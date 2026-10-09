@@ -1,0 +1,465 @@
+'use client';
+
+import React, { useState } from 'react';
+import { Upload, X, FileJson, CheckCircle2, AlertCircle, Sparkles, Terminal, Globe } from 'lucide-react';
+import { useApiStore } from '@/store/useApiStore';
+import { parseCurlCommand } from '@/lib/curl';
+
+interface ImportModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+const SAMPLE_POSTMAN_COLLECTION = {
+  info: {
+    _postman_id: 'demo-sample-collection-1',
+    name: 'JSONPlaceholder & Echo APIs',
+    description: 'Sample Postman v2.1 collection with public test endpoints and authorization',
+    schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json',
+  },
+  auth: {
+    type: 'bearer',
+    bearer: [
+      {
+        key: 'token',
+        value: '{{token}}',
+        type: 'string',
+      },
+    ],
+  },
+  item: [
+    {
+      name: 'Users & Posts',
+      item: [
+        {
+          name: 'Get Users List',
+          request: {
+            method: 'GET',
+            header: [{ key: 'Accept', value: 'application/json' }],
+            url: {
+              raw: 'https://jsonplaceholder.typicode.com/users',
+              protocol: 'https',
+              host: ['jsonplaceholder', 'typicode', 'com'],
+              path: ['users'],
+            },
+          },
+        },
+        {
+          name: 'Get Single Todo',
+          request: {
+            method: 'GET',
+            header: [],
+            url: {
+              raw: 'https://jsonplaceholder.typicode.com/todos/1',
+              protocol: 'https',
+              host: ['jsonplaceholder', 'typicode', 'com'],
+              path: ['todos', '1'],
+            },
+          },
+        },
+        {
+          name: 'Create New Post',
+          request: {
+            method: 'POST',
+            header: [{ key: 'Content-Type', value: 'application/json' }],
+            body: {
+              mode: 'raw',
+              raw: JSON.stringify(
+                {
+                  title: 'Testing API Tester',
+                  body: 'Seamless Postman collection import in the browser',
+                  userId: 1,
+                },
+                null,
+                2
+              ),
+              options: {
+                raw: {
+                  language: 'json',
+                },
+              },
+            },
+            url: {
+              raw: 'https://jsonplaceholder.typicode.com/posts',
+              protocol: 'https',
+              host: ['jsonplaceholder', 'typicode', 'com'],
+              path: ['posts'],
+            },
+          },
+        },
+      ],
+    },
+    {
+      name: 'HTTPBin Echo & Auth Tests',
+      item: [
+        {
+          name: 'Inherited Bearer Auth Test',
+          request: {
+            method: 'GET',
+            header: [],
+            url: {
+              raw: 'https://httpbin.org/bearer',
+              protocol: 'https',
+              host: ['httpbin', 'org'],
+              path: ['bearer'],
+            },
+          },
+        },
+        {
+          name: 'Basic Auth Override Test',
+          request: {
+            method: 'GET',
+            header: [],
+            auth: {
+              type: 'basic',
+              basic: [
+                { key: 'username', value: 'admin' },
+                { key: 'password', value: 'secret123' },
+              ],
+            },
+            url: {
+              raw: 'https://httpbin.org/basic-auth/admin/secret123',
+              protocol: 'https',
+              host: ['httpbin', 'org'],
+              path: ['basic-auth', 'admin', 'secret123'],
+            },
+          },
+        },
+        {
+          name: 'API Key Header Test',
+          request: {
+            method: 'GET',
+            header: [],
+            auth: {
+              type: 'apikey',
+              apikey: [
+                { key: 'key', value: 'X-API-KEY' },
+                { key: 'value', value: 'demo_api_key_token' },
+                { key: 'in', value: 'header' },
+              ],
+            },
+            url: {
+              raw: 'https://httpbin.org/headers',
+              protocol: 'https',
+              host: ['httpbin', 'org'],
+              path: ['headers'],
+            },
+          },
+        },
+        {
+          name: 'Inspect Query Params',
+          request: {
+            method: 'GET',
+            header: [],
+            url: {
+              raw: 'https://httpbin.org/get?source=apitester&mode=hybrid',
+              protocol: 'https',
+              host: ['httpbin', 'org'],
+              path: ['get'],
+              query: [
+                { key: 'source', value: 'apitester' },
+                { key: 'mode', value: 'hybrid' },
+              ],
+            },
+          },
+        },
+      ],
+    },
+  ],
+};
+
+const SAMPLE_POSTMAN_ENVIRONMENT = {
+  id: 'demo-env-sample-1',
+  name: 'Development (Sample)',
+  values: [
+    { key: 'baseUrl', value: 'https://httpbin.org', enabled: true },
+    { key: 'apiKey', value: 'demo_key_12345', enabled: true },
+    { key: 'token', value: 'jwt_sample_token', enabled: true },
+    { key: 'apiVersion', value: 'v1', enabled: true },
+  ],
+  _postman_variable_scope: 'environment',
+  _postman_exported_at: '2026-10-09T00:00:00.000Z',
+  _postman_exported_using: 'Postman/11.0.0',
+};
+
+const SAMPLE_CURL_COMMAND = `curl -X POST "https://jsonplaceholder.typicode.com/posts" \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer my_secret_token_123" \\
+  -d '{"title": "Automated cURL Import", "body": "Imported directly into tab", "userId": 1}'`;
+
+export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => {
+  const [activeImportTab, setActiveImportTab] = useState<'postman' | 'curl'>('postman');
+  const [jsonText, setJsonText] = useState('');
+  const [curlText, setCurlText] = useState('');
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  const importAnyPostmanJson = useApiStore((state) => state.importAnyPostmanJson);
+  const createTab = useApiStore((state) => state.createTab);
+
+  if (!isOpen) return null;
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result as string;
+      setJsonText(content);
+    };
+    reader.readAsText(file);
+  };
+
+  const handleImportPostman = () => {
+    setErrorMsg(null);
+    setSuccessMsg(null);
+
+    if (!jsonText.trim()) {
+      setErrorMsg('Please paste JSON content or select a file first.');
+      return;
+    }
+
+    const result = importAnyPostmanJson(jsonText);
+    if (result.success) {
+      if (result.type === 'environment') {
+        setSuccessMsg(`Postman Environment "${result.name}" imported and activated!`);
+      } else {
+        setSuccessMsg(`Postman Collection "${result.name}" imported successfully!`);
+      }
+      setTimeout(() => {
+        onClose();
+        setJsonText('');
+        setSuccessMsg(null);
+      }, 900);
+    } else {
+      setErrorMsg(result.error || 'Failed to import Postman file.');
+    }
+  };
+
+  const handleImportCurl = () => {
+    setErrorMsg(null);
+    setSuccessMsg(null);
+
+    if (!curlText.trim()) {
+      setErrorMsg('Please paste a cURL command first.');
+      return;
+    }
+
+    try {
+      const parsedReq = parseCurlCommand(curlText);
+      if (!parsedReq.url) {
+        setErrorMsg('Could not detect a valid URL in the cURL command.');
+        return;
+      }
+
+      createTab(parsedReq);
+      setSuccessMsg('cURL request imported into a new tab!');
+      setTimeout(() => {
+        onClose();
+        setCurlText('');
+        setSuccessMsg(null);
+      }, 700);
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to parse cURL command.');
+    }
+  };
+
+  const handleLoadSampleCollection = () => {
+    setJsonText(JSON.stringify(SAMPLE_POSTMAN_COLLECTION, null, 2));
+    setErrorMsg(null);
+  };
+
+  const handleLoadSampleEnvironment = () => {
+    setJsonText(JSON.stringify(SAMPLE_POSTMAN_ENVIRONMENT, null, 2));
+    setErrorMsg(null);
+  };
+
+  const handleLoadSampleCurl = () => {
+    setCurlText(SAMPLE_CURL_COMMAND);
+    setErrorMsg(null);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+      <div className="w-full max-w-2xl rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-zinc-850 pb-4">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-sky-500/10 text-sky-400 border border-sky-500/20">
+              <Upload className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 className="text-base font-semibold text-zinc-100">Import Requests & Environments</h2>
+              <p className="text-xs text-zinc-400">Import Postman Collections, Environments, or raw cURL commands</p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Tab Selection */}
+        <div className="mt-4 flex border-b border-zinc-850 gap-4 text-xs font-medium text-zinc-400">
+          <button
+            onClick={() => {
+              setActiveImportTab('postman');
+              setErrorMsg(null);
+              setSuccessMsg(null);
+            }}
+            className={`flex items-center gap-2 pb-2.5 transition border-b-2 ${
+              activeImportTab === 'postman'
+                ? 'border-sky-500 text-zinc-100 font-semibold'
+                : 'border-transparent hover:text-zinc-200'
+            }`}
+          >
+            <FileJson className="h-4 w-4 text-sky-400" />
+            <span>Postman Collection or Environment (.json)</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setActiveImportTab('curl');
+              setErrorMsg(null);
+              setSuccessMsg(null);
+            }}
+            className={`flex items-center gap-2 pb-2.5 transition border-b-2 ${
+              activeImportTab === 'curl'
+                ? 'border-sky-500 text-zinc-100 font-semibold'
+                : 'border-transparent hover:text-zinc-200'
+            }`}
+          >
+            <Terminal className="h-4 w-4 text-amber-400" />
+            <span>cURL Command</span>
+          </button>
+        </div>
+
+        {/* Tab 1: Postman Collection or Environment */}
+        {activeImportTab === 'postman' && (
+          <div className="mt-4 space-y-4">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+              <label className="flex flex-1 cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-zinc-700 bg-zinc-900/60 p-4 text-center transition hover:border-sky-500/50 hover:bg-zinc-900">
+                <FileJson className="h-5 w-5 text-sky-400" />
+                <span className="text-xs font-medium text-zinc-300">
+                  Choose or drag a Postman Collection or Environment .json file
+                </span>
+                <input
+                  type="file"
+                  accept=".json,application/json"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
+              </label>
+
+              <div className="flex sm:flex-col gap-2">
+                <button
+                  type="button"
+                  onClick={handleLoadSampleCollection}
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-amber-300 hover:bg-zinc-800 hover:border-amber-500/30 transition shadow-sm"
+                  title="Load sample Postman collection"
+                >
+                  <Sparkles className="h-3.5 w-3.5 text-amber-400" />
+                  + Sample Collection
+                </button>
+                <button
+                  type="button"
+                  onClick={handleLoadSampleEnvironment}
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-sky-300 hover:bg-zinc-800 hover:border-sky-500/30 transition shadow-sm"
+                  title="Load sample Postman environment"
+                >
+                  <Globe className="h-3.5 w-3.5 text-sky-400" />
+                  + Sample Environment
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label className="mb-1.5 block text-xs font-medium text-zinc-300">
+                Or paste Postman Collection or Environment JSON directly:
+              </label>
+              <textarea
+                value={jsonText}
+                onChange={(e) => setJsonText(e.target.value)}
+                placeholder='Paste Postman Collection JSON (with "info", "item") OR Postman Environment JSON (with "name", "values"). Auto-detected automatically!'
+                className="h-44 w-full rounded-xl border border-zinc-800 bg-zinc-900/90 p-3 font-mono text-xs text-zinc-200 placeholder-zinc-500 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition resize-none"
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Tab 2: cURL Command */}
+        {activeImportTab === 'curl' && (
+          <div className="mt-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <label className="block text-xs font-medium text-zinc-300">
+                Paste raw cURL command from terminal, DevTools, or documentation:
+              </label>
+              <button
+                type="button"
+                onClick={handleLoadSampleCurl}
+                className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-xs font-medium text-amber-300 hover:bg-zinc-800 transition"
+              >
+                <Sparkles className="h-3.5 w-3.5 text-amber-400" />
+                Load Sample cURL
+              </button>
+            </div>
+
+            <textarea
+              value={curlText}
+              onChange={(e) => setCurlText(e.target.value)}
+              placeholder={`curl -X POST "https://api.example.com/v1/resource" \\\n  -H "Authorization: Bearer token" \\\n  -d '{"name": "value"}'`}
+              className="h-52 w-full rounded-xl border border-zinc-800 bg-zinc-900/90 p-3 font-mono text-xs text-zinc-200 placeholder-zinc-500 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition resize-none"
+            />
+          </div>
+        )}
+
+        {/* Alerts */}
+        {errorMsg && (
+          <div className="mt-3 flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-300">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            <span>{errorMsg}</span>
+          </div>
+        )}
+
+        {successMsg && (
+          <div className="mt-3 flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-300">
+            <CheckCircle2 className="h-4 w-4 shrink-0" />
+            <span>{successMsg}</span>
+          </div>
+        )}
+
+        {/* Action buttons */}
+        <div className="mt-6 flex justify-end gap-2.5">
+          <button
+            onClick={onClose}
+            className="rounded-xl px-4 py-2 text-xs font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition"
+          >
+            Cancel
+          </button>
+          {activeImportTab === 'postman' ? (
+            <button
+              onClick={handleImportPostman}
+              className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-5 py-2 text-xs font-semibold text-white shadow-lg shadow-sky-500/20 hover:from-sky-400 hover:to-blue-500 active:scale-95 transition"
+            >
+              <Upload className="h-3.5 w-3.5" />
+              Import Postman File
+            </button>
+          ) : (
+            <button
+              onClick={handleImportCurl}
+              className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 px-5 py-2 text-xs font-semibold text-white shadow-lg shadow-amber-500/20 hover:from-amber-400 hover:to-orange-500 active:scale-95 transition"
+            >
+              <Terminal className="h-3.5 w-3.5" />
+              Import to Tab
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
