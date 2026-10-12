@@ -66,7 +66,7 @@ const SAMPLE_POSTMAN_COLLECTION = {
               mode: 'raw',
               raw: JSON.stringify(
                 {
-                  title: 'Testing API Tester',
+                  title: 'Testing AirREST',
                   body: 'Seamless Postman collection import in the browser',
                   userId: 1,
                 },

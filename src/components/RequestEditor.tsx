@@ -10,7 +10,6 @@ import {
   AlignLeft,
   Sparkles,
   KeyRound,
-  FileText,
   Plus,
   Trash2,
   Paperclip,
@@ -19,14 +18,27 @@ import {
   Bookmark,
   Terminal,
   Check,
-  Copy,
+  UploadCloud,
+  FileUp,
+  RefreshCw,
 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
-import { HttpMethod, BodyType, FormDataItem } from '@/types/api';
+import { HttpMethod, BodyType, RawType } from '@/types/api';
 import { KeyValueEditor } from './KeyValueEditor';
 import { METHOD_COLORS } from './MethodBadge';
 import { SaveToCollectionModal } from './SaveToCollectionModal';
 import { generateCurlCommand } from '@/lib/curl';
+import { VariableInput } from './VariableInput';
+import { interpolateVariables } from '@/lib/fetcher';
+import { beautifyXml, beautifyGraphQL, beautifyJson } from '@/lib/formatters';
+
+function formatFileSize(bytes: number): string {
+  if (!bytes || bytes <= 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
+}
 
 export const RequestEditor: React.FC = () => {
   const tabs = useApiStore((state) => state.tabs);
@@ -40,12 +52,16 @@ export const RequestEditor: React.FC = () => {
   const removeHeader = useApiStore((state) => state.removeHeader);
   const updateAuth = useApiStore((state) => state.updateAuth);
   const setBodyType = useApiStore((state) => state.setBodyType);
+  const setRawType = useApiStore((state) => state.setRawType);
   const setBodyContent = useApiStore((state) => state.setBodyContent);
+  const setGraphqlQuery = useApiStore((state) => state.setGraphqlQuery);
+  const setGraphqlVariables = useApiStore((state) => state.setGraphqlVariables);
   const setPreRequestScript = useApiStore((state) => state.setPreRequestScript);
   const setPostResponseScript = useApiStore((state) => state.setPostResponseScript);
   const updateFormDataItem = useApiStore((state) => state.updateFormDataItem);
   const addFormDataItem = useApiStore((state) => state.addFormDataItem);
   const removeFormDataItem = useApiStore((state) => state.removeFormDataItem);
+  const setBodyBinaryFile = useApiStore((state) => state.setBodyBinaryFile);
   const sendRequest = useApiStore((state) => state.sendRequest);
   const isLoading = useApiStore((state) => state.isLoading);
   const environments = useApiStore((state) => state.environments);
@@ -53,6 +69,9 @@ export const RequestEditor: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<'params' | 'headers' | 'auth' | 'body' | 'prerequest' | 'tests'>('params');
   const [jsonFormatError, setJsonFormatError] = useState<string | null>(null);
+  const [xmlFormatError, setXmlFormatError] = useState<string | null>(null);
+  const [graphqlQueryError, setGraphqlQueryError] = useState<string | null>(null);
+  const [graphqlVariablesError, setGraphqlVariablesError] = useState<string | null>(null);
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
   const [copiedCurl, setCopiedCurl] = useState(false);
 
@@ -102,6 +121,42 @@ export const RequestEditor: React.FC = () => {
       setJsonFormatError(null);
     } catch (err: unknown) {
       setJsonFormatError(err instanceof Error ? err.message : 'Invalid JSON format');
+    }
+  };
+
+  const handleBeautifyXml = () => {
+    if (!currentTab.bodyContent.trim()) return;
+    const res = beautifyXml(currentTab.bodyContent);
+    if (res.error) {
+      setXmlFormatError(res.error);
+    } else {
+      setBodyContent(res.formatted);
+      setXmlFormatError(null);
+    }
+  };
+
+  const handleBeautifyGraphQLQuery = () => {
+    const query = currentTab.graphqlQuery ?? currentTab.bodyContent ?? '';
+    if (!query.trim()) return;
+    const res = beautifyGraphQL(query);
+    if (res.error) {
+      setGraphqlQueryError(res.error);
+    } else {
+      setGraphqlQuery(res.formatted);
+      setBodyContent(res.formatted);
+      setGraphqlQueryError(null);
+    }
+  };
+
+  const handleBeautifyGraphQLVariables = () => {
+    const vars = currentTab.graphqlVariables || '';
+    if (!vars.trim()) return;
+    const res = beautifyJson(vars);
+    if (res.error) {
+      setGraphqlVariablesError(res.error);
+    } else {
+      setGraphqlVariables(res.formatted);
+      setGraphqlVariablesError(null);
     }
   };
 
@@ -186,10 +241,9 @@ export const RequestEditor: React.FC = () => {
 
           {/* URL Input */}
           <div className="relative flex-1">
-            <input
-              type="text"
+            <VariableInput
               value={currentTab.url}
-              onChange={(e) => updateActiveRequest({ url: e.target.value })}
+              onChange={(url) => updateActiveRequest({ url })}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
@@ -197,7 +251,7 @@ export const RequestEditor: React.FC = () => {
                 }
               }}
               placeholder="Enter URL (e.g. {{baseUrl}}/api/v1/resource or http://localhost:8080)"
-              className="h-11 w-full rounded-xl border border-zinc-800 bg-zinc-900/90 px-4 font-mono text-xs text-zinc-100 placeholder-zinc-500 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition"
+              size="lg"
             />
           </div>
 
@@ -220,6 +274,16 @@ export const RequestEditor: React.FC = () => {
             )}
           </button>
         </div>
+
+        {/* Resolved URL Preview Banner */}
+        {currentTab.url.includes('{{') && (
+          <div className="mt-2.5 flex items-center gap-2 rounded-xl bg-zinc-900/60 border border-zinc-800/80 px-3 py-1.5 text-[11px] font-mono text-zinc-400">
+            <span className="text-zinc-500 font-semibold shrink-0">Resolved:</span>
+            <span className="text-amber-400 font-medium truncate select-all">
+              {interpolateVariables(currentTab.url, envVarsMap)}
+            </span>
+          </div>
+        )}
 
         {/* Configuration Subtabs */}
         <div className="mt-4 flex items-center border-b border-zinc-850 gap-4 text-xs font-medium text-zinc-400">
@@ -286,7 +350,9 @@ export const RequestEditor: React.FC = () => {
             <span>Body</span>
             {currentTab.bodyType !== 'none' && (
               <span className="rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 px-1.5 text-[10px]">
-                {currentTab.bodyType}
+                {currentTab.bodyType === 'raw' && currentTab.rawType
+                  ? `raw (${currentTab.rawType})`
+                  : currentTab.bodyType}
               </span>
             )}
           </button>
@@ -380,12 +446,11 @@ export const RequestEditor: React.FC = () => {
                     <KeyRound className="h-3.5 w-3.5 text-sky-400" />
                     <span>Bearer Token</span>
                   </label>
-                  <input
-                    type="text"
+                  <VariableInput
                     value={currentTab.auth.bearerToken || ''}
-                    onChange={(e) => updateAuth({ bearerToken: e.target.value })}
+                    onChange={(bearerToken) => updateAuth({ bearerToken })}
                     placeholder="Bearer token or {{token}}..."
-                    className="w-full rounded-xl border border-zinc-800 bg-zinc-900 p-2.5 font-mono text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none"
+                    showPreview={true}
                   />
                 </div>
               )}
@@ -394,22 +459,21 @@ export const RequestEditor: React.FC = () => {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-zinc-800">
                   <div className="space-y-1.5">
                     <label className="text-xs font-medium text-zinc-300">Username</label>
-                    <input
-                      type="text"
+                    <VariableInput
                       value={currentTab.auth.basicUsername || ''}
-                      onChange={(e) => updateAuth({ basicUsername: e.target.value })}
+                      onChange={(basicUsername) => updateAuth({ basicUsername })}
                       placeholder="Username or {{username}}"
-                      className="w-full rounded-xl border border-zinc-800 bg-zinc-900 p-2.5 font-mono text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none"
+                      showPreview={true}
                     />
                   </div>
                   <div className="space-y-1.5">
                     <label className="text-xs font-medium text-zinc-300">Password</label>
-                    <input
+                    <VariableInput
                       type="password"
                       value={currentTab.auth.basicPassword || ''}
-                      onChange={(e) => updateAuth({ basicPassword: e.target.value })}
+                      onChange={(basicPassword) => updateAuth({ basicPassword })}
                       placeholder="Password or {{password}}"
-                      className="w-full rounded-xl border border-zinc-800 bg-zinc-900 p-2.5 font-mono text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none"
+                      showPreview={true}
                     />
                   </div>
                 </div>
@@ -420,22 +484,19 @@ export const RequestEditor: React.FC = () => {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-1.5">
                       <label className="text-xs font-medium text-zinc-300">Key Name</label>
-                      <input
-                        type="text"
+                      <VariableInput
                         value={currentTab.auth.apiKeyKey || ''}
-                        onChange={(e) => updateAuth({ apiKeyKey: e.target.value })}
+                        onChange={(apiKeyKey) => updateAuth({ apiKeyKey })}
                         placeholder="e.g. X-API-Key or api_key"
-                        className="w-full rounded-xl border border-zinc-800 bg-zinc-900 p-2.5 font-mono text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none"
                       />
                     </div>
                     <div className="space-y-1.5">
                       <label className="text-xs font-medium text-zinc-300">Key Value</label>
-                      <input
-                        type="text"
+                      <VariableInput
                         value={currentTab.auth.apiKeyValue || ''}
-                        onChange={(e) => updateAuth({ apiKeyValue: e.target.value })}
+                        onChange={(apiKeyValue) => updateAuth({ apiKeyValue })}
                         placeholder="e.g. secret_value or {{apiKey}}"
-                        className="w-full rounded-xl border border-zinc-800 bg-zinc-900 p-2.5 font-mono text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none"
+                        showPreview={true}
                       />
                     </div>
                   </div>
@@ -474,36 +535,84 @@ export const RequestEditor: React.FC = () => {
 
           {activeTab === 'body' && (
             <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                {/* Body Type Selectors */}
-                <div className="flex flex-wrap gap-1.5">
-                  {(['none', 'json', 'form-data', 'x-www-form-urlencoded', 'raw'] as BodyType[]).map((type) => (
-                    <button
-                      key={type}
-                      type="button"
-                      onClick={() => setBodyType(type)}
-                      className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
-                        currentTab.bodyType === type
-                          ? 'bg-zinc-800 text-sky-400 border border-zinc-700'
-                          : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900'
-                      }`}
-                    >
-                      {type}
-                    </button>
-                  ))}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                {/* Body Type Selectors & Raw Type Subselector */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex flex-wrap gap-1.5">
+                    {(['none', 'json', 'xml', 'graphql', 'form-data', 'x-www-form-urlencoded', 'raw', 'binary'] as BodyType[]).map((type) => (
+                      <button
+                        key={type}
+                        type="button"
+                        onClick={() => {
+                          setBodyType(type);
+                          setJsonFormatError(null);
+                          setXmlFormatError(null);
+                          setGraphqlQueryError(null);
+                          setGraphqlVariablesError(null);
+                        }}
+                        className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
+                          currentTab.bodyType === type
+                            ? 'bg-zinc-800 text-sky-400 border border-zinc-700'
+                            : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900'
+                        }`}
+                      >
+                        {type}
+                      </button>
+                    ))}
+                  </div>
+
+                  {currentTab.bodyType === 'raw' && (
+                    <div className="flex items-center gap-1.5 pl-2 border-l border-zinc-800">
+                      <span className="text-[11px] text-zinc-500 font-medium">Type:</span>
+                      <div className="flex rounded-lg border border-zinc-800 bg-zinc-950 p-0.5">
+                        {(['text', 'json', 'xml', 'html'] as RawType[]).map((rType) => (
+                          <button
+                            key={rType}
+                            type="button"
+                            onClick={() => {
+                              setRawType(rType);
+                              setJsonFormatError(null);
+                              setXmlFormatError(null);
+                            }}
+                            className={`rounded-md px-2 py-0.5 text-xs font-medium transition ${
+                              (currentTab.rawType || 'text') === rType
+                                ? 'bg-zinc-800 text-sky-400 font-semibold shadow-sm'
+                                : 'text-zinc-400 hover:text-zinc-200'
+                            }`}
+                          >
+                            {rType}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
-                {currentTab.bodyType === 'json' && (
-                  <button
-                    type="button"
-                    onClick={handleBeautifyJson}
-                    className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs font-medium text-zinc-300 hover:bg-zinc-800 hover:text-white transition"
-                    title="Format JSON payload"
-                  >
-                    <Sparkles className="h-3.5 w-3.5 text-amber-400" />
-                    <span>Beautify JSON</span>
-                  </button>
-                )}
+                <div className="flex items-center gap-2">
+                  {(currentTab.bodyType === 'json' || (currentTab.bodyType === 'raw' && currentTab.rawType === 'json')) && (
+                    <button
+                      type="button"
+                      onClick={handleBeautifyJson}
+                      className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs font-medium text-zinc-300 hover:bg-zinc-800 hover:text-white transition"
+                      title="Format JSON payload"
+                    >
+                      <Sparkles className="h-3.5 w-3.5 text-amber-400" />
+                      <span>Beautify JSON</span>
+                    </button>
+                  )}
+
+                  {(currentTab.bodyType === 'xml' || (currentTab.bodyType === 'raw' && currentTab.rawType === 'xml')) && (
+                    <button
+                      type="button"
+                      onClick={handleBeautifyXml}
+                      className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs font-medium text-zinc-300 hover:bg-zinc-800 hover:text-white transition"
+                      title="Format and validate XML payload"
+                    >
+                      <Sparkles className="h-3.5 w-3.5 text-emerald-400" />
+                      <span>Beautify XML</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
               {currentTab.bodyType === 'form-data' ? (
@@ -613,14 +722,210 @@ export const RequestEditor: React.FC = () => {
                     <span>Add Form Field</span>
                   </button>
                 </div>
+              ) : currentTab.bodyType === 'binary' ? (
+                /* Direct Raw Binary File Upload */
+                <div className="space-y-3">
+                  {currentTab.bodyBinaryFile?.file || currentTab.bodyBinaryFile?.name ? (
+                    <div className="rounded-xl border border-sky-500/30 bg-sky-950/20 p-4">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-sky-500/10 border border-sky-500/30 text-sky-400">
+                            <FileUp className="h-6 w-6" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-xs font-semibold text-zinc-100">
+                                {currentTab.bodyBinaryFile.name}
+                              </span>
+                              {currentTab.bodyBinaryFile.size > 0 && (
+                                <span className="rounded bg-zinc-800/80 px-1.5 py-0.5 text-[10px] font-mono text-zinc-400">
+                                  {formatFileSize(currentTab.bodyBinaryFile.size)}
+                                </span>
+                              )}
+                            </div>
+                            <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-zinc-400">
+                              <span>MIME Type:</span>
+                              <code className="rounded bg-zinc-900 border border-zinc-800 px-1.5 py-0.5 font-mono text-sky-300">
+                                {currentTab.bodyBinaryFile.type || 'application/octet-stream'}
+                              </code>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <label className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs font-medium text-zinc-300 hover:bg-zinc-850 hover:text-white cursor-pointer transition">
+                            <RefreshCw className="h-3.5 w-3.5 text-sky-400" />
+                            <span>Replace</span>
+                            <input
+                              type="file"
+                              className="hidden"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  setBodyBinaryFile({
+                                    name: file.name,
+                                    size: file.size,
+                                    type: file.type || 'application/octet-stream',
+                                    file,
+                                  });
+                                }
+                              }}
+                            />
+                          </label>
+
+                          <button
+                            type="button"
+                            onClick={() => setBodyBinaryFile(undefined)}
+                            className="flex items-center gap-1 rounded-lg border border-rose-500/20 bg-rose-500/10 px-2 py-1 text-xs font-medium text-rose-400 hover:bg-rose-500/20 transition"
+                            title="Remove attached file"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            <span>Remove</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="mt-3.5 flex items-center gap-2 rounded-lg bg-zinc-900/60 border border-zinc-850 px-3 py-2 text-[11px] text-zinc-400">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+                        <span>
+                          Direct binary payload: file will be streamed directly in the request body with{' '}
+                          <code className="text-zinc-300">Content-Type: {currentTab.bodyBinaryFile.type || 'application/octet-stream'}</code>{' '}
+                          (override anytime in the Headers tab).
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <label
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const file = e.dataTransfer.files?.[0];
+                        if (file) {
+                          setBodyBinaryFile({
+                            name: file.name,
+                            size: file.size,
+                            type: file.type || 'application/octet-stream',
+                            file,
+                          });
+                        }
+                      }}
+                      className="group flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-zinc-800 bg-zinc-900/30 hover:border-sky-500/60 hover:bg-zinc-900/60 p-8 text-center cursor-pointer transition"
+                    >
+                      <input
+                        type="file"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            setBodyBinaryFile({
+                              name: file.name,
+                              size: file.size,
+                              type: file.type || 'application/octet-stream',
+                              file,
+                            });
+                          }
+                        }}
+                      />
+                      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-zinc-900 border border-zinc-800 text-zinc-400 group-hover:scale-110 group-hover:text-sky-400 group-hover:border-sky-500/40 transition">
+                        <UploadCloud className="h-6 w-6" />
+                      </div>
+                      <div className="mt-3 text-xs font-semibold text-zinc-200 group-hover:text-white transition">
+                        Drop binary file here or click to browse
+                      </div>
+                      <div className="mt-1 text-[11px] text-zinc-500 max-w-sm">
+                        Raw binary stream (images, PDFs, documents, audio, zip). Sent directly in the HTTP request body without multipart boundaries.
+                      </div>
+                    </label>
+                  )}
+                </div>
+              ) : currentTab.bodyType === 'graphql' ? (
+                /* GraphQL Query & Variables Dual Editor */
+                <div className="space-y-4">
+                  {/* Query Editor */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-zinc-300">
+                        <Code2 className="h-3.5 w-3.5 text-pink-400" />
+                        <span>Query / Mutation</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleBeautifyGraphQLQuery}
+                        className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs font-medium text-zinc-300 hover:bg-zinc-800 hover:text-white transition"
+                        title="Prettify GraphQL Query"
+                      >
+                        <Sparkles className="h-3.5 w-3.5 text-pink-400" />
+                        <span>Prettify Query</span>
+                      </button>
+                    </div>
+                    <textarea
+                      value={currentTab.graphqlQuery ?? currentTab.bodyContent}
+                      onChange={(e) => {
+                        setGraphqlQuery(e.target.value);
+                        setBodyContent(e.target.value);
+                        if (graphqlQueryError) setGraphqlQueryError(null);
+                      }}
+                      placeholder={`query GetUsers($limit: Int) {\n  users(limit: $limit) {\n    id\n    name\n    email\n  }\n}`}
+                      rows={8}
+                      className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 p-3 font-mono text-xs text-zinc-100 placeholder-zinc-600 focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500 transition resize-y"
+                    />
+                    {graphqlQueryError && (
+                      <p className="text-[11px] text-rose-400 font-mono">{graphqlQueryError}</p>
+                    )}
+                  </div>
+
+                  {/* Variables Editor */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-zinc-300">
+                        <Sliders className="h-3.5 w-3.5 text-sky-400" />
+                        <span>GraphQL Variables (JSON)</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleBeautifyGraphQLVariables}
+                        className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs font-medium text-zinc-300 hover:bg-zinc-800 hover:text-white transition"
+                        title="Beautify Variables JSON"
+                      >
+                        <Sparkles className="h-3.5 w-3.5 text-sky-400" />
+                        <span>Beautify Variables</span>
+                      </button>
+                    </div>
+                    <textarea
+                      value={currentTab.graphqlVariables || ''}
+                      onChange={(e) => {
+                        setGraphqlVariables(e.target.value);
+                        if (graphqlVariablesError) setGraphqlVariablesError(null);
+                      }}
+                      placeholder={`{\n  "limit": 10\n}`}
+                      rows={4}
+                      className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 p-3 font-mono text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition resize-y"
+                    />
+                    {graphqlVariablesError && (
+                      <p className="text-[11px] text-rose-400 font-mono">{graphqlVariablesError}</p>
+                    )}
+                  </div>
+                </div>
               ) : currentTab.bodyType !== 'none' ? (
                 <div className="space-y-1">
                   <textarea
                     value={currentTab.bodyContent}
-                    onChange={(e) => setBodyContent(e.target.value)}
+                    onChange={(e) => {
+                      setBodyContent(e.target.value);
+                      if (jsonFormatError) setJsonFormatError(null);
+                      if (xmlFormatError) setXmlFormatError(null);
+                    }}
                     placeholder={
-                      currentTab.bodyType === 'json'
+                      currentTab.bodyType === 'json' || (currentTab.bodyType === 'raw' && currentTab.rawType === 'json')
                         ? '{\n  "title": "foo",\n  "userId": "{{userId}}"\n}'
+                        : currentTab.bodyType === 'xml' || (currentTab.bodyType === 'raw' && currentTab.rawType === 'xml')
+                        ? '<?xml version="1.0" encoding="UTF-8"?>\n<request>\n  <item id="1">example</item>\n</request>'
+                        : currentTab.bodyType === 'raw' && currentTab.rawType === 'html'
+                        ? '<!DOCTYPE html>\n<html>\n  <body>\n    <h1>Hello</h1>\n  </body>\n</html>'
                         : 'Raw body payload with {{variable}}...'
                     }
                     rows={6}
@@ -629,10 +934,13 @@ export const RequestEditor: React.FC = () => {
                   {jsonFormatError && (
                     <p className="text-[11px] text-rose-400 font-mono">{jsonFormatError}</p>
                   )}
+                  {xmlFormatError && (
+                    <p className="text-[11px] text-rose-400 font-mono">{xmlFormatError}</p>
+                  )}
                 </div>
               ) : (
                 <div className="flex items-center justify-center rounded-xl border border-dashed border-zinc-800/80 p-8 text-center text-xs text-zinc-500">
-                  This request does not have a body. Select JSON, form-data, or Raw to attach payload.
+                  This request does not have a body. Select JSON, XML, GraphQL, form-data, Raw, or Binary to attach payload.
                 </div>
               )}
             </div>
@@ -747,7 +1055,7 @@ export const RequestEditor: React.FC = () => {
               />
 
               <p className="text-[11px] text-zinc-500 leading-relaxed">
-                Use <code className="text-emerald-400">pm.response.json()</code> to inspect payload and <code className="text-emerald-400">pm.environment.set("token", token)</code> to automatically persist tokens or IDs. Subsequent requests will immediately use <code className="text-sky-400">&#123;&#123;token&#125;&#125;</code> in Headers or Auth!
+                Use <code className="text-emerald-400">pm.response.json()</code> to inspect payload and <code className="text-emerald-400">pm.environment.set(&apos;token&apos;, token)</code> to automatically persist tokens or IDs. Subsequent requests will immediately use <code className="text-sky-400">&#123;&#123;token&#125;&#125;</code> in Headers or Auth!
               </p>
             </div>
           )}

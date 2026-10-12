@@ -4,6 +4,7 @@ import {
   ApiRequest,
   ApiResponse,
   Collection,
+  CollectionItem,
   HistoryItem,
   KeyValuePair,
   BodyType,
@@ -11,6 +12,8 @@ import {
   Environment,
   EnvironmentVariable,
   FormDataItem,
+  BinaryFileData,
+  RawType,
 } from '@/types/api';
 import { executeApiRequest } from '@/lib/fetcher';
 import {
@@ -19,6 +22,7 @@ import {
   detectPostmanJsonType,
 } from '@/lib/postman';
 import { executePreRequestScript, executePostResponseScript } from '@/lib/scriptRunner';
+import { parseQueryParamsFromUrl, buildUrlWithParams } from '@/lib/urlParams';
 
 function generateId(): string {
   return Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
@@ -56,7 +60,10 @@ const defaultRequest: ApiRequest = {
   headers: [{ id: 'h1', key: 'Accept', value: 'application/json', enabled: true }],
   auth: { type: 'none' },
   bodyType: 'none',
+  rawType: 'text',
   bodyContent: '',
+  graphqlQuery: '',
+  graphqlVariables: '',
   bodyFormData: [],
   preRequestScript: '// Example Pre-request Script:\n// pm.environment.set("timestamp", Date.now());\n// console.log("Request starting...");\n',
   postResponseScript: '// Example Tests / Post-response Script:\n// const data = pm.response.json();\n// if (data.token) pm.environment.set("token", data.token);\n',
@@ -96,6 +103,10 @@ interface ApiStoreState {
   setActiveTabId: (id: string) => void;
   createTab: (initial?: Partial<ApiRequest>) => void;
   closeTab: (id: string) => void;
+  closeOtherTabs: (id: string) => void;
+  closeAllTabs: () => void;
+  closeTabsToRight: (id: string) => void;
+  duplicateTab: (id: string) => void;
   updateActiveRequest: (updates: Partial<ApiRequest>) => void;
 
   // Request Builders
@@ -109,14 +120,18 @@ interface ApiStoreState {
 
   updateAuth: (auth: Partial<AuthConfig>) => void;
   setBodyType: (type: BodyType) => void;
+  setRawType: (rawType: RawType) => void;
   setBodyContent: (content: string) => void;
+  setGraphqlQuery: (query: string) => void;
+  setGraphqlVariables: (variables: string) => void;
   setPreRequestScript: (script: string) => void;
   setPostResponseScript: (script: string) => void;
 
-  // Form-Data Items
+  // Form-Data & Binary Items
   updateFormDataItem: (id: string, updates: Partial<FormDataItem>) => void;
   addFormDataItem: () => void;
   removeFormDataItem: (id: string) => void;
+  setBodyBinaryFile: (file?: BinaryFileData) => void;
 
   // Execution
   sendRequest: () => Promise<void>;
@@ -233,8 +248,12 @@ export const useApiStore = create<ApiStoreState>()(
           headers: initial?.headers || [{ id: generateId(), key: '', value: '', enabled: true }],
           auth: initial?.auth || { type: 'none' },
           bodyType: initial?.bodyType || 'none',
+          rawType: initial?.rawType || 'text',
           bodyContent: initial?.bodyContent || '',
+          graphqlQuery: initial?.graphqlQuery || '',
+          graphqlVariables: initial?.graphqlVariables || '',
           bodyFormData: initial?.bodyFormData || [],
+          bodyBinaryFile: initial?.bodyBinaryFile,
           preRequestScript: initial?.preRequestScript || '',
           postResponseScript: initial?.postResponseScript || '',
           createdAt: Date.now(),
@@ -260,8 +279,12 @@ export const useApiStore = create<ApiStoreState>()(
               headers: [{ id: generateId(), key: '', value: '', enabled: true }],
               auth: { type: 'none' },
               bodyType: 'none',
+              rawType: 'text',
               bodyContent: '',
+              graphqlQuery: '',
+              graphqlVariables: '',
               bodyFormData: [],
+              bodyBinaryFile: undefined,
               preRequestScript: '',
               postResponseScript: '',
               createdAt: Date.now(),
@@ -286,11 +309,97 @@ export const useApiStore = create<ApiStoreState>()(
         });
       },
 
+      closeOtherTabs: (id) => {
+        set((state) => {
+          const targetTab = state.tabs.find((t) => t.id === id);
+          if (!targetTab) return state;
+          return {
+            tabs: [targetTab],
+            activeTabId: id,
+            activeResponse: state.activeTabId === id ? state.activeResponse : null,
+          };
+        });
+      },
+
+      closeAllTabs: () => {
+        set(() => {
+          const resetTab: ApiRequest = {
+            id: generateId(),
+            name: 'New Request',
+            method: 'GET',
+            url: '',
+            params: [{ id: generateId(), key: '', value: '', enabled: true }],
+            headers: [{ id: generateId(), key: '', value: '', enabled: true }],
+            auth: { type: 'none' },
+            bodyType: 'none',
+            rawType: 'text',
+            bodyContent: '',
+            graphqlQuery: '',
+            graphqlVariables: '',
+            bodyFormData: [],
+            bodyBinaryFile: undefined,
+            preRequestScript: '',
+            postResponseScript: '',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          };
+          return {
+            tabs: [resetTab],
+            activeTabId: resetTab.id,
+            activeResponse: null,
+          };
+        });
+      },
+
+      closeTabsToRight: (id) => {
+        set((state) => {
+          const index = state.tabs.findIndex((t) => t.id === id);
+          if (index === -1) return state;
+          const remainingTabs = state.tabs.slice(0, index + 1);
+          const wasActiveClosed = !remainingTabs.some((t) => t.id === state.activeTabId);
+          return {
+            tabs: remainingTabs,
+            activeTabId: wasActiveClosed ? id : state.activeTabId,
+            activeResponse: wasActiveClosed ? null : state.activeResponse,
+          };
+        });
+      },
+
+      duplicateTab: (id) => {
+        set((state) => {
+          const sourceTab = state.tabs.find((t) => t.id === id);
+          if (!sourceTab) return state;
+          const duplicatedTab: ApiRequest = {
+            ...sourceTab,
+            id: generateId(),
+            name: `${sourceTab.name || 'Untitled Request'} (Copy)`,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            params: sourceTab.params.map((p) => ({ ...p, id: generateId() })),
+            headers: sourceTab.headers.map((h) => ({ ...h, id: generateId() })),
+            bodyFormData: sourceTab.bodyFormData ? sourceTab.bodyFormData.map((f) => ({ ...f, id: generateId() })) : [],
+          };
+          const index = state.tabs.findIndex((t) => t.id === id);
+          const newTabs = [...state.tabs];
+          newTabs.splice(index + 1, 0, duplicatedTab);
+          return {
+            tabs: newTabs,
+            activeTabId: duplicatedTab.id,
+            activeResponse: null,
+          };
+        });
+      },
+
       updateActiveRequest: (updates) => {
         set((state) => ({
-          tabs: state.tabs.map((tab) =>
-            tab.id === state.activeTabId ? { ...tab, ...updates, updatedAt: Date.now() } : tab
-          ),
+          tabs: state.tabs.map((tab) => {
+            if (tab.id !== state.activeTabId) return tab;
+            if (updates.url !== undefined && updates.params === undefined && updates.url !== tab.url) {
+              const syncedParams = parseQueryParamsFromUrl(updates.url, tab.params);
+              return { ...tab, ...updates, params: syncedParams, updatedAt: Date.now() };
+            }
+            return { ...tab, ...updates, updatedAt: Date.now() };
+          }),
         }));
       },
 
@@ -299,7 +408,8 @@ export const useApiStore = create<ApiStoreState>()(
           tabs: state.tabs.map((tab) => {
             if (tab.id !== state.activeTabId) return tab;
             const updatedParams = tab.params.map((p) => (p.id === id ? { ...p, ...updates } : p));
-            return { ...tab, params: updatedParams, updatedAt: Date.now() };
+            const updatedUrl = buildUrlWithParams(tab.url, updatedParams);
+            return { ...tab, params: updatedParams, url: updatedUrl, updatedAt: Date.now() };
           }),
         }));
       },
@@ -308,9 +418,12 @@ export const useApiStore = create<ApiStoreState>()(
         set((state) => ({
           tabs: state.tabs.map((tab) => {
             if (tab.id !== state.activeTabId) return tab;
+            const updatedParams = [...tab.params, { id: generateId(), key: '', value: '', enabled: true }];
+            const updatedUrl = buildUrlWithParams(tab.url, updatedParams);
             return {
               ...tab,
-              params: [...tab.params, { id: generateId(), key: '', value: '', enabled: true }],
+              params: updatedParams,
+              url: updatedUrl,
               updatedAt: Date.now(),
             };
           }),
@@ -321,9 +434,12 @@ export const useApiStore = create<ApiStoreState>()(
         set((state) => ({
           tabs: state.tabs.map((tab) => {
             if (tab.id !== state.activeTabId) return tab;
+            const updatedParams = tab.params.filter((p) => p.id !== id);
+            const updatedUrl = buildUrlWithParams(tab.url, updatedParams);
             return {
               ...tab,
-              params: tab.params.filter((p) => p.id !== id),
+              params: updatedParams,
+              url: updatedUrl,
               updatedAt: Date.now(),
             };
           }),
@@ -383,7 +499,20 @@ export const useApiStore = create<ApiStoreState>()(
         set((state) => ({
           tabs: state.tabs.map((tab) => {
             if (tab.id !== state.activeTabId) return tab;
-            return { ...tab, bodyType, updatedAt: Date.now() };
+            let rawType = tab.rawType || 'text';
+            if (bodyType === 'json') rawType = 'json';
+            else if (bodyType === 'xml') rawType = 'xml';
+            const method = bodyType === 'graphql' && tab.method === 'GET' ? 'POST' : tab.method;
+            return { ...tab, bodyType, rawType, method, updatedAt: Date.now() };
+          }),
+        }));
+      },
+
+      setRawType: (rawType) => {
+        set((state) => ({
+          tabs: state.tabs.map((tab) => {
+            if (tab.id !== state.activeTabId) return tab;
+            return { ...tab, rawType, updatedAt: Date.now() };
           }),
         }));
       },
@@ -393,6 +522,24 @@ export const useApiStore = create<ApiStoreState>()(
           tabs: state.tabs.map((tab) => {
             if (tab.id !== state.activeTabId) return tab;
             return { ...tab, bodyContent, updatedAt: Date.now() };
+          }),
+        }));
+      },
+
+      setGraphqlQuery: (graphqlQuery) => {
+        set((state) => ({
+          tabs: state.tabs.map((tab) => {
+            if (tab.id !== state.activeTabId) return tab;
+            return { ...tab, graphqlQuery, updatedAt: Date.now() };
+          }),
+        }));
+      },
+
+      setGraphqlVariables: (graphqlVariables) => {
+        set((state) => ({
+          tabs: state.tabs.map((tab) => {
+            if (tab.id !== state.activeTabId) return tab;
+            return { ...tab, graphqlVariables, updatedAt: Date.now() };
           }),
         }));
       },
@@ -457,6 +604,15 @@ export const useApiStore = create<ApiStoreState>()(
               bodyFormData: currentList.filter((item) => item.id !== id),
               updatedAt: Date.now(),
             };
+          }),
+        }));
+      },
+
+      setBodyBinaryFile: (bodyBinaryFile) => {
+        set((state) => ({
+          tabs: state.tabs.map((tab) => {
+            if (tab.id !== state.activeTabId) return tab;
+            return { ...tab, bodyBinaryFile, updatedAt: Date.now() };
           }),
         }));
       },
@@ -745,16 +901,28 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       openRequestInTab: (request) => {
-        const newTab: ApiRequest = {
-          ...JSON.parse(JSON.stringify(request)),
-          id: generateId(),
-        };
+        set((state) => {
+          const existingTab = state.tabs.find(
+            (t) => t.id === request.id || (t.name === request.name && t.url === request.url && t.method === request.method)
+          );
+          if (existingTab) {
+            return {
+              activeTabId: existingTab.id,
+              activeResponse: null,
+            };
+          }
 
-        set((state) => ({
-          tabs: [...state.tabs, newTab],
-          activeTabId: newTab.id,
-          activeResponse: null,
-        }));
+          const newTab: ApiRequest = {
+            ...JSON.parse(JSON.stringify(request)),
+            id: request.id || generateId(),
+          };
+
+          return {
+            tabs: [...state.tabs, newTab],
+            activeTabId: newTab.id,
+            activeResponse: null,
+          };
+        });
       },
 
       clearHistory: () => set({ history: [] }),

@@ -3,6 +3,7 @@
 import React from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { KeyValuePair } from '@/types/api';
+import { VariableInput } from './VariableInput';
 
 interface KeyValueEditorProps {
   items: KeyValuePair[];
@@ -45,21 +46,19 @@ export const KeyValueEditor: React.FC<KeyValueEditorProps> = ({
                   />
                 </td>
                 <td className="px-2 py-1.5">
-                  <input
-                    type="text"
+                  <VariableInput
                     value={item.key}
-                    onChange={(e) => onUpdate(item.id, { key: e.target.value })}
+                    onChange={(key) => onUpdate(item.id, { key })}
                     placeholder={keyPlaceholder}
-                    className="w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-zinc-200 placeholder-zinc-600 focus:bg-zinc-900 focus:outline-none focus:ring-1 focus:ring-sky-500/50"
+                    size="sm"
                   />
                 </td>
                 <td className="px-2 py-1.5">
-                  <input
-                    type="text"
+                  <VariableInput
                     value={item.value}
-                    onChange={(e) => onUpdate(item.id, { value: e.target.value })}
+                    onChange={(value) => onUpdate(item.id, { value })}
                     placeholder={valuePlaceholder}
-                    className="w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-zinc-200 placeholder-zinc-600 focus:bg-zinc-900 focus:outline-none focus:ring-1 focus:ring-sky-500/50"
+                    size="sm"
                   />
                 </td>
                 <td className="px-2 py-1.5 text-center">

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Bookmark, Folder, FolderPlus, X, Check, Plus } from 'lucide-react';
+import { Bookmark, X, Check } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
 import { ApiRequest, CollectionItem } from '@/types/api';
 

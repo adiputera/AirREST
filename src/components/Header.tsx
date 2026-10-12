@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Plus, Upload, Download, Terminal, Radio, ShieldCheck, Globe, Settings2 } from 'lucide-react';
+import { Plus, Upload, Download, Terminal, ShieldCheck, Globe, Settings2 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
 import { ImportModal } from './ImportModal';
 import { EnvironmentModal } from './EnvironmentModal';
@@ -44,16 +44,11 @@ export const Header: React.FC = () => {
           </div>
           <div className="flex items-center gap-2">
             <h1 className="text-sm font-bold tracking-tight text-zinc-100">
-              API Tester
+              AirREST
             </h1>
             <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold text-sky-400">
               Extension v1.1
             </span>
-          </div>
-
-          <div className="hidden xl:flex items-center gap-1.5 ml-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] text-emerald-400 font-medium">
-            <Radio className="h-3 w-3 animate-pulse text-emerald-400" />
-            <span>Intranet & CORS Bypass Active</span>
           </div>
         </div>
 

@@ -1,4 +1,4 @@
-// Background Service Worker for API Tester Extension
+// Background Service Worker for AirREST Extension
 
 chrome.action.onClicked.addListener(async () => {
   const extensionUrl = chrome.runtime.getURL('index.html');

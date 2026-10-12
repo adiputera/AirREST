@@ -7,6 +7,9 @@ import {
   Environment,
   EnvironmentVariable,
   AuthConfig,
+  BinaryFileData,
+  BodyType,
+  RawType,
 } from '@/types/api';
 
 interface PostmanHeader {
@@ -31,8 +34,16 @@ interface PostmanUrlObject {
 }
 
 interface PostmanRequestBody {
-  mode?: 'raw' | 'urlencoded' | 'formdata' | 'file';
+  mode?: 'raw' | 'urlencoded' | 'formdata' | 'file' | 'graphql';
   raw?: string;
+  graphql?: {
+    query?: string;
+    variables?: string;
+  };
+  file?: {
+    src?: string;
+    content?: string;
+  };
   options?: {
     raw?: {
       language?: string;
@@ -42,16 +53,23 @@ interface PostmanRequestBody {
 
 export interface PostmanAuthAttribute {
   key?: string;
-  value?: any;
+  value?: unknown;
   type?: string;
 }
 
 export interface PostmanAuth {
   type?: string;
-  bearer?: PostmanAuthAttribute[] | Record<string, any> | string;
-  basic?: PostmanAuthAttribute[] | Record<string, any>;
-  apikey?: PostmanAuthAttribute[] | Record<string, any>;
-  [key: string]: any;
+  bearer?: PostmanAuthAttribute[] | Record<string, unknown> | string;
+  oauth2?: PostmanAuthAttribute[] | Record<string, unknown>;
+  basic?: PostmanAuthAttribute[] | Record<string, unknown>;
+  apikey?: PostmanAuthAttribute[] | Record<string, unknown>;
+  token?: string;
+  bearerToken?: string;
+  username?: string;
+  password?: string;
+  key?: string;
+  value?: string;
+  [key: string]: unknown;
 }
 
 interface PostmanRequestObject {
@@ -135,7 +153,7 @@ function extractRawUrl(url?: string | PostmanUrlObject): string {
  * Parses a Postman auth definition into an AuthConfig.
  * Supports Postman v2.0 & v2.1 formats for bearer, oauth2, basic, and apikey.
  */
-export function parsePostmanAuth(rawAuth: any): AuthConfig | null {
+export function parsePostmanAuth(rawAuth: PostmanAuth | Record<string, unknown> | null | undefined): AuthConfig | null {
   if (!rawAuth || typeof rawAuth !== 'object') return null;
 
   const authType = String(rawAuth.type || '').toLowerCase();
@@ -144,7 +162,7 @@ export function parsePostmanAuth(rawAuth: any): AuthConfig | null {
   if (authType === 'bearer') {
     let token = '';
     if (Array.isArray(rawAuth.bearer)) {
-      const tokenItem = rawAuth.bearer.find((item: any) => {
+      const tokenItem = (rawAuth.bearer as PostmanAuthAttribute[]).find((item) => {
         if (!item || !item.key) return false;
         const k = String(item.key).toLowerCase();
         return (
@@ -160,11 +178,12 @@ export function parsePostmanAuth(rawAuth: any): AuthConfig | null {
         token = String(rawAuth.bearer[0].value ?? '');
       }
     } else if (rawAuth.bearer && typeof rawAuth.bearer === 'object') {
+      const bObj = rawAuth.bearer as Record<string, unknown>;
       token = String(
-        rawAuth.bearer.token ||
-        rawAuth.bearer.bearerToken ||
-        rawAuth.bearer.accessToken ||
-        rawAuth.bearer.value ||
+        bObj.token ||
+        bObj.bearerToken ||
+        bObj.accessToken ||
+        bObj.value ||
         ''
       );
     } else if (typeof rawAuth.bearer === 'string') {
@@ -184,7 +203,7 @@ export function parsePostmanAuth(rawAuth: any): AuthConfig | null {
   if (authType === 'oauth2') {
     let token = '';
     if (Array.isArray(rawAuth.oauth2)) {
-      const tokenItem = rawAuth.oauth2.find((item: any) => {
+      const tokenItem = (rawAuth.oauth2 as PostmanAuthAttribute[]).find((item) => {
         if (!item || !item.key) return false;
         const k = String(item.key).toLowerCase();
         return k === 'accesstoken' || k === 'token' || k === 'value';
@@ -194,10 +213,11 @@ export function parsePostmanAuth(rawAuth: any): AuthConfig | null {
         token = String(rawAuth.oauth2[0].value ?? '');
       }
     } else if (rawAuth.oauth2 && typeof rawAuth.oauth2 === 'object') {
+      const oObj = rawAuth.oauth2 as Record<string, unknown>;
       token = String(
-        rawAuth.oauth2.accessToken ||
-        rawAuth.oauth2.token ||
-        rawAuth.oauth2.value ||
+        oObj.accessToken ||
+        oObj.token ||
+        oObj.value ||
         ''
       );
     }
@@ -216,12 +236,13 @@ export function parsePostmanAuth(rawAuth: any): AuthConfig | null {
     let username = '';
     let password = '';
     if (Array.isArray(rawAuth.basic)) {
-      const uItem = rawAuth.basic.find((item: any) => {
+      const basicList = rawAuth.basic as PostmanAuthAttribute[];
+      const uItem = basicList.find((item) => {
         if (!item || !item.key) return false;
         const k = String(item.key).toLowerCase();
         return k === 'username' || k === 'user';
       });
-      const pItem = rawAuth.basic.find((item: any) => {
+      const pItem = basicList.find((item) => {
         if (!item || !item.key) return false;
         const k = String(item.key).toLowerCase();
         return k === 'password' || k === 'pass';
@@ -229,8 +250,9 @@ export function parsePostmanAuth(rawAuth: any): AuthConfig | null {
       username = uItem ? String(uItem.value ?? '') : '';
       password = pItem ? String(pItem.value ?? '') : '';
     } else if (rawAuth.basic && typeof rawAuth.basic === 'object') {
-      username = String(rawAuth.basic.username ?? rawAuth.basic.user ?? '');
-      password = String(rawAuth.basic.password ?? rawAuth.basic.pass ?? '');
+      const bObj = rawAuth.basic as Record<string, unknown>;
+      username = String(bObj.username ?? bObj.user ?? '');
+      password = String(bObj.password ?? bObj.pass ?? '');
     }
 
     if (!username && typeof rawAuth.username === 'string') username = rawAuth.username;
@@ -250,9 +272,10 @@ export function parsePostmanAuth(rawAuth: any): AuthConfig | null {
     let inWhere: 'header' | 'query' = 'header';
 
     if (Array.isArray(rawAuth.apikey)) {
-      const kItem = rawAuth.apikey.find((item: any) => item && String(item.key).toLowerCase() === 'key');
-      const vItem = rawAuth.apikey.find((item: any) => item && String(item.key).toLowerCase() === 'value');
-      const inItem = rawAuth.apikey.find((item: any) => item && String(item.key).toLowerCase() === 'in');
+      const apiKeyList = rawAuth.apikey as PostmanAuthAttribute[];
+      const kItem = apiKeyList.find((item) => item && String(item.key).toLowerCase() === 'key');
+      const vItem = apiKeyList.find((item) => item && String(item.key).toLowerCase() === 'value');
+      const inItem = apiKeyList.find((item) => item && String(item.key).toLowerCase() === 'in');
 
       key = kItem ? String(kItem.value ?? '') : '';
       val = vItem ? String(vItem.value ?? '') : '';
@@ -260,9 +283,10 @@ export function parsePostmanAuth(rawAuth: any): AuthConfig | null {
         inWhere = 'query';
       }
     } else if (rawAuth.apikey && typeof rawAuth.apikey === 'object') {
-      key = String(rawAuth.apikey.key ?? '');
-      val = String(rawAuth.apikey.value ?? '');
-      if (String(rawAuth.apikey.in).toLowerCase() === 'query') {
+      const aObj = rawAuth.apikey as Record<string, unknown>;
+      key = String(aObj.key ?? '');
+      val = String(aObj.value ?? '');
+      if (String(aObj.in).toLowerCase() === 'query') {
         inWhere = 'query';
       }
     }
@@ -346,18 +370,75 @@ function convertPostmanItem(item: PostmanRawItem, inheritedAuth?: AuthConfig): C
   const params = parseQueryParams(rawReq.url);
   const headers = parseHeaders(rawReq.header);
 
-  let bodyType: 'none' | 'json' | 'raw' | 'x-www-form-urlencoded' = 'none';
+  let bodyType: BodyType = 'none';
+  let rawType: RawType = 'text';
   let bodyContent = '';
+  let graphqlQuery = '';
+  let graphqlVariables = '';
+  let bodyBinaryFile: BinaryFileData | undefined = undefined;
 
   if (rawReq.body) {
-    if (rawReq.body.mode === 'raw') {
-      bodyType = rawReq.body.options?.raw?.language === 'json' || rawReq.body.raw?.trim().startsWith('{') || rawReq.body.raw?.trim().startsWith('[')
-        ? 'json'
-        : 'raw';
-      bodyContent = rawReq.body.raw || '';
+    if (rawReq.body.mode === 'graphql') {
+      bodyType = 'graphql';
+      graphqlQuery = rawReq.body.graphql?.query || '';
+      graphqlVariables = rawReq.body.graphql?.variables || '';
+      bodyContent = graphqlQuery;
+    } else if (rawReq.body.mode === 'raw') {
+      const rawLang = rawReq.body.options?.raw?.language?.toLowerCase();
+      const rawStr = rawReq.body.raw || '';
+      const trimmed = rawStr.trim();
+
+      if (rawLang === 'xml' || (trimmed.startsWith('<') && trimmed.endsWith('>'))) {
+        bodyType = 'xml';
+        rawType = 'xml';
+      } else if (rawLang === 'json' || trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        bodyType = 'json';
+        rawType = 'json';
+      } else if (rawLang === 'html') {
+        bodyType = 'raw';
+        rawType = 'html';
+      } else {
+        bodyType = 'raw';
+        rawType = 'text';
+      }
+      bodyContent = rawStr;
     } else if (rawReq.body.mode === 'urlencoded') {
       bodyType = 'x-www-form-urlencoded';
       bodyContent = rawReq.body.raw || '';
+    } else if (rawReq.body.mode === 'file') {
+      bodyType = 'binary';
+      const fileSrc =
+        typeof rawReq.body.file === 'object' && rawReq.body.file?.src
+          ? rawReq.body.file.src
+          : typeof rawReq.body.file === 'string'
+          ? rawReq.body.file
+          : '';
+      const fileName = fileSrc
+        ? fileSrc.split('/').pop()?.split('\\').pop() || fileSrc
+        : 'upload.bin';
+      bodyBinaryFile = {
+        name: fileName,
+        size: 0,
+        type: 'application/octet-stream',
+      };
+    }
+  }
+
+  // Check headers for Content-Type fallback if raw mode without language options
+  if (bodyType === 'raw' && rawType === 'text') {
+    const ctHeader = headers.find((h) => h.key.trim().toLowerCase() === 'content-type');
+    if (ctHeader && ctHeader.value) {
+      const ctVal = ctHeader.value.toLowerCase();
+      if (ctVal.includes('application/xml') || ctVal.includes('text/xml')) {
+        bodyType = 'xml';
+        rawType = 'xml';
+      } else if (ctVal.includes('application/json')) {
+        bodyType = 'json';
+        rawType = 'json';
+      } else if (ctVal.includes('text/html')) {
+        bodyType = 'raw';
+        rawType = 'html';
+      }
     }
   }
 
@@ -413,7 +494,11 @@ function convertPostmanItem(item: PostmanRawItem, inheritedAuth?: AuthConfig): C
     headers: finalHeaders,
     auth,
     bodyType,
+    rawType,
     bodyContent,
+    graphqlQuery,
+    graphqlVariables,
+    bodyBinaryFile,
     preRequestScript,
     postResponseScript,
     createdAt: Date.now(),
@@ -483,7 +568,7 @@ function itemToPostmanJson(item: CollectionItem): PostmanRawItem {
   }));
 
   let body: PostmanRequestBody | undefined = undefined;
-  if (req.bodyType === 'json') {
+  if (req.bodyType === 'json' || (req.bodyType === 'raw' && req.rawType === 'json')) {
     body = {
       mode: 'raw',
       raw: req.bodyContent,
@@ -493,10 +578,55 @@ function itemToPostmanJson(item: CollectionItem): PostmanRawItem {
         },
       },
     };
+  } else if (req.bodyType === 'xml' || (req.bodyType === 'raw' && req.rawType === 'xml')) {
+    body = {
+      mode: 'raw',
+      raw: req.bodyContent,
+      options: {
+        raw: {
+          language: 'xml',
+        },
+      },
+    };
+  } else if (req.bodyType === 'raw' && req.rawType === 'html') {
+    body = {
+      mode: 'raw',
+      raw: req.bodyContent,
+      options: {
+        raw: {
+          language: 'html',
+        },
+      },
+    };
+  } else if (req.bodyType === 'raw' && req.rawType === 'text') {
+    body = {
+      mode: 'raw',
+      raw: req.bodyContent,
+      options: {
+        raw: {
+          language: 'text',
+        },
+      },
+    };
+  } else if (req.bodyType === 'graphql') {
+    body = {
+      mode: 'graphql',
+      graphql: {
+        query: req.graphqlQuery || req.bodyContent || '',
+        variables: req.graphqlVariables || '',
+      },
+    };
   } else if (req.bodyType === 'raw' || req.bodyType === 'x-www-form-urlencoded') {
     body = {
       mode: 'raw',
       raw: req.bodyContent,
+    };
+  } else if (req.bodyType === 'binary') {
+    body = {
+      mode: 'file',
+      file: {
+        src: req.bodyBinaryFile?.name || '',
+      },
     };
   }
 
@@ -667,7 +797,12 @@ export function importPostmanEnvironment(jsonString: string): Environment {
   const rawEnv = parsed.environment && typeof parsed.environment === 'object' ? parsed.environment : parsed;
   const name = typeof rawEnv.name === 'string' && rawEnv.name.trim() ? rawEnv.name.trim() : 'Imported Environment';
 
-  let rawValues: any[] = [];
+  interface PostmanRawEnvItem {
+    key?: unknown;
+    value?: unknown;
+    enabled?: unknown;
+  }
+  let rawValues: PostmanRawEnvItem[] = [];
   if (Array.isArray(rawEnv.values)) {
     rawValues = rawEnv.values;
   } else if (Array.isArray(rawEnv.variable)) {
@@ -721,7 +856,7 @@ export function exportPostmanEnvironment(env: Environment): string {
       })),
     _postman_variable_scope: 'environment',
     _postman_exported_at: new Date().toISOString(),
-    _postman_exported_using: 'API Tester/1.1.0',
+    _postman_exported_using: 'AirREST/1.1.0',
   };
 
   return JSON.stringify(postmanFormat, null, 2);
