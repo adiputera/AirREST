@@ -1,4 +1,4 @@
-import { ApiRequest, HttpMethod, KeyValuePair, AuthConfig } from '@/types/api';
+import { ApiRequest, HttpMethod, KeyValuePair, AuthConfig, FormDataItem, BinaryFileData, RawType } from '@/types/api';
 import { interpolateVariables } from './fetcher';
 
 function generateId(): string {
@@ -17,8 +17,13 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
   let method: HttpMethod = 'GET';
   let url = '';
   const headers: KeyValuePair[] = [];
+  const bodyFormData: FormDataItem[] = [];
+  let bodyBinaryFile: BinaryFileData | undefined = undefined;
   let bodyContent = '';
   let bodyType: ApiRequest['bodyType'] = 'none';
+  let rawType: RawType = 'text';
+  let graphqlQuery = '';
+  let graphqlVariables = '';
 
   // Tokenize preserving quoted strings
   const regex = /[^\s"']+|"([^"]*)"|'([^']*)'/g;
@@ -75,6 +80,76 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
           });
         }
       }
+    } else if (token === '-A' || token === '--user-agent') {
+      const ua = tokens[++i];
+      if (ua) {
+        headers.push({
+          id: generateId(),
+          key: 'User-Agent',
+          value: ua,
+          enabled: true,
+        });
+      }
+    } else if (token === '-b' || token === '--cookie') {
+      const cookie = tokens[++i];
+      if (cookie) {
+        headers.push({
+          id: generateId(),
+          key: 'Cookie',
+          value: cookie,
+          enabled: true,
+        });
+      }
+    } else if (token === '--json') {
+      const data = tokens[++i];
+      if (data !== undefined) {
+        bodyContent = data;
+        bodyType = 'json';
+        rawType = 'json';
+        if (method === 'GET') {
+          method = 'POST';
+        }
+        if (!headers.some((h) => h.key.toLowerCase() === 'content-type')) {
+          headers.push({
+            id: generateId(),
+            key: 'Content-Type',
+            value: 'application/json',
+            enabled: true,
+          });
+        }
+        if (!headers.some((h) => h.key.toLowerCase() === 'accept')) {
+          headers.push({
+            id: generateId(),
+            key: 'Accept',
+            value: 'application/json',
+            enabled: true,
+          });
+        }
+      }
+    } else if (token === '-F' || token === '--form') {
+      const formEntry = tokens[++i];
+      if (formEntry) {
+        const eqIdx = formEntry.indexOf('=');
+        if (eqIdx > 0) {
+          const k = formEntry.substring(0, eqIdx).trim();
+          let v = formEntry.substring(eqIdx + 1).trim();
+          const isFile = v.startsWith('@');
+          if (isFile) {
+            v = v.substring(1).trim();
+          }
+          bodyFormData.push({
+            id: generateId(),
+            key: k,
+            type: isFile ? 'file' : 'text',
+            value: v,
+            enabled: true,
+          });
+          bodyType = 'form-data';
+          if (method === 'GET') {
+            method = 'POST';
+          }
+        }
+      }
     } else if (
       token === '-d' ||
       token === '--data' ||
@@ -83,12 +158,43 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
     ) {
       const data = tokens[++i];
       if (data !== undefined) {
-        bodyContent = data;
+        if (token === '--data-binary' && data.startsWith('@')) {
+          const fileName = data.substring(1).trim();
+          bodyType = 'binary';
+          bodyBinaryFile = {
+            name: fileName,
+            size: 0,
+            type: 'application/octet-stream',
+          };
+        } else {
+          bodyContent = data;
+          const trimmed = data.trim();
+          if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+            try {
+              const parsed = JSON.parse(data);
+              if (parsed && typeof parsed === 'object' && typeof parsed.query === 'string') {
+                bodyType = 'graphql';
+                graphqlQuery = parsed.query;
+                graphqlVariables = parsed.variables ? JSON.stringify(parsed.variables, null, 2) : '';
+              } else {
+                bodyType = 'json';
+                rawType = 'json';
+              }
+            } catch {
+              bodyType = 'json';
+              rawType = 'json';
+            }
+          } else if (trimmed.startsWith('<') && trimmed.endsWith('>')) {
+            bodyType = 'xml';
+            rawType = 'xml';
+          } else {
+            bodyType = 'raw';
+            rawType = 'text';
+          }
+        }
         if (method === 'GET') {
           method = 'POST'; // curl defaults to POST when -d is passed
         }
-        bodyType =
-          data.trim().startsWith('{') || data.trim().startsWith('[') ? 'json' : 'raw';
       }
     } else if (token === '--url') {
       url = tokens[++i] || '';
@@ -136,14 +242,66 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
     ? headers.filter((h) => h.key.trim().toLowerCase() !== 'authorization')
     : headers;
 
+  // Check Content-Type header if present to refine bodyType and rawType
+  const contentTypeHeader = cleanHeaders.find((h) => h.key.trim().toLowerCase() === 'content-type');
+  if (contentTypeHeader && bodyType !== 'none' && bodyType !== 'form-data' && bodyType !== 'binary') {
+    const ctVal = contentTypeHeader.value.toLowerCase();
+    if (ctVal.includes('application/xml') || ctVal.includes('text/xml')) {
+      bodyType = 'xml';
+      rawType = 'xml';
+    } else if (ctVal.includes('application/json')) {
+      bodyType = 'json';
+      rawType = 'json';
+    } else if (ctVal.includes('text/html')) {
+      bodyType = 'raw';
+      rawType = 'html';
+    } else if (ctVal.includes('text/plain')) {
+      bodyType = 'raw';
+      rawType = 'text';
+    }
+  }
+
+  // Extract query parameters from URL into params list
+  const params: KeyValuePair[] = [];
+  let finalUrl = url;
+
+  if (url && url.includes('?')) {
+    try {
+      const dummyBase = !/^https?:\/\//i.test(url) ? 'http://placeholder' : undefined;
+      const parsedUrl = new URL(url, dummyBase);
+      parsedUrl.searchParams.forEach((value, key) => {
+        params.push({
+          id: generateId(),
+          key,
+          value,
+          enabled: true,
+        });
+      });
+      // Keep full URL with query parameters in sync with params
+      finalUrl = url;
+    } catch {
+      // Retain url as is
+    }
+  }
+
+  if (params.length === 0) {
+    params.push({ id: generateId(), key: '', value: '', enabled: true });
+  }
+
   return {
     method,
-    url,
+    url: finalUrl,
+    params,
     headers: cleanHeaders,
     auth,
     bodyType,
+    rawType,
     bodyContent,
-    name: url ? `${method} ${url.substring(0, 30)}` : 'Imported cURL Request',
+    graphqlQuery,
+    graphqlVariables,
+    bodyFormData,
+    bodyBinaryFile,
+    name: url ? `${method} ${finalUrl.substring(0, 30)}` : 'Imported cURL Request',
   };
 }
 
@@ -155,6 +313,30 @@ export function generateCurlCommand(
   variables: Record<string, string> = {}
 ): string {
   let url = interpolateVariables(request.url, variables);
+
+  // Append query parameters
+  if (request.params && request.params.length > 0) {
+    const activeParams = request.params.filter((p) => p.enabled && p.key.trim());
+    if (activeParams.length > 0) {
+      try {
+        const dummyBase = !/^https?:\/\//i.test(url) ? 'http://placeholder' : undefined;
+        const parsedUrl = new URL(url, dummyBase);
+        for (const p of activeParams) {
+          const k = interpolateVariables(p.key.trim(), variables);
+          const v = interpolateVariables(p.value, variables);
+          parsedUrl.searchParams.set(k, v);
+        }
+        url = dummyBase ? parsedUrl.pathname + parsedUrl.search : parsedUrl.toString();
+      } catch {
+        if (!url.includes('?')) {
+          const queryString = activeParams
+            .map((p) => `${encodeURIComponent(interpolateVariables(p.key.trim(), variables))}=${encodeURIComponent(interpolateVariables(p.value, variables))}`)
+            .join('&');
+          url += '?' + queryString;
+        }
+      }
+    }
+  }
 
   // If API Key is configured in query parameters, attach it
   if (request.auth.type === 'apikey' && request.auth.apiKeyIn === 'query' && request.auth.apiKeyKey && request.auth.apiKeyValue) {
@@ -172,12 +354,18 @@ export function generateCurlCommand(
   const parts: string[] = [`curl -X ${request.method} "${url}"`];
 
   // Headers
+  let hasContentType = false;
   for (const h of request.headers) {
     if (h.enabled && h.key.trim()) {
       const key = interpolateVariables(h.key.trim(), variables);
       const val = interpolateVariables(h.value, variables);
+      if (key.toLowerCase() === 'content-type') hasContentType = true;
       parts.push(`-H "${key}: ${val}"`);
     }
+  }
+
+  if (!hasContentType && request.bodyType === 'graphql') {
+    parts.push(`-H "Content-Type: application/json"`);
   }
 
   // Auth
@@ -198,7 +386,27 @@ export function generateCurlCommand(
 
   // Body
   if (request.method !== 'GET' && request.method !== 'HEAD') {
-    if (request.bodyType === 'json' || request.bodyType === 'raw' || request.bodyType === 'x-www-form-urlencoded') {
+    if (request.bodyType === 'graphql') {
+      const q = interpolateVariables(request.graphqlQuery || request.bodyContent || '', variables);
+      const vStr = interpolateVariables(request.graphqlVariables || '', variables).trim();
+      let vParsed: unknown = undefined;
+      if (vStr) {
+        try {
+          vParsed = JSON.parse(vStr);
+        } catch {
+          // ignore
+        }
+      }
+      const gqlObj: { query: string; variables?: unknown } = { query: q };
+      if (vParsed !== undefined) gqlObj.variables = vParsed;
+      const body = JSON.stringify(gqlObj);
+      parts.push(`-d '${body.replace(/'/g, `'\\''`)}'`);
+    } else if (
+      request.bodyType === 'json' ||
+      request.bodyType === 'xml' ||
+      request.bodyType === 'raw' ||
+      request.bodyType === 'x-www-form-urlencoded'
+    ) {
       const body = interpolateVariables(request.bodyContent || '', variables);
       if (body) {
         parts.push(`-d '${body.replace(/'/g, `'\\''`)}'`);
@@ -215,6 +423,9 @@ export function generateCurlCommand(
           }
         }
       }
+    } else if (request.bodyType === 'binary' && request.bodyBinaryFile) {
+      const fileName = request.bodyBinaryFile.name || 'file.bin';
+      parts.push(`--data-binary "@${fileName}"`);
     }
   }
 

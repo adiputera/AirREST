@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "API Tester - REST & Postman Client",
+  "name": "AirREST - REST & Postman Client",
   "version": "1.0.0",
-  "description": "Fast browser-based API tester with Postman collection compatibility, zero CORS blocks, and Intranet support.",
+  "description": "Fast browser-based API client with Postman collection compatibility, zero CORS blocks, and Intranet support.",
   "permissions": [
     "storage"
   ],
@@ -13,7 +13,7 @@
     "service_worker": "service-worker.js"
   },
   "action": {
-    "default_title": "Open API Tester",
+    "default_title": "Open AirREST",
     "default_icon": {
       "16": "icons/icon-16.png",
       "48": "icons/icon-48.png",

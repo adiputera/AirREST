@@ -12,10 +12,38 @@ import {
   FolderPlus,
   Layers,
   ArrowUpRight,
+  Download,
 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
-import { CollectionItem, ApiRequest } from '@/types/api';
+import { CollectionItem, ApiRequest, Collection } from '@/types/api';
 import { MethodBadge } from './MethodBadge';
+import { exportPostmanCollection } from '@/lib/postman';
+
+function filterCollectionItems(items: CollectionItem[], query: string): CollectionItem[] {
+  return items
+    .map((item) => {
+      if (item.type === 'folder') {
+        const matchingChildren = item.items ? filterCollectionItems(item.items, query) : [];
+        if (matchingChildren.length > 0 || item.name.toLowerCase().includes(query)) {
+          return {
+            ...item,
+            items: matchingChildren.length > 0 ? matchingChildren : item.items,
+          };
+        }
+        return null;
+      }
+      if (item.type === 'request') {
+        const matches =
+          item.name.toLowerCase().includes(query) ||
+          (item.request &&
+            (item.request.url.toLowerCase().includes(query) ||
+              item.request.method.toLowerCase().includes(query)));
+        return matches ? item : null;
+      }
+      return null;
+    })
+    .filter((item): item is CollectionItem => item !== null);
+}
 
 interface FolderItemProps {
   item: CollectionItem;
@@ -98,12 +126,46 @@ export const Sidebar: React.FC = () => {
   const [isCreatingCol, setIsCreatingCol] = useState(false);
   const [newColTitle, setNewColTitle] = useState('');
 
+  const trimmedQuery = searchQuery.trim().toLowerCase();
+
+  const filteredCollections = !trimmedQuery
+    ? collections
+    : collections
+        .map((col) => {
+          const nameMatches = col.name.toLowerCase().includes(trimmedQuery);
+          const matchedItems = filterCollectionItems(col.items, trimmedQuery);
+          if (nameMatches || matchedItems.length > 0) {
+            return {
+              ...col,
+              items: nameMatches ? col.items : matchedItems,
+            };
+          }
+          return null;
+        })
+        .filter((col): col is Collection => col !== null);
+
   const filteredHistory = history.filter(
     (h) =>
-      h.request.url.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      h.request.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      h.request.method.toLowerCase().includes(searchQuery.toLowerCase())
+      h.request.url.toLowerCase().includes(trimmedQuery) ||
+      h.request.name.toLowerCase().includes(trimmedQuery) ||
+      h.request.method.toLowerCase().includes(trimmedQuery)
   );
+
+  const handleExportCollection = (e: React.MouseEvent, col: Collection) => {
+    e.stopPropagation();
+    try {
+      const json = exportPostmanCollection(col);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${col.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-postman-v2.1.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Failed to export collection', err);
+    }
+  };
 
   return (
     <aside className="flex h-full w-72 flex-col border-r border-zinc-800 bg-zinc-950/70 select-none">
@@ -225,24 +287,41 @@ export const Sidebar: React.FC = () => {
                   Import your Postman v2.1 collection using the header button to organize your API requests.
                 </p>
               </div>
+            ) : filteredCollections.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-8 px-4 text-center">
+                <Search className="h-6 w-6 text-zinc-600" />
+                <h4 className="mt-2 text-xs font-semibold text-zinc-300">No Matching Collections</h4>
+                <p className="mt-1 text-[11px] text-zinc-500">
+                  No collection or request matched &ldquo;{searchQuery}&rdquo;.
+                </p>
+              </div>
             ) : (
               <div className="space-y-3">
-                {collections.map((col) => (
+                {filteredCollections.map((col) => (
                   <div key={col.id} className="rounded-lg border border-zinc-850 bg-zinc-900/40 p-1.5">
                     <div className="flex items-center justify-between px-2 py-1">
-                      <div className="flex items-center gap-1.5">
-                        <Folder className="h-4 w-4 text-amber-400" />
-                        <span className="text-xs font-bold text-zinc-200 truncate max-w-[150px]">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <Folder className="h-4 w-4 text-amber-400 shrink-0" />
+                        <span className="text-xs font-bold text-zinc-200 truncate" title={col.name}>
                           {col.name}
                         </span>
                       </div>
-                      <button
-                        onClick={() => deleteCollection(col.id)}
-                        className="rounded p-1 text-zinc-500 hover:text-rose-400 hover:bg-zinc-800 transition"
-                        title="Delete collection"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                      <div className="flex items-center gap-0.5 shrink-0 ml-1">
+                        <button
+                          onClick={(e) => handleExportCollection(e, col)}
+                          className="rounded p-1 text-zinc-500 hover:text-sky-400 hover:bg-zinc-800 transition"
+                          title="Export collection as Postman v2.1 JSON"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          onClick={() => deleteCollection(col.id)}
+                          className="rounded p-1 text-zinc-500 hover:text-rose-400 hover:bg-zinc-800 transition"
+                          title="Delete collection"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                     </div>
 
                     <div className="mt-1 space-y-0.5">

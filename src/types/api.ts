@@ -17,7 +17,16 @@ export interface FormDataItem {
   enabled: boolean;
 }
 
-export type BodyType = 'none' | 'json' | 'raw' | 'x-www-form-urlencoded' | 'form-data';
+export interface BinaryFileData {
+  name: string;
+  size: number;
+  type: string;
+  file?: File;
+}
+
+export type RawType = 'text' | 'json' | 'xml' | 'html';
+
+export type BodyType = 'none' | 'json' | 'xml' | 'raw' | 'x-www-form-urlencoded' | 'form-data' | 'binary' | 'graphql';
 
 export interface AuthConfig {
   type: 'none' | 'bearer' | 'basic' | 'apikey';
@@ -38,8 +47,12 @@ export interface ApiRequest {
   headers: KeyValuePair[];
   auth: AuthConfig;
   bodyType: BodyType;
+  rawType?: RawType;
   bodyContent: string;
+  graphqlQuery?: string;
+  graphqlVariables?: string;
   bodyFormData?: FormDataItem[];
+  bodyBinaryFile?: BinaryFileData;
   preRequestScript?: string;
   postResponseScript?: string;
   createdAt: number;
@@ -58,6 +71,10 @@ export interface ApiResponse {
   scriptError?: string;
   updatedEnvVars?: string[];
   timestamp: number;
+  contentType?: string;
+  isBinary?: boolean;
+  isImage?: boolean;
+  blobUrl?: string;
 }
 
 export interface CollectionItem {
