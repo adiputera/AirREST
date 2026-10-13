@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: airrest-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: airrest
+      POSTGRES_PASSWORD: airrest_secret_password
+      POSTGRES_DB: airrest_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airrest -d airrest_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: airrest-backend
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PORT: 8080
+      DATABASE_URL: postgres://airrest:airrest_secret_password@postgres:5432/airrest_db?sslmode=disable
+      JWT_SECRET: super-secret-jwt-key-change-in-production-minimum-32-chars
+      JWT_EXPIRATION_HOURS: 72
+      SUPERADMIN_EMAIL: admin@example.com
+      SUPERADMIN_PASSWORD: SuperadminSecurePassword123!
+      SUPERADMIN_NAME: Super Administrator
+    ports:
+      - "8080:8080"
+
+volumes:
+  pgdata:

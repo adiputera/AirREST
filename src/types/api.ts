@@ -115,3 +115,58 @@ export interface Environment {
   createdAt: number;
   updatedAt: number;
 }
+
+export type WorkspaceMode = 'offline' | 'cloud';
+
+export interface CloudUser {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  avatar_url?: string;
+}
+
+export interface CloudWorkspace {
+  id: string;
+  name: string;
+  description?: string;
+  is_default?: boolean;
+}
+
+export interface CloudTeam {
+  id: string;
+  name: string;
+  description?: string;
+  role?: string; // 'admin' | 'member'
+}
+
+export interface CloudProject {
+  id: string;
+  team_id: string;
+  team_name?: string;
+  name: string;
+  description?: string;
+  user_role?: 'admin' | 'contributor' | 'reader';
+}
+
+export interface ActiveScope {
+  type: 'workspace' | 'project';
+  id: string;
+  name: string;
+  teamId?: string;
+  teamName?: string;
+  role?: 'admin' | 'contributor' | 'reader' | 'owner';
+}
+
+export type SyncStatus = 'idle' | 'syncing' | 'synced' | 'error' | 'offline';
+
+export interface CloudConfig {
+  apiUrl: string;
+  hubUrl?: string;
+  token?: string;
+  refreshToken?: string;
+  tokenExpiresAt?: string;
+  user?: CloudUser;
+  activeScope?: ActiveScope;
+}
+

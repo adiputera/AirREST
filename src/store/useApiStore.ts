@@ -14,6 +14,10 @@ import {
   FormDataItem,
   BinaryFileData,
   RawType,
+  WorkspaceMode,
+  CloudConfig,
+  ActiveScope,
+  SyncStatus,
 } from '@/types/api';
 import { executeApiRequest } from '@/lib/fetcher';
 import {
@@ -23,6 +27,15 @@ import {
 } from '@/lib/postman';
 import { executePreRequestScript, executePostResponseScript } from '@/lib/scriptRunner';
 import { parseQueryParamsFromUrl, buildUrlWithParams } from '@/lib/urlParams';
+import {
+  pullScopeDelta,
+  batchImportToWorkspace,
+  registerTokenRefreshCallback,
+} from '@/lib/cloudApi';
+import {
+  buildCollectionsFromDelta,
+  buildEnvironmentsFromDelta,
+} from '@/lib/cloudSyncTransformer';
 
 function generateId(): string {
   return Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
@@ -145,6 +158,23 @@ interface ApiStoreState {
   openRequestInTab: (request: ApiRequest) => void;
   clearHistory: () => void;
   deleteHistoryItem: (id: string) => void;
+
+  // Workspace Mode & Cloud Synchronization
+  workspaceMode: WorkspaceMode;
+  hasConfiguredMode: boolean;
+  cloudConfig: CloudConfig;
+  syncStatus: SyncStatus;
+  lastSyncedAt: number | null;
+  syncError: string | null;
+
+  setWorkspaceMode: (mode: WorkspaceMode) => void;
+  setHasConfiguredMode: (configured: boolean) => void;
+  setCloudConfig: (config: Partial<CloudConfig>) => void;
+  setActiveScope: (scope: ActiveScope) => Promise<void>;
+  logoutCloud: () => void;
+  setSyncStatus: (status: SyncStatus, error?: string | null) => void;
+  pullCloudDelta: () => Promise<void>;
+  importLocalToCloud: () => Promise<{ success: boolean; message: string }>;
 }
 
 export const useApiStore = create<ApiStoreState>()(
@@ -159,6 +189,99 @@ export const useApiStore = create<ApiStoreState>()(
       sidebarTab: 'collections',
       environments: defaultEnvironments,
       activeEnvironmentId: 'env-jsonplaceholder',
+
+      // Workspace Mode & Cloud Sync State
+      workspaceMode: 'offline',
+      hasConfiguredMode: false,
+      cloudConfig: {
+        apiUrl: 'http://localhost:8080',
+      },
+      syncStatus: 'idle',
+      lastSyncedAt: null,
+      syncError: null,
+
+      setWorkspaceMode: (workspaceMode) => set({ workspaceMode, hasConfiguredMode: true }),
+      setHasConfiguredMode: (hasConfiguredMode) => set({ hasConfiguredMode }),
+      setCloudConfig: (updates) =>
+        set((state) => ({
+          cloudConfig: { ...state.cloudConfig, ...updates },
+        })),
+      setActiveScope: async (scope) => {
+        set((state) => ({
+          cloudConfig: {
+            ...state.cloudConfig,
+            activeScope: scope,
+          },
+        }));
+        await get().pullCloudDelta();
+      },
+      logoutCloud: () => {
+        set((state) => ({
+          workspaceMode: 'offline',
+          cloudConfig: {
+            apiUrl: state.cloudConfig.apiUrl || 'http://localhost:8080',
+          },
+          syncStatus: 'idle',
+          syncError: null,
+        }));
+      },
+      setSyncStatus: (syncStatus, syncError = null) => set({ syncStatus, syncError }),
+      pullCloudDelta: async () => {
+        const { workspaceMode, cloudConfig } = get();
+        if (workspaceMode !== 'cloud' || !cloudConfig.token || !cloudConfig.activeScope) {
+          return;
+        }
+        set({ syncStatus: 'syncing', syncError: null });
+        try {
+          const delta = await pullScopeDelta(
+            cloudConfig.apiUrl,
+            cloudConfig.token,
+            cloudConfig.activeScope,
+            null,
+            cloudConfig.refreshToken
+          );
+          const pulledCols = buildCollectionsFromDelta(delta.collections, delta.items);
+          const pulledEnvs = buildEnvironmentsFromDelta(delta.environments);
+
+          set({
+            collections: pulledCols,
+            environments: pulledEnvs.length > 0 ? pulledEnvs : get().environments,
+            activeEnvironmentId: pulledEnvs.length > 0 ? pulledEnvs[0].id : get().activeEnvironmentId,
+            syncStatus: 'synced',
+            lastSyncedAt: Date.now(),
+            syncError: null,
+          });
+        } catch (err: any) {
+          set({
+            syncStatus: 'error',
+            syncError: err.message || 'Cloud sync failed',
+          });
+        }
+      },
+      importLocalToCloud: async () => {
+        const { cloudConfig, collections } = get();
+        if (!cloudConfig.token || !cloudConfig.activeScope) {
+          return { success: false, message: 'Not connected to a cloud workspace or project' };
+        }
+        if (collections.length === 0) {
+          return { success: false, message: 'No local collections found to import' };
+        }
+        try {
+          set({ syncStatus: 'syncing', syncError: null });
+          await batchImportToWorkspace(
+            cloudConfig.apiUrl,
+            cloudConfig.token,
+            cloudConfig.activeScope.id,
+            collections,
+            cloudConfig.refreshToken
+          );
+          await get().pullCloudDelta();
+          return { success: true, message: `Successfully imported ${collections.length} collection(s) to cloud` };
+        } catch (err: any) {
+          set({ syncStatus: 'error', syncError: err.message || 'Import failed' });
+          return { success: false, message: err.message || 'Import failed' };
+        }
+      },
 
       // Environment actions
       setActiveEnvironmentId: (activeEnvironmentId) => set({ activeEnvironmentId }),
@@ -943,7 +1066,19 @@ export const useApiStore = create<ApiStoreState>()(
         history: state.history,
         environments: state.environments,
         activeEnvironmentId: state.activeEnvironmentId,
+        workspaceMode: state.workspaceMode,
+        hasConfiguredMode: state.hasConfiguredMode,
+        cloudConfig: state.cloudConfig,
       }),
     }
   )
 );
+
+// Register silent background refresh listener to keep cloudConfig tokens up to date
+registerTokenRefreshCallback((newTokens) => {
+  useApiStore.getState().setCloudConfig({
+    token: newTokens.token,
+    refreshToken: newTokens.refreshToken,
+    tokenExpiresAt: newTokens.expiresAt,
+  });
+});
