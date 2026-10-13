@@ -1,0 +1,28 @@
+# Go build binaries
+/server
+
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+profile.out
+
+# Environment variables & secrets (Never commit secrets!)
+.env
+.env.*
+*.env
+!.env.example
+!.env.*.example
+!*.env.example
+
+# Test & coverage
+coverage/
+
+# IDEs & OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo

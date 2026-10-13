@@ -1,21 +1,34 @@
 'use client';
 
-import React, { useState } from 'react';
-import { Plus, Upload, Download, Terminal, ShieldCheck, Globe, Settings2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Plus, Upload, Download, Terminal, Globe, Settings2 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
 import { ImportModal } from './ImportModal';
 import { EnvironmentModal } from './EnvironmentModal';
+import { ModeSelectorModal } from './ModeSelectorModal';
+import { CloudAuthModal } from './CloudAuthModal';
+import { ScopeSwitcher } from './ScopeSwitcher';
 import { exportPostmanCollection } from '@/lib/postman';
 
 export const Header: React.FC = () => {
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [isEnvModalOpen, setIsEnvModalOpen] = useState(false);
+  const [isModeSelectorOpen, setIsModeSelectorOpen] = useState(false);
+  const [isCloudAuthOpen, setIsCloudAuthOpen] = useState(false);
 
   const createTab = useApiStore((state) => state.createTab);
   const collections = useApiStore((state) => state.collections);
   const environments = useApiStore((state) => state.environments);
   const activeEnvironmentId = useApiStore((state) => state.activeEnvironmentId);
   const setActiveEnvironmentId = useApiStore((state) => state.setActiveEnvironmentId);
+  const hasConfiguredMode = useApiStore((state) => state.hasConfiguredMode);
+
+  // Automatically prompt on first launch if storage mode is not yet configured
+  useEffect(() => {
+    if (!hasConfiguredMode) {
+      setIsModeSelectorOpen(true);
+    }
+  }, [hasConfiguredMode]);
 
   const handleExportAll = () => {
     if (collections.length === 0) {
@@ -36,19 +49,27 @@ export const Header: React.FC = () => {
 
   return (
     <>
-      <header className="flex h-14 w-full items-center justify-between border-b border-zinc-800 bg-zinc-950/80 px-4 backdrop-blur-md">
-        {/* Brand & Status */}
+      <header className="relative z-30 flex h-14 w-full items-center justify-between border-b border-zinc-800 bg-zinc-950/80 px-4 backdrop-blur-md">
+        {/* Brand & Team/Project Scope Switcher */}
         <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-tr from-sky-600 to-indigo-600 shadow-md shadow-sky-500/20 text-white">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-tr from-sky-600 to-indigo-600 shadow-md shadow-sky-500/20 text-white shrink-0">
             <Terminal className="h-4 w-4" />
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 mr-1">
             <h1 className="text-sm font-bold tracking-tight text-zinc-100">
               AirREST
             </h1>
-            <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold text-sky-400">
+            <span className="hidden sm:inline-block rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold text-sky-400">
               Extension v1.1
             </span>
+          </div>
+
+          {/* Scope & Team Switcher */}
+          <div className="relative z-30 border-l border-zinc-800/80 pl-3">
+            <ScopeSwitcher
+              onOpenModeSelector={() => setIsModeSelectorOpen(true)}
+              onOpenCloudAuth={() => setIsCloudAuthOpen(true)}
+            />
           </div>
         </div>
 
@@ -106,16 +127,22 @@ export const Header: React.FC = () => {
               <span className="hidden md:inline">Export</span>
             </button>
           )}
-
-          <div className="hidden 2xl:flex items-center gap-1 border-l border-zinc-800 pl-3 ml-1 text-[11px] text-zinc-500">
-            <ShieldCheck className="h-3.5 w-3.5 text-zinc-400" />
-            <span>Saved</span>
-          </div>
         </div>
       </header>
 
+      {/* Modals */}
       <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} />
       <EnvironmentModal isOpen={isEnvModalOpen} onClose={() => setIsEnvModalOpen(false)} />
+      <ModeSelectorModal
+        isOpen={isModeSelectorOpen}
+        onClose={() => setIsModeSelectorOpen(false)}
+        onSelectCloud={() => setIsCloudAuthOpen(true)}
+      />
+      <CloudAuthModal
+        isOpen={isCloudAuthOpen}
+        onClose={() => setIsCloudAuthOpen(false)}
+      />
     </>
   );
 };
+

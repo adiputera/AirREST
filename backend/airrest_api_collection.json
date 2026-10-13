@@ -1,0 +1,373 @@
+{
+  "info": {
+    "_postman_id": "c1f7a4e2-63b9-4a92-8db3-982827170123",
+    "name": "AirREST Backend API",
+    "description": "Complete API testing collection for AirREST Go backend synchronization service with Auth, Workspaces, Teams, Projects, RBAC, and Stateless OCC Sync.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "0. Health",
+      "item": [
+        {
+          "name": "Service Healthcheck",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "health"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "1. Authentication",
+      "item": [
+        {
+          "name": "Superadmin Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.data && res.data.token) {",
+                  "    pm.environment.set('token', res.data.token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@example.com\",\n  \"password\": \"SuperadminSecurePassword123!\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "login"]
+            }
+          }
+        },
+        {
+          "name": "Register New User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.data && res.data.token) {",
+                  "    pm.environment.set('userToken', res.data.token);",
+                  "    pm.environment.set('userId', res.data.user.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"developer@example.com\",\n  \"password\": \"DeveloperPass123!\",\n  \"name\": \"Alice Developer\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/register",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "register"]
+            }
+          }
+        },
+        {
+          "name": "Get Current Profile (Me)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "me"]
+            }
+          }
+        },
+        {
+          "name": "Update User Profile",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Alice Updated\",\n  \"avatar_url\": \"https://example.com/avatar.png\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/profile",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "profile"]
+            }
+          }
+        },
+        {
+          "name": "Change Password",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"current_password\": \"DeveloperPass123!\",\n  \"new_password\": \"NewSuperSecretPass456!\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/password",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "password"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Workspaces",
+      "item": [
+        {
+          "name": "List Private Workspaces",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/workspaces",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "workspaces"]
+            }
+          }
+        },
+        {
+          "name": "Create Private Workspace",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Microservices Workspace\",\n  \"description\": \"Sandbox for internal APIs\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/workspaces",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "workspaces"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Teams & Membership",
+      "item": [
+        {
+          "name": "Create Team (Superadmin only)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Core Platform Team\",\n  \"description\": \"Engineering squad\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/teams",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "teams"]
+            }
+          }
+        },
+        {
+          "name": "List Teams",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/teams",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "teams"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Projects & Isolation",
+      "item": [
+        {
+          "name": "List Team Projects",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/teams/{{teamId}}/projects",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "teams", "{{teamId}}", "projects"]
+            }
+          }
+        },
+        {
+          "name": "Create Project in Team",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Auth Service API\",\n  \"description\": \"Endpoints for identity and tokens\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/teams/{{teamId}}/projects",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "teams", "{{teamId}}", "projects"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Collections & Items",
+      "item": [
+        {
+          "name": "List Collections in Workspace",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/collections?workspace_id={{workspaceId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "collections"],
+              "query": [
+                { "key": "workspace_id", "value": "{{workspaceId}}" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Reorder Items in Collection",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"id\": \"{{itemId1}}\",\n      \"parent_id\": null,\n      \"sort_order\": 0\n    },\n    {\n      \"id\": \"{{itemId2}}\",\n      \"parent_id\": null,\n      \"sort_order\": 1\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/collections/{{collectionId}}/reorder",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "collections", "{{collectionId}}", "reorder"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Delta Synchronization",
+      "item": [
+        {
+          "name": "Pull Changes (since timestamp)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/sync/pull?workspace_id={{workspaceId}}&since=1970-01-01T00:00:00Z",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "sync", "pull"],
+              "query": [
+                { "key": "workspace_id", "value": "{{workspaceId}}" },
+                { "key": "since", "value": "1970-01-01T00:00:00Z" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Push Batch Changeset",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"workspace_id\": \"{{workspaceId}}\",\n  \"collections\": [\n    {\n      \"action\": \"create\",\n      \"collection\": {\n        \"name\": \"Products API\"\n      }\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/sync/push",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "sync", "push"]
+            }
+          }
+      ]
+    },
+    {
+      "name": "6. Users Directory",
+      "item": [
+        {
+          "name": "Search Users by Email or Name",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/search?email=example",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "users", "search"],
+              "query": [
+                { "key": "email", "value": "example" }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080" },
+    { "key": "token", "value": "" },
+    { "key": "teamId", "value": "" },
+    { "key": "workspaceId", "value": "" }
+  ]
+}

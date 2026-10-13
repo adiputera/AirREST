@@ -1,0 +1,269 @@
+import React, { useState, useEffect } from 'react';
+import { ShieldAlert, Plus, Search, Loader2, UserCheck, X } from 'lucide-react';
+import { useHubStore } from '../store/useHubStore';
+import { apiListAllUsers, apiProvisionUser } from '../lib/api';
+import { User } from '../types';
+
+export const SuperadminView: React.FC = () => {
+  const apiUrl = useHubStore((state) => state.apiUrl);
+  const token = useHubStore((state) => state.token);
+  const refreshToken = useHubStore((state) => state.refreshToken);
+
+  const [users, setUsers] = useState<User[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [search, setSearch] = useState('');
+
+  // Provision Modal
+  const [isProvisionOpen, setIsProvisionOpen] = useState(false);
+  const [newEmail, setNewEmail] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newName, setNewName] = useState('');
+  const [newRole, setNewRole] = useState<'user' | 'superadmin'>('user');
+  const [isProvisioning, setIsProvisioning] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const loadUsers = async () => {
+    if (!token) return;
+    setIsLoading(true);
+    try {
+      const data = await apiListAllUsers(apiUrl, token, refreshToken || undefined);
+      setUsers(data);
+    } catch (err: any) {
+      console.error('Failed to list users:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadUsers();
+  }, [apiUrl, token]);
+
+  const handleProvision = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token) return;
+    setIsProvisioning(true);
+    setErrorMsg(null);
+    try {
+      await apiProvisionUser(
+        apiUrl,
+        token,
+        newEmail,
+        newPassword,
+        newName,
+        newRole,
+        refreshToken || undefined
+      );
+      setIsProvisionOpen(false);
+      setNewEmail('');
+      setNewPassword('');
+      setNewName('');
+      loadUsers();
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Provisioning failed');
+    } finally {
+      setIsProvisioning(false);
+    }
+  };
+
+  const filtered = users.filter(
+    (u) =>
+      u.email.toLowerCase().includes(search.toLowerCase()) ||
+      u.name.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div className="flex-1 overflow-y-auto p-8 bg-zinc-950">
+      <div className="max-w-5xl mx-auto space-y-6 animate-in fade-in duration-150">
+        {/* Banner */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-6">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20 shrink-0">
+              <ShieldAlert className="h-5 w-5" />
+            </div>
+            <div>
+              <h1 className="text-lg font-bold text-zinc-100">Superadmin System Console</h1>
+              <p className="text-xs text-zinc-400 mt-0.5">
+                System-wide user administration, account provisioning, and global role management.
+              </p>
+            </div>
+          </div>
+
+          <button
+            onClick={() => setIsProvisionOpen(true)}
+            className="flex items-center gap-1.5 rounded-xl bg-amber-500 px-4 py-2 text-xs font-semibold text-zinc-950 hover:bg-amber-400 transition shadow-md shadow-amber-500/20 shrink-0"
+          >
+            <Plus className="h-4 w-4" />
+            <span>Provision New User</span>
+          </button>
+        </div>
+
+        {/* Directory Controls */}
+        <div className="flex items-center justify-between gap-4">
+          <div className="relative w-72">
+            <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-zinc-500" />
+            <input
+              type="text"
+              placeholder="Search user directory..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 pl-9 pr-3 py-2 text-xs text-zinc-200 placeholder-zinc-500 focus:border-amber-500 focus:outline-none"
+            />
+          </div>
+
+          <div className="text-xs text-zinc-400">
+            Total Registered Users: <strong className="text-zinc-200">{users.length}</strong>
+          </div>
+        </div>
+
+        {/* Users Table */}
+        <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 overflow-hidden shadow-sm">
+          <table className="w-full text-left text-xs">
+            <thead className="border-b border-zinc-800 bg-zinc-950/80 text-zinc-400 uppercase text-[10px] font-semibold">
+              <tr>
+                <th className="px-4 py-3">User</th>
+                <th className="px-4 py-3">Email Address</th>
+                <th className="px-4 py-3">System Role</th>
+                <th className="px-4 py-3">User ID</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-800/60 text-zinc-200">
+              {isLoading ? (
+                <tr>
+                  <td colSpan={4} className="py-10 text-center text-zinc-500">
+                    <Loader2 className="h-4 w-4 animate-spin inline mr-2 text-amber-400" />
+                    Loading registered users...
+                  </td>
+                </tr>
+              ) : filtered.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="py-10 text-center text-zinc-500">
+                    No matching users found.
+                  </td>
+                </tr>
+              ) : (
+                filtered.map((u) => (
+                  <tr key={u.id} className="hover:bg-zinc-800/30 transition">
+                    <td className="px-4 py-3 font-medium flex items-center gap-2">
+                      <div className="h-7 w-7 rounded-full bg-zinc-800 flex items-center justify-center font-bold text-[11px] text-zinc-300 border border-zinc-700/50">
+                        {u.name ? u.name[0].toUpperCase() : 'U'}
+                      </div>
+                      <span>{u.name}</span>
+                    </td>
+                    <td className="px-4 py-3 text-zinc-400">{u.email}</td>
+                    <td className="px-4 py-3">
+                      <span
+                        className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                          u.role === 'superadmin'
+                            ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                            : 'bg-zinc-800 text-zinc-300'
+                        }`}
+                      >
+                        {u.role}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-zinc-500 font-mono text-[11px]">{u.id}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Provision User Modal */}
+      {isProvisionOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
+                <UserCheck className="h-5 w-5 text-amber-400" />
+                <span>Provision User Account</span>
+              </h3>
+              <button
+                onClick={() => setIsProvisionOpen(false)}
+                className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {errorMsg && (
+              <div className="mb-4 rounded-lg border border-rose-500/30 bg-rose-500/10 p-2.5 text-xs text-rose-300">
+                {errorMsg}
+              </div>
+            )}
+
+            <form onSubmit={handleProvision} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1">Display Name</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. System Engineer"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs text-zinc-100 focus:border-amber-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1">Email Address</label>
+                <input
+                  type="email"
+                  required
+                  placeholder="user@example.com"
+                  value={newEmail}
+                  onChange={(e) => setNewEmail(e.target.value)}
+                  className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs text-zinc-100 focus:border-amber-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1">Password</label>
+                <input
+                  type="password"
+                  required
+                  minLength={8}
+                  placeholder="Minimum 8 characters"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs text-zinc-100 focus:border-amber-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1">System Role</label>
+                <select
+                  value={newRole}
+                  onChange={(e) => setNewRole(e.target.value as any)}
+                  className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs text-zinc-100 focus:border-amber-500 focus:outline-none"
+                >
+                  <option value="user">User (Standard account)</option>
+                  <option value="superadmin">Superadmin (Full platform control)</option>
+                </select>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsProvisionOpen(false)}
+                  className="rounded-lg border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isProvisioning}
+                  className="flex items-center gap-1.5 rounded-lg bg-amber-500 px-4 py-1.5 text-xs font-semibold text-zinc-950 hover:bg-amber-400 transition shadow-md disabled:opacity-50"
+                >
+                  {isProvisioning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Provision Account'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
