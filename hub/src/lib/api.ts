@@ -32,9 +32,12 @@ function extractError(json: any, fallback: string): string {
   return fallback;
 }
 
+export const DEFAULT_API_URL: string =
+  (import.meta.env.VITE_API_URL ? String(import.meta.env.VITE_API_URL) : 'http://localhost:8080').replace(/\/+$/, '');
+
 export async function fetchWithAuth(endpoint: string, options: ApiFetchOptions): Promise<Response> {
   const { apiUrl, token, refreshToken, ...fetchInit } = options;
-  const baseUrl = apiUrl.replace(/\/+$/, '') || 'http://localhost:8080';
+  const baseUrl = apiUrl ? apiUrl.replace(/\/+$/, '') : DEFAULT_API_URL;
   const url = `${baseUrl}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`;
 
   const headers = new Headers(fetchInit.headers || {});

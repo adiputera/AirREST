@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Cloud, Server, LogOut, User as UserIcon, Shield, Laptop } from 'lucide-react';
 import { useHubStore } from '../store/useHubStore';
+import { DEFAULT_API_URL } from '../lib/api';
 
 export const Navbar: React.FC = () => {
   const user = useHubStore((state) => state.user);
@@ -14,7 +15,7 @@ export const Navbar: React.FC = () => {
 
   const handleSaveUrl = (e: React.FormEvent) => {
     e.preventDefault();
-    setApiUrl(tempUrl.trim().replace(/\/+$/, '') || 'http://localhost:8080');
+    setApiUrl(tempUrl.trim().replace(/\/+$/, '') || DEFAULT_API_URL);
     setIsServerModalOpen(false);
   };
 
@@ -109,7 +110,7 @@ export const Navbar: React.FC = () => {
                   required
                   value={tempUrl}
                   onChange={(e) => setTempUrl(e.target.value)}
-                  placeholder="http://localhost:8080"
+                  placeholder={DEFAULT_API_URL}
                   className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs text-zinc-100 font-mono focus:border-sky-500 focus:outline-none"
                 />
               </div>

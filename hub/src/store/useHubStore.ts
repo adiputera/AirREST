@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { User } from '../types';
-import { registerHubTokenRefresh } from '../lib/api';
+import { DEFAULT_API_URL, registerHubTokenRefresh } from '../lib/api';
 
 export type HubTab = 'teams' | 'projects' | 'superadmin' | 'connect';
 
@@ -28,7 +28,7 @@ interface HubStoreState {
 export const useHubStore = create<HubStoreState>()(
   persist(
     (set) => ({
-      apiUrl: 'http://localhost:8080',
+      apiUrl: DEFAULT_API_URL,
       token: null,
       refreshToken: null,
       tokenExpiresAt: null,
@@ -68,6 +68,14 @@ export const useHubStore = create<HubStoreState>()(
         selectedTeamId: state.selectedTeamId,
         selectedProjectId: state.selectedProjectId,
       }),
+      merge: (persistedState: any, currentState) => {
+        const merged = { ...currentState, ...(persistedState as object) };
+        // If VITE_API_URL is configured and user's persisted storage is still pointing to default localhost, update to VITE_API_URL
+        if (import.meta.env.VITE_API_URL && persistedState?.apiUrl === 'http://localhost:8080') {
+          merged.apiUrl = DEFAULT_API_URL;
+        }
+        return merged;
+      },
     }
   )
 );
