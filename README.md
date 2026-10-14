@@ -1,12 +1,13 @@
 # AirREST
 
-> A fast, lightweight, and modern browser-based REST API testing studio packaged as a **Google Chrome Extension (Manifest V3)** and standalone web client. Built with **React 19**, **Vite**, **Tailwind CSS v4**, and **Zustand**.
+> A fast, lightweight, and modern browser-based REST API testing studio packaged as a **Google Chrome Extension (Manifest V3)** and standalone web client with optional cloud team synchronization. Built with **React 19**, **Vite**, **Tailwind CSS v4**, **Zustand**, and a **Go + PostgreSQL** cloud backend.
 
 [![GitHub Repository](https://img.shields.io/badge/GitHub-adiputera%2Fapi--tester-181717?logo=github)](https://github.com/adiputera/api-tester)
 [![Manifest V3](https://img.shields.io/badge/Chrome%20Extension-Manifest%20V3-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=white)](https://vitejs.dev/)
 [![Tailwind CSS v4](https://img.shields.io/badge/Tailwind_CSS-v4-38B2AC?logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
+[![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-10B981.svg)](LICENSE)
 
 ---
@@ -18,37 +19,100 @@ Most web-based API testing tools are severely constrained by browser security mo
 **AirREST provides an agile, zero-friction alternative by running directly in your browser as a Chrome Extension (Manifest V3):**
 
 - 🛡️ **Zero CORS & Mixed-Content Blocks**: Chrome host permissions (`<all_urls>`) allow direct, unrestricted HTTP and HTTPS dispatching from your browser.
-- 💻 **Localhost & Private Network Ready**: Seamlessly test local development servers (`http://localhost:3000`, `http://127.0.0.1:8080`) and private subnets (`10.x.x.x`, `192.168.x.x`, `172.16-31.x.x`) without running external desktop proxies.
+- 💻 **Flexible Workspace Modes (Offline vs Cloud)**: Run **100% Offline** using local storage (zero tracking, instant launch), or connect to **Cloud Sync Mode** for multi-device backup and team collaboration.
+- 👥 **Team & Project Scope Switcher**: Freely jump between personal workspaces and assigned team projects from the studio header with real-time RBAC tags (`Admin`, `Contributor`, `Reader`).
+- 🔑 **Rolling Refresh Tokens**: 30-day rolling refresh token rotation with silent background refresh ensures active sessions are never abruptly logged out.
+- 🏢 **Decoupled Management Hub (`hub/`)**: Separate full-page dashboard deployable on Vercel for managing teams, project RBAC, and user provisioning without bloating the browser extension.
 - 📁 **Native Postman v2.1 Compatibility**: Import and export standard Postman Collections and Environments without vendor lock-in.
-- 🔒 **100% Client-Side & Private**: Your requests, collections, credentials, and environment tokens are stored purely in local storage. No tracking, no external middleman server, no mandatory accounts.
 
 ---
 
-## 🚀 Quick Start: Install as Chrome Extension
+## 🚀 Quick Start
 
-You can load AirREST directly into Google Chrome, Microsoft Edge, Brave, or Chromium in Developer Mode in under a minute:
-
-### 1. Build the Extension Bundle
+### 1. Build & Load the Chrome Extension Studio
 ```bash
 # Clone the repository
 git clone git@github.com:adiputera/api-tester.git
 cd api-tester
 
-# Install dependencies
+# Install dependencies (links both extension & hub)
 npm install
 
 # Build the production extension
-npm run build
+npm run build:extension
 ```
-The build output will be compiled into the `dist/` directory.
-
-### 2. Load into Chrome
 1. Open Google Chrome and navigate to `chrome://extensions/`.
-2. Enable the **Developer mode** toggle in the upper-right corner.
-3. Click the **Load unpacked** button in the upper-left corner.
-4. Select the **`dist/`** directory located in your cloned `api-tester` folder.
+2. Enable **Developer mode** in the upper-right corner.
+3. Click **Load unpacked** and select the **`dist/`** directory.
+4. On first open, choose **Offline Mode** (pure local storage) or connect to **Cloud Sync**.
 
-🎉 **Done!** The AirREST icon will appear in your Chrome extensions toolbar. Click it anytime to open the studio in a full browser tab.
+### 2. Deploy AirREST Hub to Vercel (Management Portal)
+AirREST Hub is located in the **`hub/`** directory and deploys to Vercel with zero configuration:
+1. In the [Vercel Dashboard](https://vercel.com/dashboard), import this repository.
+2. Set **Root Directory** to **`hub`**.
+3. Framework Preset: **Vite**.
+4. Click **Deploy**!
+
+### 3. Run the Cloud Sync Backend (Optional)
+AirREST works 100% offline out-of-the-box. For team collaboration and multi-device sync, spin up the Go backend:
+```bash
+cd backend
+
+# Copy sample configuration (ensure .env is never pushed to git!)
+cp .env.example .env
+
+# Start PostgreSQL with Docker
+docker compose up -d postgres
+
+# Start the Go server
+go run cmd/server/main.go
+```
+The server starts at `http://localhost:8080`, runs automatic database schema migrations, and bootstraps the default Superadmin account (`admin@example.com`).
+
+---
+
+## 🔐 Environment Variables & Security Safeguards
+
+To maintain strict security and confidentiality, **environment variables containing sensitive credentials must never be committed or pushed to version control**.
+
+### 1. Git Protection via `.gitignore`
+The repository's `.gitignore` contains strict glob rules protecting all environment variable files:
+```gitignore
+# Environment variables & secrets (Never commit secrets!)
+.env
+.env.*
+*.env
+!.env.example
+!.env.*.example
+!*.env.example
+```
+- All local environment files (`.env`, `.env.local`, `.env.production`, `backend/.env`, etc.) are **strictly ignored**.
+- Only sanitized example templates (`.env.example`, `backend/.env.example`) are tracked in Git as reference models.
+
+### 2. Backend Environment Variables (`backend/.env`)
+
+The backend reads configuration from environment variables or a local `backend/.env` file:
+
+| Variable | Required | Default / Example | Description |
+|---|---|---|---|
+| `PORT` | Optional | `8080` | Port for the HTTP server to listen on. |
+| `DATABASE_URL` | **Yes** | `postgres://airrest:airrest_secret_password@localhost:5432/airrest_db?sslmode=disable` | PostgreSQL connection string. For Vercel Serverless, use a pooled connection string (e.g. Neon or Supabase transaction pooler on port 6543 with `?sslmode=require`). |
+| `JWT_SECRET` | **Yes** | `super-secret-jwt-key-change-in-production-minimum-32-chars` | High-entropy secret key used to sign and verify HS256 JWT tokens (minimum 32 characters). |
+| `JWT_EXPIRATION_HOURS` | Optional | `72` | Lifespan in hours for access tokens. |
+| `JWT_REFRESH_EXPIRATION_DAYS` | Optional | `30` | Lifespan in days for rolling refresh tokens. |
+| `SUPERADMIN_EMAIL` | Optional | `admin@example.com` | Email for bootstrap Superadmin account created on first boot if no superadmin exists. |
+| `SUPERADMIN_PASSWORD` | Optional | `SuperadminSecurePassword123!` | Strong password for bootstrap Superadmin account. |
+| `SUPERADMIN_NAME` | Optional | `Super Administrator` | Display name for bootstrap Superadmin account. |
+| `DB_MAX_CONNS` | Optional | `25` (Docker) / `4` (Vercel) | Maximum concurrent connections in `pgxpool`. |
+| `DB_MIN_CONNS` | Optional | `2` (Docker) / `1` (Vercel) | Minimum idle connections in `pgxpool`. |
+| `SKIP_MIGRATIONS` | Optional | `false` | Set to `true` if database migrations are handled via external CI/CD pipelines instead of on application boot. |
+
+> [!IMPORTANT]
+> **Production Deployment Safeguard**: When deploying to Vercel, Fly.io, AWS, or Docker, configure these variables directly in your host's secure environment settings dashboard. Never commit `.env` into your Git repository.
+
+### 3. Frontend & Extension Security
+- **No Bundled Secrets**: The Chrome Extension and Hub client bundles contain zero hardcoded API keys or server secrets.
+- **Client-Side Secret Storage**: User credentials, JWT access tokens, and refresh tokens are stored purely in the user's isolated browser storage (`localStorage` / Zustand) and sent only via standard `Authorization: Bearer <token>` headers over HTTPS/HTTP.
 
 ---
 
@@ -69,7 +133,7 @@ The build output will be compiled into the `dist/` directory.
 - **Interactive Hover Tooltip Popups**: Hovering over any `{{variableName}}` reveals a floating inspector displaying its resolved value, current environment scope, and resolution suggestions.
 - **Live Resolved URL Preview**: Real-time evaluation banner beneath the URL bar displaying the fully interpolated endpoint before dispatch.
 - **Variable Interpolation**: Use `{{variableName}}` across request URLs, query parameters, custom headers, authentication credentials, and request bodies.
-- **Built-in Postman Dynamic Variables**:
+- **Built-in Dynamic Variables**:
   - `{{$guid}}` — Generates a random UUID v4.
   - `{{$timestamp}}` — Current Unix timestamp in seconds.
   - `{{$isoTimestamp}}` — Current ISO 8601 UTC date-time string.
@@ -157,18 +221,38 @@ The build output will be compiled into the `dist/` directory.
 
 ## 🛠 Local Development & Scripts
 
+### Frontend & Extension Scripts (Node.js)
+
 | Command | Description |
 |---|---|
-| `npm run dev` | Runs the local Vite development server |
+| `npm run dev` | Runs the local Vite development server for the Chrome Extension studio |
 | `npm run build` | Builds the production Chrome Extension bundle into `dist/` |
+| `npm run build:extension` | Alias for `npm run build` |
+| `npm run dev:hub` | Runs the local Vite development server for AirREST Hub (`hub/`) |
+| `npm run build:hub` | Builds the production AirREST Hub bundle into `hub/dist/` |
+| `npm run build:all` | Compiles both the Chrome Extension studio and the Hub portal |
 | `npm run preview` | Previews the production build locally |
-| `npm run lint` | Runs ESLint validation |
+| `npm run lint` | Runs ESLint validation across the repository |
+
+### Backend Scripts (Go & Docker)
+
+| Command | Description |
+|---|---|
+| `cd backend && docker compose up -d postgres` | Starts the local PostgreSQL 16 database |
+| `cd backend && go run cmd/server/main.go` | Starts the standalone Go REST API service on `:8080` |
+| `cd backend && go test -v ./...` | Executes the complete Go test suite |
+| `cd backend && docker compose down` | Stops the local PostgreSQL database container |
 
 ---
 
 ## 📦 Project Structure
 
 ```
+├── .gitignore                    # Comprehensive ignore rules (.env, binaries, dist)
+├── package.json                  # Root npm workspace configuration
+├── package-lock.json
+├── vite.config.ts                # Extension Vite bundler configuration
+│
 ├── dist/                         # Compiled Chrome extension (load unpacked in chrome://extensions)
 │   ├── index.html                # Extension main window HTML
 │   ├── manifest.json             # Chrome Manifest V3 manifest
@@ -176,50 +260,68 @@ The build output will be compiled into the `dist/` directory.
 │   ├── service-worker.js         # Extension background service worker
 │   ├── icons/                    # Extension icons (16px, 48px, 128px)
 │   └── assets/                   # Compiled JavaScript and CSS bundles
-├── public/                       # Static assets copied into dist during build
+│
+├── public/                       # Static extension assets copied during build
 │   ├── manifest.json
 │   ├── sandbox.html
 │   ├── service-worker.js
 │   └── icons/
-├── src/
-│   ├── components/
-│   │   ├── EnvironmentModal.tsx        # Environment manager modal & Postman env import/export
-│   │   ├── Header.tsx                  # Top header, environment selector, global actions
-│   │   ├── ImportModal.tsx             # Postman Collection & cURL import modal
-│   │   ├── KeyValueEditor.tsx          # Dynamic table editor for Params and Headers
-│   │   ├── MethodBadge.tsx             # Color-coded badge for HTTP methods
-│   │   ├── RequestEditor.tsx           # Request editor (URL, method, headers, body, scripts)
-│   │   ├── ResponseViewer.tsx          # Response status, latency, pretty JSON, and headers
-│   │   ├── SaveToCollectionModal.tsx   # Modal to save requests to collections/folders
-│   │   ├── Sidebar.tsx                 # Collections tree and request history
-│   │   ├── TabBar.tsx                  # Multi-tab request management
-│   │   └── VariableInput.tsx           # Monospace variable highlighter & hover popups
-│   ├── lib/
-│   │   ├── curl.ts                     # cURL command generator and parser
-│   │   ├── fetcher.ts                  # Fetch engine with variable interpolation & form-data
-│   │   ├── postman.ts                  # Postman v2.1 collection & environment parser/exporter
-│   │   ├── scriptRunner.ts             # Sandboxed runner for pm.* scripts
-│   │   └── urlParams.ts                # Two-way URL bar and query parameters synchronization
-│   ├── store/
-│   │   └── useApiStore.ts              # Zustand store with persistent storage
-│   ├── types/
-│   │   └── api.ts                      # TypeScript data models and interfaces
-│   ├── App.tsx                         # Studio layout shell
-│   ├── index.css                       # Tailwind CSS v4 styling
-│   └── main.tsx                        # React DOM entrypoint
-├── index.html                          # Root HTML template for Vite
-├── package.json
-├── tsconfig.json
-└── vite.config.ts                      # Vite build configuration
+│
+├── src/                          # Chrome Extension React 19 source code
+│   ├── components/               # UI components (Header, RequestEditor, ResponseViewer, Modals)
+│   ├── lib/                      # Utilities (cURL, fetcher, postman, scriptRunner, cloudApi)
+│   ├── store/                    # Zustand persistent application store
+│   ├── types/                    # TypeScript data models and interfaces
+│   ├── App.tsx                   # Studio layout shell
+│   ├── index.css                 # Tailwind CSS v4 styling
+│   └── main.tsx                  # React DOM entrypoint
+│
+├── hub/                          # AirREST Hub management portal (Vite + React 19 + Tailwind v4)
+│   ├── src/                      # Hub pages (Teams, Projects, Superadmin, Connect)
+│   ├── dist/                     # Hub compiled output (ignored in git)
+│   ├── package.json              # Hub dependencies
+│   ├── vercel.json               # Hub Vercel routing configuration
+│   └── vite.config.ts            # Hub Vite configuration
+│
+└── backend/                      # Go REST synchronization service (Chi + PostgreSQL + pgx)
+    ├── api/                      # Vercel Serverless Function entrypoint (index.go)
+    ├── cmd/server/               # Standalone server entrypoint (main.go)
+    ├── config/                   # Configuration loader & environment parser
+    ├── internal/                 # Domain logic, handlers, middleware, repos, services
+    │   ├── domain/               # Core data models (User, Team, Project, Collection, Item)
+    │   ├── handler/              # HTTP REST handlers (Auth, Sync, Workspace, Admin)
+    │   ├── middleware/           # JWT auth, CORS, and logging middleware
+    │   ├── repository/           # PostgreSQL pgx queries & embedded SQL migrations
+    │   └── service/              # Business logic & Optimistic Concurrency Control (OCC)
+    ├── pkg/                      # Shared packages (hasher, response, token)
+    ├── .env.example              # Sanitized template for backend environment variables
+    ├── .gitignore                # Backend-specific ignore rules
+    ├── docker-compose.yml        # PostgreSQL container setup
+    ├── Dockerfile                # Production container build
+    ├── vercel.json               # Serverless rewrite configuration
+    └── README.md                 # Detailed backend documentation & API reference
 ```
+
+---
+
+## 🌐 Online Synchronization Backend (Branch: `feat/online-sync`)
+
+In addition to running completely offline, AirREST includes an optional, cloud-native Go synchronization backend located in the `backend/` directory:
+
+- **Private & Team Collaboration**: Supports multiple private workspaces, teams, and isolated projects.
+- **Granular RBAC**: Strict permissions for Superadmin, Team Admin, Project Admin, Contributor, and Reader.
+- **Conflict Management**: Optimistic Concurrency Control (OCC) with version validation and HTTP `409 Conflict` resolution.
+- **Deployment Flexibility**: Run locally with Docker, deploy to any container host, or deploy directly to **Vercel** as a serverless Go function.
+- **Detailed Documentation**: See [backend/README.md](backend/README.md) for full architecture, Vercel deployment steps, configuration, and API reference.
 
 ---
 
 ## 🔒 Privacy & Security
 
-- **100% Client-Side**: All HTTP requests are initiated directly from your browser. There is no intermediate proxy or remote relay server.
+- **100% Client-Side Dispatched**: All HTTP test requests are initiated directly from your browser. Private API traffic and payloads never route through the synchronization backend.
+- **Zero Corporate Data**: This is a personal open-source project. Code, documentation, and test datasets contain zero internal corporate references or proprietary domains.
 - **Sandboxed Script Evaluation**: Pre-request and test scripts execute in an isolated `sandbox.html` iframe without access to cookies or extension APIs.
-- **Local Storage Only**: Collections, environments, history, and tokens are stored in the browser's local storage and never leave your computer.
+- **Local Storage & Cloud Sync**: Works completely offline out of the box, with optional opt-in cloud synchronization to your own private backend.
 
 ---
 

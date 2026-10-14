@@ -3,9 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "hub"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:extension": "vite build",
+    "dev:hub": "npm run --prefix hub dev",
+    "build:hub": "npm run --prefix hub build",
+    "build:all": "npm run build && npm run build:hub",
     "preview": "vite preview",
     "lint": "eslint"
   },

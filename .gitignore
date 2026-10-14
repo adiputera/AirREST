@@ -1,5 +1,5 @@
 # Dependencies
-/node_modules
+node_modules/
 /.pnp
 .pnp.*
 .yarn/*
@@ -8,26 +8,46 @@
 !.yarn/releases
 !.yarn/versions
 
-# Production build outputs
-/dist
-/dist-ssr
-/build
-/out
+# Production build outputs (Extension & Hub)
+dist/
+dist-ssr/
+build/
+out/
 
-# Framework / Bundler caches
+# Go build outputs & executables
+/backend/server
+/server
+
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+profile.out
+
+# Database & SQLite files
+*.db
+*.sqlite
+*.sqlite3
+
+# Framework & Bundler caches
 /.next/
 .vite/
+*.tsbuildinfo
+next-env.d.ts
 
 # Testing & Coverage
-/coverage
+coverage/
+*.out
 
-# Environment variables
+# Environment variables & secrets (Never commit secrets!)
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-.env*.local
+.env.*
+*.env
+!.env.example
+!.env.*.example
+!*.env.example
 
 # Logs
 npm-debug.log*
@@ -45,7 +65,14 @@ lerna-debug.log*
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Sensitive credentials & private keys
 *.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12
 
 # IDEs and Text Editors
 .idea/
@@ -57,10 +84,7 @@ Thumbs.db
 *.swp
 *.swo
 
-# TypeScript build cache & Next env
-*.tsbuildinfo
-next-env.d.ts
-
 # Temporary & backup files
 *.tmp
 *.bak
+
