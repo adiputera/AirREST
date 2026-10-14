@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Cloud, Lock, Mail, Server, AlertCircle, Loader2 } from 'lucide-react';
 import { useHubStore } from '../store/useHubStore';
-import { apiLogin } from '../lib/api';
+import { apiLogin, DEFAULT_API_URL } from '../lib/api';
 
 export const LoginView: React.FC = () => {
   const [email, setEmail] = useState('');
@@ -22,7 +22,7 @@ export const LoginView: React.FC = () => {
     setErrorMsg(null);
 
     try {
-      const cleanUrl = inputUrl.trim().replace(/\/+$/, '') || 'http://localhost:8080';
+      const cleanUrl = inputUrl.trim().replace(/\/+$/, '') || DEFAULT_API_URL;
       setApiUrl(cleanUrl);
 
       const res = await apiLogin(cleanUrl, email, password);
@@ -113,7 +113,7 @@ export const LoginView: React.FC = () => {
                   type="url"
                   value={inputUrl}
                   onChange={(e) => setInputUrl(e.target.value)}
-                  placeholder="http://localhost:8080"
+                  placeholder={DEFAULT_API_URL}
                   className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-200 font-mono focus:border-sky-500 focus:outline-none"
                 />
               </div>
