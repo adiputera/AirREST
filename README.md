@@ -287,7 +287,7 @@ The backend reads configuration from environment variables or a local `backend/.
     ├── api/                      # Vercel Serverless Function entrypoint (index.go)
     ├── cmd/server/               # Standalone server entrypoint (main.go)
     ├── config/                   # Configuration loader & environment parser
-    ├── internal/                 # Domain logic, handlers, middleware, repos, services
+    ├── core/                     # Domain logic, handlers, middleware, repos, services
     │   ├── domain/               # Core data models (User, Team, Project, Collection, Item)
     │   ├── handler/              # HTTP REST handlers (Auth, Sync, Workspace, Admin)
     │   ├── middleware/           # JWT auth, CORS, and logging middleware

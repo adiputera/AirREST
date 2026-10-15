@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/adiputera/airrest-backend/internal/app"
+	"github.com/adiputera/airrest-backend/core/app"
 )
 
 var (
