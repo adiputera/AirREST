@@ -2,10 +2,13 @@ package middleware
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/adiputera/airrest-backend/core/domain"
+	"github.com/adiputera/airrest-backend/core/repository/postgres"
 	"github.com/adiputera/airrest-backend/core/service"
 	"github.com/adiputera/airrest-backend/pkg/response"
 	"github.com/adiputera/airrest-backend/pkg/token"
@@ -44,7 +47,12 @@ func Authenticate(tm *token.TokenManager, authService *service.AuthService) func
 			// Load user from database to ensure user still exists and hasn't changed roles
 			user, err := authService.GetUserByID(r.Context(), claims.UserID)
 			if err != nil {
-				response.Error(w, http.StatusUnauthorized, "user account not found or deactivated", "UNAUTHORIZED")
+				slog.Error("auth middleware: failed to load user from database", "user_id", claims.UserID, "error", err)
+				if errors.Is(err, postgres.ErrUserNotFound) {
+					response.Error(w, http.StatusUnauthorized, "user account not found or deactivated", "UNAUTHORIZED")
+					return
+				}
+				response.Error(w, http.StatusInternalServerError, "database error during authentication: "+err.Error(), "DATABASE_ERROR")
 				return
 			}
 
