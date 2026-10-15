@@ -46,6 +46,14 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// On Vercel, rewrites can overwrite r.URL.Path with the internal destination (/api/index.go).
+	// Restore the original client request path from Vercel routing headers if present.
+	if matchedPath := r.Header.Get("x-matched-path"); matchedPath != "" {
+		r.URL.Path = matchedPath
+	} else if invokePath := r.Header.Get("x-invoke-path"); invokePath != "" {
+		r.URL.Path = invokePath
+	}
+
 	// Forward incoming request to the Chi router
 	application.Router.ServeHTTP(w, r)
 }
