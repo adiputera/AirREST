@@ -238,28 +238,38 @@ export async function pullScopeDelta(
   }>(json);
 }
 
-export async function batchImportToWorkspace(
+export async function batchImportToScope(
   apiUrl: string,
   token: string,
-  workspaceId: string,
+  scope: ActiveScope | { id: string; type: 'workspace' | 'project' } | string,
   collections: Collection[],
   refreshToken?: string
 ) {
   const formattedCollections = collections.map((c) => ({
+    id: c.id,
     name: c.name,
     description: c.description || '',
-    items: c.items.map(formatImportItem),
+    items: (c.items || []).map(formatImportItem),
   }));
+
+  const payload: any = {
+    collections: formattedCollections,
+  };
+
+  if (typeof scope === 'string') {
+    payload.workspace_id = scope;
+  } else if (scope.type === 'workspace') {
+    payload.workspace_id = scope.id;
+  } else {
+    payload.project_id = scope.id;
+  }
 
   const res = await fetchWithAuth('/api/v1/sync/import-batch', {
     method: 'POST',
     apiUrl,
     token,
     refreshToken,
-    body: JSON.stringify({
-      workspace_id: workspaceId,
-      collections: formattedCollections,
-    }),
+    body: JSON.stringify(payload),
   });
 
   const json = await res.json();
@@ -267,6 +277,16 @@ export async function batchImportToWorkspace(
     throw new Error(extractError(json, 'Batch import failed'));
   }
   return unwrapData<any>(json);
+}
+
+export async function batchImportToWorkspace(
+  apiUrl: string,
+  token: string,
+  workspaceId: string,
+  collections: Collection[],
+  refreshToken?: string
+) {
+  return batchImportToScope(apiUrl, token, workspaceId, collections, refreshToken);
 }
 
 function formatImportItem(item: any): any {

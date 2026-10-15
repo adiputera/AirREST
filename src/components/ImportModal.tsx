@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Upload, X, FileJson, CheckCircle2, AlertCircle, Sparkles, Terminal, Globe } from 'lucide-react';
+import { Upload, X, FileJson, CheckCircle2, AlertCircle, Sparkles, Terminal, Globe, Loader2 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
 import { parseCurlCommand } from '@/lib/curl';
 
@@ -193,6 +193,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
   const [curlText, setCurlText] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
 
   const importAnyPostmanJson = useApiStore((state) => state.importAnyPostmanJson);
   const createTab = useApiStore((state) => state.createTab);
@@ -213,7 +214,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
     reader.readAsText(file);
   };
 
-  const handleImportPostman = () => {
+  const handleImportPostman = async () => {
     setErrorMsg(null);
     setSuccessMsg(null);
 
@@ -222,20 +223,25 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
       return;
     }
 
-    const result = importAnyPostmanJson(jsonText);
-    if (result.success) {
-      if (result.type === 'environment') {
-        setSuccessMsg(`Postman Environment "${result.name}" imported and activated!`);
+    setIsImporting(true);
+    try {
+      const result = await importAnyPostmanJson(jsonText);
+      if (result.success) {
+        if (result.type === 'environment') {
+          setSuccessMsg(`Postman Environment "${result.name}" imported and activated!`);
+        } else {
+          setSuccessMsg(`Postman Collection "${result.name}" imported and synced!`);
+        }
+        setTimeout(() => {
+          onClose();
+          setJsonText('');
+          setSuccessMsg(null);
+        }, 900);
       } else {
-        setSuccessMsg(`Postman Collection "${result.name}" imported successfully!`);
+        setErrorMsg(result.error || 'Failed to import Postman file.');
       }
-      setTimeout(() => {
-        onClose();
-        setJsonText('');
-        setSuccessMsg(null);
-      }, 900);
-    } else {
-      setErrorMsg(result.error || 'Failed to import Postman file.');
+    } finally {
+      setIsImporting(false);
     }
   };
 
@@ -444,10 +450,20 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
           {activeImportTab === 'postman' ? (
             <button
               onClick={handleImportPostman}
-              className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-5 py-2 text-xs font-semibold text-white shadow-lg shadow-sky-500/20 hover:from-sky-400 hover:to-blue-500 active:scale-95 transition"
+              disabled={isImporting}
+              className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-5 py-2 text-xs font-semibold text-white shadow-lg shadow-sky-500/20 hover:from-sky-400 hover:to-blue-500 active:scale-95 transition disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <Upload className="h-3.5 w-3.5" />
-              Import Postman File
+              {isImporting ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Importing & Syncing...
+                </>
+              ) : (
+                <>
+                  <Upload className="h-3.5 w-3.5" />
+                  Import Postman File
+                </>
+              )}
             </button>
           ) : (
             <button

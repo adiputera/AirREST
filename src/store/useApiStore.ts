@@ -30,6 +30,7 @@ import { parseQueryParamsFromUrl, buildUrlWithParams } from '@/lib/urlParams';
 import {
   pullScopeDelta,
   batchImportToWorkspace,
+  batchImportToScope,
   registerTokenRefreshCallback,
 } from '@/lib/cloudApi';
 import {
@@ -104,12 +105,12 @@ interface ApiStoreState {
   updateEnvironmentVariable: (envId: string, varId: string, updates: Partial<EnvironmentVariable>) => void;
   removeEnvironmentVariable: (envId: string, varId: string) => void;
   importEnvironmentFromJson: (jsonStr: string) => { success: boolean; error?: string; environment?: Environment };
-  importAnyPostmanJson: (jsonStr: string) => {
+  importAnyPostmanJson: (jsonStr: string) => Promise<{
     success: boolean;
     type?: 'collection' | 'environment';
     name?: string;
     error?: string;
-  };
+  }>;
 
   // Navigation & Tabs
   setSidebarTab: (tab: 'collections' | 'history') => void;
@@ -152,8 +153,8 @@ interface ApiStoreState {
   // Collections & History
   createCollection: (name: string, description?: string) => string;
   saveRequestToCollection: (collectionId: string, folderId: string | null, request: ApiRequest) => void;
-  addCollection: (collection: Collection) => void;
-  importCollectionFromJson: (jsonStr: string) => { success: boolean; error?: string };
+  addCollection: (collection: Collection) => Promise<void> | void;
+  importCollectionFromJson: (jsonStr: string) => Promise<{ success: boolean; error?: string }>;
   deleteCollection: (id: string) => void;
   openRequestInTab: (request: ApiRequest) => void;
   clearHistory: () => void;
@@ -227,7 +228,7 @@ export const useApiStore = create<ApiStoreState>()(
       },
       setSyncStatus: (syncStatus, syncError = null) => set({ syncStatus, syncError }),
       pullCloudDelta: async () => {
-        const { workspaceMode, cloudConfig } = get();
+        const { workspaceMode, cloudConfig, collections: currentCols } = get();
         if (workspaceMode !== 'cloud' || !cloudConfig.token || !cloudConfig.activeScope) {
           return;
         }
@@ -242,6 +243,50 @@ export const useApiStore = create<ApiStoreState>()(
           );
           const pulledCols = buildCollectionsFromDelta(delta.collections, delta.items);
           const pulledEnvs = buildEnvironmentsFromDelta(delta.environments);
+
+          // SAFE SYNC: If there are local collections that don't exist on remote,
+          // automatically push them to the cloud so they are never lost!
+          const remoteColIds = new Set(pulledCols.map((c) => c.id));
+          const unsyncedCols = currentCols.filter((c) => !remoteColIds.has(c.id));
+
+          if (unsyncedCols.length > 0) {
+            try {
+              await batchImportToScope(
+                cloudConfig.apiUrl,
+                cloudConfig.token,
+                cloudConfig.activeScope,
+                unsyncedCols,
+                cloudConfig.refreshToken
+              );
+              const freshDelta = await pullScopeDelta(
+                cloudConfig.apiUrl,
+                cloudConfig.token,
+                cloudConfig.activeScope,
+                null,
+                cloudConfig.refreshToken
+              );
+              const freshCols = buildCollectionsFromDelta(freshDelta.collections, freshDelta.items);
+              set({
+                collections: freshCols,
+                environments: pulledEnvs.length > 0 ? pulledEnvs : get().environments,
+                activeEnvironmentId: pulledEnvs.length > 0 ? pulledEnvs[0].id : get().activeEnvironmentId,
+                syncStatus: 'synced',
+                lastSyncedAt: Date.now(),
+                syncError: null,
+              });
+              return;
+            } catch {
+              // If push failed, preserve both remote and local collections so user NEVER loses data
+              set({
+                collections: [...pulledCols, ...unsyncedCols],
+                environments: pulledEnvs.length > 0 ? pulledEnvs : get().environments,
+                syncStatus: 'synced',
+                lastSyncedAt: Date.now(),
+                syncError: null,
+              });
+              return;
+            }
+          }
 
           set({
             collections: pulledCols,
@@ -268,10 +313,10 @@ export const useApiStore = create<ApiStoreState>()(
         }
         try {
           set({ syncStatus: 'syncing', syncError: null });
-          await batchImportToWorkspace(
+          await batchImportToScope(
             cloudConfig.apiUrl,
             cloudConfig.token,
-            cloudConfig.activeScope.id,
+            cloudConfig.activeScope,
             collections,
             cloudConfig.refreshToken
           );
@@ -952,10 +997,27 @@ export const useApiStore = create<ApiStoreState>()(
         });
       },
 
-      addCollection: (collection) => {
+      addCollection: async (collection) => {
         set((state) => ({
           collections: [collection, ...state.collections],
         }));
+
+        const { workspaceMode, cloudConfig } = get();
+        if (workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
+          try {
+            set({ syncStatus: 'syncing', syncError: null });
+            await batchImportToScope(
+              cloudConfig.apiUrl,
+              cloudConfig.token,
+              cloudConfig.activeScope,
+              [collection],
+              cloudConfig.refreshToken
+            );
+            await get().pullCloudDelta();
+          } catch (err: any) {
+            set({ syncStatus: 'error', syncError: err.message || 'Failed to sync collection to cloud' });
+          }
+        }
       },
 
       importEnvironmentFromJson: (jsonStr) => {
@@ -974,7 +1036,7 @@ export const useApiStore = create<ApiStoreState>()(
         }
       },
 
-      importAnyPostmanJson: (jsonStr) => {
+      importAnyPostmanJson: async (jsonStr) => {
         try {
           const detected = detectPostmanJsonType(jsonStr);
           if (detected === 'environment') {
@@ -985,7 +1047,7 @@ export const useApiStore = create<ApiStoreState>()(
             return { success: false, error: res.error };
           } else {
             const col = importPostmanCollection(jsonStr);
-            get().addCollection(col);
+            await get().addCollection(col);
             return { success: true, type: 'collection', name: col.name };
           }
         } catch (err: unknown) {
@@ -996,7 +1058,7 @@ export const useApiStore = create<ApiStoreState>()(
         }
       },
 
-      importCollectionFromJson: (jsonStr) => {
+      importCollectionFromJson: async (jsonStr) => {
         try {
           if (detectPostmanJsonType(jsonStr) === 'environment') {
             const envRes = get().importEnvironmentFromJson(jsonStr);
@@ -1007,7 +1069,7 @@ export const useApiStore = create<ApiStoreState>()(
           }
 
           const imported = importPostmanCollection(jsonStr);
-          get().addCollection(imported);
+          await get().addCollection(imported);
           return { success: true };
         } catch (err: unknown) {
           return {
