@@ -359,9 +359,9 @@ type ImportItemRequest struct {
 	Items              []ImportItemRequest     `json:"items,omitempty"`
 }
 
-// ImportBatch allows claiming and migrating offline LocalStorage collections into user's workspace
-func (s *SyncService) ImportBatch(ctx context.Context, user *domain.User, workspaceID uuid.UUID, collections []ImportCollectionRequest) error {
-	if err := s.collectionService.CheckPermission(ctx, user, &workspaceID, nil, true); err != nil {
+// ImportBatch allows claiming and migrating offline LocalStorage collections into user's workspace or project
+func (s *SyncService) ImportBatch(ctx context.Context, user *domain.User, workspaceID *uuid.UUID, projectID *uuid.UUID, collections []ImportCollectionRequest) error {
+	if err := s.collectionService.CheckPermission(ctx, user, workspaceID, projectID, true); err != nil {
 		return err
 	}
 
@@ -380,11 +380,11 @@ func (s *SyncService) ImportBatch(ctx context.Context, user *domain.User, worksp
 		}
 
 		insertColQuery := `
-			INSERT INTO collections (id, workspace_id, name, description, version, created_by, last_modified_by, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, 1, $5, $5, $6, $6)
+			INSERT INTO collections (id, workspace_id, project_id, name, description, version, created_by, last_modified_by, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, 1, $6, $6, $7, $7)
 			ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, updated_at = EXCLUDED.updated_at
 		`
-		if _, err := tx.Exec(ctx, insertColQuery, colID, workspaceID, colReq.Name, colReq.Description, user.ID, now); err != nil {
+		if _, err := tx.Exec(ctx, insertColQuery, colID, workspaceID, projectID, colReq.Name, colReq.Description, user.ID, now); err != nil {
 			return fmt.Errorf("failed to insert imported collection: %w", err)
 		}
 

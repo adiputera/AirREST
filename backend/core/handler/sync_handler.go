@@ -20,7 +20,8 @@ func NewSyncHandler(syncService *service.SyncService) *SyncHandler {
 }
 
 type BatchImportRequest struct {
-	WorkspaceID string                           `json:"workspace_id"`
+	WorkspaceID *string                          `json:"workspace_id,omitempty"`
+	ProjectID   *string                          `json:"project_id,omitempty"`
 	Collections []service.ImportCollectionRequest `json:"collections"`
 }
 
@@ -81,7 +82,7 @@ func (h *SyncHandler) Push(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, result)
 }
 
-// ImportBatch handles claiming and migrating offline LocalStorage collections into user's private workspace
+// ImportBatch handles claiming and migrating offline LocalStorage collections into user's private workspace or project
 func (h *SyncHandler) ImportBatch(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUserFromContext(r.Context())
 
@@ -91,18 +92,35 @@ func (h *SyncHandler) ImportBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wsID, err := uuid.Parse(req.WorkspaceID)
-	if err != nil {
-		response.Error(w, http.StatusBadRequest, "invalid workspace_id", "BAD_REQUEST")
+	var wsID, projID *uuid.UUID
+	if req.WorkspaceID != nil && *req.WorkspaceID != "" {
+		id, err := uuid.Parse(*req.WorkspaceID)
+		if err != nil {
+			response.Error(w, http.StatusBadRequest, "invalid workspace_id", "BAD_REQUEST")
+			return
+		}
+		wsID = &id
+	}
+	if req.ProjectID != nil && *req.ProjectID != "" {
+		id, err := uuid.Parse(*req.ProjectID)
+		if err != nil {
+			response.Error(w, http.StatusBadRequest, "invalid project_id", "BAD_REQUEST")
+			return
+		}
+		projID = &id
+	}
+
+	if wsID == nil && projID == nil {
+		response.Error(w, http.StatusBadRequest, "either workspace_id or project_id must be provided", "BAD_REQUEST")
 		return
 	}
 
-	if err := h.syncService.ImportBatch(r.Context(), user, wsID, req.Collections); err != nil {
+	if err := h.syncService.ImportBatch(r.Context(), user, wsID, projID, req.Collections); err != nil {
 		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
 		return
 	}
 
 	response.JSON(w, http.StatusOK, map[string]string{
-		"message": "offline collections successfully imported into cloud workspace",
+		"message": "collections successfully imported into cloud scope",
 	})
 }
