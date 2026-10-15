@@ -6,9 +6,11 @@ import (
 	"io/fs"
 	"log/slog"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/adiputera/airrest-backend/core/repository/migrations"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -22,6 +24,18 @@ func ConnectWithPoolConfig(ctx context.Context, databaseURL string, maxConns, mi
 	config, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse database config: %w", err)
+	}
+
+	// In serverless environments or when connecting via transaction poolers (Neon pooler, Supabase port 6543, PgBouncer),
+	// disable prepared statements by using QueryExecModeSimpleProtocol to avoid "prepared statement does not exist" errors
+	if strings.Contains(databaseURL, "pooler") ||
+		strings.Contains(databaseURL, ":6543") ||
+		strings.Contains(databaseURL, "pgbouncer") ||
+		strings.Contains(databaseURL, "neon.tech") ||
+		strings.Contains(databaseURL, "supabase.co") ||
+		strings.Contains(databaseURL, "supabase.net") {
+		config.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+		slog.Info("cloud postgres / connection pooler detected: enabled pgx.QueryExecModeSimpleProtocol")
 	}
 
 	if maxConns <= 0 {
