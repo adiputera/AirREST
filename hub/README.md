@@ -8,7 +8,7 @@
  
 AirREST Hub is the companion web dashboard for managing collaboration in AirREST:
 - **Teams & Member Roles**: Create teams, invite users, and assign Team Admin and Member roles.
-- **Project Isolation**: Create projects within teams and assign Project Admins, Contributors, or Readers.
+- **Project Isolation**: Create projects within teams and assign Project Admins, Maintainers, Contributors, or Readers.
 - **Superadmin Panel**: System-level administrative tools to manage all registered users and provision system accounts.
 - **Extension Connect**: Easily view and copy connection settings for linking the AirREST Chrome Extension Studio to your cloud backend.
 - **Decoupled Architecture**: Runs entirely independent of the Chrome extension, keeping the extension bundle ultra-lightweight.

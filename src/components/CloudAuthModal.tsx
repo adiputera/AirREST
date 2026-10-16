@@ -86,6 +86,11 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
         console.warn('Could not auto-fetch scopes upon login:', wsErr);
       }
 
+      const currentStore = useApiStore.getState();
+      const localCount = (currentStore.offlineCollections && currentStore.offlineCollections.length > 0)
+        ? currentStore.offlineCollections.length
+        : collections.length;
+
       // 2. Commit auth to store
       setCloudConfig({
         apiUrl: cleanUrl,
@@ -106,7 +111,7 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
       }
 
       // 4. Check if local collections exist to prompt for one-click migration
-      if (collections.length > 0) {
+      if (localCount > 0) {
         setImportPrompt(true);
       } else {
         onClose();
@@ -148,7 +153,7 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
             </div>
             <h3 className="text-base font-bold text-zinc-100">Successfully Signed In!</h3>
             <p className="text-xs text-zinc-400 mt-2 leading-relaxed">
-              We detected <strong className="text-sky-400">{collections.length} collection(s)</strong> in your local browser storage.
+              We detected <strong className="text-sky-400">{(useApiStore.getState().offlineCollections?.length || collections.length)} collection(s)</strong> in your local browser storage.
               Would you like to import them into your active cloud workspace?
             </p>
 
