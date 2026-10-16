@@ -27,11 +27,13 @@ type CreateEnvironmentRequest struct {
 	ProjectID   *string          `json:"project_id,omitempty"`
 	Name        string           `json:"name"`
 	Variables   *json.RawMessage `json:"variables"`
+	MinRole     *string          `json:"min_role,omitempty"`
 }
 
 type UpdateEnvironmentRequest struct {
 	Name        string           `json:"name"`
 	Variables   *json.RawMessage `json:"variables"`
+	MinRole     *string          `json:"min_role,omitempty"`
 	BaseVersion int64            `json:"base_version"`
 }
 
@@ -88,11 +90,17 @@ func (h *EnvironmentHandler) Create(w http.ResponseWriter, r *http.Request) {
 		projID = &id
 	}
 
+	minRole := domain.ProjectRoleReader
+	if req.MinRole != nil && *req.MinRole != "" {
+		minRole = domain.ProjectRole(*req.MinRole)
+	}
+
 	env := &domain.Environment{
 		WorkspaceID: wsID,
 		ProjectID:   projID,
 		Name:        req.Name,
 		Variables:   req.Variables,
+		MinRole:     minRole,
 	}
 
 	if err := h.envService.Create(r.Context(), user, env); err != nil {
@@ -140,6 +148,9 @@ func (h *EnvironmentHandler) Update(w http.ResponseWriter, r *http.Request) {
 		ID:        id,
 		Name:      req.Name,
 		Variables: req.Variables,
+	}
+	if req.MinRole != nil && *req.MinRole != "" {
+		env.MinRole = domain.ProjectRole(*req.MinRole)
 	}
 
 	updated, err := h.envService.Update(r.Context(), user, env, req.BaseVersion)

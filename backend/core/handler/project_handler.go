@@ -168,6 +168,8 @@ func (h *ProjectHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 	switch req.Role {
 	case string(domain.ProjectRoleAdmin):
 		role = domain.ProjectRoleAdmin
+	case string(domain.ProjectRoleMaintainer):
+		role = domain.ProjectRoleMaintainer
 	case string(domain.ProjectRoleContributor):
 		role = domain.ProjectRoleContributor
 	}

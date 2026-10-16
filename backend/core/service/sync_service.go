@@ -146,13 +146,13 @@ func (s *SyncService) PullDelta(
 	var envQuery string
 	if workspaceID != nil {
 		envQuery = `
-			SELECT id, workspace_id, project_id, name, variables, version, last_modified_by, created_at, updated_at, deleted_at
+			SELECT id, workspace_id, project_id, name, variables, min_role, version, last_modified_by, created_at, updated_at, deleted_at
 			FROM environments
 			WHERE workspace_id = $1 AND updated_at > $2
 		`
 	} else {
 		envQuery = `
-			SELECT id, workspace_id, project_id, name, variables, version, last_modified_by, created_at, updated_at, deleted_at
+			SELECT id, workspace_id, project_id, name, variables, min_role, version, last_modified_by, created_at, updated_at, deleted_at
 			FROM environments
 			WHERE project_id = $1 AND updated_at > $2
 		`
@@ -164,14 +164,26 @@ func (s *SyncService) PullDelta(
 	}
 	defer envRows.Close()
 
+	var userRole domain.ProjectRole
+	if projectID != nil && !user.IsSuperadmin() {
+		userRole, _ = s.collectionService.projectService.GetEffectiveRole(ctx, user, *projectID)
+	}
+
 	for envRows.Next() {
 		var env domain.Environment
 		if err := envRows.Scan(
-			&env.ID, &env.WorkspaceID, &env.ProjectID, &env.Name, &env.Variables,
+			&env.ID, &env.WorkspaceID, &env.ProjectID, &env.Name, &env.Variables, &env.MinRole,
 			&env.Version, &env.LastModifiedBy, &env.CreatedAt, &env.UpdatedAt, &env.DeletedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan environment delta: %w", err)
 		}
+
+		if projectID != nil && !user.IsSuperadmin() {
+			if !CanAccessEnv(userRole, env.MinRole) {
+				continue // Do NOT send protected env to unauthorized user!
+			}
+		}
+
 		result.Environments = append(result.Environments, &env)
 	}
 

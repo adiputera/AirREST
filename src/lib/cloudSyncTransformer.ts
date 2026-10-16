@@ -101,6 +101,7 @@ export function buildEnvironmentsFromDelta(backendEnvs: any[]): Environment[] {
         id: e.id,
         name: e.name,
         variables: Array.isArray(parsedVars) ? parsedVars : [],
+        minRole: e.min_role || 'reader',
         createdAt: new Date(e.created_at || Date.now()).getTime(),
         updatedAt: new Date(e.updated_at || Date.now()).getTime(),
       };

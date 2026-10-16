@@ -30,6 +30,15 @@ Most web-based API testing tools are severely constrained by browser security mo
 ## 🚀 Quick Start
 
 ### 1. Build & Load the Chrome Extension Studio
+
+AirREST uses a single codebase with multi-target compilation supporting two distinct distribution editions:
+
+| Edition | Build Command | Output Directory | Target Distribution | Description |
+|---|---|---|---|---|
+| **Offline Only** | `npm run build:offline` | `dist-offline/` | **Chrome Web Store (Public)** | 100% offline, privacy-focused, zero cloud auth/sync UI, minimal permissions, instant approval. |
+| **Full (Cloud + Offline)** | `npm run build` | `dist/` | **Unlisted / Team Collaboration** | Dual-mode: offline storage + team workspace sync, RBAC, and Hub backend integration. |
+| **Both Editions** | `npm run build:all-extensions` | `dist/` & `dist-offline/` | All targets | Compiles both packages simultaneously with dead-code elimination. |
+
 ```bash
 # Clone the repository
 git clone git@github.com:adiputera/api-tester.git
@@ -38,13 +47,17 @@ cd api-tester
 # Install dependencies (links both extension & hub)
 npm install
 
-# Build the production extension
-npm run build:extension
+# Build for Chrome Web Store (100% Offline Only)
+npm run build:offline
+
+# Or build the Full Edition (Offline + Cloud Sync)
+npm run build
 ```
 1. Open Google Chrome and navigate to `chrome://extensions/`.
 2. Enable **Developer mode** in the upper-right corner.
-3. Click **Load unpacked** and select the **`dist/`** directory.
-4. On first open, choose **Offline Mode** (pure local storage) or connect to **Cloud Sync**.
+3. Click **Load unpacked** and select:
+   - **`dist-offline/`** to run or inspect the Chrome Web Store offline-only release.
+   - **`dist/`** to run or inspect the full cloud-sync edition.
 
 ### 2. Deploy AirREST Hub to Vercel (Management Portal)
 AirREST Hub is located in the **`hub/`** directory and deploys to Vercel with zero configuration:
@@ -129,6 +142,7 @@ The backend reads configuration from environment variables or a local `backend/.
 ### 2. 🌍 Environment Variables & Dynamic Templating
 - **Environment Switcher**: Create and switch between environments (e.g., `Localhost`, `Development`, `Staging`, `Production`) directly from the header dropdown.
 - **Postman Environment Interoperability**: Import and export Postman Environment `.json` files.
+- **Granular Environment RBAC & Protection**: Protect sensitive environments (e.g. Production) within team projects using 4-tier role-based restrictions (`All Members (Reader+)`, `Contributor+`, `Maintainer+ (Production/Release)`, or `Admin Only`). Environments restricted to higher roles are strictly filtered at the backend and never exposed to unauthorized project members, preventing privilege escalation.
 - **Syntax Highlighting for Variables**: Monospace syntax highlighting for `{{variableName}}` inside request URLs, Authorization credentials, query parameters, and header tables with amber (resolved) and rose (unresolved) indicators.
 - **Interactive Hover Tooltip Popups**: Hovering over any `{{variableName}}` reveals a floating inspector displaying its resolved value, current environment scope, and resolution suggestions.
 - **Live Resolved URL Preview**: Real-time evaluation banner beneath the URL bar displaying the fully interpolated endpoint before dispatch.

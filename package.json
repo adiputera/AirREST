@@ -8,11 +8,15 @@
   ],
   "scripts": {
     "dev": "vite",
+    "dev:offline": "vite --mode offline",
     "build": "vite build",
+    "build:full": "vite build --mode full",
+    "build:offline": "vite build --mode offline",
     "build:extension": "vite build",
+    "build:all-extensions": "npm run build && npm run build:offline",
     "dev:hub": "npm run --prefix hub dev",
     "build:hub": "npm run --prefix hub build",
-    "build:all": "npm run build && npm run build:hub",
+    "build:all": "npm run build && npm run build:offline && npm run build:hub",
     "preview": "vite preview",
     "lint": "eslint"
   },

@@ -10,6 +10,7 @@ node_modules/
 
 # Production build outputs (Extension & Hub)
 dist/
+dist-offline/
 dist-ssr/
 build/
 out/

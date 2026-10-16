@@ -166,10 +166,10 @@ go test -v ./...
 - `DELETE /api/v1/items/{id}` — Soft delete item (tombstone)
 
 ### Environments & Secrets
-- `GET /api/v1/environments?workspace_id={id}&project_id={id}` — List scoped environments
-- `POST /api/v1/environments` — Create environment
-- `GET /api/v1/environments/{id}` — Get environment details
-- `PUT /api/v1/environments/{id}` — Update environment (supports `base_version` OCC)
+- `GET /api/v1/environments?workspace_id={id}&project_id={id}` — List scoped environments (automatically filtered by the caller's project role)
+- `POST /api/v1/environments` — Create environment (supports `min_role: 'admin' | 'maintainer' | 'contributor' | 'reader'`)
+- `GET /api/v1/environments/{id}` — Get environment details (enforces `min_role` RBAC)
+- `PUT /api/v1/environments/{id}` — Update environment (supports `base_version` OCC and `min_role`)
 - `DELETE /api/v1/environments/{id}` — Soft delete environment (tombstone)
 
 ### Stateless Delta & Batch Synchronization

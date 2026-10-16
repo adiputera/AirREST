@@ -60,7 +60,7 @@ func New(ctx context.Context) (*App, error) {
 	teamService := service.NewTeamService(teamRepo, userRepo)
 	projectService := service.NewProjectService(projectRepo, teamRepo, teamService)
 	collectionService := service.NewCollectionService(collectionRepo, workspaceRepo, projectService)
-	envService := service.NewEnvironmentService(envRepo, collectionService)
+	envService := service.NewEnvironmentService(envRepo, collectionService, projectService)
 	syncService := service.NewSyncService(pool, collectionService, envService)
 
 	// Bootstrap initial Superadmin if not exists

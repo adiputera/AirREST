@@ -310,3 +310,88 @@ function formatImportItem(item: any): any {
     items: (item.items || []).map(formatImportItem),
   };
 }
+
+// ----------------- Environment Endpoints -----------------
+
+export async function createScopeEnvironment(
+  apiUrl: string,
+  token: string,
+  scope: ActiveScope,
+  env: { name: string; variables: any[]; min_role?: string },
+  refreshToken?: string
+) {
+  const payload: any = {
+    name: env.name,
+    variables: env.variables,
+    min_role: env.min_role || 'reader',
+  };
+
+  if (scope.type === 'workspace') {
+    payload.workspace_id = scope.id;
+  } else {
+    payload.project_id = scope.id;
+  }
+
+  const res = await fetchWithAuth('/api/v1/environments', {
+    method: 'POST',
+    apiUrl,
+    token,
+    refreshToken,
+    body: JSON.stringify(payload),
+  });
+
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(extractError(json, 'Failed to create environment'));
+  }
+  return unwrapData<any>(json);
+}
+
+export async function updateScopeEnvironment(
+  apiUrl: string,
+  token: string,
+  envId: string,
+  updates: { name?: string; variables?: any[]; min_role?: string; base_version?: number },
+  refreshToken?: string
+) {
+  const payload: any = {
+    name: updates.name,
+    variables: updates.variables,
+    min_role: updates.min_role,
+    base_version: updates.base_version || 1,
+  };
+
+  const res = await fetchWithAuth(`/api/v1/environments/${envId}`, {
+    method: 'PUT',
+    apiUrl,
+    token,
+    refreshToken,
+    body: JSON.stringify(payload),
+  });
+
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(extractError(json, 'Failed to update environment'));
+  }
+  return unwrapData<any>(json);
+}
+
+export async function deleteScopeEnvironment(
+  apiUrl: string,
+  token: string,
+  envId: string,
+  refreshToken?: string
+) {
+  const res = await fetchWithAuth(`/api/v1/environments/${envId}`, {
+    method: 'DELETE',
+    apiUrl,
+    token,
+    refreshToken,
+  });
+
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(extractError(json, 'Failed to delete environment'));
+  }
+  return unwrapData<any>(json);
+}
