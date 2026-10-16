@@ -20,7 +20,7 @@ Most web-based API testing tools are severely constrained by browser security mo
 
 - 🛡️ **Zero CORS & Mixed-Content Blocks**: Chrome host permissions (`<all_urls>`) allow direct, unrestricted HTTP and HTTPS dispatching from your browser.
 - 💻 **Flexible Workspace Modes (Offline vs Cloud)**: Run **100% Offline** using local storage (zero tracking, instant launch), or connect to **Cloud Sync Mode** for multi-device backup and team collaboration.
-- 👥 **Team & Project Scope Switcher**: Freely jump between personal workspaces and assigned team projects from the studio header with real-time RBAC tags (`Admin`, `Contributor`, `Reader`).
+- 👥 **Team & Project Scope Switcher**: Freely jump between personal workspaces and assigned team projects from the studio header with real-time RBAC tags (`Admin`, `Maintainer`, `Contributor`, `Reader`).
 - 🔑 **Rolling Refresh Tokens**: 30-day rolling refresh token rotation with silent background refresh ensures active sessions are never abruptly logged out.
 - 🏢 **Decoupled Management Hub (`hub/`)**: Separate full-page dashboard deployable on Vercel for managing teams, project RBAC, and user provisioning without bloating the browser extension.
 - 📁 **Native Postman v2.1 Compatibility**: Import and export standard Postman Collections and Environments without vendor lock-in.

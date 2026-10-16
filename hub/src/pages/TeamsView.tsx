@@ -11,6 +11,7 @@ import {
   UserPlus,
   AlertCircle,
   X,
+  Pencil,
 } from 'lucide-react';
 import { useHubStore } from '../store/useHubStore';
 import {
@@ -50,6 +51,10 @@ export const TeamsView: React.FC = () => {
   const [selectedUserToInvite, setSelectedUserToInvite] = useState<User | null>(null);
   const [newMemberRole, setNewMemberRole] = useState<'admin' | 'member'>('member');
   const [isAddingMember, setIsAddingMember] = useState(false);
+
+  const [editingMember, setEditingMember] = useState<TeamMember | null>(null);
+  const [editRole, setEditRole] = useState<'admin' | 'member'>('member');
+  const [isUpdatingRole, setIsUpdatingRole] = useState(false);
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -171,6 +176,24 @@ export const TeamsView: React.FC = () => {
       setMembers(members.filter((m) => m.user_id !== memberUserId));
     } catch (err: any) {
       alert(err.message || 'Failed to remove member');
+    }
+  };
+
+  // Handle Update Member Role
+  const handleUpdateRole = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || !selectedTeamId || !editingMember) return;
+    setIsUpdatingRole(true);
+    setErrorMsg(null);
+    try {
+      await apiAddTeamMember(apiUrl, token, selectedTeamId, editingMember.user_id, editRole, refreshToken || undefined);
+      const updatedMembers = await apiListTeamMembers(apiUrl, token, selectedTeamId, refreshToken || undefined);
+      setMembers(updatedMembers);
+      setEditingMember(null);
+    } catch (err: any) {
+      alert(err.message || 'Failed to update member role');
+    } finally {
+      setIsUpdatingRole(false);
     }
   };
 
@@ -354,15 +377,27 @@ export const TeamsView: React.FC = () => {
                             </span>
                           </td>
                           <td className="px-4 py-3 text-right">
-                            {member.user_id !== user?.id && (
+                            <div className="flex items-center justify-end gap-1">
                               <button
-                                onClick={() => handleRemoveMember(member.user_id)}
-                                className="rounded p-1 text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400 transition"
-                                title="Remove Member"
+                                onClick={() => {
+                                  setEditingMember(member);
+                                  setEditRole(member.role);
+                                }}
+                                className="rounded p-1 text-zinc-500 hover:bg-sky-500/10 hover:text-sky-400 transition"
+                                title="Edit Role"
                               >
-                                <Trash2 className="h-3.5 w-3.5" />
+                                <Pencil className="h-3.5 w-3.5" />
                               </button>
-                            )}
+                              {member.user_id !== user?.id && (
+                                <button
+                                  onClick={() => handleRemoveMember(member.user_id)}
+                                  className="rounded p-1 text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400 transition"
+                                  title="Remove Member"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );
@@ -536,6 +571,67 @@ export const TeamsView: React.FC = () => {
                   className="flex items-center gap-1.5 rounded-lg bg-sky-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-sky-500 transition shadow-md disabled:opacity-50"
                 >
                   {isAddingMember ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Confirm Add Member'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {/* Modal: Edit Team Member Role */}
+      {editingMember && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
+                <Shield className="h-4 w-4 text-sky-400" />
+                <span>Edit Member Role</span>
+              </h3>
+              <button
+                onClick={() => setEditingMember(null)}
+                className="text-zinc-500 hover:text-zinc-300"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mb-4 rounded-lg bg-zinc-900/60 border border-zinc-800/80 p-3 text-xs">
+              <div className="font-semibold text-zinc-200">
+                {editingMember.user?.name || editingMember.name || 'Member'}
+              </div>
+              <div className="text-zinc-400 text-[11px] truncate">
+                {editingMember.user?.email || editingMember.email}
+              </div>
+            </div>
+
+            <form onSubmit={handleUpdateRole} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1">
+                  Team Role
+                </label>
+                <select
+                  value={editRole}
+                  onChange={(e) => setEditRole(e.target.value as 'admin' | 'member')}
+                  className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none"
+                >
+                  <option value="member">Member (Can access assigned projects)</option>
+                  <option value="admin">Admin (Can manage team projects &amp; members)</option>
+                </select>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingMember(null)}
+                  className="rounded-lg border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isUpdatingRole}
+                  className="flex items-center gap-1.5 rounded-lg bg-sky-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-sky-500 transition shadow-md disabled:opacity-50"
+                >
+                  {isUpdatingRole ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Save Changes'}
                 </button>
               </div>
             </form>

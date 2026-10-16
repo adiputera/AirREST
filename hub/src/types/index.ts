@@ -42,7 +42,7 @@ export interface Project {
   created_by?: string;
   created_at?: string;
   updated_at?: string;
-  user_role?: 'admin' | 'contributor' | 'reader';
+  user_role?: 'admin' | 'maintainer' | 'contributor' | 'reader';
 }
 
 export interface ProjectMember {
@@ -50,7 +50,7 @@ export interface ProjectMember {
   user_id: string;
   email?: string;
   name?: string;
-  role: 'admin' | 'contributor' | 'reader';
+  role: 'admin' | 'maintainer' | 'contributor' | 'reader';
   assigned_at?: string;
   user?: {
     id: string;

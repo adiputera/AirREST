@@ -239,7 +239,7 @@ export async function apiAddProjectMember(
   token: string,
   projectId: string,
   userId: string,
-  role: 'admin' | 'contributor' | 'reader',
+  role: 'admin' | 'maintainer' | 'contributor' | 'reader',
   refreshToken?: string
 ) {
   const res = await fetchWithAuth(`/api/v1/projects/${projectId}/members`, {

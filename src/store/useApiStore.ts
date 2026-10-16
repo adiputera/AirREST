@@ -88,6 +88,18 @@ const defaultRequest: ApiRequest = {
   updatedAt: Date.now(),
 };
 
+export interface ScopeCacheEntry {
+  collections: Collection[];
+  environments: Environment[];
+  activeEnvironmentId?: string | null;
+  lastSyncedAt?: number | null;
+}
+
+function getScopeKey(scope?: ActiveScope | null): string {
+  if (!scope || !scope.id) return 'default';
+  return `${scope.type}:${scope.id}`;
+}
+
 interface ApiStoreState {
   tabs: ApiRequest[];
   activeTabId: string;
@@ -170,6 +182,10 @@ interface ApiStoreState {
   syncStatus: SyncStatus;
   lastSyncedAt: number | null;
   syncError: string | null;
+  offlineCollections?: Collection[];
+  offlineEnvironments?: Environment[];
+  offlineActiveEnvironmentId?: string | null;
+  scopeCache?: Record<string, ScopeCacheEntry>;
 
   setWorkspaceMode: (mode: WorkspaceMode) => void;
   setHasConfiguredMode: (configured: boolean) => void;
@@ -203,12 +219,59 @@ export const useApiStore = create<ApiStoreState>()(
       syncStatus: 'idle',
       lastSyncedAt: null,
       syncError: null,
+      offlineCollections: [],
+      offlineEnvironments: defaultEnvironments,
+      offlineActiveEnvironmentId: 'env-jsonplaceholder',
+      scopeCache: {},
 
-      setWorkspaceMode: (workspaceMode) =>
-        set({
-          workspaceMode: isOfflineOnly ? 'offline' : workspaceMode,
-          hasConfiguredMode: true,
-        }),
+      setWorkspaceMode: (workspaceMode) => {
+        const currentMode = get().workspaceMode;
+        if (currentMode === workspaceMode) return;
+
+        if (workspaceMode === 'offline') {
+          // Save current cloud scope data into scopeCache before leaving
+          const activeScope = get().cloudConfig.activeScope;
+          const updatedScopeCache = { ...(get().scopeCache || {}) };
+          if (activeScope) {
+            updatedScopeCache[getScopeKey(activeScope)] = {
+              collections: get().collections,
+              environments: get().environments,
+              activeEnvironmentId: get().activeEnvironmentId,
+              lastSyncedAt: get().lastSyncedAt,
+            };
+          }
+
+          const { offlineCollections, offlineEnvironments, offlineActiveEnvironmentId, collections, environments, activeEnvironmentId } = get();
+          set({
+            workspaceMode: 'offline',
+            hasConfiguredMode: true,
+            scopeCache: updatedScopeCache,
+            collections: (offlineCollections && offlineCollections.length > 0) ? offlineCollections : collections,
+            environments: (offlineEnvironments && offlineEnvironments.length > 0) ? offlineEnvironments : environments,
+            activeEnvironmentId: offlineActiveEnvironmentId || activeEnvironmentId || defaultEnvironments[0]?.id || null,
+            syncStatus: 'idle',
+            syncError: null,
+          });
+        } else {
+          // Entering cloud mode: snapshot current offline state first
+          const { collections, environments, activeEnvironmentId, cloudConfig, scopeCache } = get();
+          const targetScope = cloudConfig.activeScope;
+          const cached = targetScope ? scopeCache?.[getScopeKey(targetScope)] : null;
+
+          set({
+            workspaceMode: isOfflineOnly ? 'offline' : 'cloud',
+            hasConfiguredMode: true,
+            offlineCollections: collections,
+            offlineEnvironments: environments,
+            offlineActiveEnvironmentId: activeEnvironmentId,
+            collections: cached ? cached.collections : [],
+            environments: cached ? cached.environments : [],
+            activeEnvironmentId: cached ? (cached.activeEnvironmentId || null) : null,
+            syncStatus: 'idle',
+            syncError: null,
+          });
+        }
+      },
       setHasConfiguredMode: (hasConfiguredMode) =>
         set({
           hasConfiguredMode: isOfflineOnly ? true : hasConfiguredMode,
@@ -218,28 +281,66 @@ export const useApiStore = create<ApiStoreState>()(
           cloudConfig: { ...state.cloudConfig, ...updates },
         })),
       setActiveScope: async (scope) => {
+        const { workspaceMode, collections, environments, activeEnvironmentId, cloudConfig, scopeCache, lastSyncedAt } = get();
+        const updatedScopeCache = { ...(scopeCache || {}) };
+
+        // If transitioning from offline mode, snapshot offline state
+        if (workspaceMode === 'offline') {
+          set({
+            offlineCollections: collections,
+            offlineEnvironments: environments,
+            offlineActiveEnvironmentId: activeEnvironmentId,
+          });
+        } else if (cloudConfig.activeScope) {
+          // If transitioning from another cloud scope, snapshot old cloud scope into scopeCache
+          updatedScopeCache[getScopeKey(cloudConfig.activeScope)] = {
+            collections,
+            environments,
+            activeEnvironmentId,
+            lastSyncedAt,
+          };
+        }
+
+        // Check if target scope already has cached data in local storage
+        const targetCache = updatedScopeCache[getScopeKey(scope)];
+
         set((state) => ({
+          workspaceMode: 'cloud',
           cloudConfig: {
             ...state.cloudConfig,
             activeScope: scope,
           },
+          scopeCache: updatedScopeCache,
+          // Load cached data immediately for instant switching, or empty array if newly created/visited
+          collections: targetCache ? targetCache.collections : [],
+          environments: targetCache ? targetCache.environments : [],
+          activeEnvironmentId: targetCache ? (targetCache.activeEnvironmentId || null) : null,
+          syncStatus: 'syncing',
+          syncError: null,
         }));
+
         await get().pullCloudDelta();
       },
       logoutCloud: () => {
+        const { offlineCollections, offlineEnvironments, offlineActiveEnvironmentId } = get();
         set((state) => ({
           workspaceMode: 'offline',
+          collections: offlineCollections || [],
+          environments: offlineEnvironments || defaultEnvironments,
+          activeEnvironmentId: offlineActiveEnvironmentId || defaultEnvironments[0]?.id || null,
+          scopeCache: {},
           cloudConfig: {
             apiUrl: state.cloudConfig.apiUrl || 'http://localhost:8080',
           },
           syncStatus: 'idle',
           syncError: null,
+          lastSyncedAt: null,
         }));
       },
       setSyncStatus: (syncStatus, syncError = null) => set({ syncStatus, syncError }),
       pullCloudDelta: async () => {
         if (isOfflineOnly) return;
-        const { workspaceMode, cloudConfig, collections: currentCols } = get();
+        const { workspaceMode, cloudConfig } = get();
         if (workspaceMode !== 'cloud' || !cloudConfig.token || !cloudConfig.activeScope) {
           return;
         }
@@ -255,66 +356,26 @@ export const useApiStore = create<ApiStoreState>()(
           const pulledCols = buildCollectionsFromDelta(delta.collections, delta.items);
           const pulledEnvs = buildEnvironmentsFromDelta(delta.environments);
 
-          // SAFE SYNC: If there are local collections that don't exist on remote,
-          // automatically push them to the cloud so they are never lost!
-          const remoteColIds = new Set(pulledCols.map((c) => c.id));
-          const unsyncedCols = currentCols.filter((c) => !remoteColIds.has(c.id));
-
-          if (unsyncedCols.length > 0) {
-            try {
-              await batchImportToScope(
-                cloudConfig.apiUrl,
-                cloudConfig.token,
-                cloudConfig.activeScope,
-                unsyncedCols,
-                cloudConfig.refreshToken
-              );
-              const freshDelta = await pullScopeDelta(
-                cloudConfig.apiUrl,
-                cloudConfig.token,
-                cloudConfig.activeScope,
-                null,
-                cloudConfig.refreshToken
-              );
-              const targetActiveId = pulledEnvs.some((e) => e.id === get().activeEnvironmentId)
-                ? get().activeEnvironmentId
-                : (pulledEnvs[0]?.id || null);
-
-              set({
-                collections: freshCols,
-                environments: pulledEnvs,
-                activeEnvironmentId: targetActiveId,
-                syncStatus: 'synced',
-                lastSyncedAt: Date.now(),
-                syncError: null,
-              });
-              return;
-            } catch {
-              // If push failed, preserve both remote and local collections so user NEVER loses data
-              const targetActiveId = pulledEnvs.some((e) => e.id === get().activeEnvironmentId)
-                ? get().activeEnvironmentId
-                : (pulledEnvs[0]?.id || null);
-
-              set({
-                collections: [...pulledCols, ...unsyncedCols],
-                environments: pulledEnvs,
-                activeEnvironmentId: targetActiveId,
-                syncStatus: 'synced',
-                lastSyncedAt: Date.now(),
-                syncError: null,
-              });
-              return;
-            }
-          }
-
           const targetActiveId = pulledEnvs.some((e) => e.id === get().activeEnvironmentId)
             ? get().activeEnvironmentId
             : (pulledEnvs[0]?.id || null);
+
+          const scopeKey = getScopeKey(cloudConfig.activeScope);
+          const updatedScopeCache = {
+            ...(get().scopeCache || {}),
+            [scopeKey]: {
+              collections: pulledCols,
+              environments: pulledEnvs,
+              activeEnvironmentId: targetActiveId,
+              lastSyncedAt: Date.now(),
+            },
+          };
 
           set({
             collections: pulledCols,
             environments: pulledEnvs,
             activeEnvironmentId: targetActiveId,
+            scopeCache: updatedScopeCache,
             syncStatus: 'synced',
             lastSyncedAt: Date.now(),
             syncError: null,
@@ -327,11 +388,15 @@ export const useApiStore = create<ApiStoreState>()(
         }
       },
       importLocalToCloud: async () => {
-        const { cloudConfig, collections } = get();
+        const { cloudConfig, offlineCollections, collections } = get();
+        const colsToImport = (offlineCollections && offlineCollections.length > 0)
+          ? offlineCollections
+          : collections;
+
         if (!cloudConfig.token || !cloudConfig.activeScope) {
           return { success: false, message: 'Not connected to a cloud workspace or project' };
         }
-        if (collections.length === 0) {
+        if (colsToImport.length === 0) {
           return { success: false, message: 'No local collections found to import' };
         }
         try {
@@ -340,11 +405,11 @@ export const useApiStore = create<ApiStoreState>()(
             cloudConfig.apiUrl,
             cloudConfig.token,
             cloudConfig.activeScope,
-            collections,
+            colsToImport,
             cloudConfig.refreshToken
           );
           await get().pullCloudDelta();
-          return { success: true, message: `Successfully imported ${collections.length} collection(s) to cloud` };
+          return { success: true, message: `Successfully imported ${colsToImport.length} collection(s) to cloud` };
         } catch (err: any) {
           set({ syncStatus: 'error', syncError: err.message || 'Import failed' });
           return { success: false, message: err.message || 'Import failed' };
@@ -352,7 +417,11 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       // Environment actions
-      setActiveEnvironmentId: (activeEnvironmentId) => set({ activeEnvironmentId }),
+      setActiveEnvironmentId: (activeEnvironmentId) =>
+        set((state) => ({
+          activeEnvironmentId,
+          offlineActiveEnvironmentId: state.workspaceMode === 'offline' ? activeEnvironmentId : state.offlineActiveEnvironmentId,
+        })),
 
       createEnvironment: (name, minRole = 'reader') => {
         const newEnv: Environment = {
@@ -366,6 +435,12 @@ export const useApiStore = create<ApiStoreState>()(
         set((state) => ({
           environments: [...state.environments, newEnv],
           activeEnvironmentId: newEnv.id,
+          offlineEnvironments: state.workspaceMode === 'offline'
+            ? [...(state.offlineEnvironments || state.environments), newEnv]
+            : state.offlineEnvironments,
+          offlineActiveEnvironmentId: state.workspaceMode === 'offline'
+            ? newEnv.id
+            : state.offlineActiveEnvironmentId,
         }));
 
         const { workspaceMode, cloudConfig } = get();
@@ -399,6 +474,12 @@ export const useApiStore = create<ApiStoreState>()(
         set((state) => ({
           environments: state.environments.filter((e) => e.id !== id),
           activeEnvironmentId: state.activeEnvironmentId === id ? null : state.activeEnvironmentId,
+          offlineEnvironments: state.workspaceMode === 'offline'
+            ? (state.offlineEnvironments || state.environments).filter((e) => e.id !== id)
+            : state.offlineEnvironments,
+          offlineActiveEnvironmentId: state.workspaceMode === 'offline' && state.offlineActiveEnvironmentId === id
+            ? null
+            : state.offlineActiveEnvironmentId,
         }));
 
         const { workspaceMode, cloudConfig } = get();
@@ -411,15 +492,19 @@ export const useApiStore = create<ApiStoreState>()(
 
       updateEnvironment: (id, updates) => {
         let updatedEnv: Environment | undefined;
-        set((state) => ({
-          environments: state.environments.map((e) => {
+        set((state) => {
+          const updatedEnvs = state.environments.map((e) => {
             if (e.id === id) {
               updatedEnv = { ...e, ...updates, updatedAt: Date.now() };
               return updatedEnv;
             }
             return e;
-          }),
-        }));
+          });
+          return {
+            environments: updatedEnvs,
+            offlineEnvironments: state.workspaceMode === 'offline' ? updatedEnvs : state.offlineEnvironments,
+          };
+        });
 
         const { workspaceMode, cloudConfig } = get();
         if (workspaceMode === 'cloud' && cloudConfig.token && updatedEnv) {
@@ -441,8 +526,8 @@ export const useApiStore = create<ApiStoreState>()(
 
       addEnvironmentVariable: (envId) => {
         let updatedEnv: Environment | undefined;
-        set((state) => ({
-          environments: state.environments.map((e) => {
+        set((state) => {
+          const updatedEnvs = state.environments.map((e) => {
             if (e.id !== envId) return e;
             updatedEnv = {
               ...e,
@@ -450,8 +535,12 @@ export const useApiStore = create<ApiStoreState>()(
               updatedAt: Date.now(),
             };
             return updatedEnv;
-          }),
-        }));
+          });
+          return {
+            environments: updatedEnvs,
+            offlineEnvironments: state.workspaceMode === 'offline' ? updatedEnvs : state.offlineEnvironments,
+          };
+        });
 
         const { workspaceMode, cloudConfig } = get();
         if (workspaceMode === 'cloud' && cloudConfig.token && updatedEnv) {
@@ -471,8 +560,8 @@ export const useApiStore = create<ApiStoreState>()(
 
       updateEnvironmentVariable: (envId, varId, updates) => {
         let updatedEnv: Environment | undefined;
-        set((state) => ({
-          environments: state.environments.map((e) => {
+        set((state) => {
+          const updatedEnvs = state.environments.map((e) => {
             if (e.id !== envId) return e;
             updatedEnv = {
               ...e,
@@ -480,8 +569,12 @@ export const useApiStore = create<ApiStoreState>()(
               updatedAt: Date.now(),
             };
             return updatedEnv;
-          }),
-        }));
+          });
+          return {
+            environments: updatedEnvs,
+            offlineEnvironments: state.workspaceMode === 'offline' ? updatedEnvs : state.offlineEnvironments,
+          };
+        });
 
         const { workspaceMode, cloudConfig } = get();
         if (workspaceMode === 'cloud' && cloudConfig.token && updatedEnv) {
@@ -501,8 +594,8 @@ export const useApiStore = create<ApiStoreState>()(
 
       removeEnvironmentVariable: (envId, varId) => {
         let updatedEnv: Environment | undefined;
-        set((state) => ({
-          environments: state.environments.map((e) => {
+        set((state) => {
+          const updatedEnvs = state.environments.map((e) => {
             if (e.id !== envId) return e;
             updatedEnv = {
               ...e,
@@ -510,8 +603,12 @@ export const useApiStore = create<ApiStoreState>()(
               updatedAt: Date.now(),
             };
             return updatedEnv;
-          }),
-        }));
+          });
+          return {
+            environments: updatedEnvs,
+            offlineEnvironments: state.workspaceMode === 'offline' ? updatedEnvs : state.offlineEnvironments,
+          };
+        });
 
         const { workspaceMode, cloudConfig } = get();
         if (workspaceMode === 'cloud' && cloudConfig.token && updatedEnv) {
@@ -1052,6 +1149,9 @@ export const useApiStore = create<ApiStoreState>()(
         };
         set((state) => ({
           collections: [newCol, ...state.collections],
+          offlineCollections: state.workspaceMode === 'offline'
+            ? [newCol, ...(state.offlineCollections || state.collections)]
+            : state.offlineCollections,
         }));
         return newCol.id;
       },
@@ -1122,13 +1222,19 @@ export const useApiStore = create<ApiStoreState>()(
             };
           });
 
-          return { collections };
+          return {
+            collections,
+            offlineCollections: state.workspaceMode === 'offline' ? collections : state.offlineCollections,
+          };
         });
       },
 
       addCollection: async (collection) => {
         set((state) => ({
           collections: [collection, ...state.collections],
+          offlineCollections: state.workspaceMode === 'offline'
+            ? [collection, ...(state.offlineCollections || state.collections)]
+            : state.offlineCollections,
         }));
 
         const { workspaceMode, cloudConfig } = get();
@@ -1155,6 +1261,12 @@ export const useApiStore = create<ApiStoreState>()(
           set((state) => ({
             environments: [...state.environments, imported],
             activeEnvironmentId: imported.id,
+            offlineEnvironments: state.workspaceMode === 'offline'
+              ? [...(state.offlineEnvironments || state.environments), imported]
+              : state.offlineEnvironments,
+            offlineActiveEnvironmentId: state.workspaceMode === 'offline'
+              ? imported.id
+              : state.offlineActiveEnvironmentId,
           }));
 
           const { workspaceMode, cloudConfig } = get();
@@ -1236,6 +1348,9 @@ export const useApiStore = create<ApiStoreState>()(
       deleteCollection: (id) => {
         set((state) => ({
           collections: state.collections.filter((c) => c.id !== id),
+          offlineCollections: state.workspaceMode === 'offline'
+            ? (state.offlineCollections || state.collections).filter((c) => c.id !== id)
+            : state.offlineCollections,
         }));
       },
 
@@ -1282,10 +1397,28 @@ export const useApiStore = create<ApiStoreState>()(
         history: state.history,
         environments: state.environments,
         activeEnvironmentId: state.activeEnvironmentId,
+        offlineCollections: state.offlineCollections,
+        offlineEnvironments: state.offlineEnvironments,
+        offlineActiveEnvironmentId: state.offlineActiveEnvironmentId,
+        scopeCache: state.scopeCache,
         workspaceMode: isOfflineOnly ? 'offline' : state.workspaceMode,
         hasConfiguredMode: isOfflineOnly ? true : state.hasConfiguredMode,
         cloudConfig: state.cloudConfig,
       }),
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        if (state.workspaceMode === 'offline') {
+          if (!state.offlineCollections || state.offlineCollections.length === 0) {
+            state.offlineCollections = state.collections || [];
+          }
+          if (!state.offlineEnvironments || state.offlineEnvironments.length === 0) {
+            state.offlineEnvironments = state.environments || defaultEnvironments;
+          }
+          if (!state.offlineActiveEnvironmentId) {
+            state.offlineActiveEnvironmentId = state.activeEnvironmentId || defaultEnvironments[0]?.id || null;
+          }
+        }
+      },
     }
   )
 );

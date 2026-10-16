@@ -11,6 +11,7 @@ import {
   AlertCircle,
   X,
   Info,
+  Pencil,
 } from 'lucide-react';
 import { useHubStore } from '../store/useHubStore';
 import {
@@ -51,8 +52,12 @@ export const ProjectsView: React.FC = () => {
 
   const [isAssignMemberOpen, setIsAssignMemberOpen] = useState(false);
   const [selectedUserIdToAssign, setSelectedUserIdToAssign] = useState<string>('');
-  const [assignedRole, setAssignedRole] = useState<'admin' | 'contributor' | 'reader'>('contributor');
+  const [assignedRole, setAssignedRole] = useState<'admin' | 'maintainer' | 'contributor' | 'reader'>('contributor');
   const [isAssigningMember, setIsAssigningMember] = useState(false);
+
+  const [editingMember, setEditingMember] = useState<ProjectMember | null>(null);
+  const [editRole, setEditRole] = useState<'admin' | 'maintainer' | 'contributor' | 'reader'>('contributor');
+  const [isUpdatingRole, setIsUpdatingRole] = useState(false);
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -187,6 +192,31 @@ export const ProjectsView: React.FC = () => {
       setProjectMembers(projectMembers.filter((m) => m.user_id !== memberUserId));
     } catch (err: any) {
       alert(err.message || 'Failed to unassign member');
+    }
+  };
+
+  // Handle Update Member Role
+  const handleUpdateRole = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || !selectedProjectId || !editingMember) return;
+    setIsUpdatingRole(true);
+    setErrorMsg(null);
+    try {
+      await apiAddProjectMember(
+        apiUrl,
+        token,
+        selectedProjectId,
+        editingMember.user_id,
+        editRole,
+        refreshToken || undefined
+      );
+      const updated = await apiListProjectMembers(apiUrl, token, selectedProjectId, refreshToken || undefined);
+      setProjectMembers(updated);
+      setEditingMember(null);
+    } catch (err: any) {
+      alert(err.message || 'Failed to update project member role');
+    } finally {
+      setIsUpdatingRole(false);
     }
   };
 
@@ -331,7 +361,7 @@ export const ProjectsView: React.FC = () => {
                 <div>
                   <h3 className="text-base font-bold text-zinc-100">Assigned Project Members</h3>
                   <p className="text-xs text-zinc-400">
-                    Granular RBAC: Admin (full), Contributor (read &amp; write OCC), Reader (read-only)
+                    Granular RBAC: Admin (full), Maintainer (manage envs &amp; collections), Contributor (read &amp; write OCC), Reader (read-only)
                   </p>
                 </div>
 
@@ -387,6 +417,8 @@ export const ProjectsView: React.FC = () => {
                               className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
                                 member.role === 'admin'
                                   ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                                  : member.role === 'maintainer'
+                                  ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
                                   : member.role === 'contributor'
                                   ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
                                   : 'bg-zinc-800 text-zinc-300'
@@ -396,15 +428,27 @@ export const ProjectsView: React.FC = () => {
                             </span>
                           </td>
                           <td className="px-4 py-3 text-right">
-                            {member.user_id !== user?.id && (
+                            <div className="flex items-center justify-end gap-1">
                               <button
-                                onClick={() => handleRemoveMember(member.user_id)}
-                                className="rounded p-1 text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400 transition"
-                                title="Unassign Member"
+                                onClick={() => {
+                                  setEditingMember(member);
+                                  setEditRole(member.role);
+                                }}
+                                className="rounded p-1 text-zinc-500 hover:bg-sky-500/10 hover:text-sky-400 transition"
+                                title="Edit Role"
                               >
-                                <Trash2 className="h-3.5 w-3.5" />
+                                <Pencil className="h-3.5 w-3.5" />
                               </button>
-                            )}
+                              {member.user_id !== user?.id && (
+                                <button
+                                  onClick={() => handleRemoveMember(member.user_id)}
+                                  className="rounded p-1 text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400 transition"
+                                  title="Unassign Member"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );
@@ -530,8 +574,9 @@ export const ProjectsView: React.FC = () => {
                   onChange={(e) => setAssignedRole(e.target.value as any)}
                   className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none"
                 >
-                  <option value="contributor">Contributor (Read &amp; Write Collections)</option>
                   <option value="reader">Reader (Read-Only Collections)</option>
+                  <option value="contributor">Contributor (Read &amp; Write Collections)</option>
+                  <option value="maintainer">Maintainer (Collections &amp; Production Environments)</option>
                   <option value="admin">Admin (Manage Project &amp; Assign Members)</option>
                 </select>
               </div>
@@ -550,6 +595,69 @@ export const ProjectsView: React.FC = () => {
                   className="flex items-center gap-1.5 rounded-lg bg-sky-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-sky-500 transition shadow-md disabled:opacity-50"
                 >
                   {isAssigningMember ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Confirm Assignment'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {/* Modal: Edit Project Member Role */}
+      {editingMember && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
+                <Shield className="h-4 w-4 text-sky-400" />
+                <span>Edit Project Role (RBAC)</span>
+              </h3>
+              <button
+                onClick={() => setEditingMember(null)}
+                className="text-zinc-500 hover:text-zinc-300"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mb-4 rounded-lg bg-zinc-900/60 border border-zinc-800/80 p-3 text-xs">
+              <div className="font-semibold text-zinc-200">
+                {editingMember.user?.name || editingMember.name || 'Member'}
+              </div>
+              <div className="text-zinc-400 text-[11px] truncate">
+                {editingMember.user?.email || editingMember.email}
+              </div>
+            </div>
+
+            <form onSubmit={handleUpdateRole} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1">
+                  Project Role (RBAC)
+                </label>
+                <select
+                  value={editRole}
+                  onChange={(e) => setEditRole(e.target.value as any)}
+                  className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none"
+                >
+                  <option value="reader">Reader (Read-Only Collections)</option>
+                  <option value="contributor">Contributor (Read &amp; Write Collections)</option>
+                  <option value="maintainer">Maintainer (Collections &amp; Production Environments)</option>
+                  <option value="admin">Admin (Manage Project &amp; Assign Members)</option>
+                </select>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingMember(null)}
+                  className="rounded-lg border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isUpdatingRole}
+                  className="flex items-center gap-1.5 rounded-lg bg-sky-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-sky-500 transition shadow-md disabled:opacity-50"
+                >
+                  {isUpdatingRole ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Save Changes'}
                 </button>
               </div>
             </form>
