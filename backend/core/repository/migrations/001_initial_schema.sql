@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS project_members (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    role VARCHAR(20) NOT NULL CHECK (role IN ('admin', 'contributor', 'reader')),
+    role VARCHAR(20) NOT NULL CHECK (role IN ('admin', 'maintainer', 'contributor', 'reader')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (project_id, user_id)
@@ -132,6 +132,7 @@ CREATE TABLE IF NOT EXISTS environments (
     project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
     name VARCHAR(100) NOT NULL,
     variables JSONB NOT NULL DEFAULT '[]'::jsonb,
+    min_role VARCHAR(20) NOT NULL DEFAULT 'reader' CHECK (min_role IN ('admin', 'maintainer', 'contributor', 'reader')),
     version BIGINT NOT NULL DEFAULT 1,
     last_modified_by UUID REFERENCES users(id),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

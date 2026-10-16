@@ -90,3 +90,61 @@ func TestReorderItemPermissionRules(t *testing.T) {
 	}
 }
 
+func TestEnvironmentAccessRules(t *testing.T) {
+	// 1. Reader role
+	if !CanAccessEnv(domain.ProjectRoleReader, domain.ProjectRoleReader) {
+		t.Fatalf("reader should be able to access reader-level environment")
+	}
+	if CanAccessEnv(domain.ProjectRoleReader, domain.ProjectRoleContributor) {
+		t.Fatalf("reader should NOT be able to access contributor-level environment")
+	}
+	if CanAccessEnv(domain.ProjectRoleReader, domain.ProjectRoleMaintainer) {
+		t.Fatalf("reader should NOT be able to access maintainer-level environment")
+	}
+	if CanAccessEnv(domain.ProjectRoleReader, domain.ProjectRoleAdmin) {
+		t.Fatalf("reader should NOT be able to access admin-level environment")
+	}
+
+	// 2. Contributor role
+	if !CanAccessEnv(domain.ProjectRoleContributor, domain.ProjectRoleReader) {
+		t.Fatalf("contributor should be able to access reader-level environment")
+	}
+	if !CanAccessEnv(domain.ProjectRoleContributor, domain.ProjectRoleContributor) {
+		t.Fatalf("contributor should be able to access contributor-level environment")
+	}
+	if CanAccessEnv(domain.ProjectRoleContributor, domain.ProjectRoleMaintainer) {
+		t.Fatalf("contributor should NOT be able to access maintainer-level environment")
+	}
+	if CanAccessEnv(domain.ProjectRoleContributor, domain.ProjectRoleAdmin) {
+		t.Fatalf("contributor should NOT be able to access admin-level environment")
+	}
+
+	// 3. Maintainer role
+	if !CanAccessEnv(domain.ProjectRoleMaintainer, domain.ProjectRoleReader) {
+		t.Fatalf("maintainer should be able to access reader-level environment")
+	}
+	if !CanAccessEnv(domain.ProjectRoleMaintainer, domain.ProjectRoleContributor) {
+		t.Fatalf("maintainer should be able to access contributor-level environment")
+	}
+	if !CanAccessEnv(domain.ProjectRoleMaintainer, domain.ProjectRoleMaintainer) {
+		t.Fatalf("maintainer should be able to access maintainer-level environment")
+	}
+	if CanAccessEnv(domain.ProjectRoleMaintainer, domain.ProjectRoleAdmin) {
+		t.Fatalf("maintainer should NOT be able to access admin-level environment")
+	}
+
+	// 4. Admin role
+	if !CanAccessEnv(domain.ProjectRoleAdmin, domain.ProjectRoleReader) {
+		t.Fatalf("admin should be able to access reader-level environment")
+	}
+	if !CanAccessEnv(domain.ProjectRoleAdmin, domain.ProjectRoleContributor) {
+		t.Fatalf("admin should be able to access contributor-level environment")
+	}
+	if !CanAccessEnv(domain.ProjectRoleAdmin, domain.ProjectRoleMaintainer) {
+		t.Fatalf("admin should be able to access maintainer-level environment")
+	}
+	if !CanAccessEnv(domain.ProjectRoleAdmin, domain.ProjectRoleAdmin) {
+		t.Fatalf("admin should be able to access admin-level environment")
+	}
+}
+

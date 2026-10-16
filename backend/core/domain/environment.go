@@ -13,6 +13,7 @@ type Environment struct {
 	ProjectID      *uuid.UUID       `json:"project_id,omitempty"`
 	Name           string           `json:"name"`
 	Variables      *json.RawMessage `json:"variables"`
+	MinRole        ProjectRole      `json:"min_role"`
 	Version        int64            `json:"version"`
 	LastModifiedBy *uuid.UUID       `json:"last_modified_by,omitempty"`
 	CreatedAt      time.Time        `json:"created_at"`

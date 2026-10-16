@@ -9,6 +9,7 @@ import { ModeSelectorModal } from './ModeSelectorModal';
 import { CloudAuthModal } from './CloudAuthModal';
 import { ScopeSwitcher } from './ScopeSwitcher';
 import { exportPostmanCollection } from '@/lib/postman';
+import { isOfflineOnly } from '@/lib/edition';
 
 export const Header: React.FC = () => {
   const [isImportOpen, setIsImportOpen] = useState(false);
@@ -23,12 +24,12 @@ export const Header: React.FC = () => {
   const setActiveEnvironmentId = useApiStore((state) => state.setActiveEnvironmentId);
   const hasConfiguredMode = useApiStore((state) => state.hasConfiguredMode);
 
-  // Automatically prompt on first launch if storage mode is not yet configured
+  // Automatically prompt on first launch if storage mode is not yet configured (Full edition only)
   useEffect(() => {
-    if (!hasConfiguredMode) {
+    if (!isOfflineOnly && !hasConfiguredMode) {
       setIsModeSelectorOpen(true);
     }
-  }, [hasConfiguredMode]);
+  }, [isOfflineOnly, hasConfiguredMode]);
 
   const handleExportAll = () => {
     if (collections.length === 0) {
@@ -52,25 +53,39 @@ export const Header: React.FC = () => {
       <header className="relative z-30 flex h-14 w-full items-center justify-between border-b border-zinc-800 bg-zinc-950/80 px-4 backdrop-blur-md">
         {/* Brand & Team/Project Scope Switcher */}
         <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-tr from-sky-600 to-indigo-600 shadow-md shadow-sky-500/20 text-white shrink-0">
+          <div
+            className={`flex h-8 w-8 items-center justify-center rounded-lg shadow-md shrink-0 text-white ${
+              isOfflineOnly
+                ? 'bg-gradient-to-tr from-emerald-600 to-teal-500 shadow-emerald-500/20'
+                : 'bg-gradient-to-tr from-sky-600 to-indigo-600 shadow-sky-500/20'
+            }`}
+          >
             <Terminal className="h-4 w-4" />
           </div>
           <div className="flex items-center gap-2 mr-1">
             <h1 className="text-sm font-bold tracking-tight text-zinc-100">
               AirREST
             </h1>
-            <span className="hidden sm:inline-block rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold text-sky-400">
-              Extension v1.1
+            <span
+              className={`hidden sm:inline-block rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                isOfflineOnly
+                  ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
+                  : 'border-sky-500/30 bg-sky-500/10 text-sky-400'
+              }`}
+            >
+              {isOfflineOnly ? 'Offline Edition' : 'Extension v1.1'}
             </span>
           </div>
 
-          {/* Scope & Team Switcher */}
-          <div className="relative z-30 border-l border-zinc-800/80 pl-3">
-            <ScopeSwitcher
-              onOpenModeSelector={() => setIsModeSelectorOpen(true)}
-              onOpenCloudAuth={() => setIsCloudAuthOpen(true)}
-            />
-          </div>
+          {/* Scope & Team Switcher (Full edition only) */}
+          {!isOfflineOnly && (
+            <div className="relative z-30 border-l border-zinc-800/80 pl-3">
+              <ScopeSwitcher
+                onOpenModeSelector={() => setIsModeSelectorOpen(true)}
+                onOpenCloudAuth={() => setIsCloudAuthOpen(true)}
+              />
+            </div>
+          )}
         </div>
 
         {/* Global Actions */}
@@ -133,15 +148,19 @@ export const Header: React.FC = () => {
       {/* Modals */}
       <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} />
       <EnvironmentModal isOpen={isEnvModalOpen} onClose={() => setIsEnvModalOpen(false)} />
-      <ModeSelectorModal
-        isOpen={isModeSelectorOpen}
-        onClose={() => setIsModeSelectorOpen(false)}
-        onSelectCloud={() => setIsCloudAuthOpen(true)}
-      />
-      <CloudAuthModal
-        isOpen={isCloudAuthOpen}
-        onClose={() => setIsCloudAuthOpen(false)}
-      />
+      {!isOfflineOnly && (
+        <>
+          <ModeSelectorModal
+            isOpen={isModeSelectorOpen}
+            onClose={() => setIsModeSelectorOpen(false)}
+            onSelectCloud={() => setIsCloudAuthOpen(true)}
+          />
+          <CloudAuthModal
+            isOpen={isCloudAuthOpen}
+            onClose={() => setIsCloudAuthOpen(false)}
+          />
+        </>
+      )}
     </>
   );
 };

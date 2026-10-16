@@ -13,6 +13,8 @@ import {
   AlertCircle,
   CheckCircle2,
   FileCode,
+  Shield,
+  Lock,
 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
 import { exportPostmanEnvironment } from '@/lib/postman';
@@ -33,11 +35,27 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
   const updateEnvironmentVariable = useApiStore((state) => state.updateEnvironmentVariable);
   const removeEnvironmentVariable = useApiStore((state) => state.removeEnvironmentVariable);
   const importEnvironmentFromJson = useApiStore((state) => state.importEnvironmentFromJson);
+  const cloudConfig = useApiStore((state) => state.cloudConfig);
+
+  const activeScope = cloudConfig?.activeScope;
+  const isProjectScope = activeScope?.type === 'project';
+  const userRole = activeScope?.role || 'reader';
+
+  const ROLE_RANK: Record<string, number> = {
+    admin: 4,
+    owner: 4,
+    maintainer: 3,
+    contributor: 2,
+    reader: 1,
+  };
+  const userRank = !isProjectScope ? 4 : (ROLE_RANK[userRole] || 1);
+  const isProjectAdmin = userRank >= 4;
 
   const [selectedEnvId, setSelectedEnvId] = useState<string>(
     activeEnvironmentId || (environments[0]?.id ?? '')
   );
   const [newEnvName, setNewEnvName] = useState('');
+  const [newEnvMinRole, setNewEnvMinRole] = useState<'reader' | 'contributor' | 'maintainer' | 'admin'>('reader');
   const [isAddingEnv, setIsAddingEnv] = useState(false);
   const [isPasteModalOpen, setIsPasteModalOpen] = useState(false);
   const [pastedJson, setPastedJson] = useState('');
@@ -53,9 +71,10 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
 
   const handleCreateEnv = () => {
     if (!newEnvName.trim()) return;
-    const newId = createEnvironment(newEnvName);
+    const newId = createEnvironment(newEnvName, isProjectScope ? newEnvMinRole : 'reader');
     setSelectedEnvId(newId);
     setNewEnvName('');
+    setNewEnvMinRole('reader');
     setIsAddingEnv(false);
   };
 
@@ -164,7 +183,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
           </div>
 
           {isAddingEnv && (
-            <div className="mt-3 flex gap-1">
+            <div className="mt-3 flex flex-col gap-2 rounded-xl border border-zinc-700 bg-zinc-900/90 p-2.5">
               <input
                 type="text"
                 value={newEnvName}
@@ -174,12 +193,35 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                 autoFocus
                 className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-100 placeholder-zinc-500 focus:border-sky-500 focus:outline-none"
               />
-              <button
-                onClick={handleCreateEnv}
-                className="rounded-lg bg-sky-500 px-2 text-xs font-bold text-white hover:bg-sky-400"
-              >
-                ✓
-              </button>
+              {isProjectScope && (
+                <div className="flex items-center gap-1.5 text-[10px] text-zinc-400">
+                  <Shield className="h-3 w-3 text-zinc-400 shrink-0" />
+                  <select
+                    value={newEnvMinRole}
+                    onChange={(e) => setNewEnvMinRole(e.target.value as any)}
+                    className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-0.5 text-[11px] text-zinc-300 focus:outline-none"
+                  >
+                    <option value="reader">🟢 All Members</option>
+                    {userRank >= 2 && <option value="contributor">🟡 Contributor+</option>}
+                    {userRank >= 3 && <option value="maintainer">🔵 Maintainer+ (Production)</option>}
+                    {userRank >= 4 && <option value="admin">🔴 Admin Only</option>}
+                  </select>
+                </div>
+              )}
+              <div className="flex justify-end gap-1.5 pt-1">
+                <button
+                  onClick={() => setIsAddingEnv(false)}
+                  className="rounded px-2 py-0.5 text-[11px] text-zinc-400 hover:text-white"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleCreateEnv}
+                  className="rounded bg-sky-500 px-2.5 py-0.5 text-[11px] font-bold text-white hover:bg-sky-400"
+                >
+                  Create
+                </button>
+              </div>
             </div>
           )}
 
@@ -204,8 +246,26 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                   </div>
 
                   <div className="flex items-center gap-1.5">
+                    {env.minRole === 'admin' && (
+                      <span className="flex items-center gap-0.5 text-[9px] text-rose-400 bg-rose-500/10 px-1.5 py-0.5 rounded border border-rose-500/30 font-medium shrink-0" title="Admin only access">
+                        <Shield className="h-2.5 w-2.5" />
+                        Admin
+                      </span>
+                    )}
+                    {env.minRole === 'maintainer' && (
+                      <span className="flex items-center gap-0.5 text-[9px] text-sky-400 bg-sky-500/10 px-1.5 py-0.5 rounded border border-sky-500/30 font-medium shrink-0" title="Maintainer and Admin access (Production)">
+                        <Shield className="h-2.5 w-2.5" />
+                        Maintainer
+                      </span>
+                    )}
+                    {env.minRole === 'contributor' && (
+                      <span className="flex items-center gap-0.5 text-[9px] text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/30 font-medium shrink-0" title="Contributor, Maintainer, and Admin access">
+                        <Shield className="h-2.5 w-2.5" />
+                        Contrib+
+                      </span>
+                    )}
                     {isActive && (
-                      <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
+                      <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20 shrink-0">
                         <Check className="h-2.5 w-2.5" />
                         Active
                       </span>
@@ -239,7 +299,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
         <div className="flex flex-1 flex-col overflow-hidden bg-zinc-950 p-6">
           <div className="flex items-center justify-between border-b border-zinc-850 pb-4">
             {currentEnv ? (
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-3">
                 <input
                   type="text"
                   value={currentEnv.name}
@@ -260,6 +320,45 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                 >
                   {activeEnvironmentId === currentEnv.id ? 'Active Environment' : 'Set as Active'}
                 </button>
+
+                {isProjectScope && (
+                  <div className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/80 px-2.5 py-1 text-xs">
+                    <Shield
+                      className={`h-3.5 w-3.5 shrink-0 ${
+                        currentEnv.minRole === 'admin'
+                          ? 'text-rose-400'
+                          : currentEnv.minRole === 'maintainer'
+                          ? 'text-sky-400'
+                          : currentEnv.minRole === 'contributor'
+                          ? 'text-amber-400'
+                          : 'text-emerald-400'
+                      }`}
+                    />
+                    <span className="text-zinc-400 text-[11px]">Access:</span>
+                    <select
+                      value={currentEnv.minRole || 'reader'}
+                      disabled={userRank < 3 || userRank < (ROLE_RANK[currentEnv.minRole || 'reader'] || 1)}
+                      onChange={(e) => updateEnvironment(currentEnv.id, { minRole: e.target.value as any })}
+                      className="bg-transparent text-xs text-zinc-200 focus:outline-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 font-medium"
+                      title={userRank < 3 ? 'Maintainer or Admin access required to change access restrictions' : 'Change minimum required role'}
+                    >
+                      <option value="reader" className="bg-zinc-900 text-zinc-200">
+                        🟢 All Members (Reader+)
+                      </option>
+                      <option value="contributor" className="bg-zinc-900 text-zinc-200">
+                        🟡 Contributor+
+                      </option>
+                      <option value="maintainer" className="bg-zinc-900 text-zinc-200">
+                        🔵 Maintainer+ (Production / Release)
+                      </option>
+                      {userRank >= 4 && (
+                        <option value="admin" className="bg-zinc-900 text-zinc-200">
+                          🔴 Admin Only (Restricted)
+                        </option>
+                      )}
+                    </select>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="text-xs text-zinc-400">Select an environment</div>

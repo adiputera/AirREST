@@ -112,6 +112,7 @@ export interface Environment {
   id: string;
   name: string;
   variables: EnvironmentVariable[];
+  minRole?: 'admin' | 'maintainer' | 'contributor' | 'reader';
   createdAt: number;
   updatedAt: number;
 }
@@ -146,7 +147,7 @@ export interface CloudProject {
   team_name?: string;
   name: string;
   description?: string;
-  user_role?: 'admin' | 'contributor' | 'reader';
+  user_role?: 'admin' | 'maintainer' | 'contributor' | 'reader';
 }
 
 export interface ActiveScope {
@@ -155,7 +156,7 @@ export interface ActiveScope {
   name: string;
   teamId?: string;
   teamName?: string;
-  role?: 'admin' | 'contributor' | 'reader' | 'owner';
+  role?: 'admin' | 'maintainer' | 'contributor' | 'reader' | 'owner';
 }
 
 export type SyncStatus = 'idle' | 'syncing' | 'synced' | 'error' | 'offline';

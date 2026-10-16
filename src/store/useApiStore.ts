@@ -29,14 +29,17 @@ import { executePreRequestScript, executePostResponseScript } from '@/lib/script
 import { parseQueryParamsFromUrl, buildUrlWithParams } from '@/lib/urlParams';
 import {
   pullScopeDelta,
-  batchImportToWorkspace,
   batchImportToScope,
   registerTokenRefreshCallback,
+  createScopeEnvironment,
+  updateScopeEnvironment,
+  deleteScopeEnvironment,
 } from '@/lib/cloudApi';
 import {
   buildCollectionsFromDelta,
   buildEnvironmentsFromDelta,
 } from '@/lib/cloudSyncTransformer';
+import { isOfflineOnly } from '@/lib/edition';
 
 function generateId(): string {
   return Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
@@ -98,7 +101,7 @@ interface ApiStoreState {
   environments: Environment[];
   activeEnvironmentId: string | null;
   setActiveEnvironmentId: (id: string | null) => void;
-  createEnvironment: (name: string) => string;
+  createEnvironment: (name: string, minRole?: 'admin' | 'maintainer' | 'contributor' | 'reader') => string;
   deleteEnvironment: (id: string) => void;
   updateEnvironment: (id: string, updates: Partial<Environment>) => void;
   addEnvironmentVariable: (envId: string) => void;
@@ -193,7 +196,7 @@ export const useApiStore = create<ApiStoreState>()(
 
       // Workspace Mode & Cloud Sync State
       workspaceMode: 'offline',
-      hasConfiguredMode: false,
+      hasConfiguredMode: isOfflineOnly ? true : false,
       cloudConfig: {
         apiUrl: 'http://localhost:8080',
       },
@@ -201,8 +204,15 @@ export const useApiStore = create<ApiStoreState>()(
       lastSyncedAt: null,
       syncError: null,
 
-      setWorkspaceMode: (workspaceMode) => set({ workspaceMode, hasConfiguredMode: true }),
-      setHasConfiguredMode: (hasConfiguredMode) => set({ hasConfiguredMode }),
+      setWorkspaceMode: (workspaceMode) =>
+        set({
+          workspaceMode: isOfflineOnly ? 'offline' : workspaceMode,
+          hasConfiguredMode: true,
+        }),
+      setHasConfiguredMode: (hasConfiguredMode) =>
+        set({
+          hasConfiguredMode: isOfflineOnly ? true : hasConfiguredMode,
+        }),
       setCloudConfig: (updates) =>
         set((state) => ({
           cloudConfig: { ...state.cloudConfig, ...updates },
@@ -228,6 +238,7 @@ export const useApiStore = create<ApiStoreState>()(
       },
       setSyncStatus: (syncStatus, syncError = null) => set({ syncStatus, syncError }),
       pullCloudDelta: async () => {
+        if (isOfflineOnly) return;
         const { workspaceMode, cloudConfig, collections: currentCols } = get();
         if (workspaceMode !== 'cloud' || !cloudConfig.token || !cloudConfig.activeScope) {
           return;
@@ -265,11 +276,14 @@ export const useApiStore = create<ApiStoreState>()(
                 null,
                 cloudConfig.refreshToken
               );
-              const freshCols = buildCollectionsFromDelta(freshDelta.collections, freshDelta.items);
+              const targetActiveId = pulledEnvs.some((e) => e.id === get().activeEnvironmentId)
+                ? get().activeEnvironmentId
+                : (pulledEnvs[0]?.id || null);
+
               set({
                 collections: freshCols,
-                environments: pulledEnvs.length > 0 ? pulledEnvs : get().environments,
-                activeEnvironmentId: pulledEnvs.length > 0 ? pulledEnvs[0].id : get().activeEnvironmentId,
+                environments: pulledEnvs,
+                activeEnvironmentId: targetActiveId,
                 syncStatus: 'synced',
                 lastSyncedAt: Date.now(),
                 syncError: null,
@@ -277,9 +291,14 @@ export const useApiStore = create<ApiStoreState>()(
               return;
             } catch {
               // If push failed, preserve both remote and local collections so user NEVER loses data
+              const targetActiveId = pulledEnvs.some((e) => e.id === get().activeEnvironmentId)
+                ? get().activeEnvironmentId
+                : (pulledEnvs[0]?.id || null);
+
               set({
                 collections: [...pulledCols, ...unsyncedCols],
-                environments: pulledEnvs.length > 0 ? pulledEnvs : get().environments,
+                environments: pulledEnvs,
+                activeEnvironmentId: targetActiveId,
                 syncStatus: 'synced',
                 lastSyncedAt: Date.now(),
                 syncError: null,
@@ -288,10 +307,14 @@ export const useApiStore = create<ApiStoreState>()(
             }
           }
 
+          const targetActiveId = pulledEnvs.some((e) => e.id === get().activeEnvironmentId)
+            ? get().activeEnvironmentId
+            : (pulledEnvs[0]?.id || null);
+
           set({
             collections: pulledCols,
-            environments: pulledEnvs.length > 0 ? pulledEnvs : get().environments,
-            activeEnvironmentId: pulledEnvs.length > 0 ? pulledEnvs[0].id : get().activeEnvironmentId,
+            environments: pulledEnvs,
+            activeEnvironmentId: targetActiveId,
             syncStatus: 'synced',
             lastSyncedAt: Date.now(),
             syncError: null,
@@ -331,11 +354,12 @@ export const useApiStore = create<ApiStoreState>()(
       // Environment actions
       setActiveEnvironmentId: (activeEnvironmentId) => set({ activeEnvironmentId }),
 
-      createEnvironment: (name) => {
+      createEnvironment: (name, minRole = 'reader') => {
         const newEnv: Environment = {
           id: generateId(),
           name: name.trim() || 'New Environment',
           variables: [{ id: generateId(), key: '', value: '', enabled: true }],
+          minRole,
           createdAt: Date.now(),
           updatedAt: Date.now(),
         };
@@ -343,6 +367,31 @@ export const useApiStore = create<ApiStoreState>()(
           environments: [...state.environments, newEnv],
           activeEnvironmentId: newEnv.id,
         }));
+
+        const { workspaceMode, cloudConfig } = get();
+        if (workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
+          createScopeEnvironment(
+            cloudConfig.apiUrl,
+            cloudConfig.token,
+            cloudConfig.activeScope,
+            {
+              name: newEnv.name,
+              variables: newEnv.variables,
+              min_role: newEnv.minRole,
+            },
+            cloudConfig.refreshToken
+          ).then((created) => {
+            if (created && created.id) {
+              set((state) => ({
+                environments: state.environments.map((e) => (e.id === newEnv.id ? { ...e, id: created.id } : e)),
+                activeEnvironmentId: state.activeEnvironmentId === newEnv.id ? created.id : state.activeEnvironmentId,
+              }));
+            }
+          }).catch((err) => {
+            console.error('Failed to sync created environment to cloud:', err);
+          });
+        }
+
         return newEnv.id;
       },
 
@@ -351,53 +400,133 @@ export const useApiStore = create<ApiStoreState>()(
           environments: state.environments.filter((e) => e.id !== id),
           activeEnvironmentId: state.activeEnvironmentId === id ? null : state.activeEnvironmentId,
         }));
+
+        const { workspaceMode, cloudConfig } = get();
+        if (workspaceMode === 'cloud' && cloudConfig.token) {
+          deleteScopeEnvironment(cloudConfig.apiUrl, cloudConfig.token, id, cloudConfig.refreshToken).catch((err) => {
+            console.error('Failed to delete environment from cloud:', err);
+          });
+        }
       },
 
       updateEnvironment: (id, updates) => {
+        let updatedEnv: Environment | undefined;
         set((state) => ({
-          environments: state.environments.map((e) =>
-            e.id === id ? { ...e, ...updates, updatedAt: Date.now() } : e
-          ),
+          environments: state.environments.map((e) => {
+            if (e.id === id) {
+              updatedEnv = { ...e, ...updates, updatedAt: Date.now() };
+              return updatedEnv;
+            }
+            return e;
+          }),
         }));
+
+        const { workspaceMode, cloudConfig } = get();
+        if (workspaceMode === 'cloud' && cloudConfig.token && updatedEnv) {
+          updateScopeEnvironment(
+            cloudConfig.apiUrl,
+            cloudConfig.token,
+            id,
+            {
+              name: updatedEnv.name,
+              variables: updatedEnv.variables,
+              min_role: updatedEnv.minRole,
+            },
+            cloudConfig.refreshToken
+          ).catch((err) => {
+            console.error('Failed to sync updated environment to cloud:', err);
+          });
+        }
       },
 
       addEnvironmentVariable: (envId) => {
+        let updatedEnv: Environment | undefined;
         set((state) => ({
           environments: state.environments.map((e) => {
             if (e.id !== envId) return e;
-            return {
+            updatedEnv = {
               ...e,
               variables: [...e.variables, { id: generateId(), key: '', value: '', enabled: true }],
               updatedAt: Date.now(),
             };
+            return updatedEnv;
           }),
         }));
+
+        const { workspaceMode, cloudConfig } = get();
+        if (workspaceMode === 'cloud' && cloudConfig.token && updatedEnv) {
+          updateScopeEnvironment(
+            cloudConfig.apiUrl,
+            cloudConfig.token,
+            envId,
+            {
+              name: updatedEnv.name,
+              variables: updatedEnv.variables,
+              min_role: updatedEnv.minRole,
+            },
+            cloudConfig.refreshToken
+          ).catch(() => {});
+        }
       },
 
       updateEnvironmentVariable: (envId, varId, updates) => {
+        let updatedEnv: Environment | undefined;
         set((state) => ({
           environments: state.environments.map((e) => {
             if (e.id !== envId) return e;
-            return {
+            updatedEnv = {
               ...e,
               variables: e.variables.map((v) => (v.id === varId ? { ...v, ...updates } : v)),
               updatedAt: Date.now(),
             };
+            return updatedEnv;
           }),
         }));
+
+        const { workspaceMode, cloudConfig } = get();
+        if (workspaceMode === 'cloud' && cloudConfig.token && updatedEnv) {
+          updateScopeEnvironment(
+            cloudConfig.apiUrl,
+            cloudConfig.token,
+            envId,
+            {
+              name: updatedEnv.name,
+              variables: updatedEnv.variables,
+              min_role: updatedEnv.minRole,
+            },
+            cloudConfig.refreshToken
+          ).catch(() => {});
+        }
       },
 
       removeEnvironmentVariable: (envId, varId) => {
+        let updatedEnv: Environment | undefined;
         set((state) => ({
           environments: state.environments.map((e) => {
             if (e.id !== envId) return e;
-            return {
+            updatedEnv = {
               ...e,
               variables: e.variables.filter((v) => v.id !== varId),
               updatedAt: Date.now(),
             };
+            return updatedEnv;
           }),
         }));
+
+        const { workspaceMode, cloudConfig } = get();
+        if (workspaceMode === 'cloud' && cloudConfig.token && updatedEnv) {
+          updateScopeEnvironment(
+            cloudConfig.apiUrl,
+            cloudConfig.token,
+            envId,
+            {
+              name: updatedEnv.name,
+              variables: updatedEnv.variables,
+              min_role: updatedEnv.minRole,
+            },
+            cloudConfig.refreshToken
+          ).catch(() => {});
+        }
       },
 
       setSidebarTab: (sidebarTab) => set({ sidebarTab }),
@@ -1003,7 +1132,7 @@ export const useApiStore = create<ApiStoreState>()(
         }));
 
         const { workspaceMode, cloudConfig } = get();
-        if (workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
+        if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
           try {
             set({ syncStatus: 'syncing', syncError: null });
             await batchImportToScope(
@@ -1027,6 +1156,31 @@ export const useApiStore = create<ApiStoreState>()(
             environments: [...state.environments, imported],
             activeEnvironmentId: imported.id,
           }));
+
+          const { workspaceMode, cloudConfig } = get();
+          if (workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
+            createScopeEnvironment(
+              cloudConfig.apiUrl,
+              cloudConfig.token,
+              cloudConfig.activeScope,
+              {
+                name: imported.name,
+                variables: imported.variables,
+                min_role: imported.minRole || 'reader',
+              },
+              cloudConfig.refreshToken
+            ).then((created) => {
+              if (created?.id) {
+                set((state) => ({
+                  environments: state.environments.map((e) => (e.id === imported.id ? { ...e, id: created.id } : e)),
+                  activeEnvironmentId: state.activeEnvironmentId === imported.id ? created.id : state.activeEnvironmentId,
+                }));
+              }
+            }).catch((err) => {
+              console.error('Failed to sync imported environment to cloud:', err);
+            });
+          }
+
           return { success: true, environment: imported };
         } catch (err: unknown) {
           return {
@@ -1128,8 +1282,8 @@ export const useApiStore = create<ApiStoreState>()(
         history: state.history,
         environments: state.environments,
         activeEnvironmentId: state.activeEnvironmentId,
-        workspaceMode: state.workspaceMode,
-        hasConfiguredMode: state.hasConfiguredMode,
+        workspaceMode: isOfflineOnly ? 'offline' : state.workspaceMode,
+        hasConfiguredMode: isOfflineOnly ? true : state.hasConfiguredMode,
         cloudConfig: state.cloudConfig,
       }),
     }
@@ -1137,10 +1291,12 @@ export const useApiStore = create<ApiStoreState>()(
 );
 
 // Register silent background refresh listener to keep cloudConfig tokens up to date
-registerTokenRefreshCallback((newTokens) => {
-  useApiStore.getState().setCloudConfig({
-    token: newTokens.token,
-    refreshToken: newTokens.refreshToken,
-    tokenExpiresAt: newTokens.expiresAt,
+if (!isOfflineOnly) {
+  registerTokenRefreshCallback((newTokens) => {
+    useApiStore.getState().setCloudConfig({
+      token: newTokens.token,
+      refreshToken: newTokens.refreshToken,
+      tokenExpiresAt: newTokens.expiresAt,
+    });
   });
-});
+}

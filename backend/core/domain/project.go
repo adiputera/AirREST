@@ -10,6 +10,7 @@ type ProjectRole string
 
 const (
 	ProjectRoleAdmin       ProjectRole = "admin"
+	ProjectRoleMaintainer  ProjectRole = "maintainer"
 	ProjectRoleContributor ProjectRole = "contributor"
 	ProjectRoleReader      ProjectRole = "reader"
 )
