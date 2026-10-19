@@ -12,6 +12,12 @@ import {
   X,
   Info,
   Pencil,
+  Folder,
+  Layers,
+  ChevronDown,
+  ChevronRight,
+  Lock,
+  FolderInput,
 } from 'lucide-react';
 import { useHubStore } from '../store/useHubStore';
 import {
@@ -24,8 +30,24 @@ import {
   apiAddProjectMember,
   apiRemoveProjectMember,
   apiListTeamMembers,
+  apiListProjectCollections,
+  apiListProjectEnvironments,
+  apiUpdateCollectionPermission,
+  apiUpdateEnvironmentPermission,
+  apiDeleteCollection,
+  apiDeleteEnvironment,
+  apiMoveCollection,
 } from '../lib/api';
-import { Team, Project, ProjectMember, TeamMember } from '../types';
+import {
+  Team,
+  Project,
+  ProjectMember,
+  TeamMember,
+  Collection,
+  Environment,
+  ProjectRole,
+  CollectionItem,
+} from '../types';
 import { ConfirmModal } from '../components/ConfirmModal';
 
 export const ProjectsView: React.FC = () => {
@@ -68,6 +90,32 @@ export const ProjectsView: React.FC = () => {
   const [isUpdatingRole, setIsUpdatingRole] = useState(false);
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Sub-tabs: 'members' | 'collections' | 'environments'
+  const [projectSubTab, setProjectSubTab] = useState<'members' | 'collections' | 'environments'>('members');
+  const [collections, setCollections] = useState<Collection[]>([]);
+  const [environments, setEnvironments] = useState<Environment[]>([]);
+  const [isLoadingCollections, setIsLoadingCollections] = useState(false);
+  const [isLoadingEnvironments, setIsLoadingEnvironments] = useState(false);
+  const [searchCollection, setSearchCollection] = useState('');
+  const [searchEnvironment, setSearchEnvironment] = useState('');
+  const [collapsedCollections, setCollapsedCollections] = useState<Record<string, boolean>>({});
+
+  // Permission Modal
+  const [permModalItem, setPermModalItem] = useState<{
+    type: 'collection' | 'environment';
+    id: string;
+    name: string;
+    currentRole: ProjectRole;
+    version: number;
+  } | null>(null);
+  const [selectedPermRole, setSelectedPermRole] = useState<ProjectRole>('reader');
+  const [isUpdatingPerm, setIsUpdatingPerm] = useState(false);
+
+  // Move Collection Modal
+  const [moveColItem, setMoveColItem] = useState<{ id: string; name: string } | null>(null);
+  const [targetMoveProjectId, setTargetMoveProjectId] = useState<string>('');
+  const [isMovingCol, setIsMovingCol] = useState(false);
 
   // 1. Load teams list
   useEffect(() => {
@@ -136,12 +184,264 @@ export const ProjectsView: React.FC = () => {
     loadMembers();
   }, [selectedProjectId, token]);
 
+  // 4. Load project collections and environments for selected project
+  useEffect(() => {
+    if (!selectedProjectId || !token) {
+      setCollections([]);
+      setEnvironments([]);
+      return;
+    }
+    const loadResources = async () => {
+      setIsLoadingCollections(true);
+      setIsLoadingEnvironments(true);
+      try {
+        const [colData, envData] = await Promise.all([
+          apiListProjectCollections(apiUrl, token, selectedProjectId, refreshToken || undefined),
+          apiListProjectEnvironments(apiUrl, token, selectedProjectId, refreshToken || undefined),
+        ]);
+        setCollections(colData);
+        setEnvironments(envData);
+      } catch (err) {
+        console.error('Failed to load project collections/environments:', err);
+      } finally {
+        setIsLoadingCollections(false);
+        setIsLoadingEnvironments(false);
+      }
+    };
+    loadResources();
+  }, [selectedProjectId, token]);
+
   const activeProject = projects.find((p) => p.id === selectedProjectId);
   const activeTeam = teams.find((t) => t.id === selectedTeamId);
   const canEditProject =
     user?.role === 'superadmin' ||
     activeTeam?.user_role === 'admin' ||
     activeProject?.user_role === 'admin';
+  const canManagePermissions = canEditProject || activeProject?.user_role === 'maintainer';
+  const canMoveCollection =
+    canEditProject ||
+    activeProject?.user_role === 'maintainer' ||
+    activeProject?.user_role === 'contributor';
+
+  const eligibleTargetProjects = projects.filter((p) => {
+    if (p.id === selectedProjectId) return false;
+    const isSuper = user?.role === 'superadmin';
+    const isTeamAdm = activeTeam?.user_role === 'admin';
+    const role = p.user_role;
+    return isSuper || isTeamAdm || role === 'admin' || role === 'maintainer' || role === 'contributor';
+  });
+
+  const handleConfirmMoveCollection = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || !moveColItem || !targetMoveProjectId) return;
+    setIsMovingCol(true);
+    setErrorMsg(null);
+    try {
+      await apiMoveCollection(apiUrl, token, moveColItem.id, targetMoveProjectId, undefined, refreshToken || undefined);
+      setMoveColItem(null);
+      if (selectedProjectId) {
+        const data = await apiListProjectCollections(apiUrl, token, selectedProjectId, refreshToken || undefined);
+        setCollections(data);
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Failed to move collection');
+    } finally {
+      setIsMovingCol(false);
+    }
+  };
+
+  // Handle Open Permission Modal
+  const handleOpenPermModal = (
+    type: 'collection' | 'environment',
+    id: string,
+    name: string,
+    currentRole: ProjectRole = 'reader',
+    version: number = 1
+  ) => {
+    setPermModalItem({ type, id, name, currentRole, version });
+    setSelectedPermRole(currentRole);
+    setErrorMsg(null);
+  };
+
+  // Handle Save Permission
+  const handleSavePermission = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || !permModalItem) return;
+    setIsUpdatingPerm(true);
+    setErrorMsg(null);
+    try {
+      if (permModalItem.type === 'collection') {
+        const updated = await apiUpdateCollectionPermission(
+          apiUrl,
+          token,
+          permModalItem.id,
+          selectedPermRole,
+          permModalItem.version,
+          refreshToken || undefined
+        );
+        setCollections((prev) =>
+          prev.map((c) =>
+            c.id === permModalItem.id
+              ? { ...c, min_role: selectedPermRole, version: updated.version || c.version + 1 }
+              : c
+          )
+        );
+      } else {
+        const updated = await apiUpdateEnvironmentPermission(
+          apiUrl,
+          token,
+          permModalItem.id,
+          selectedPermRole,
+          permModalItem.version,
+          refreshToken || undefined
+        );
+        setEnvironments((prev) =>
+          prev.map((env) =>
+            env.id === permModalItem.id
+              ? { ...env, min_role: selectedPermRole, version: updated.version || env.version + 1 }
+              : env
+          )
+        );
+      }
+      setPermModalItem(null);
+    } catch (err: any) {
+      alert(err.message || 'Failed to update permission');
+    } finally {
+      setIsUpdatingPerm(false);
+    }
+  };
+
+  const toggleCollectionCollapse = (colId: string) => {
+    setCollapsedCollections((prev) => ({
+      ...prev,
+      [colId]: !prev[colId],
+    }));
+  };
+
+  const getMethodBadgeClass = (method: string) => {
+    switch (method.toUpperCase()) {
+      case 'GET':
+        return 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
+      case 'POST':
+        return 'bg-sky-500/10 text-sky-400 border border-sky-500/20';
+      case 'PUT':
+        return 'bg-amber-500/10 text-amber-400 border border-amber-500/20';
+      case 'DELETE':
+        return 'bg-rose-500/10 text-rose-400 border border-rose-500/20';
+      case 'PATCH':
+        return 'bg-purple-500/10 text-purple-400 border border-purple-500/20';
+      default:
+        return 'bg-zinc-800 text-zinc-300 border border-zinc-700';
+    }
+  };
+
+  const getMinRoleBadge = (role: ProjectRole = 'reader') => {
+    switch (role) {
+      case 'admin':
+        return {
+          label: 'Admin Only',
+          badgeClass: 'bg-rose-500/10 text-rose-400 border border-rose-500/20',
+        };
+      case 'maintainer':
+        return {
+          label: 'Maintainer+',
+          badgeClass: 'bg-amber-500/10 text-amber-400 border border-amber-500/20',
+        };
+      case 'contributor':
+        return {
+          label: 'Contributor+',
+          badgeClass: 'bg-sky-500/10 text-sky-400 border border-sky-500/20',
+        };
+      case 'reader':
+      default:
+        return {
+          label: 'Reader (All)',
+          badgeClass: 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20',
+        };
+    }
+  };
+
+  const renderCollectionItems = (items: CollectionItem[] = []) => {
+    if (!items || items.length === 0) {
+      return (
+        <div className="py-6 text-center text-xs text-zinc-500">
+          No requests in this collection yet.
+        </div>
+      );
+    }
+
+    const rootItems = items.filter((i) => !i.parent_id);
+    const childMap = new Map<string, CollectionItem[]>();
+    for (const item of items) {
+      if (item.parent_id) {
+        const list = childMap.get(item.parent_id) || [];
+        list.push(item);
+        childMap.set(item.parent_id, list);
+      }
+    }
+
+    const renderItem = (item: CollectionItem, depth = 0) => {
+      const isFolder = item.type === 'folder';
+      const children = childMap.get(item.id) || [];
+
+      if (isFolder) {
+        return (
+          <div key={item.id} className="space-y-1">
+            <div
+              className="flex items-center gap-2 py-1.5 px-3 rounded-lg bg-zinc-950/40 text-xs font-semibold text-zinc-300 border border-zinc-800/60"
+              style={{ marginLeft: `${depth * 16}px` }}
+            >
+              <Folder className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+              <span className="truncate">{item.name}</span>
+              <span className="text-[10px] text-zinc-500 font-normal">
+                ({children.length} {children.length === 1 ? 'item' : 'items'})
+              </span>
+            </div>
+            {children.length > 0 && (
+              <div className="space-y-1">
+                {children.map((child) => renderItem(child, depth + 1))}
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      // It is a request item - purely list title, cannot click like in extension
+      const method = (item.method || 'GET').toUpperCase();
+      return (
+        <div
+          key={item.id}
+          className="flex items-center justify-between py-1.5 px-3 rounded-lg bg-zinc-900/60 border border-zinc-800/40 text-xs cursor-default select-none transition"
+          style={{ marginLeft: `${depth * 16}px` }}
+          title={item.name}
+        >
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span
+              className={`px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wider uppercase shrink-0 ${getMethodBadgeClass(
+                method
+              )}`}
+            >
+              {method}
+            </span>
+            <span className="font-medium text-zinc-200 truncate">{item.name}</span>
+          </div>
+          {item.url && (
+            <span className="text-[10px] text-zinc-500 font-mono truncate max-w-xs ml-2 hidden sm:inline">
+              {item.url}
+            </span>
+          )}
+        </div>
+      );
+    };
+
+    return (
+      <div className="p-3 space-y-1 bg-zinc-950/60 border-t border-zinc-800/80">
+        {rootItems.length > 0
+          ? rootItems.map((item) => renderItem(item, 0))
+          : items.map((item) => renderItem(item, 0))}
+      </div>
+    );
+  };
 
   // Handle Open Edit Project
   const handleOpenEditProject = (proj: Project) => {
@@ -232,6 +532,10 @@ export const ProjectsView: React.FC = () => {
   const [isRemovingMember, setIsRemovingMember] = useState(false);
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
   const [isDeletingProject, setIsDeletingProject] = useState(false);
+  const [collectionToDelete, setCollectionToDelete] = useState<Collection | null>(null);
+  const [isDeletingCollection, setIsDeletingCollection] = useState(false);
+  const [environmentToDelete, setEnvironmentToDelete] = useState<Environment | null>(null);
+  const [isDeletingEnvironment, setIsDeletingEnvironment] = useState(false);
 
   // Handle Remove Member Confirmation
   const confirmRemoveMember = async () => {
@@ -267,6 +571,36 @@ export const ProjectsView: React.FC = () => {
     }
   };
 
+  // Handle Delete Collection Confirmation
+  const confirmDeleteCollection = async () => {
+    if (!token || !collectionToDelete) return;
+    setIsDeletingCollection(true);
+    try {
+      await apiDeleteCollection(apiUrl, token, collectionToDelete.id, refreshToken || undefined);
+      setCollections((prev) => prev.filter((c) => c.id !== collectionToDelete.id));
+      setCollectionToDelete(null);
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete collection');
+    } finally {
+      setIsDeletingCollection(false);
+    }
+  };
+
+  // Handle Delete Environment Confirmation
+  const confirmDeleteEnvironment = async () => {
+    if (!token || !environmentToDelete) return;
+    setIsDeletingEnvironment(true);
+    try {
+      await apiDeleteEnvironment(apiUrl, token, environmentToDelete.id, refreshToken || undefined);
+      setEnvironments((prev) => prev.filter((e) => e.id !== environmentToDelete.id));
+      setEnvironmentToDelete(null);
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete environment');
+    } finally {
+      setIsDeletingEnvironment(false);
+    }
+  };
+
   // Handle Update Member Role
   const handleUpdateRole = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -295,6 +629,30 @@ export const ProjectsView: React.FC = () => {
   const filteredProjects = projects.filter((p) =>
     p.name.toLowerCase().includes(searchProject.toLowerCase())
   );
+
+  const filteredCollections = collections.filter((c) => {
+    const q = searchCollection.toLowerCase();
+    if (!q) return true;
+    if (c.name.toLowerCase().includes(q)) return true;
+    if (c.description?.toLowerCase().includes(q)) return true;
+    return (c.items || []).some((item) => item.name.toLowerCase().includes(q));
+  });
+
+  const filteredEnvironments = environments.filter((env) => {
+    const q = searchEnvironment.toLowerCase();
+    if (!q) return true;
+    if (env.name.toLowerCase().includes(q)) return true;
+    const rawVars: any[] = Array.isArray(env.variables)
+      ? env.variables
+      : typeof env.variables === 'string'
+      ? JSON.parse(env.variables || '[]')
+      : [];
+    return rawVars.some(
+      (v: any) =>
+        (typeof v.key === 'string' && v.key.toLowerCase().includes(q)) ||
+        (typeof v.value === 'string' && v.value.toLowerCase().includes(q))
+    );
+  });
 
   return (
     <div className="flex flex-1 overflow-hidden">
@@ -457,109 +815,470 @@ export const ProjectsView: React.FC = () => {
               </div>
             </div>
 
-            {/* Project Members Section */}
-            <div>
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h3 className="text-base font-bold text-zinc-100">Assigned Project Members</h3>
-                  <p className="text-xs text-zinc-400">
-                    Granular RBAC: Admin (full), Maintainer (manage envs &amp; collections), Contributor (read &amp; write OCC), Reader (read-only)
-                  </p>
+            {/* Project Sub-Navigation Tabs */}
+            <div className="flex items-center gap-1.5 border-b border-zinc-800 pb-3">
+              <button
+                type="button"
+                onClick={() => setProjectSubTab('members')}
+                className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold transition ${
+                  projectSubTab === 'members'
+                    ? 'bg-zinc-800 text-white shadow-sm border border-zinc-700/60'
+                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/60'
+                }`}
+              >
+                <Users className="h-3.5 w-3.5 text-indigo-400" />
+                <span>Members</span>
+                <span className="rounded-full bg-zinc-700/60 px-2 py-0.5 text-[10px] font-bold text-zinc-300">
+                  {projectMembers.length}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setProjectSubTab('collections')}
+                className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold transition ${
+                  projectSubTab === 'collections'
+                    ? 'bg-zinc-800 text-white shadow-sm border border-zinc-700/60'
+                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/60'
+                }`}
+              >
+                <Folder className="h-3.5 w-3.5 text-amber-400" />
+                <span>Collections</span>
+                <span className="rounded-full bg-zinc-700/60 px-2 py-0.5 text-[10px] font-bold text-zinc-300">
+                  {collections.length}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setProjectSubTab('environments')}
+                className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold transition ${
+                  projectSubTab === 'environments'
+                    ? 'bg-zinc-800 text-white shadow-sm border border-zinc-700/60'
+                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/60'
+                }`}
+              >
+                <Layers className="h-3.5 w-3.5 text-emerald-400" />
+                <span>Environments</span>
+                <span className="rounded-full bg-zinc-700/60 px-2 py-0.5 text-[10px] font-bold text-zinc-300">
+                  {environments.length}
+                </span>
+              </button>
+            </div>
+
+            {/* TAB 1: Assigned Project Members */}
+            {projectSubTab === 'members' && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-base font-bold text-zinc-100">Assigned Project Members</h3>
+                    <p className="text-xs text-zinc-400">
+                      Granular RBAC: Admin (full), Maintainer (manage envs &amp; collections), Contributor (read &amp; write OCC), Reader (read-only)
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => setIsAssignMemberOpen(true)}
+                    className="flex items-center gap-1.5 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-400 hover:bg-sky-500/20 transition shadow-sm"
+                  >
+                    <UserCheck className="h-3.5 w-3.5" />
+                    <span>Assign Team Member</span>
+                  </button>
                 </div>
 
-                <button
-                  onClick={() => setIsAssignMemberOpen(true)}
-                  className="flex items-center gap-1.5 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-400 hover:bg-sky-500/20 transition shadow-sm"
-                >
-                  <UserCheck className="h-3.5 w-3.5" />
-                  <span>Assign Team Member</span>
-                </button>
-              </div>
-
-              {/* Members Table */}
-              <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 overflow-hidden shadow-sm">
-                <table className="w-full text-left text-xs">
-                  <thead className="border-b border-zinc-800 bg-zinc-950/80 text-zinc-400 uppercase text-[10px] font-semibold">
-                    <tr>
-                      <th className="px-4 py-3">Member</th>
-                      <th className="px-4 py-3">Email</th>
-                      <th className="px-4 py-3">Access Level (RBAC)</th>
-                      <th className="px-4 py-3 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-zinc-800/60 text-zinc-200">
-                    {isLoadingMembers ? (
+                {/* Members Table */}
+                <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 overflow-hidden shadow-sm">
+                  <table className="w-full text-left text-xs">
+                    <thead className="border-b border-zinc-800 bg-zinc-950/80 text-zinc-400 uppercase text-[10px] font-semibold">
                       <tr>
-                        <td colSpan={4} className="py-8 text-center text-zinc-500">
-                          <Loader2 className="h-4 w-4 animate-spin inline mr-2 text-sky-400" />
-                          Loading project members...
-                        </td>
+                        <th className="px-4 py-3">Member</th>
+                        <th className="px-4 py-3">Email</th>
+                        <th className="px-4 py-3">Access Level (RBAC)</th>
+                        <th className="px-4 py-3 text-right">Actions</th>
                       </tr>
-                    ) : projectMembers.length === 0 ? (
-                      <tr>
-                        <td colSpan={4} className="py-8 text-center text-zinc-500">
-                          No members assigned to this project yet. Assign team members to grant access.
-                        </td>
-                      </tr>
-                    ) : (
-                      projectMembers.map((member) => {
-                        const mName = member.user?.name || member.name || 'Member';
-                        const mEmail = member.user?.email || member.email || '';
-                        return (
-                          <tr key={member.user_id} className="hover:bg-zinc-800/30 transition">
-                            <td className="px-4 py-3 font-medium flex items-center gap-2">
-                              <div className="h-7 w-7 rounded-full bg-zinc-800 flex items-center justify-center font-bold text-[11px] text-zinc-300 border border-zinc-700/50">
-                                {mName[0].toUpperCase()}
-                              </div>
-                              <span>{mName}</span>
-                            </td>
-                            <td className="px-4 py-3 text-zinc-400">{mEmail}</td>
-                          <td className="px-4 py-3">
-                            <span
-                              className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
-                                member.role === 'admin'
-                                  ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                                  : member.role === 'maintainer'
-                                  ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
-                                  : member.role === 'contributor'
-                                  ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
-                                  : 'bg-zinc-800 text-zinc-300'
-                              }`}
-                            >
-                              {member.role}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <div className="flex items-center justify-end gap-1">
-                              <button
-                                onClick={() => {
-                                  setEditingMember(member);
-                                  setEditRole(member.role);
-                                }}
-                                className="rounded p-1 text-zinc-500 hover:bg-sky-500/10 hover:text-sky-400 transition"
-                                title="Edit Role"
-                              >
-                                <Pencil className="h-3.5 w-3.5" />
-                              </button>
-                              {member.user_id !== user?.id && (
-                                <button
-                                  onClick={() => setMemberToRemove(member)}
-                                  className="rounded p-1 text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400 transition"
-                                  title="Unassign Member"
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </button>
-                              )}
-                            </div>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-800/60 text-zinc-200">
+                      {isLoadingMembers ? (
+                        <tr>
+                          <td colSpan={4} className="py-8 text-center text-zinc-500">
+                            <Loader2 className="h-4 w-4 animate-spin inline mr-2 text-sky-400" />
+                            Loading project members...
                           </td>
                         </tr>
-                      );
-                    })
-                  )}
-                  </tbody>
-                </table>
+                      ) : projectMembers.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} className="py-8 text-center text-zinc-500">
+                            No members assigned to this project yet. Assign team members to grant access.
+                          </td>
+                        </tr>
+                      ) : (
+                        projectMembers.map((member) => {
+                          const mName = member.user?.name || member.name || 'Member';
+                          const mEmail = member.user?.email || member.email || '';
+                          return (
+                            <tr key={member.user_id} className="hover:bg-zinc-800/30 transition">
+                              <td className="px-4 py-3 font-medium flex items-center gap-2">
+                                <div className="h-7 w-7 rounded-full bg-zinc-800 flex items-center justify-center font-bold text-[11px] text-zinc-300 border border-zinc-700/50">
+                                  {mName[0].toUpperCase()}
+                                </div>
+                                <span>{mName}</span>
+                              </td>
+                              <td className="px-4 py-3 text-zinc-400">{mEmail}</td>
+                              <td className="px-4 py-3">
+                                <span
+                                  className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                                    member.role === 'admin'
+                                      ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                                      : member.role === 'maintainer'
+                                      ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
+                                      : member.role === 'contributor'
+                                      ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
+                                      : 'bg-zinc-800 text-zinc-300'
+                                  }`}
+                                >
+                                  {member.role}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-right">
+                                <div className="flex items-center justify-end gap-1">
+                                  <button
+                                    onClick={() => {
+                                      setEditingMember(member);
+                                      setEditRole(member.role);
+                                    }}
+                                    className="rounded p-1 text-zinc-500 hover:bg-sky-500/10 hover:text-sky-400 transition"
+                                    title="Edit Role"
+                                  >
+                                    <Pencil className="h-3.5 w-3.5" />
+                                  </button>
+                                  {member.user_id !== user?.id && (
+                                    <button
+                                      onClick={() => setMemberToRemove(member)}
+                                      className="rounded p-1 text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400 transition"
+                                      title="Unassign Member"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
+            )}
+
+            {/* TAB 2: Project Collections */}
+            {projectSubTab === 'collections' && (
+              <div className="space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
+                      <Folder className="h-4 w-4 text-amber-400" />
+                      <span>Project Collections ({filteredCollections.length})</span>
+                    </h3>
+                    <p className="text-xs text-zinc-400">
+                      Listing all request titles. Detail editing is handled in the AirREST Extension.
+                    </p>
+                  </div>
+
+                  <div className="relative w-full sm:w-64">
+                    <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-zinc-500" />
+                    <input
+                      type="text"
+                      placeholder="Filter collections or requests..."
+                      value={searchCollection}
+                      onChange={(e) => setSearchCollection(e.target.value)}
+                      className="w-full rounded-lg border border-zinc-800 bg-zinc-900 pl-8 pr-3 py-1.5 text-xs text-zinc-200 placeholder-zinc-500 focus:border-sky-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                {isLoadingCollections ? (
+                  <div className="py-12 text-center text-xs text-zinc-500">
+                    <Loader2 className="h-5 w-5 animate-spin inline mr-2 text-sky-400" />
+                    Loading project collections...
+                  </div>
+                ) : filteredCollections.length === 0 ? (
+                  <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-10 text-center text-xs text-zinc-500">
+                    <Folder className="h-8 w-8 mx-auto text-zinc-600 mb-2" />
+                    <div className="font-semibold text-zinc-400 mb-1">No collections found</div>
+                    <p className="max-w-xs mx-auto text-zinc-500">
+                      No collections match your criteria. Create or sync collections from the AirREST extension.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {filteredCollections.map((col) => {
+                      const isCollapsed = !!collapsedCollections[col.id];
+                      const minRole = col.min_role || 'reader';
+                      const roleBadge = getMinRoleBadge(minRole);
+                      const reqCount = (col.items || []).filter((i) => i.type === 'request').length;
+
+                      return (
+                        <div
+                          key={col.id}
+                          className="rounded-2xl border border-zinc-800 bg-zinc-900/40 overflow-hidden shadow-sm transition hover:border-zinc-700/80"
+                        >
+                          <div className="p-4 flex items-center justify-between gap-3 bg-zinc-950/60">
+                            <button
+                              type="button"
+                              onClick={() => toggleCollectionCollapse(col.id)}
+                              className="flex items-center gap-3 text-left min-w-0 flex-1 group"
+                            >
+                              <div className="text-zinc-500 group-hover:text-zinc-300 transition">
+                                {isCollapsed ? (
+                                  <ChevronRight className="h-4 w-4" />
+                                ) : (
+                                  <ChevronDown className="h-4 w-4" />
+                                )}
+                              </div>
+                              <Folder className="h-4 w-4 text-amber-400 shrink-0" />
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-xs text-zinc-100 group-hover:text-sky-300 transition truncate">
+                                    {col.name}
+                                  </span>
+                                  <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-[10px] text-zinc-400 font-semibold">
+                                    {reqCount} {reqCount === 1 ? 'request' : 'requests'}
+                                  </span>
+                                </div>
+                                {col.description && (
+                                  <p className="text-[11px] text-zinc-400 line-clamp-1 mt-0.5">
+                                    {col.description}
+                                  </p>
+                                )}
+                              </div>
+                            </button>
+
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span
+                                className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${roleBadge.badgeClass}`}
+                                title={`Minimum role required: ${minRole}`}
+                              >
+                                {roleBadge.label}
+                              </span>
+
+                              {canManagePermissions && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleOpenPermModal('collection', col.id, col.name, minRole, col.version)
+                                    }
+                                    className="flex items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-800/80 px-2.5 py-1 text-xs font-semibold text-zinc-300 hover:text-white hover:bg-zinc-700 transition"
+                                    title="Change Collection Permission"
+                                  >
+                                    <Shield className="h-3 w-3 text-sky-400" />
+                                    <span>Permission</span>
+                                  </button>
+                                  {canMoveCollection && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setMoveColItem({ id: col.id, name: col.name });
+                                        setTargetMoveProjectId(eligibleTargetProjects[0]?.id || '');
+                                        setErrorMsg(null);
+                                      }}
+                                      className="flex items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-800/80 px-2.5 py-1 text-xs font-semibold text-zinc-300 hover:text-white hover:bg-zinc-700 transition"
+                                      title="Move Collection to Another Project"
+                                    >
+                                      <FolderInput className="h-3 w-3 text-amber-400" />
+                                      <span>Move</span>
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => setCollectionToDelete(col)}
+                                    className="flex items-center gap-1 rounded-lg border border-red-500/20 bg-red-500/10 px-2.5 py-1 text-xs font-semibold text-red-400 hover:text-red-300 hover:bg-red-500/20 transition"
+                                    title="Delete Collection"
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                    <span>Delete</span>
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </div>
+
+                          {!isCollapsed && renderCollectionItems(col.items || [])}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* TAB 3: Project Environments */}
+            {projectSubTab === 'environments' && (
+              <div className="space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
+                      <Layers className="h-4 w-4 text-emerald-400" />
+                      <span>Project Environments ({filteredEnvironments.length})</span>
+                    </h3>
+                    <p className="text-xs text-zinc-400">
+                      Showing synchronized environment variables. Access is protected by minimum role.
+                    </p>
+                  </div>
+
+                  <div className="relative w-full sm:w-64">
+                    <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-zinc-500" />
+                    <input
+                      type="text"
+                      placeholder="Filter environments or variables..."
+                      value={searchEnvironment}
+                      onChange={(e) => setSearchEnvironment(e.target.value)}
+                      className="w-full rounded-lg border border-zinc-800 bg-zinc-900 pl-8 pr-3 py-1.5 text-xs text-zinc-200 placeholder-zinc-500 focus:border-sky-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                {isLoadingEnvironments ? (
+                  <div className="py-12 text-center text-xs text-zinc-500">
+                    <Loader2 className="h-5 w-5 animate-spin inline mr-2 text-sky-400" />
+                    Loading project environments...
+                  </div>
+                ) : filteredEnvironments.length === 0 ? (
+                  <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-10 text-center text-xs text-zinc-500">
+                    <Layers className="h-8 w-8 mx-auto text-zinc-600 mb-2" />
+                    <div className="font-semibold text-zinc-400 mb-1">No environments found</div>
+                    <p className="max-w-xs mx-auto text-zinc-500">
+                      No environments match your criteria. Create or sync environments from the AirREST extension.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {filteredEnvironments.map((env) => {
+                      const minRole = env.min_role || 'reader';
+                      const roleBadge = getMinRoleBadge(minRole);
+                      const rawVars: any[] = Array.isArray(env.variables)
+                        ? env.variables
+                        : typeof env.variables === 'string'
+                        ? JSON.parse(env.variables || '[]')
+                        : [];
+
+                      return (
+                        <div
+                          key={env.id}
+                          className="rounded-2xl border border-zinc-800 bg-zinc-900/40 overflow-hidden shadow-sm"
+                        >
+                          <div className="p-4 flex items-center justify-between gap-3 bg-zinc-950/60">
+                            <div className="flex items-center gap-3">
+                              <div className="h-8 w-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+                                <Layers className="h-4 w-4" />
+                              </div>
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-xs text-zinc-100">{env.name}</span>
+                                  <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-[10px] text-zinc-400 font-semibold">
+                                    {rawVars.length} {rawVars.length === 1 ? 'variable' : 'variables'}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span
+                                className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${roleBadge.badgeClass}`}
+                                title={`Minimum role required: ${minRole}`}
+                              >
+                                {roleBadge.label}
+                              </span>
+
+                              {canManagePermissions && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleOpenPermModal('environment', env.id, env.name, minRole, env.version)
+                                    }
+                                    className="flex items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-800/80 px-2.5 py-1 text-xs font-semibold text-zinc-300 hover:text-white hover:bg-zinc-700 transition"
+                                    title="Change Environment Permission"
+                                  >
+                                    <Shield className="h-3 w-3 text-sky-400" />
+                                    <span>Permission</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setEnvironmentToDelete(env)}
+                                    className="flex items-center gap-1 rounded-lg border border-red-500/20 bg-red-500/10 px-2.5 py-1 text-xs font-semibold text-red-400 hover:text-red-300 hover:bg-red-500/20 transition"
+                                    title="Delete Environment"
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                    <span>Delete</span>
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Variables Table */}
+                          <div className="overflow-x-auto border-t border-zinc-800/80">
+                            <table className="w-full text-left text-xs">
+                              <thead className="border-b border-zinc-800 bg-zinc-950 text-zinc-400 uppercase text-[10px] font-semibold">
+                                <tr>
+                                  <th className="px-4 py-2.5 w-1/3">Variable Key</th>
+                                  <th className="px-4 py-2.5 w-1/2">Value</th>
+                                  <th className="px-4 py-2.5 text-right">Status</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-zinc-800/40 text-zinc-200">
+                                {rawVars.length === 0 ? (
+                                  <tr>
+                                    <td colSpan={3} className="py-6 text-center text-xs text-zinc-500">
+                                      No variables configured in this environment.
+                                    </td>
+                                  </tr>
+                                ) : (
+                                  rawVars.map((v: any, idx: number) => {
+                                    const isEnabled = v.enabled !== false;
+                                    return (
+                                      <tr key={v.id || v.key || idx} className="hover:bg-zinc-800/20 transition">
+                                        <td className="px-4 py-2.5 font-mono text-xs text-zinc-200 font-semibold">
+                                          {v.key || <span className="text-zinc-500 italic">unnamed</span>}
+                                        </td>
+                                        <td className="px-4 py-2.5 font-mono text-xs text-zinc-300">
+                                          <span className="rounded bg-zinc-950/80 px-2 py-1 text-[11px] border border-zinc-800 inline-block max-w-md truncate">
+                                            {v.value !== undefined && v.value !== null ? String(v.value) : ''}
+                                          </span>
+                                        </td>
+                                        <td className="px-4 py-2.5 text-right">
+                                          <span
+                                            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                              isEnabled
+                                                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                                                : 'bg-zinc-800 text-zinc-400 border border-zinc-700/50'
+                                            }`}
+                                          >
+                                            <span
+                                              className={`h-1.5 w-1.5 rounded-full ${
+                                                isEnabled ? 'bg-emerald-400' : 'bg-zinc-500'
+                                              }`}
+                                            />
+                                            <span>{isEnabled ? 'Active' : 'Disabled'}</span>
+                                          </span>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         ) : (
           <div className="flex h-full items-center justify-center text-xs text-zinc-500">
@@ -871,6 +1590,240 @@ export const ProjectsView: React.FC = () => {
         confirmText="Delete Project"
         variant="danger"
       />
+
+      {/* Confirmation Modal for Deleting Collection */}
+      <ConfirmModal
+        isOpen={!!collectionToDelete}
+        onClose={() => setCollectionToDelete(null)}
+        onConfirm={confirmDeleteCollection}
+        isLoading={isDeletingCollection}
+        title="Delete Collection"
+        message={
+          <span>
+            Are you sure you want to delete collection{' '}
+            <strong className="text-zinc-200">"{collectionToDelete?.name}"</strong>? This will permanently remove the collection and all its requests.
+          </span>
+        }
+        confirmText="Delete Collection"
+        variant="danger"
+      />
+
+      {/* Confirmation Modal for Deleting Environment */}
+      <ConfirmModal
+        isOpen={!!environmentToDelete}
+        onClose={() => setEnvironmentToDelete(null)}
+        onConfirm={confirmDeleteEnvironment}
+        isLoading={isDeletingEnvironment}
+        title="Delete Environment"
+        message={
+          <span>
+            Are you sure you want to delete environment{' '}
+            <strong className="text-zinc-200">"{environmentToDelete?.name}"</strong>? All variables defined in this environment will be permanently removed.
+          </span>
+        }
+        confirmText="Delete Environment"
+        variant="danger"
+      />
+
+      {/* Modal: Change Permission for Collection or Environment */}
+      {permModalItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
+                <Shield className="h-5 w-5 text-sky-400" />
+                <span>
+                  Change {permModalItem.type === 'collection' ? 'Collection' : 'Environment'} Permission
+                </span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setPermModalItem(null)}
+                className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800 transition"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-zinc-400 mb-4">
+              Configure the minimum project role required to view and sync{' '}
+              <strong className="text-zinc-200">"{permModalItem.name}"</strong>.
+            </p>
+
+            <form onSubmit={handleSavePermission} className="space-y-4">
+              <div className="space-y-2">
+                {[
+                  {
+                    role: 'reader' as ProjectRole,
+                    title: 'Reader (All Assigned Members)',
+                    desc: 'Accessible to all members assigned to this project.',
+                    badgeClass: 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20',
+                  },
+                  {
+                    role: 'contributor' as ProjectRole,
+                    title: 'Contributor+',
+                    desc: 'Restricted to Contributors, Maintainers, and Admins.',
+                    badgeClass: 'bg-sky-500/10 text-sky-400 border border-sky-500/20',
+                  },
+                  {
+                    role: 'maintainer' as ProjectRole,
+                    title: 'Maintainer+',
+                    desc: 'Restricted to Maintainers and Admins.',
+                    badgeClass: 'bg-amber-500/10 text-amber-400 border border-amber-500/20',
+                  },
+                  {
+                    role: 'admin' as ProjectRole,
+                    title: 'Admin Only',
+                    desc: 'Restricted strictly to Project Admins and Superadmins.',
+                    badgeClass: 'bg-rose-500/10 text-rose-400 border border-rose-500/20',
+                    disabled: !canEditProject,
+                  },
+                ].map((opt) => {
+                  const isSelected = selectedPermRole === opt.role;
+                  return (
+                    <label
+                      key={opt.role}
+                      onClick={() => {
+                        if (!opt.disabled) setSelectedPermRole(opt.role);
+                      }}
+                      className={`flex items-start gap-3 p-3 rounded-xl border transition ${
+                        opt.disabled
+                          ? 'opacity-40 cursor-not-allowed border-zinc-900 bg-zinc-950'
+                          : isSelected
+                          ? 'border-sky-500/60 bg-sky-950/20 shadow-sm cursor-pointer'
+                          : 'border-zinc-800 bg-zinc-900/40 hover:bg-zinc-900 hover:border-zinc-700 cursor-pointer'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="permMinRole"
+                        value={opt.role}
+                        disabled={opt.disabled}
+                        checked={isSelected}
+                        onChange={() => setSelectedPermRole(opt.role)}
+                        className="mt-0.5 text-sky-500 focus:ring-sky-500"
+                      />
+                      <div className="flex-1">
+                        <div className="flex items-center justify-between mb-0.5">
+                          <span className="text-xs font-semibold text-zinc-200">{opt.title}</span>
+                          <span className={`rounded px-1.5 py-0.2 text-[9px] font-bold uppercase ${opt.badgeClass}`}>
+                            {opt.role}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-zinc-400">{opt.desc}</p>
+                        {opt.disabled && (
+                          <p className="text-[10px] text-amber-400/80 mt-1">Requires Project Admin role</p>
+                        )}
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setPermModalItem(null)}
+                  className="rounded-lg border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isUpdatingPerm}
+                  className="flex items-center gap-1.5 rounded-lg bg-sky-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-sky-500 transition shadow-md disabled:opacity-50"
+                >
+                  {isUpdatingPerm ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Save Permission'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Move Collection Modal */}
+      {moveColItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+            <div className="flex items-center justify-between pb-4 border-b border-zinc-800/80 mb-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-amber-500/20 bg-amber-500/10 text-amber-400">
+                  <FolderInput className="h-4 w-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-zinc-100">Move Collection</h3>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    Relocate <span className="font-semibold text-zinc-200">"{moveColItem.name}"</span> to another project.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMoveColItem(null)}
+                className="rounded-lg p-1 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900 transition"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {errorMsg && (
+              <div className="mb-4 flex items-center gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-400">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{errorMsg}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleConfirmMoveCollection} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
+                  Destination Project (Same Team: {activeTeam?.name})
+                </label>
+                {eligibleTargetProjects.length === 0 ? (
+                  <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3 text-center">
+                    <p className="text-xs text-zinc-400 leading-relaxed">
+                      No other eligible projects found in this team. You must have at least Contributor role in the destination project.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <select
+                      value={targetMoveProjectId}
+                      onChange={(e) => setTargetMoveProjectId(e.target.value)}
+                      className="w-full rounded-xl border border-zinc-800 bg-zinc-900 p-2.5 text-xs text-zinc-200 focus:border-sky-500 focus:outline-none cursor-pointer"
+                    >
+                      {eligibleTargetProjects.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} {p.user_role ? `(${p.user_role.toUpperCase()})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-[11px] text-zinc-500">
+                      Collection and all requests will be relocated to the selected project.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-zinc-800/80">
+                <button
+                  type="button"
+                  onClick={() => setMoveColItem(null)}
+                  className="rounded-lg border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isMovingCol || eligibleTargetProjects.length === 0 || !targetMoveProjectId}
+                  className="flex items-center gap-1.5 rounded-lg bg-sky-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-sky-500 transition shadow-md disabled:opacity-50"
+                >
+                  {isMovingCol ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Move Collection'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

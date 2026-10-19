@@ -20,7 +20,7 @@ export default defineConfig(({ mode }) => {
           if (fs.existsSync(manifestPath)) {
             const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
             if (isOffline) {
-              manifest.name = 'AirREST - Offline REST & Postman Client';
+              manifest.name = 'AirREST - Offline REST Client';
               manifest.description =
                 'Fast, privacy-friendly, 100% offline browser-based API client with Postman collection compatibility and zero CORS restrictions.';
               if (manifest.action) {
@@ -39,7 +39,7 @@ export default defineConfig(({ mode }) => {
                 }
               }
             } else {
-              manifest.name = 'AirREST - REST & Postman Client';
+              manifest.name = 'AirREST - REST Client';
               manifest.description =
                 'Fast browser-based API client with Postman collection compatibility and zero CORS restrictions.';
               if (manifest.action) {

@@ -20,9 +20,10 @@ Most web-based API testing tools are severely constrained by browser security mo
 
 - 🛡️ **Zero CORS & Mixed-Content Blocks**: Chrome host permissions (`<all_urls>`) allow direct, unrestricted HTTP and HTTPS dispatching from your browser.
 - 💻 **Flexible Workspace Modes (Offline vs Cloud)**: Run **100% Offline** using local storage (zero tracking, instant launch), or connect to **Cloud Sync Mode** for multi-device backup and team collaboration.
-- 👥 **Team & Project Scope Switcher**: Freely jump between personal workspaces and assigned team projects from the studio header with real-time RBAC tags (`Admin`, `Maintainer`, `Contributor`, `Reader`).
+- 👥 **Workspace & Project Switcher**: Unified switcher to seamlessly alternate between local **Offline Workspace** (zero cloud sync) and **Online Cloud Workspaces** (Personal & Team Projects with RBAC tags `Admin`, `Maintainer`, `Contributor`, `Reader`), featuring per-scope tab and history isolation, and state caching.
+- 🔄 **Workspace & Project Collection Relocation**: Move collections seamlessly from Offline LocalStorage to Cloud Workspaces, or across projects within the same team, protected by granular RBAC (requires contributor role or above in both source and target scopes).
 - 🔑 **Rolling Refresh Tokens**: 30-day rolling refresh token rotation with silent background refresh ensures active sessions are never abruptly logged out.
-- 🏢 **Decoupled Management Hub (`hub/`)**: Separate full-page dashboard deployable on Vercel for managing teams, project RBAC, and user provisioning without bloating the browser extension.
+- 🏢 **Decoupled Management Hub (`hub/`)**: Separate full-page dashboard deployable on Vercel for managing teams, project RBAC, project collections & environments with granular role-based permissions, and user provisioning without bloating the browser extension.
 - 📁 **Native Postman v2.1 Compatibility**: Import and export standard Postman Collections and Environments without vendor lock-in.
 
 ---
@@ -125,7 +126,8 @@ The backend reads configuration from environment variables or a local `backend/.
 
 ### 3. Frontend & Extension Security
 - **No Bundled Secrets**: The Chrome Extension and Hub client bundles contain zero hardcoded API keys or server secrets.
-- **Client-Side Secret Storage**: User credentials, JWT access tokens, and refresh tokens are stored purely in the user's isolated browser storage (`localStorage` / Zustand) and sent only via standard `Authorization: Bearer <token>` headers over HTTPS/HTTP.
+- **Client-Side Secret Storage**: User credentials, JWT access tokens, and refresh tokens are stored purely in the user's isolated browser storage (Zustand persist) and sent only via standard `Authorization: Bearer <token>` headers over HTTPS/HTTP.
+- **High-Capacity Persistent Storage (IndexedDB & `unlimitedStorage`)**: Workspaces, collections, environments, and histories are backed by an asynchronous IndexedDB storage layer with automatic zero-loss migration from `localStorage`. Accompanied by the extension's `unlimitedStorage` permission, this eliminates browser 5MB `localStorage` quota restrictions and effortlessly supports multi-megabyte collections (3MB+ to 50MB+).
 
 ---
 
@@ -135,6 +137,8 @@ The backend reads configuration from environment variables or a local `backend/.
 - **Two-way Interoperability**: Full support for the standard Postman Collection `v2.1.0` JSON schema.
 - **Deep Hierarchy Preservation**: Preserves nested folder trees, query parameters, header tables, request bodies, and scripting hooks.
 - **Flexible Import**: Import collections via drag-and-drop file upload or direct JSON text paste.
+- **Duplicate Conflict Resolution**: Intelligent duplicate detection when importing collections with matching names. Provides Postman-style **"Import as Copy"** (auto-appends ` (Copy)` with fresh UUIDs) or **"Replace"** (overwrites in-place while aligning item IDs and syncing with cloud backend).
+- **Request Differences Breakdown**: Visual difference inspector displaying which endpoints are `Added`, `Modified`, or `Removed` without cluttering the screen with deep raw body diffs.
 - **1-Click Export**: Export any individual collection directly from the sidebar or global header to Postman v2.1 JSON to share with teammates.
 - **Safe Management & Confirmations**: Deleting collections or environments triggers a modern confirmation dialog to prevent accidental data loss.
 - **Real-Time Search**: Instant filtering across collection names, folders, and nested request endpoints.
@@ -143,6 +147,7 @@ The backend reads configuration from environment variables or a local `backend/.
 ### 2. 🌍 Environment Variables & Dynamic Templating
 - **Environment Switcher**: Create and switch between environments (e.g., `Localhost`, `Development`, `Staging`, `Production`) directly from the header dropdown.
 - **Postman Environment Interoperability**: Import and export Postman Environment `.json` files.
+- **Duplicate Conflict Resolution**: Intelligent duplicate detection when importing environments with matching names via global Import or Environment Manager. Provides a visual variable differences breakdown (`+Added`, `~Modified`, `-Removed`, `Same`) and options to **"Import as Copy"** (auto-appends ` (Copy)` with fresh UUIDs) or **"Replace"** (updates in-place while aligning variable IDs and syncing with cloud backend).
 - **Granular Environment RBAC & Protection**: Protect sensitive environments (e.g. Production) within team projects using 4-tier role-based restrictions (`All Members (Reader+)`, `Contributor+`, `Maintainer+ (Production/Release)`, or `Admin Only`). Environments restricted to higher roles are strictly filtered at the backend and never exposed to unauthorized project members, preventing privilege escalation.
 - **Syntax Highlighting for Variables**: Monospace syntax highlighting for `{{variableName}}` inside request URLs, Authorization credentials, query parameters, and header tables with amber (resolved) and rose (unresolved) indicators.
 - **Interactive Hover Tooltip Popups**: Hovering over any `{{variableName}}` reveals a floating inspector displaying its resolved value, current environment scope, and resolution suggestions.

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Cloud, Server, LogOut, User as UserIcon, Shield, Laptop } from 'lucide-react';
+import { Cloud, Server, LogOut, User as UserIcon, Shield } from 'lucide-react';
 import { useHubStore } from '../store/useHubStore';
 import { DEFAULT_API_URL } from '../lib/api';
 
@@ -8,7 +8,6 @@ export const Navbar: React.FC = () => {
   const apiUrl = useHubStore((state) => state.apiUrl);
   const setApiUrl = useHubStore((state) => state.setApiUrl);
   const logout = useHubStore((state) => state.logout);
-  const setActiveTab = useHubStore((state) => state.setActiveTab);
 
   const [isServerModalOpen, setIsServerModalOpen] = useState(false);
   const [tempUrl, setTempUrl] = useState(apiUrl);
@@ -40,14 +39,6 @@ export const Navbar: React.FC = () => {
 
         {/* Right Actions */}
         <div className="flex items-center gap-3">
-          {/* Extension Connect Quick Button */}
-          <button
-            onClick={() => setActiveTab('connect')}
-            className="hidden md:flex items-center gap-1.5 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-400 hover:bg-sky-500/20 transition shadow-sm"
-          >
-            <Laptop className="h-3.5 w-3.5" />
-            <span>Connect Extension</span>
-          </button>
 
           {/* Server Endpoint Indicator */}
           <button

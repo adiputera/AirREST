@@ -32,6 +32,7 @@ export function buildCollectionsFromDelta(backendCollections: any[], backendItem
       items: nestedItems,
       createdAt: new Date(bc.created_at || Date.now()).getTime(),
       updatedAt: new Date(bc.updated_at || Date.now()).getTime(),
+      _origin: 'cloud',
     });
   }
 

@@ -27,12 +27,19 @@ type CreateCollectionRequest struct {
 	ProjectID   *string `json:"project_id,omitempty"`
 	Name        string  `json:"name"`
 	Description *string `json:"description,omitempty"`
+	MinRole     *string `json:"min_role,omitempty"`
 }
 
 type UpdateCollectionRequest struct {
 	Name        string  `json:"name"`
 	Description *string `json:"description,omitempty"`
+	MinRole     *string `json:"min_role,omitempty"`
 	BaseVersion int64   `json:"base_version"`
+}
+
+type MoveCollectionRequest struct {
+	TargetWorkspaceID *string `json:"target_workspace_id,omitempty"`
+	TargetProjectID   *string `json:"target_project_id,omitempty"`
 }
 
 func (h *CollectionHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -88,11 +95,17 @@ func (h *CollectionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		projID = &id
 	}
 
+	minRole := domain.ProjectRoleReader
+	if req.MinRole != nil && *req.MinRole != "" {
+		minRole = domain.ProjectRole(*req.MinRole)
+	}
+
 	col := &domain.Collection{
 		WorkspaceID: wsID,
 		ProjectID:   projID,
 		Name:        req.Name,
 		Description: req.Description,
+		MinRole:     minRole,
 	}
 
 	if err := h.collectionService.CreateCollection(r.Context(), user, col); err != nil {
@@ -141,6 +154,9 @@ func (h *CollectionHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Name:        req.Name,
 		Description: req.Description,
 	}
+	if req.MinRole != nil && *req.MinRole != "" {
+		col.MinRole = domain.ProjectRole(*req.MinRole)
+	}
 
 	if err := h.collectionService.UpdateCollection(r.Context(), user, col, req.BaseVersion); err != nil {
 		if errors.Is(err, postgres.ErrVersionConflict) {
@@ -169,6 +185,49 @@ func (h *CollectionHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response.JSON(w, http.StatusOK, map[string]string{"message": "collection deleted successfully"})
+}
+
+func (h *CollectionHandler) Move(w http.ResponseWriter, r *http.Request) {
+	user := middleware.GetUserFromContext(r.Context())
+	idStr := chi.URLParam(r, "id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "invalid collection id", "BAD_REQUEST")
+		return
+	}
+
+	var req MoveCollectionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.Error(w, http.StatusBadRequest, "invalid request body", "BAD_REQUEST")
+		return
+	}
+
+	var targetWsID, targetProjID *uuid.UUID
+	if req.TargetWorkspaceID != nil && *req.TargetWorkspaceID != "" {
+		parsed, err := uuid.Parse(*req.TargetWorkspaceID)
+		if err != nil {
+			response.Error(w, http.StatusBadRequest, "invalid target_workspace_id", "BAD_REQUEST")
+			return
+		}
+		targetWsID = &parsed
+	}
+	if req.TargetProjectID != nil && *req.TargetProjectID != "" {
+		parsed, err := uuid.Parse(*req.TargetProjectID)
+		if err != nil {
+			response.Error(w, http.StatusBadRequest, "invalid target_project_id", "BAD_REQUEST")
+			return
+		}
+		targetProjID = &parsed
+	}
+
+	if err := h.collectionService.MoveCollection(r.Context(), user, id, targetWsID, targetProjID); err != nil {
+		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
+		return
+	}
+
+	response.JSON(w, http.StatusOK, map[string]string{
+		"message": "collection moved successfully",
+	})
 }
 
 // Item Handlers

@@ -3,7 +3,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import { User } from '../types';
 import { DEFAULT_API_URL, registerHubTokenRefresh } from '../lib/api';
 
-export type HubTab = 'teams' | 'projects' | 'superadmin' | 'connect';
+export type HubTab = 'teams' | 'projects' | 'superadmin';
 
 interface HubStoreState {
   apiUrl: string;

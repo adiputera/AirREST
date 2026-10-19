@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import { appStorage } from '@/lib/storage';
 import {
   ApiRequest,
   ApiResponse,
@@ -34,16 +35,31 @@ import {
   createScopeEnvironment,
   updateScopeEnvironment,
   deleteScopeEnvironment,
+  deleteScopeCollection,
+  deleteScopeItem,
+  moveScopeCollection,
 } from '@/lib/cloudApi';
 import {
   buildCollectionsFromDelta,
   buildEnvironmentsFromDelta,
 } from '@/lib/cloudSyncTransformer';
 import { isOfflineOnly } from '@/lib/edition';
-import { findSavedRequestInCollections } from '@/lib/requestDiff';
+import {
+  findSavedRequestInCollections,
+  alignCollectionItemIds,
+  flattenCollectionRequests,
+  alignEnvironmentVariableIds,
+} from '@/lib/requestDiff';
 
 function generateId(): string {
-  return Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
 }
 
 const defaultEnvironments: Environment[] = [
@@ -90,11 +106,38 @@ const defaultRequest: ApiRequest = {
   updatedAt: Date.now(),
 };
 
+function createInitialTab(): ApiRequest {
+  return {
+    id: generateId(),
+    name: 'New Request',
+    method: 'GET',
+    url: '',
+    params: [{ id: generateId(), key: '', value: '', enabled: true }],
+    headers: [{ id: generateId(), key: '', value: '', enabled: true }],
+    auth: { type: 'none' },
+    bodyType: 'none',
+    rawType: 'text',
+    bodyContent: '',
+    graphqlQuery: '',
+    graphqlVariables: '',
+    bodyFormData: [],
+    bodyBinaryFile: undefined,
+    bodyUrlEncoded: [{ id: generateId(), key: '', value: '', enabled: true }],
+    preRequestScript: '',
+    postResponseScript: '',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+}
+
 export interface ScopeCacheEntry {
   collections: Collection[];
   environments: Environment[];
   activeEnvironmentId?: string | null;
   lastSyncedAt?: number | null;
+  tabs?: ApiRequest[];
+  activeTabId?: string;
+  history?: HistoryItem[];
 }
 
 function getScopeKey(scope?: ActiveScope | null): string {
@@ -121,6 +164,8 @@ interface ApiStoreState {
   addEnvironmentVariable: (envId: string) => void;
   updateEnvironmentVariable: (envId: string, varId: string, updates: Partial<EnvironmentVariable>) => void;
   removeEnvironmentVariable: (envId: string, varId: string) => void;
+  addEnvironment: (env: Environment) => Promise<string>;
+  replaceEnvironment: (existingId: string, incomingEnv: Environment) => Promise<void>;
   importEnvironmentFromJson: (jsonStr: string) => { success: boolean; error?: string; environment?: Environment };
   importAnyPostmanJson: (jsonStr: string) => Promise<{
     success: boolean;
@@ -178,8 +223,10 @@ interface ApiStoreState {
   saveRequestToCollection: (collectionId: string, folderId: string | null, request: ApiRequest) => void;
   saveActiveRequest: () => { success: boolean; isDirectSaved: boolean };
   addCollection: (collection: Collection) => Promise<void> | void;
+  replaceCollection: (existingId: string, newCollection: Collection) => Promise<void>;
   importCollectionFromJson: (jsonStr: string) => Promise<{ success: boolean; error?: string }>;
   deleteCollection: (id: string) => void;
+  moveCollection: (collectionId: string, targetScope: ActiveScope) => Promise<{ success: boolean; error?: string }>;
   openRequestInTab: (request: ApiRequest) => void;
   clearHistory: () => void;
   deleteHistoryItem: (id: string) => void;
@@ -194,7 +241,11 @@ interface ApiStoreState {
   offlineCollections?: Collection[];
   offlineEnvironments?: Environment[];
   offlineActiveEnvironmentId?: string | null;
+  offlineTabs?: ApiRequest[];
+  offlineActiveTabId?: string;
+  offlineHistory?: HistoryItem[];
   scopeCache?: Record<string, ScopeCacheEntry>;
+  isSwitchingWorkspace?: boolean;
 
   setWorkspaceMode: (mode: WorkspaceMode) => void;
   setHasConfiguredMode: (configured: boolean) => void;
@@ -231,54 +282,120 @@ export const useApiStore = create<ApiStoreState>()(
       offlineCollections: [],
       offlineEnvironments: defaultEnvironments,
       offlineActiveEnvironmentId: 'env-jsonplaceholder',
+      offlineTabs: [defaultRequest],
+      offlineActiveTabId: defaultRequest.id,
+      offlineHistory: [],
       scopeCache: {},
+      isSwitchingWorkspace: false,
 
       setWorkspaceMode: (workspaceMode) => {
         const currentMode = get().workspaceMode;
         if (currentMode === workspaceMode) return;
+
+        set({ isSwitchingWorkspace: true });
 
         if (workspaceMode === 'offline') {
           // Save current cloud scope data into scopeCache before leaving
           const activeScope = get().cloudConfig.activeScope;
           const updatedScopeCache = { ...(get().scopeCache || {}) };
           if (activeScope) {
-            updatedScopeCache[getScopeKey(activeScope)] = {
+            const scopeKey = getScopeKey(activeScope);
+            const prevEntry = updatedScopeCache[scopeKey];
+            updatedScopeCache[scopeKey] = {
+              ...prevEntry,
               collections: get().collections,
               environments: get().environments,
               activeEnvironmentId: get().activeEnvironmentId,
               lastSyncedAt: get().lastSyncedAt,
+              tabs: get().tabs,
+              activeTabId: get().activeTabId,
+              history: get().history,
             };
           }
 
-          const { offlineCollections, offlineEnvironments, offlineActiveEnvironmentId, collections, environments, activeEnvironmentId } = get();
+          const {
+            offlineCollections,
+            offlineEnvironments,
+            offlineActiveEnvironmentId,
+            offlineTabs,
+            offlineActiveTabId,
+            offlineHistory,
+          } = get();
+
+          const restoredTabs =
+            offlineTabs && offlineTabs.length > 0
+              ? offlineTabs
+              : [createInitialTab()];
+          const restoredActiveTabId =
+            offlineActiveTabId && restoredTabs.some((t) => t.id === offlineActiveTabId)
+              ? offlineActiveTabId
+              : restoredTabs[0].id;
+
           set({
             workspaceMode: 'offline',
             hasConfiguredMode: true,
             scopeCache: updatedScopeCache,
-            collections: (offlineCollections && offlineCollections.length > 0) ? offlineCollections : collections,
-            environments: (offlineEnvironments && offlineEnvironments.length > 0) ? offlineEnvironments : environments,
-            activeEnvironmentId: offlineActiveEnvironmentId || activeEnvironmentId || defaultEnvironments[0]?.id || null,
+            collections: offlineCollections || [],
+            environments: (offlineEnvironments && offlineEnvironments.length > 0) ? offlineEnvironments : defaultEnvironments,
+            activeEnvironmentId: offlineActiveEnvironmentId || defaultEnvironments[0]?.id || null,
+            tabs: restoredTabs,
+            activeTabId: restoredActiveTabId,
+            activeResponse: null,
+            history: offlineHistory || [],
             syncStatus: 'idle',
             syncError: null,
           });
+
+          setTimeout(() => {
+            set({ isSwitchingWorkspace: false });
+          }, 250);
         } else {
-          // Entering cloud mode: snapshot current offline state first
-          const { collections, environments, activeEnvironmentId, cloudConfig, scopeCache } = get();
+          // Entering cloud mode: snapshot current offline state only if we were actually in offline mode
+          const isCurrentlyOffline = get().workspaceMode === 'offline';
+          const { collections, environments, activeEnvironmentId, cloudConfig, scopeCache, tabs, activeTabId, history } = get();
           const targetScope = cloudConfig.activeScope;
           const cached = targetScope ? scopeCache?.[getScopeKey(targetScope)] : null;
+
+          const restoredTabs =
+            cached?.tabs && cached.tabs.length > 0
+              ? cached.tabs
+              : [createInitialTab()];
+          const restoredActiveTabId =
+            cached?.activeTabId && restoredTabs.some((t) => t.id === cached.activeTabId)
+              ? cached.activeTabId
+              : restoredTabs[0].id;
 
           set({
             workspaceMode: isOfflineOnly ? 'offline' : 'cloud',
             hasConfiguredMode: true,
-            offlineCollections: collections,
-            offlineEnvironments: environments,
-            offlineActiveEnvironmentId: activeEnvironmentId,
+            offlineCollections: isCurrentlyOffline ? collections : (get().offlineCollections || []),
+            offlineEnvironments: isCurrentlyOffline ? environments : (get().offlineEnvironments || defaultEnvironments),
+            offlineActiveEnvironmentId: isCurrentlyOffline ? activeEnvironmentId : (get().offlineActiveEnvironmentId || null),
+            offlineTabs: isCurrentlyOffline ? tabs : (get().offlineTabs || [createInitialTab()]),
+            offlineActiveTabId: isCurrentlyOffline ? activeTabId : (get().offlineActiveTabId || ''),
+            offlineHistory: isCurrentlyOffline ? history : (get().offlineHistory || []),
             collections: cached ? cached.collections : [],
             environments: cached ? cached.environments : [],
             activeEnvironmentId: cached ? (cached.activeEnvironmentId || null) : null,
-            syncStatus: 'idle',
+            tabs: restoredTabs,
+            activeTabId: restoredActiveTabId,
+            activeResponse: null,
+            history: cached?.history || [],
+            syncStatus: targetScope ? 'syncing' : 'idle',
             syncError: null,
           });
+
+          if (!isOfflineOnly && targetScope && cloudConfig.token) {
+            get()
+              .pullCloudDelta()
+              .finally(() => {
+                set({ isSwitchingWorkspace: false });
+              });
+          } else {
+            setTimeout(() => {
+              set({ isSwitchingWorkspace: false });
+            }, 250);
+          }
         }
       },
       setHasConfiguredMode: (hasConfiguredMode) =>
@@ -290,53 +407,142 @@ export const useApiStore = create<ApiStoreState>()(
           cloudConfig: { ...state.cloudConfig, ...updates },
         })),
       setActiveScope: async (scope) => {
-        const { workspaceMode, collections, environments, activeEnvironmentId, cloudConfig, scopeCache, lastSyncedAt } = get();
-        const updatedScopeCache = { ...(scopeCache || {}) };
+        const {
+          workspaceMode,
+          collections,
+          environments,
+          activeEnvironmentId,
+          cloudConfig,
+          scopeCache,
+          lastSyncedAt,
+          tabs,
+          activeTabId,
+          history,
+        } = get();
 
-        // If transitioning from offline mode, snapshot offline state
-        if (workspaceMode === 'offline') {
-          set({
-            offlineCollections: collections,
-            offlineEnvironments: environments,
-            offlineActiveEnvironmentId: activeEnvironmentId,
-          });
-        } else if (cloudConfig.activeScope) {
-          // If transitioning from another cloud scope, snapshot old cloud scope into scopeCache
-          updatedScopeCache[getScopeKey(cloudConfig.activeScope)] = {
-            collections,
-            environments,
-            activeEnvironmentId,
-            lastSyncedAt,
-          };
+        const isSameScope =
+          workspaceMode === 'cloud' &&
+          cloudConfig.activeScope &&
+          cloudConfig.activeScope.type === scope.type &&
+          cloudConfig.activeScope.id === scope.id;
+
+        if (isSameScope && get().syncStatus !== 'idle') {
+          return;
         }
 
-        // Check if target scope already has cached data in local storage
-        const targetCache = updatedScopeCache[getScopeKey(scope)];
+        set({ isSwitchingWorkspace: true });
 
-        set((state) => ({
-          workspaceMode: 'cloud',
-          cloudConfig: {
-            ...state.cloudConfig,
-            activeScope: scope,
-          },
-          scopeCache: updatedScopeCache,
-          // Load cached data immediately for instant switching, or empty array if newly created/visited
-          collections: targetCache ? targetCache.collections : [],
-          environments: targetCache ? targetCache.environments : [],
-          activeEnvironmentId: targetCache ? (targetCache.activeEnvironmentId || null) : null,
-          syncStatus: 'syncing',
-          syncError: null,
-        }));
+        try {
+          const updatedScopeCache = { ...(scopeCache || {}) };
 
-        await get().pullCloudDelta();
+          // If transitioning from offline mode, snapshot offline state
+          if (workspaceMode === 'offline') {
+            set({
+              offlineCollections: collections,
+              offlineEnvironments: environments,
+              offlineActiveEnvironmentId: activeEnvironmentId,
+              offlineTabs: tabs,
+              offlineActiveTabId: activeTabId,
+              offlineHistory: history,
+            });
+          } else if (cloudConfig.activeScope) {
+            // If transitioning from another cloud scope, snapshot old cloud scope into scopeCache
+            const prevKey = getScopeKey(cloudConfig.activeScope);
+            const prevEntry = updatedScopeCache[prevKey];
+            updatedScopeCache[prevKey] = {
+              ...prevEntry,
+              collections,
+              environments,
+              activeEnvironmentId,
+              lastSyncedAt,
+              tabs,
+              activeTabId,
+              history,
+            };
+          }
+
+          // Check if target scope already has cached data in local storage
+          const targetCache = updatedScopeCache[getScopeKey(scope)];
+
+          const targetTabs =
+            targetCache?.tabs && targetCache.tabs.length > 0
+              ? targetCache.tabs
+              : [createInitialTab()];
+          const targetActiveTabId =
+            targetCache?.activeTabId && targetTabs.some((t) => t.id === targetCache.activeTabId)
+              ? targetCache.activeTabId
+              : targetTabs[0].id;
+
+          set((state) => ({
+            workspaceMode: 'cloud',
+            cloudConfig: {
+              ...state.cloudConfig,
+              activeScope: scope,
+            },
+            scopeCache: updatedScopeCache,
+            // Load cached data immediately for instant switching, or empty array if newly created/visited
+            collections: targetCache ? targetCache.collections : [],
+            environments: targetCache ? targetCache.environments : [],
+            activeEnvironmentId: targetCache ? (targetCache.activeEnvironmentId || null) : null,
+            tabs: targetTabs,
+            activeTabId: targetActiveTabId,
+            activeResponse: null,
+            history: targetCache?.history || [],
+            syncStatus: 'syncing',
+            syncError: null,
+          }));
+
+          await get().pullCloudDelta();
+        } finally {
+          set({ isSwitchingWorkspace: false });
+        }
       },
       logoutCloud: () => {
-        const { offlineCollections, offlineEnvironments, offlineActiveEnvironmentId } = get();
+        set({ isSwitchingWorkspace: true });
+        const { offlineCollections, offlineEnvironments, offlineActiveEnvironmentId, offlineTabs, offlineActiveTabId, offlineHistory, scopeCache } = get();
+
+        // 1. Collect all collection IDs belonging to any cloud scope or currently loaded in cloud mode
+        const cloudColIds = new Set<string>();
+        if (scopeCache) {
+          for (const entry of Object.values(scopeCache)) {
+            if (entry.collections) {
+              for (const c of entry.collections) {
+                cloudColIds.add(c.id);
+              }
+            }
+          }
+        }
+        if (get().workspaceMode === 'cloud' && get().collections) {
+          for (const c of get().collections) {
+            cloudColIds.add(c.id);
+          }
+        }
+
+        // 2. Filter out any cloud-specific collections that leaked into offlineCollections
+        const pureOfflineCollections = (offlineCollections || []).filter(
+          (c) => c._origin === 'offline' || (!cloudColIds.has(c.id) && c._origin !== 'cloud')
+        );
+
+        const restoredTabs =
+          offlineTabs && offlineTabs.length > 0
+            ? offlineTabs
+            : [createInitialTab()];
+        const restoredActiveTabId =
+          offlineActiveTabId && restoredTabs.some((t) => t.id === offlineActiveTabId)
+            ? offlineActiveTabId
+            : restoredTabs[0].id;
+
         set((state) => ({
           workspaceMode: 'offline',
-          collections: offlineCollections || [],
-          environments: offlineEnvironments || defaultEnvironments,
+          collections: pureOfflineCollections,
+          offlineCollections: pureOfflineCollections,
+          environments: (offlineEnvironments && offlineEnvironments.length > 0) ? offlineEnvironments : defaultEnvironments,
           activeEnvironmentId: offlineActiveEnvironmentId || defaultEnvironments[0]?.id || null,
+          tabs: restoredTabs,
+          activeTabId: restoredActiveTabId,
+          activeResponse: null,
+          history: offlineHistory || [],
+          offlineHistory: offlineHistory || [],
           scopeCache: {},
           cloudConfig: {
             apiUrl: state.cloudConfig.apiUrl || 'http://localhost:8080',
@@ -345,6 +551,10 @@ export const useApiStore = create<ApiStoreState>()(
           syncError: null,
           lastSyncedAt: null,
         }));
+
+        setTimeout(() => {
+          set({ isSwitchingWorkspace: false });
+        }, 250);
       },
       setSyncStatus: (syncStatus, syncError = null) => set({ syncStatus, syncError }),
       pullCloudDelta: async () => {
@@ -370,13 +580,18 @@ export const useApiStore = create<ApiStoreState>()(
             : (pulledEnvs[0]?.id || null);
 
           const scopeKey = getScopeKey(cloudConfig.activeScope);
+          const currentScopeCache = get().scopeCache?.[scopeKey];
           const updatedScopeCache = {
             ...(get().scopeCache || {}),
             [scopeKey]: {
+              ...currentScopeCache,
               collections: pulledCols,
               environments: pulledEnvs,
               activeEnvironmentId: targetActiveId,
               lastSyncedAt: Date.now(),
+              tabs: get().tabs,
+              activeTabId: get().activeTabId,
+              history: get().history,
             },
           };
 
@@ -445,7 +660,7 @@ export const useApiStore = create<ApiStoreState>()(
           environments: [...state.environments, newEnv],
           activeEnvironmentId: newEnv.id,
           offlineEnvironments: state.workspaceMode === 'offline'
-            ? [...(state.offlineEnvironments || state.environments), newEnv]
+            ? [...(state.offlineEnvironments || defaultEnvironments), newEnv]
             : state.offlineEnvironments,
           offlineActiveEnvironmentId: state.workspaceMode === 'offline'
             ? newEnv.id
@@ -484,7 +699,7 @@ export const useApiStore = create<ApiStoreState>()(
           environments: state.environments.filter((e) => e.id !== id),
           activeEnvironmentId: state.activeEnvironmentId === id ? null : state.activeEnvironmentId,
           offlineEnvironments: state.workspaceMode === 'offline'
-            ? (state.offlineEnvironments || state.environments).filter((e) => e.id !== id)
+            ? (state.offlineEnvironments || defaultEnvironments).filter((e) => e.id !== id)
             : state.offlineEnvironments,
           offlineActiveEnvironmentId: state.workspaceMode === 'offline' && state.offlineActiveEnvironmentId === id
             ? null
@@ -635,6 +850,100 @@ export const useApiStore = create<ApiStoreState>()(
         }
       },
 
+      addEnvironment: async (env: Environment) => {
+        set((state) => ({
+          environments: [...state.environments, env],
+          activeEnvironmentId: env.id,
+          offlineEnvironments: state.workspaceMode === 'offline'
+            ? [...(state.offlineEnvironments || defaultEnvironments), env]
+            : state.offlineEnvironments,
+          offlineActiveEnvironmentId: state.workspaceMode === 'offline'
+            ? env.id
+            : state.offlineActiveEnvironmentId,
+        }));
+
+        const { workspaceMode, cloudConfig } = get();
+        if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
+          try {
+            const created = await createScopeEnvironment(
+              cloudConfig.apiUrl,
+              cloudConfig.token,
+              cloudConfig.activeScope,
+              {
+                name: env.name,
+                variables: env.variables,
+                min_role: env.minRole || 'reader',
+              },
+              cloudConfig.refreshToken
+            );
+            if (created && created.id) {
+              set((state) => ({
+                environments: state.environments.map((e) => (e.id === env.id ? { ...e, id: created.id } : e)),
+                activeEnvironmentId: state.activeEnvironmentId === env.id ? created.id : state.activeEnvironmentId,
+                offlineEnvironments: state.workspaceMode === 'offline'
+                  ? (state.offlineEnvironments || []).map((e) => (e.id === env.id ? { ...e, id: created.id } : e))
+                  : state.offlineEnvironments,
+                offlineActiveEnvironmentId: state.offlineActiveEnvironmentId === env.id ? created.id : state.offlineActiveEnvironmentId,
+              }));
+              return created.id;
+            }
+          } catch (err: any) {
+            console.error('Failed to sync environment to cloud:', err);
+          }
+        }
+        return env.id;
+      },
+
+      replaceEnvironment: async (existingId: string, incomingEnv: Environment) => {
+        const state = get();
+        const existingEnv = state.environments.find((e) => e.id === existingId);
+        if (!existingEnv) {
+          throw new Error('Existing environment not found');
+        }
+
+        const alignedVars = alignEnvironmentVariableIds(existingEnv.variables || [], incomingEnv.variables || []);
+
+        const replacedEnv: Environment = {
+          ...incomingEnv,
+          id: existingId,
+          name: incomingEnv.name,
+          variables: alignedVars,
+          minRole: incomingEnv.minRole || existingEnv.minRole,
+          updatedAt: Date.now(),
+        };
+
+        set((s) => ({
+          environments: s.environments.map((e) => (e.id === existingId ? replacedEnv : e)),
+          activeEnvironmentId: existingId,
+          offlineEnvironments: s.workspaceMode === 'offline'
+            ? (s.offlineEnvironments || defaultEnvironments).map((e) => (e.id === existingId ? replacedEnv : e))
+            : s.offlineEnvironments,
+          offlineActiveEnvironmentId: s.workspaceMode === 'offline'
+            ? existingId
+            : s.offlineActiveEnvironmentId,
+        }));
+
+        const { workspaceMode, cloudConfig } = get();
+        if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
+          try {
+            await updateScopeEnvironment(
+              cloudConfig.apiUrl,
+              cloudConfig.token,
+              existingId,
+              {
+                name: replacedEnv.name,
+                variables: replacedEnv.variables,
+                min_role: replacedEnv.minRole,
+              },
+              cloudConfig.refreshToken
+            );
+          } catch (err: any) {
+            console.error('Failed to sync replaced environment to cloud:', err);
+            throw err;
+          }
+        }
+      },
+
       setSidebarTab: (sidebarTab) => set({ sidebarTab }),
 
       setActiveTabId: (activeTabId) => {
@@ -674,27 +983,7 @@ export const useApiStore = create<ApiStoreState>()(
       closeTab: (id) => {
         set((state) => {
           if (state.tabs.length <= 1) {
-            const resetTab: ApiRequest = {
-              id: generateId(),
-              name: 'New Request',
-              method: 'GET',
-              url: '',
-              params: [{ id: generateId(), key: '', value: '', enabled: true }],
-              headers: [{ id: generateId(), key: '', value: '', enabled: true }],
-              auth: { type: 'none' },
-              bodyType: 'none',
-              rawType: 'text',
-              bodyContent: '',
-              graphqlQuery: '',
-              graphqlVariables: '',
-              bodyFormData: [],
-              bodyBinaryFile: undefined,
-              bodyUrlEncoded: [{ id: generateId(), key: '', value: '', enabled: true }],
-              preRequestScript: '',
-              postResponseScript: '',
-              createdAt: Date.now(),
-              updatedAt: Date.now(),
-            };
+            const resetTab = createInitialTab();
             return { tabs: [resetTab], activeTabId: resetTab.id, activeResponse: null };
           }
 
@@ -913,7 +1202,11 @@ export const useApiStore = create<ApiStoreState>()(
 
             let bodyUrlEncoded = tab.bodyUrlEncoded;
             if (bodyType === 'x-www-form-urlencoded') {
-              const hasRealItems = bodyUrlEncoded && bodyUrlEncoded.some((item) => item.key.trim() || item.value.trim());
+              const hasRealItems =
+                bodyUrlEncoded &&
+                bodyUrlEncoded.some(
+                  (item) => String(item?.key ?? '').trim() || String(item?.value ?? '').trim()
+                );
               if (!hasRealItems) {
                 const trimmedBody = (tab.bodyContent || '').trim();
                 if (trimmedBody.startsWith('{')) {
@@ -1227,11 +1520,41 @@ export const useApiStore = create<ApiStoreState>()(
             timestamp: Date.now(),
           };
 
-          set((s) => ({
-            activeResponse: finalResponse,
-            isLoading: false,
-            history: [historyEntry, ...s.history].slice(0, 50),
-          }));
+          set((s) => {
+            const newHistory = [historyEntry, ...s.history].slice(0, 50);
+            if (s.workspaceMode === 'offline') {
+              return {
+                activeResponse: finalResponse,
+                isLoading: false,
+                history: newHistory,
+                offlineHistory: newHistory,
+              };
+            }
+
+            const activeScope = s.cloudConfig.activeScope;
+            let updatedScopeCache = s.scopeCache;
+            if (activeScope) {
+              const scopeKey = getScopeKey(activeScope);
+              const entry = (s.scopeCache || {})[scopeKey] || {
+                collections: s.collections,
+                environments: s.environments,
+              };
+              updatedScopeCache = {
+                ...(s.scopeCache || {}),
+                [scopeKey]: {
+                  ...entry,
+                  history: newHistory,
+                },
+              };
+            }
+
+            return {
+              activeResponse: finalResponse,
+              isLoading: false,
+              history: newHistory,
+              scopeCache: updatedScopeCache,
+            };
+          });
         } catch (err: unknown) {
           const errorMsg = err instanceof Error ? err.message : String(err);
           const fallbackResponse: ApiResponse = {
@@ -1258,48 +1581,71 @@ export const useApiStore = create<ApiStoreState>()(
           items: [],
           createdAt: Date.now(),
           updatedAt: Date.now(),
+          _origin: get().workspaceMode === 'offline' ? 'offline' : 'cloud',
         };
         set((state) => ({
           collections: [newCol, ...state.collections],
           offlineCollections: state.workspaceMode === 'offline'
-            ? [newCol, ...(state.offlineCollections || state.collections)]
+            ? [newCol, ...(state.offlineCollections || [])]
             : state.offlineCollections,
         }));
+
+        const { workspaceMode, cloudConfig } = get();
+        if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
+          batchImportToScope(
+            cloudConfig.apiUrl,
+            cloudConfig.token,
+            cloudConfig.activeScope,
+            [newCol],
+            cloudConfig.refreshToken
+          ).catch((err) => {
+            console.error('Failed to sync created collection to cloud:', err);
+          });
+        }
+
         return newCol.id;
       },
 
       saveRequestToCollection: (collectionId, folderId, request) => {
+        let assignedReqId = request.id;
+
         set((state) => {
+          const cleanReq: ApiRequest = JSON.parse(JSON.stringify(request));
+
+          const insertOrUpdateInList = (items: CollectionItem[]): CollectionItem[] => {
+            const existingIdx = items.findIndex(
+              (item) => item.type === 'request' && (item.id === cleanReq.id || item.request?.id === cleanReq.id || item.name === cleanReq.name)
+            );
+
+            if (existingIdx >= 0) {
+              const updated = [...items];
+              assignedReqId = updated[existingIdx].id;
+              cleanReq.id = assignedReqId;
+              updated[existingIdx] = {
+                ...updated[existingIdx],
+                name: cleanReq.name,
+                request: cleanReq,
+              };
+              return updated;
+            }
+
+            const isUUID = cleanReq.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanReq.id);
+            assignedReqId = isUUID ? cleanReq.id : generateId();
+            cleanReq.id = assignedReqId;
+
+            return [
+              ...items,
+              {
+                id: assignedReqId,
+                name: cleanReq.name || 'Untitled Request',
+                type: 'request',
+                request: cleanReq,
+              },
+            ];
+          };
+
           const collections = state.collections.map((col) => {
             if (col.id !== collectionId) return col;
-
-            const cleanReq: ApiRequest = JSON.parse(JSON.stringify(request));
-
-            const insertOrUpdateInList = (items: CollectionItem[]): CollectionItem[] => {
-              const existingIdx = items.findIndex(
-                (item) => item.type === 'request' && (item.id === cleanReq.id || item.request?.id === cleanReq.id || item.name === cleanReq.name)
-              );
-
-              if (existingIdx >= 0) {
-                const updated = [...items];
-                updated[existingIdx] = {
-                  ...updated[existingIdx],
-                  name: cleanReq.name,
-                  request: cleanReq,
-                };
-                return updated;
-              }
-
-              return [
-                ...items,
-                {
-                  id: cleanReq.id || generateId(),
-                  name: cleanReq.name || 'Untitled Request',
-                  type: 'request',
-                  request: cleanReq,
-                },
-              ];
-            };
 
             if (!folderId) {
               return {
@@ -1334,8 +1680,16 @@ export const useApiStore = create<ApiStoreState>()(
             };
           });
 
+          const tabs = state.tabs.map((tab) => {
+            if (tab.id === request.id || tab.name === request.name) {
+              return { ...tab, id: assignedReqId, name: cleanReq.name };
+            }
+            return tab;
+          });
+
           return {
             collections,
+            tabs,
             offlineCollections: state.workspaceMode === 'offline' ? collections : state.offlineCollections,
           };
         });
@@ -1370,10 +1724,14 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       addCollection: async (collection) => {
+        const taggedCol: Collection = {
+          ...collection,
+          _origin: get().workspaceMode === 'offline' ? 'offline' : 'cloud',
+        };
         set((state) => ({
-          collections: [collection, ...state.collections],
+          collections: [taggedCol, ...state.collections],
           offlineCollections: state.workspaceMode === 'offline'
-            ? [collection, ...(state.offlineCollections || state.collections)]
+            ? [taggedCol, ...(state.offlineCollections || [])]
             : state.offlineCollections,
         }));
 
@@ -1395,6 +1753,65 @@ export const useApiStore = create<ApiStoreState>()(
         }
       },
 
+      replaceCollection: async (existingId: string, newCollection: Collection) => {
+        const state = get();
+        const existingCol = state.collections.find((c) => c.id === existingId);
+        if (!existingCol) {
+          throw new Error('Existing collection not found');
+        }
+
+        const alignedItems = alignCollectionItemIds(existingCol.items || [], newCollection.items || []);
+        const existingFlat = flattenCollectionRequests(existingCol.items || []);
+        const newFlat = flattenCollectionRequests(alignedItems);
+        const newIds = new Set(newFlat.map((i) => i.id).filter(Boolean));
+        const removedItemIds = existingFlat
+          .map((i) => i.id)
+          .filter((id) => id && !newIds.has(id));
+
+        const replacedCol: Collection = {
+          ...newCollection,
+          id: existingId,
+          name: newCollection.name,
+          items: alignedItems,
+          updatedAt: Date.now(),
+          _origin: get().workspaceMode === 'offline' ? 'offline' : 'cloud',
+        };
+
+        set((s) => ({
+          collections: s.collections.map((c) => (c.id === existingId ? replacedCol : c)),
+          offlineCollections: s.workspaceMode === 'offline'
+            ? (s.offlineCollections || []).map((c) => (c.id === existingId ? replacedCol : c))
+            : s.offlineCollections,
+        }));
+
+        const { workspaceMode, cloudConfig } = get();
+        if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
+          try {
+            set({ syncStatus: 'syncing', syncError: null });
+
+            for (const remId of removedItemIds) {
+              await deleteScopeItem(
+                cloudConfig.apiUrl,
+                cloudConfig.token,
+                remId,
+                cloudConfig.refreshToken
+              ).catch((err) => console.error('Failed to delete removed item from cloud:', err));
+            }
+
+            await batchImportToScope(
+              cloudConfig.apiUrl,
+              cloudConfig.token,
+              cloudConfig.activeScope,
+              [replacedCol],
+              cloudConfig.refreshToken
+            );
+            await get().pullCloudDelta();
+          } catch (err: any) {
+            set({ syncStatus: 'error', syncError: err.message || 'Failed to sync replaced collection' });
+          }
+        }
+      },
+
       importEnvironmentFromJson: (jsonStr) => {
         try {
           const imported = importPostmanEnvironment(jsonStr);
@@ -1402,7 +1819,7 @@ export const useApiStore = create<ApiStoreState>()(
             environments: [...state.environments, imported],
             activeEnvironmentId: imported.id,
             offlineEnvironments: state.workspaceMode === 'offline'
-              ? [...(state.offlineEnvironments || state.environments), imported]
+              ? [...(state.offlineEnvironments || defaultEnvironments), imported]
               : state.offlineEnvironments,
             offlineActiveEnvironmentId: state.workspaceMode === 'offline'
               ? imported.id
@@ -1489,9 +1906,123 @@ export const useApiStore = create<ApiStoreState>()(
         set((state) => ({
           collections: state.collections.filter((c) => c.id !== id),
           offlineCollections: state.workspaceMode === 'offline'
-            ? (state.offlineCollections || state.collections).filter((c) => c.id !== id)
+            ? (state.offlineCollections || []).filter((c) => c.id !== id)
             : state.offlineCollections,
         }));
+
+        const { workspaceMode, cloudConfig } = get();
+        if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token) {
+          deleteScopeCollection(cloudConfig.apiUrl, cloudConfig.token, id, cloudConfig.refreshToken).catch((err) => {
+            console.error('Failed to delete collection from cloud:', err);
+          });
+        }
+      },
+
+      moveCollection: async (collectionId, targetScope) => {
+        const { workspaceMode, collections, offlineCollections, cloudConfig } = get();
+        if (isOfflineOnly) {
+          return { success: false, error: 'Offline edition cannot move collections to online scopes' };
+        }
+
+        if (workspaceMode === 'offline') {
+          // Moving from offline to online scope
+          const col = (offlineCollections || collections).find((c) => c.id === collectionId);
+          if (!col) {
+            return { success: false, error: 'Collection not found' };
+          }
+          if (!cloudConfig.token) {
+            return { success: false, error: 'Cloud authentication required to move collection to an online workspace' };
+          }
+
+          try {
+            set({ syncStatus: 'syncing', syncError: null });
+            await batchImportToScope(
+              cloudConfig.apiUrl,
+              cloudConfig.token,
+              targetScope,
+              [col],
+              cloudConfig.refreshToken
+            );
+
+            // Remove from offline collections
+            const remainingOffline = (offlineCollections || []).filter((c) => c.id !== collectionId);
+            const remainingActive = collections.filter((c) => c.id !== collectionId);
+
+            // Update target scope cache if present
+            const targetKey = getScopeKey(targetScope);
+            const updatedScopeCache = { ...(get().scopeCache || {}) };
+            if (updatedScopeCache[targetKey]) {
+              const existingInTarget = updatedScopeCache[targetKey].collections || [];
+              updatedScopeCache[targetKey] = {
+                ...updatedScopeCache[targetKey],
+                collections: [...existingInTarget, { ...col, _origin: 'cloud' }],
+              };
+            }
+
+            set({
+              collections: remainingActive,
+              offlineCollections: remainingOffline,
+              scopeCache: updatedScopeCache,
+              syncStatus: 'idle',
+            });
+
+            return { success: true };
+          } catch (err: any) {
+            set({ syncStatus: 'error', syncError: err.message || 'Failed to move collection' });
+            return { success: false, error: err.message || 'Failed to move collection' };
+          }
+        } else {
+          // Moving from an online scope to another online scope
+          const col = collections.find((c) => c.id === collectionId);
+          if (!col) {
+            return { success: false, error: 'Collection not found' };
+          }
+          if (!cloudConfig.token || !cloudConfig.activeScope) {
+            return { success: false, error: 'Not connected to cloud' };
+          }
+
+          try {
+            set({ syncStatus: 'syncing', syncError: null });
+            await moveScopeCollection(
+              cloudConfig.apiUrl,
+              cloudConfig.token,
+              collectionId,
+              targetScope,
+              cloudConfig.refreshToken
+            );
+
+            // Remove from current scope
+            const remainingCols = collections.filter((c) => c.id !== collectionId);
+            const currentScopeKey = getScopeKey(cloudConfig.activeScope);
+            const targetScopeKey = getScopeKey(targetScope);
+            const updatedScopeCache = { ...(get().scopeCache || {}) };
+
+            if (updatedScopeCache[currentScopeKey]) {
+              updatedScopeCache[currentScopeKey] = {
+                ...updatedScopeCache[currentScopeKey],
+                collections: (updatedScopeCache[currentScopeKey].collections || []).filter((c) => c.id !== collectionId),
+              };
+            }
+
+            if (updatedScopeCache[targetScopeKey]) {
+              updatedScopeCache[targetScopeKey] = {
+                ...updatedScopeCache[targetScopeKey],
+                collections: [...(updatedScopeCache[targetScopeKey].collections || []), col],
+              };
+            }
+
+            set({
+              collections: remainingCols,
+              scopeCache: updatedScopeCache,
+              syncStatus: 'idle',
+            });
+
+            return { success: true };
+          } catch (err: any) {
+            set({ syncStatus: 'error', syncError: err.message || 'Failed to move collection' });
+            return { success: false, error: err.message || 'Failed to move collection' };
+          }
+        }
       },
 
       openRequestInTab: (request) => {
@@ -1519,17 +2050,67 @@ export const useApiStore = create<ApiStoreState>()(
         });
       },
 
-      clearHistory: () => set({ history: [] }),
+      clearHistory: () => {
+        set((s) => {
+          if (s.workspaceMode === 'offline') {
+            return { history: [], offlineHistory: [] };
+          }
+          const activeScope = s.cloudConfig.activeScope;
+          let updatedScopeCache = s.scopeCache;
+          if (activeScope) {
+            const scopeKey = getScopeKey(activeScope);
+            const entry = (s.scopeCache || {})[scopeKey];
+            if (entry) {
+              updatedScopeCache = {
+                ...(s.scopeCache || {}),
+                [scopeKey]: {
+                  ...entry,
+                  history: [],
+                },
+              };
+            }
+          }
+          return {
+            history: [],
+            scopeCache: updatedScopeCache,
+          };
+        });
+      },
 
       deleteHistoryItem: (id) => {
-        set((state) => ({
-          history: state.history.filter((h) => h.id !== id),
-        }));
+        set((state) => {
+          const newHistory = state.history.filter((h) => h.id !== id);
+          if (state.workspaceMode === 'offline') {
+            return {
+              history: newHistory,
+              offlineHistory: newHistory,
+            };
+          }
+          const activeScope = state.cloudConfig.activeScope;
+          let updatedScopeCache = state.scopeCache;
+          if (activeScope) {
+            const scopeKey = getScopeKey(activeScope);
+            const entry = (state.scopeCache || {})[scopeKey];
+            if (entry) {
+              updatedScopeCache = {
+                ...(state.scopeCache || {}),
+                [scopeKey]: {
+                  ...entry,
+                  history: newHistory,
+                },
+              };
+            }
+          }
+          return {
+            history: newHistory,
+            scopeCache: updatedScopeCache,
+          };
+        });
       },
     }),
     {
-      name: 'api-tester-storage-v2',
-      storage: createJSONStorage(() => localStorage),
+      name: 'air-rest-storage',
+      storage: createJSONStorage(() => appStorage),
       partialize: (state) => ({
         tabs: state.tabs,
         activeTabId: state.activeTabId,
@@ -1540,6 +2121,9 @@ export const useApiStore = create<ApiStoreState>()(
         offlineCollections: state.offlineCollections,
         offlineEnvironments: state.offlineEnvironments,
         offlineActiveEnvironmentId: state.offlineActiveEnvironmentId,
+        offlineTabs: state.offlineTabs,
+        offlineActiveTabId: state.offlineActiveTabId,
+        offlineHistory: state.offlineHistory,
         scopeCache: state.scopeCache,
         workspaceMode: isOfflineOnly ? 'offline' : state.workspaceMode,
         hasConfiguredMode: isOfflineOnly ? true : state.hasConfiguredMode,
@@ -1548,14 +2132,25 @@ export const useApiStore = create<ApiStoreState>()(
       onRehydrateStorage: () => (state) => {
         if (!state) return;
         if (state.workspaceMode === 'offline') {
-          if (!state.offlineCollections || state.offlineCollections.length === 0) {
-            state.offlineCollections = state.collections || [];
+          if (!state.offlineCollections) {
+            state.offlineCollections = [];
           }
           if (!state.offlineEnvironments || state.offlineEnvironments.length === 0) {
-            state.offlineEnvironments = state.environments || defaultEnvironments;
+            state.offlineEnvironments = defaultEnvironments;
           }
           if (!state.offlineActiveEnvironmentId) {
-            state.offlineActiveEnvironmentId = state.activeEnvironmentId || defaultEnvironments[0]?.id || null;
+            state.offlineActiveEnvironmentId = defaultEnvironments[0]?.id || null;
+          }
+          if (!state.offlineTabs || state.offlineTabs.length === 0) {
+            state.offlineTabs = [createInitialTab()];
+            state.offlineActiveTabId = state.offlineTabs[0].id;
+          }
+          if (!state.offlineHistory) {
+            state.offlineHistory = state.history || [];
+          }
+        } else {
+          if (!state.offlineHistory) {
+            state.offlineHistory = [];
           }
         }
       },

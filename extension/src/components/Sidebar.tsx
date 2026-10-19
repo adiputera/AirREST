@@ -13,12 +13,14 @@ import {
   Layers,
   ArrowUpRight,
   Download,
+  FolderInput,
 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
 import { CollectionItem, ApiRequest, Collection } from '@/types/api';
 import { MethodBadge } from './MethodBadge';
 import { exportPostmanCollection } from '@/lib/postman';
 import { ConfirmModal } from './ConfirmModal';
+import { MoveCollectionModal } from './MoveCollectionModal';
 
 function filterCollectionItems(items: CollectionItem[], query: string): CollectionItem[] {
   return items
@@ -127,7 +129,16 @@ export const Sidebar: React.FC = () => {
   const [isCreatingCol, setIsCreatingCol] = useState(false);
   const [newColTitle, setNewColTitle] = useState('');
   const [collectionToDelete, setCollectionToDelete] = useState<Collection | null>(null);
+  const [collectionToMove, setCollectionToMove] = useState<Collection | null>(null);
   const [showClearHistoryConfirm, setShowClearHistoryConfirm] = useState(false);
+  const [collapsedCollections, setCollapsedCollections] = useState<Record<string, boolean>>({});
+
+  const toggleCollectionCollapse = (colId: string) => {
+    setCollapsedCollections((prev) => ({
+      ...prev,
+      [colId]: !prev[colId],
+    }));
+  };
 
   const trimmedQuery = searchQuery.trim().toLowerCase();
 
@@ -299,45 +310,85 @@ export const Sidebar: React.FC = () => {
                 </p>
               </div>
             ) : (
-              <div className="space-y-3">
-                {filteredCollections.map((col) => (
-                  <div key={col.id} className="rounded-lg border border-zinc-850 bg-zinc-900/40 p-1.5">
-                    <div className="flex items-center justify-between px-2 py-1">
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <Folder className="h-4 w-4 text-amber-400 shrink-0" />
-                        <span className="text-xs font-bold text-zinc-200 truncate" title={col.name}>
-                          {col.name}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-0.5 shrink-0 ml-1">
-                        <button
-                          onClick={(e) => handleExportCollection(e, col)}
-                          className="rounded p-1 text-zinc-500 hover:text-sky-400 hover:bg-zinc-800 transition"
-                          title="Export collection as Postman v2.1 JSON"
-                        >
-                          <Download className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          onClick={() => setCollectionToDelete(col)}
-                          className="rounded p-1 text-zinc-500 hover:text-rose-400 hover:bg-zinc-800 transition"
-                          title="Delete collection"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    </div>
+              <div className="space-y-2">
+                {filteredCollections.map((col) => {
+                  const isCollapsed = !trimmedQuery && !!collapsedCollections[col.id];
 
-                    <div className="mt-1 space-y-0.5">
-                      {col.items.map((item) => (
-                        <FolderItem
-                          key={item.id}
-                          item={item}
-                          onSelectRequest={openRequestInTab}
-                        />
-                      ))}
+                  return (
+                    <div key={col.id} className="rounded-lg border border-zinc-850 bg-zinc-900/40 p-1.5 transition">
+                      <div
+                        onClick={() => toggleCollectionCollapse(col.id)}
+                        className="flex items-center justify-between px-2 py-1 rounded-md hover:bg-zinc-850/60 cursor-pointer transition select-none group"
+                      >
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <div className="text-zinc-500 group-hover:text-zinc-300 transition shrink-0">
+                            {isCollapsed ? (
+                              <ChevronRight className="h-3.5 w-3.5" />
+                            ) : (
+                              <ChevronDown className="h-3.5 w-3.5" />
+                            )}
+                          </div>
+                          {isCollapsed ? (
+                            <Folder className="h-4 w-4 text-amber-400 shrink-0" />
+                          ) : (
+                            <FolderOpen className="h-4 w-4 text-amber-400 shrink-0" />
+                          )}
+                          <span className="text-xs font-bold text-zinc-200 group-hover:text-white truncate" title={col.name}>
+                            {col.name}
+                          </span>
+                          <span className="text-[10px] text-zinc-500 shrink-0 font-mono">
+                            {col.items.length}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-0.5 shrink-0 ml-1">
+                          <button
+                            onClick={(e) => handleExportCollection(e, col)}
+                            className="rounded p-1 text-zinc-500 hover:text-sky-400 hover:bg-zinc-800 transition"
+                            title="Export collection as Postman v2.1 JSON"
+                          >
+                            <Download className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setCollectionToMove(col);
+                            }}
+                            className="rounded p-1 text-zinc-500 hover:text-amber-400 hover:bg-zinc-800 transition"
+                            title="Move collection to another workspace or project"
+                          >
+                            <FolderInput className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setCollectionToDelete(col);
+                            }}
+                            className="rounded p-1 text-zinc-500 hover:text-rose-400 hover:bg-zinc-800 transition"
+                            title="Delete collection"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {!isCollapsed && (
+                        <div className="mt-1 space-y-0.5 border-t border-zinc-850/50 pt-1">
+                          {col.items.length === 0 ? (
+                            <div className="px-2 py-1 text-[11px] text-zinc-500 italic">Empty collection</div>
+                          ) : (
+                            col.items.map((item) => (
+                              <FolderItem
+                                key={item.id}
+                                item={item}
+                                onSelectRequest={openRequestInTab}
+                              />
+                            ))
+                          )}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -437,6 +488,12 @@ export const Sidebar: React.FC = () => {
         message="Are you sure you want to clear your entire request history? This action cannot be undone."
         confirmText="Clear All History"
         variant="danger"
+      />
+
+      <MoveCollectionModal
+        isOpen={!!collectionToMove}
+        onClose={() => setCollectionToMove(null)}
+        collection={collectionToMove}
       />
     </aside>
   );

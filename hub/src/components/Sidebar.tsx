@@ -1,5 +1,5 @@
 import React from 'react';
-import { Users, FolderGit2, ShieldAlert, Laptop, ChevronRight } from 'lucide-react';
+import { Users, FolderGit2, ShieldAlert, ChevronRight } from 'lucide-react';
 import { useHubStore, HubTab } from '../store/useHubStore';
 
 export const Sidebar: React.FC = () => {
@@ -13,7 +13,6 @@ export const Sidebar: React.FC = () => {
     ...(user?.role === 'superadmin'
       ? [{ id: 'superadmin' as HubTab, label: 'Superadmin Console', icon: ShieldAlert, badge: 'System' }]
       : []),
-    { id: 'connect', label: 'Extension Connect', icon: Laptop },
   ];
 
   return (

@@ -17,9 +17,17 @@ import {
   Lock,
 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
-import { exportPostmanEnvironment } from '@/lib/postman';
+import { exportPostmanEnvironment, importPostmanEnvironment } from '@/lib/postman';
+import {
+  compareEnvironments,
+  generateCopyEnvironmentName,
+  cloneEnvironmentWithNewIds,
+  EnvironmentDiffSummary,
+} from '@/lib/requestDiff';
+import { Environment } from '@/types/api';
 import { getRoleFromJwt } from '@/lib/jwt';
 import { ConfirmModal } from './ConfirmModal';
+import { EnvironmentConflictModal } from './EnvironmentConflictModal';
 
 interface EnvironmentModalProps {
   isOpen: boolean;
@@ -36,6 +44,8 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
   const addEnvironmentVariable = useApiStore((state) => state.addEnvironmentVariable);
   const updateEnvironmentVariable = useApiStore((state) => state.updateEnvironmentVariable);
   const removeEnvironmentVariable = useApiStore((state) => state.removeEnvironmentVariable);
+  const addEnvironment = useApiStore((state) => state.addEnvironment);
+  const replaceEnvironment = useApiStore((state) => state.replaceEnvironment);
   const importEnvironmentFromJson = useApiStore((state) => state.importEnvironmentFromJson);
   const cloudConfig = useApiStore((state) => state.cloudConfig);
 
@@ -77,6 +87,12 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [conflict, setConflict] = useState<{
+    existingEnv: Environment;
+    incomingEnv: Environment;
+    diff: EnvironmentDiffSummary;
+  } | null>(null);
+  const [isResolvingConflict, setIsResolvingConflict] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -122,24 +138,39 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       const content = event.target?.result as string;
-      const res = importEnvironmentFromJson(content);
-      if (res.success && res.environment) {
-        setSelectedEnvId(res.environment.id);
+      try {
+        const incoming = importPostmanEnvironment(content);
+        const existing = environments.find(
+          (env) => env.name.trim().toLowerCase() === incoming.name.trim().toLowerCase()
+        );
+
+        if (existing) {
+          const diff = compareEnvironments(existing, incoming);
+          setConflict({
+            existingEnv: existing,
+            incomingEnv: incoming,
+            diff,
+          });
+          return;
+        }
+
+        const newId = await addEnvironment(incoming);
+        setSelectedEnvId(newId);
         setSuccessMsg(
-          `Environment "${res.environment.name}" imported with ${res.environment.variables.length} variables!`
+          `Environment "${incoming.name}" imported with ${incoming.variables.length} variables!`
         );
         setTimeout(() => setSuccessMsg(null), 3000);
-      } else {
-        setErrorMsg(res.error || 'Failed to import environment file.');
+      } catch (err: unknown) {
+        setErrorMsg(err instanceof Error ? err.message : 'Failed to import environment file.');
       }
     };
     reader.readAsText(file);
     e.target.value = '';
   };
 
-  const handlePasteImport = () => {
+  const handlePasteImport = async () => {
     setErrorMsg(null);
     setSuccessMsg(null);
 
@@ -148,17 +179,72 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
       return;
     }
 
-    const res = importEnvironmentFromJson(pastedJson);
-    if (res.success && res.environment) {
-      setSelectedEnvId(res.environment.id);
+    try {
+      const incoming = importPostmanEnvironment(pastedJson);
+      const existing = environments.find(
+        (env) => env.name.trim().toLowerCase() === incoming.name.trim().toLowerCase()
+      );
+
+      if (existing) {
+        const diff = compareEnvironments(existing, incoming);
+        setIsPasteModalOpen(false);
+        setPastedJson('');
+        setConflict({
+          existingEnv: existing,
+          incomingEnv: incoming,
+          diff,
+        });
+        return;
+      }
+
+      const newId = await addEnvironment(incoming);
+      setSelectedEnvId(newId);
       setIsPasteModalOpen(false);
       setPastedJson('');
       setSuccessMsg(
-        `Environment "${res.environment.name}" imported with ${res.environment.variables.length} variables!`
+        `Environment "${incoming.name}" imported with ${incoming.variables.length} variables!`
       );
       setTimeout(() => setSuccessMsg(null), 3000);
-    } else {
-      setErrorMsg(res.error || 'Invalid Postman environment format.');
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : 'Invalid Postman environment format.');
+    }
+  };
+
+  const handleConflictAsCopy = async () => {
+    if (!conflict) return;
+    setIsResolvingConflict(true);
+    setErrorMsg(null);
+    try {
+      const existingNames = environments.map((e) => e.name);
+      const copyName = generateCopyEnvironmentName(conflict.incomingEnv.name, existingNames);
+      const copyEnv = cloneEnvironmentWithNewIds(conflict.incomingEnv, copyName);
+
+      const newId = await addEnvironment(copyEnv);
+      setSelectedEnvId(newId);
+      setSuccessMsg(`Environment "${copyName}" imported as copy!`);
+      setTimeout(() => setSuccessMsg(null), 3000);
+      setConflict(null);
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to import environment as copy.');
+    } finally {
+      setIsResolvingConflict(false);
+    }
+  };
+
+  const handleConflictReplace = async () => {
+    if (!conflict) return;
+    setIsResolvingConflict(true);
+    setErrorMsg(null);
+    try {
+      await replaceEnvironment(conflict.existingEnv.id, conflict.incomingEnv);
+      setSelectedEnvId(conflict.existingEnv.id);
+      setSuccessMsg(`Environment "${conflict.existingEnv.name}" replaced successfully!`);
+      setTimeout(() => setSuccessMsg(null), 3000);
+      setConflict(null);
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to replace environment.');
+    } finally {
+      setIsResolvingConflict(false);
     }
   };
 
@@ -609,6 +695,19 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
         confirmText="Delete Environment"
         variant="danger"
       />
+
+      {conflict && (
+        <EnvironmentConflictModal
+          isOpen={Boolean(conflict)}
+          onClose={() => setConflict(null)}
+          existingEnv={conflict.existingEnv}
+          incomingEnv={conflict.incomingEnv}
+          diff={conflict.diff}
+          onImportAsCopy={handleConflictAsCopy}
+          onReplace={handleConflictReplace}
+          isResolving={isResolvingConflict}
+        />
+      )}
     </div>
   );
 };

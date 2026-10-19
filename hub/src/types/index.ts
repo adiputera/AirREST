@@ -34,6 +34,8 @@ export interface TeamMember {
   };
 }
 
+export type ProjectRole = 'admin' | 'maintainer' | 'contributor' | 'reader';
+
 export interface Project {
   id: string;
   team_id: string;
@@ -42,7 +44,7 @@ export interface Project {
   created_by?: string;
   created_at?: string;
   updated_at?: string;
-  user_role?: 'admin' | 'maintainer' | 'contributor' | 'reader';
+  user_role?: ProjectRole;
 }
 
 export interface ProjectMember {
@@ -50,7 +52,7 @@ export interface ProjectMember {
   user_id: string;
   email?: string;
   name?: string;
-  role: 'admin' | 'maintainer' | 'contributor' | 'reader';
+  role: ProjectRole;
   assigned_at?: string;
   user?: {
     id: string;
@@ -68,3 +70,54 @@ export interface Workspace {
   created_at?: string;
   updated_at?: string;
 }
+
+export interface CollectionItem {
+  id: string;
+  collection_id: string;
+  parent_id?: string | null;
+  type: 'folder' | 'request';
+  name: string;
+  sort_order: number;
+  method?: string | null;
+  url?: string | null;
+  version?: number;
+  created_at?: string;
+  updated_at?: string;
+  items?: CollectionItem[];
+}
+
+export interface Collection {
+  id: string;
+  workspace_id?: string | null;
+  project_id?: string | null;
+  name: string;
+  description?: string | null;
+  min_role?: ProjectRole;
+  version: number;
+  created_by?: string;
+  last_modified_by?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  items?: CollectionItem[];
+}
+
+export interface EnvironmentVariable {
+  id?: string;
+  key: string;
+  value: string;
+  enabled: boolean;
+}
+
+export interface Environment {
+  id: string;
+  workspace_id?: string | null;
+  project_id?: string | null;
+  name: string;
+  variables: EnvironmentVariable[];
+  min_role?: ProjectRole;
+  version: number;
+  last_modified_by?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+

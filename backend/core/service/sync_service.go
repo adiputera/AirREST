@@ -61,14 +61,14 @@ func (s *SyncService) PullDelta(
 	var colParam uuid.UUID
 	if workspaceID != nil {
 		colQuery = `
-			SELECT id, workspace_id, project_id, name, description, version, created_by, last_modified_by, created_at, updated_at, deleted_at
+			SELECT id, workspace_id, project_id, name, description, min_role, version, created_by, last_modified_by, created_at, updated_at, deleted_at
 			FROM collections
 			WHERE workspace_id = $1 AND updated_at > $2
 		`
 		colParam = *workspaceID
 	} else if projectID != nil {
 		colQuery = `
-			SELECT id, workspace_id, project_id, name, description, version, created_by, last_modified_by, created_at, updated_at, deleted_at
+			SELECT id, workspace_id, project_id, name, description, min_role, version, created_by, last_modified_by, created_at, updated_at, deleted_at
 			FROM collections
 			WHERE project_id = $1 AND updated_at > $2
 		`
@@ -83,14 +83,26 @@ func (s *SyncService) PullDelta(
 	}
 	defer colRows.Close()
 
+	var userRole domain.ProjectRole
+	if projectID != nil && !user.IsSuperadmin() {
+		userRole, _ = s.collectionService.projectService.GetEffectiveRole(ctx, user, *projectID)
+	}
+
 	for colRows.Next() {
 		var c domain.Collection
 		if err := colRows.Scan(
-			&c.ID, &c.WorkspaceID, &c.ProjectID, &c.Name, &c.Description,
+			&c.ID, &c.WorkspaceID, &c.ProjectID, &c.Name, &c.Description, &c.MinRole,
 			&c.Version, &c.CreatedBy, &c.LastModifiedBy, &c.CreatedAt, &c.UpdatedAt, &c.DeletedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan collection delta: %w", err)
 		}
+
+		if projectID != nil && !user.IsSuperadmin() {
+			if !CanAccessCollection(userRole, c.MinRole) {
+				continue // Do NOT send protected collection to unauthorized user
+			}
+		}
+
 		result.Collections = append(result.Collections, &c)
 	}
 
@@ -102,7 +114,7 @@ func (s *SyncService) PullDelta(
 			       ci.method, ci.url, ci.params, ci.headers, ci.auth, ci.body_type, ci.raw_type,
 			       ci.body_content, ci.graphql_query, ci.graphql_variables, ci.body_form_data,
 			       ci.pre_request_script, ci.post_response_script, ci.version, ci.last_modified_by,
-			       ci.created_at, ci.updated_at, ci.deleted_at
+			       ci.created_at, ci.updated_at, ci.deleted_at, c.min_role
 			FROM collection_items ci
 			JOIN collections c ON ci.collection_id = c.id
 			WHERE c.workspace_id = $1 AND ci.updated_at > $2
@@ -113,7 +125,7 @@ func (s *SyncService) PullDelta(
 			       ci.method, ci.url, ci.params, ci.headers, ci.auth, ci.body_type, ci.raw_type,
 			       ci.body_content, ci.graphql_query, ci.graphql_variables, ci.body_form_data,
 			       ci.pre_request_script, ci.post_response_script, ci.version, ci.last_modified_by,
-			       ci.created_at, ci.updated_at, ci.deleted_at
+			       ci.created_at, ci.updated_at, ci.deleted_at, c.min_role
 			FROM collection_items ci
 			JOIN collections c ON ci.collection_id = c.id
 			WHERE c.project_id = $1 AND ci.updated_at > $2
@@ -129,15 +141,23 @@ func (s *SyncService) PullDelta(
 	for itemRows.Next() {
 		var item domain.CollectionItem
 		var typeStr string
+		var colMinRole domain.ProjectRole
 		if err := itemRows.Scan(
 			&item.ID, &item.CollectionID, &item.ParentID, &typeStr, &item.Name, &item.SortOrder,
 			&item.Method, &item.URL, &item.Params, &item.Headers, &item.Auth, &item.BodyType, &item.RawType,
 			&item.BodyContent, &item.GraphQLQuery, &item.GraphQLVariables, &item.BodyFormData,
 			&item.PreRequestScript, &item.PostResponseScript, &item.Version, &item.LastModifiedBy,
-			&item.CreatedAt, &item.UpdatedAt, &item.DeletedAt,
+			&item.CreatedAt, &item.UpdatedAt, &item.DeletedAt, &colMinRole,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan item delta: %w", err)
 		}
+
+		if projectID != nil && !user.IsSuperadmin() {
+			if !CanAccessCollection(userRole, colMinRole) {
+				continue // Do NOT send item if collection is protected
+			}
+		}
+
 		item.Type = domain.ItemType(typeStr)
 		result.Items = append(result.Items, &item)
 	}
@@ -163,11 +183,7 @@ func (s *SyncService) PullDelta(
 		return nil, fmt.Errorf("failed to query environments delta: %w", err)
 	}
 	defer envRows.Close()
-
-	var userRole domain.ProjectRole
-	if projectID != nil && !user.IsSuperadmin() {
-		userRole, _ = s.collectionService.projectService.GetEffectiveRole(ctx, user, *projectID)
-	}
+	// userRole was already computed above for projectRBAC if projectID != nil
 
 	for envRows.Next() {
 		var env domain.Environment
@@ -394,7 +410,12 @@ func (s *SyncService) ImportBatch(ctx context.Context, user *domain.User, worksp
 		insertColQuery := `
 			INSERT INTO collections (id, workspace_id, project_id, name, description, version, created_by, last_modified_by, created_at, updated_at)
 			VALUES ($1, $2, $3, $4, $5, 1, $6, $6, $7, $7)
-			ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, updated_at = EXCLUDED.updated_at
+			ON CONFLICT (id) DO UPDATE SET
+				name = EXCLUDED.name,
+				description = EXCLUDED.description,
+				version = collections.version + 1,
+				last_modified_by = EXCLUDED.last_modified_by,
+				updated_at = EXCLUDED.updated_at
 		`
 		if _, err := tx.Exec(ctx, insertColQuery, colID, workspaceID, projectID, colReq.Name, colReq.Description, user.ID, now); err != nil {
 			return fmt.Errorf("failed to insert imported collection: %w", err)
@@ -448,7 +469,17 @@ func (s *SyncService) insertImportItems(
 				url = EXCLUDED.url,
 				params = EXCLUDED.params,
 				headers = EXCLUDED.headers,
+				auth = EXCLUDED.auth,
+				body_type = EXCLUDED.body_type,
+				raw_type = EXCLUDED.raw_type,
 				body_content = EXCLUDED.body_content,
+				graphql_query = EXCLUDED.graphql_query,
+				graphql_variables = EXCLUDED.graphql_variables,
+				body_form_data = EXCLUDED.body_form_data,
+				pre_request_script = EXCLUDED.pre_request_script,
+				post_response_script = EXCLUDED.post_response_script,
+				version = collection_items.version + 1,
+				last_modified_by = EXCLUDED.last_modified_by,
 				updated_at = EXCLUDED.updated_at
 		`
 

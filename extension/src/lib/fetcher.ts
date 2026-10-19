@@ -153,13 +153,13 @@ export function prepareRequest(
         headers['Content-Type'] = 'application/x-www-form-urlencoded';
       }
       const activeItems = (request.bodyUrlEncoded || []).filter(
-        (item) => item.enabled && item.key.trim() !== ''
+        (item) => item.enabled && String(item?.key ?? '').trim() !== ''
       );
       if (activeItems.length > 0) {
         const formParams = new URLSearchParams();
         for (const item of activeItems) {
-          const k = interpolateVariables(item.key.trim(), variables);
-          const v = interpolateVariables(item.value || '', variables);
+          const k = interpolateVariables(String(item.key).trim(), variables);
+          const v = interpolateVariables(String(item.value ?? ''), variables);
           formParams.append(k, v);
         }
         bodyPayload = formParams.toString();
@@ -169,14 +169,16 @@ export function prepareRequest(
     } else if (request.bodyType === 'form-data') {
       // Multipart Form Data with File support
       const formData = new FormData();
-      const activeFormItems = (request.bodyFormData || []).filter((item) => item.enabled && item.key.trim() !== '');
+      const activeFormItems = (request.bodyFormData || []).filter(
+        (item) => item.enabled && String(item?.key ?? '').trim() !== ''
+      );
 
       for (const item of activeFormItems) {
-        const itemKey = interpolateVariables(item.key.trim(), variables);
+        const itemKey = interpolateVariables(String(item.key).trim(), variables);
         if (item.type === 'file' && item.file) {
           formData.append(itemKey, item.file, item.file.name);
         } else {
-          formData.append(itemKey, interpolateVariables(item.value || '', variables));
+          formData.append(itemKey, interpolateVariables(String(item.value ?? ''), variables));
         }
       }
 

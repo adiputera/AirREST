@@ -5,6 +5,8 @@ import {
   KeyValuePair,
   FormDataItem,
   AuthConfig,
+  Environment,
+  EnvironmentVariable,
 } from '@/types/api';
 
 /**
@@ -13,11 +15,16 @@ import {
 function normalizeKeyValue(list?: KeyValuePair[]): Array<{ key: string; value: string; enabled: boolean }> {
   if (!list || !Array.isArray(list)) return [];
   return list
-    .filter((item) => (item.key && item.key.trim() !== '') || (item.value && item.value.trim() !== ''))
+    .filter((item) => {
+      if (!item) return false;
+      const k = String(item.key ?? '').trim();
+      const v = String(item.value ?? '').trim();
+      return k !== '' || v !== '';
+    })
     .map((item) => ({
-      key: (item.key || '').trim(),
-      value: (item.value || '').trim(),
-      enabled: Boolean(item.enabled),
+      key: String(item?.key ?? '').trim(),
+      value: String(item?.value ?? '').trim(),
+      enabled: Boolean(item?.enabled),
     }));
 }
 
@@ -27,12 +34,17 @@ function normalizeKeyValue(list?: KeyValuePair[]): Array<{ key: string; value: s
 function normalizeFormData(list?: FormDataItem[]): Array<{ key: string; value: string; type: string; enabled: boolean }> {
   if (!list || !Array.isArray(list)) return [];
   return list
-    .filter((item) => (item.key && item.key.trim() !== '') || (item.value && item.value.trim() !== ''))
+    .filter((item) => {
+      if (!item) return false;
+      const k = String(item.key ?? '').trim();
+      const v = String(item.value ?? '').trim();
+      return k !== '' || v !== '';
+    })
     .map((item) => ({
-      key: (item.key || '').trim(),
-      value: (item.value || '').trim(),
-      type: item.type || 'text',
-      enabled: Boolean(item.enabled),
+      key: String(item?.key ?? '').trim(),
+      value: String(item?.value ?? '').trim(),
+      type: item?.type || 'text',
+      enabled: Boolean(item?.enabled),
     }));
 }
 
@@ -44,20 +56,20 @@ function normalizeAuth(auth?: AuthConfig) {
     return { type: 'none' };
   }
   if (auth.type === 'bearer') {
-    return { type: 'bearer', bearerToken: (auth.bearerToken || '').trim() };
+    return { type: 'bearer', bearerToken: String(auth.bearerToken ?? '').trim() };
   }
   if (auth.type === 'basic') {
     return {
       type: 'basic',
-      basicUsername: (auth.basicUsername || '').trim(),
-      basicPassword: (auth.basicPassword || '').trim(),
+      basicUsername: String(auth.basicUsername ?? '').trim(),
+      basicPassword: String(auth.basicPassword ?? '').trim(),
     };
   }
   if (auth.type === 'apikey') {
     return {
       type: 'apikey',
-      key: (auth.apiKeyKey || '').trim(),
-      value: (auth.apiKeyValue || '').trim(),
+      key: String(auth.apiKeyKey ?? '').trim(),
+      value: String(auth.apiKeyValue ?? '').trim(),
       in: auth.apiKeyIn || 'header',
     };
   }
@@ -69,24 +81,24 @@ function normalizeAuth(auth?: AuthConfig) {
  */
 export function normalizeRequestForDiff(req: ApiRequest) {
   return {
-    name: (req.name || '').trim(),
-    method: req.method || 'GET',
-    url: (req.url || '').trim(),
-    params: normalizeKeyValue(req.params),
-    headers: normalizeKeyValue(req.headers),
-    auth: normalizeAuth(req.auth),
-    bodyType: req.bodyType || 'none',
-    rawType: req.rawType || 'text',
-    bodyContent: (req.bodyContent || '').trim(),
-    graphqlQuery: (req.graphqlQuery || '').trim(),
-    graphqlVariables: (req.graphqlVariables || '').trim(),
-    bodyFormData: normalizeFormData(req.bodyFormData),
-    bodyUrlEncoded: normalizeKeyValue(req.bodyUrlEncoded),
-    binaryFile: req.bodyBinaryFile
+    name: String(req?.name ?? '').trim(),
+    method: req?.method || 'GET',
+    url: String(req?.url ?? '').trim(),
+    params: normalizeKeyValue(req?.params),
+    headers: normalizeKeyValue(req?.headers),
+    auth: normalizeAuth(req?.auth),
+    bodyType: req?.bodyType || 'none',
+    rawType: req?.rawType || 'text',
+    bodyContent: String(req?.bodyContent ?? '').trim(),
+    graphqlQuery: String(req?.graphqlQuery ?? '').trim(),
+    graphqlVariables: String(req?.graphqlVariables ?? '').trim(),
+    bodyFormData: normalizeFormData(req?.bodyFormData),
+    bodyUrlEncoded: normalizeKeyValue(req?.bodyUrlEncoded),
+    binaryFile: req?.bodyBinaryFile
       ? { name: req.bodyBinaryFile.name, size: req.bodyBinaryFile.size }
       : null,
-    preRequestScript: (req.preRequestScript || '').trim(),
-    postResponseScript: (req.postResponseScript || '').trim(),
+    preRequestScript: String(req?.preRequestScript ?? '').trim(),
+    postResponseScript: String(req?.postResponseScript ?? '').trim(),
   };
 }
 
@@ -170,4 +182,432 @@ export function isRequestModified(tab: ApiRequest, collections: Collection[]): b
 
   // Not in any collection: dirty if user has entered any data
   return !isBlankRequest(tab);
+}
+
+function makeUUID(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+export interface FlattenedCollectionRequest {
+  id: string;
+  name: string;
+  path: string;
+  method: string;
+  url: string;
+  request: ApiRequest;
+}
+
+export function flattenCollectionRequests(
+  items: CollectionItem[],
+  prefix = ''
+): FlattenedCollectionRequest[] {
+  const list: FlattenedCollectionRequest[] = [];
+  if (!Array.isArray(items)) return list;
+
+  for (const item of items) {
+    const currentPath = prefix ? `${prefix} / ${item.name}` : item.name;
+    if (item.type === 'folder' && item.items) {
+      list.push(...flattenCollectionRequests(item.items, currentPath));
+    } else if (item.type === 'request' && item.request) {
+      list.push({
+        id: item.id || item.request.id,
+        name: item.name || item.request.name || 'Untitled Request',
+        path: currentPath,
+        method: (item.request.method || 'GET').toUpperCase(),
+        url: item.request.url || '',
+        request: item.request,
+      });
+    }
+  }
+
+  return list;
+}
+
+export interface CollectionRequestDiff {
+  name: string;
+  method: string;
+  url: string;
+  path: string;
+  status: 'added' | 'removed' | 'modified';
+}
+
+export interface CollectionDiffSummary {
+  existingName: string;
+  incomingName: string;
+  hasDifferences: boolean;
+  totalExisting: number;
+  totalIncoming: number;
+  added: CollectionRequestDiff[];
+  modified: CollectionRequestDiff[];
+  removed: CollectionRequestDiff[];
+  unchangedCount: number;
+}
+
+export function compareCollections(
+  existingCol: Collection,
+  incomingCol: Collection
+): CollectionDiffSummary {
+  const existingReqs = flattenCollectionRequests(existingCol.items || []);
+  const incomingReqs = flattenCollectionRequests(incomingCol.items || []);
+
+  const added: CollectionRequestDiff[] = [];
+  const modified: CollectionRequestDiff[] = [];
+  const removed: CollectionRequestDiff[] = [];
+  let unchangedCount = 0;
+
+  const matchedIncomingIndices = new Set<number>();
+
+  for (const ex of existingReqs) {
+    let matchIdx = incomingReqs.findIndex(
+      (inc, idx) => !matchedIncomingIndices.has(idx) && inc.id && ex.id && inc.id === ex.id
+    );
+
+    if (matchIdx === -1) {
+      matchIdx = incomingReqs.findIndex(
+        (inc, idx) => !matchedIncomingIndices.has(idx) && inc.path.toLowerCase() === ex.path.toLowerCase()
+      );
+    }
+
+    if (matchIdx === -1) {
+      matchIdx = incomingReqs.findIndex(
+        (inc, idx) =>
+          !matchedIncomingIndices.has(idx) &&
+          inc.method.toLowerCase() === ex.method.toLowerCase() &&
+          inc.name.toLowerCase() === ex.name.toLowerCase()
+      );
+    }
+
+    if (matchIdx >= 0) {
+      matchedIncomingIndices.add(matchIdx);
+      const inc = incomingReqs[matchIdx];
+
+      const normEx = JSON.stringify(normalizeRequestForDiff(ex.request));
+      const normInc = JSON.stringify(normalizeRequestForDiff(inc.request));
+
+      if (normEx !== normInc) {
+        modified.push({
+          name: inc.name,
+          method: inc.method,
+          url: inc.url,
+          path: inc.path,
+          status: 'modified',
+        });
+      } else {
+        unchangedCount++;
+      }
+    } else {
+      removed.push({
+        name: ex.name,
+        method: ex.method,
+        url: ex.url,
+        path: ex.path,
+        status: 'removed',
+      });
+    }
+  }
+
+  for (let i = 0; i < incomingReqs.length; i++) {
+    if (!matchedIncomingIndices.has(i)) {
+      const inc = incomingReqs[i];
+      added.push({
+        name: inc.name,
+        method: inc.method,
+        url: inc.url,
+        path: inc.path,
+        status: 'added',
+      });
+    }
+  }
+
+  const hasDifferences = added.length > 0 || modified.length > 0 || removed.length > 0;
+
+  return {
+    existingName: existingCol.name,
+    incomingName: incomingCol.name,
+    hasDifferences,
+    totalExisting: existingReqs.length,
+    totalIncoming: incomingReqs.length,
+    added,
+    modified,
+    removed,
+    unchangedCount,
+  };
+}
+
+export function generateCopyCollectionName(baseName: string, existingNames: string[]): string {
+  const lowerNames = existingNames.map((n) => n.toLowerCase().trim());
+  let candidate = `${baseName} (Copy)`;
+  let counter = 2;
+
+  while (lowerNames.includes(candidate.toLowerCase().trim())) {
+    candidate = `${baseName} (Copy ${counter})`;
+    counter++;
+  }
+
+  return candidate;
+}
+
+export function cloneCollectionWithNewIds(col: Collection, newName: string): Collection {
+  const cloneItems = (items: CollectionItem[]): CollectionItem[] => {
+    return items.map((item) => {
+      const newItemId = makeUUID();
+
+      if (item.type === 'folder') {
+        return {
+          ...item,
+          id: newItemId,
+          items: cloneItems(item.items || []),
+        };
+      }
+
+      const reqClone: ApiRequest | undefined = item.request
+        ? {
+            ...JSON.parse(JSON.stringify(item.request)),
+            id: newItemId,
+          }
+        : undefined;
+
+      return {
+        ...item,
+        id: newItemId,
+        request: reqClone,
+      };
+    });
+  };
+
+  const newColId = makeUUID();
+
+  return {
+    ...JSON.parse(JSON.stringify(col)),
+    id: newColId,
+    name: newName,
+    items: cloneItems(col.items || []),
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+}
+
+export function alignCollectionItemIds(
+  existingItems: CollectionItem[],
+  incomingItems: CollectionItem[]
+): CollectionItem[] {
+  const existingFlat = flattenCollectionRequests(existingItems);
+
+  const alignList = (items: CollectionItem[], prefix = ''): CollectionItem[] => {
+    return items.map((item) => {
+      const currentPath = prefix ? `${prefix} / ${item.name}` : item.name;
+      if (item.type === 'folder') {
+        return {
+          ...item,
+          id: item.id || makeUUID(),
+          items: alignList(item.items || [], currentPath),
+        };
+      }
+
+      const match = existingFlat.find(
+        (ex) => (ex.id && item.id && ex.id === item.id) || ex.path.toLowerCase() === currentPath.toLowerCase()
+      );
+
+      const isValidUUID = item.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.id);
+      const resolvedId = match ? match.id : (isValidUUID ? item.id : makeUUID());
+
+      const updatedReq = item.request
+        ? { ...item.request, id: resolvedId }
+        : undefined;
+
+      return {
+        ...item,
+        id: resolvedId,
+        request: updatedReq,
+      };
+    });
+  };
+
+  return alignList(incomingItems);
+}
+
+export interface EnvironmentVariableDiff {
+  key: string;
+  oldValue?: string;
+  newValue?: string;
+  oldEnabled?: boolean;
+  newEnabled?: boolean;
+  status: 'added' | 'removed' | 'modified';
+}
+
+export interface EnvironmentDiffSummary {
+  existingName: string;
+  incomingName: string;
+  hasDifferences: boolean;
+  totalExisting: number;
+  totalIncoming: number;
+  added: EnvironmentVariableDiff[];
+  modified: EnvironmentVariableDiff[];
+  removed: EnvironmentVariableDiff[];
+  unchangedCount: number;
+}
+
+/**
+ * Compares two environments variable-by-variable and produces a summary of additions, modifications, and removals.
+ */
+export function compareEnvironments(
+  existingEnv: Environment,
+  incomingEnv: Environment
+): EnvironmentDiffSummary {
+  const existingVars = (existingEnv.variables || [])
+    .filter((v) => v && String(v.key ?? '').trim() !== '')
+    .map((v) => ({
+      id: v.id,
+      key: String(v.key ?? '').trim(),
+      value: String(v.value ?? ''),
+      enabled: v.enabled !== false,
+    }));
+
+  const incomingVars = (incomingEnv.variables || [])
+    .filter((v) => v && String(v.key ?? '').trim() !== '')
+    .map((v) => ({
+      id: v.id,
+      key: String(v.key ?? '').trim(),
+      value: String(v.value ?? ''),
+      enabled: v.enabled !== false,
+    }));
+
+  const added: EnvironmentVariableDiff[] = [];
+  const modified: EnvironmentVariableDiff[] = [];
+  const removed: EnvironmentVariableDiff[] = [];
+  let unchangedCount = 0;
+
+  const matchedIncomingIndices = new Set<number>();
+
+  for (const ex of existingVars) {
+    let matchIdx = incomingVars.findIndex(
+      (inc, idx) => !matchedIncomingIndices.has(idx) && inc.key === ex.key
+    );
+
+    if (matchIdx === -1) {
+      matchIdx = incomingVars.findIndex(
+        (inc, idx) =>
+          !matchedIncomingIndices.has(idx) &&
+          inc.key.toLowerCase() === ex.key.toLowerCase()
+      );
+    }
+
+    if (matchIdx >= 0) {
+      matchedIncomingIndices.add(matchIdx);
+      const inc = incomingVars[matchIdx];
+
+      if (inc.value !== ex.value || inc.enabled !== ex.enabled) {
+        modified.push({
+          key: inc.key,
+          oldValue: ex.value,
+          newValue: inc.value,
+          oldEnabled: ex.enabled,
+          newEnabled: inc.enabled,
+          status: 'modified',
+        });
+      } else {
+        unchangedCount++;
+      }
+    } else {
+      removed.push({
+        key: ex.key,
+        oldValue: ex.value,
+        oldEnabled: ex.enabled,
+        status: 'removed',
+      });
+    }
+  }
+
+  for (let i = 0; i < incomingVars.length; i++) {
+    if (!matchedIncomingIndices.has(i)) {
+      const inc = incomingVars[i];
+      added.push({
+        key: inc.key,
+        newValue: inc.value,
+        newEnabled: inc.enabled,
+        status: 'added',
+      });
+    }
+  }
+
+  const hasDifferences = added.length > 0 || modified.length > 0 || removed.length > 0;
+
+  return {
+    existingName: existingEnv.name,
+    incomingName: incomingEnv.name,
+    hasDifferences,
+    totalExisting: existingVars.length,
+    totalIncoming: incomingVars.length,
+    added,
+    modified,
+    removed,
+    unchangedCount,
+  };
+}
+
+/**
+ * Generates an unused copy name for duplicate environments (e.g., "Dev (Copy)", "Dev (Copy 2)").
+ */
+export function generateCopyEnvironmentName(baseName: string, existingNames: string[]): string {
+  const lowerNames = existingNames.map((n) => n.toLowerCase().trim());
+  let candidate = `${baseName} (Copy)`;
+  let counter = 2;
+
+  while (lowerNames.includes(candidate.toLowerCase().trim())) {
+    candidate = `${baseName} (Copy ${counter})`;
+    counter++;
+  }
+
+  return candidate;
+}
+
+/**
+ * Clones an environment with brand new UUIDs and a new name.
+ */
+export function cloneEnvironmentWithNewIds(env: Environment, newName: string): Environment {
+  return {
+    ...JSON.parse(JSON.stringify(env)),
+    id: makeUUID(),
+    name: newName,
+    variables: (env.variables || []).map((v) => ({
+      ...v,
+      id: makeUUID(),
+    })),
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+}
+
+/**
+ * Aligns incoming variable IDs with existing variable IDs when matching keys exist.
+ */
+export function alignEnvironmentVariableIds(
+  existingVars: EnvironmentVariable[],
+  incomingVars: EnvironmentVariable[]
+): EnvironmentVariable[] {
+  const existingMap = new Map<string, string>();
+  for (const ex of existingVars) {
+    if (ex.key) {
+      existingMap.set(ex.key.trim().toLowerCase(), ex.id);
+    }
+  }
+
+  return incomingVars.map((inc) => {
+    const matchedId = existingMap.get(String(inc.key ?? '').trim().toLowerCase());
+    const isValidUUID =
+      inc.id &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(inc.id);
+
+    return {
+      ...inc,
+      id: matchedId || (isValidUUID ? inc.id : makeUUID()),
+    };
+  });
 }

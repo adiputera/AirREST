@@ -11,8 +11,9 @@ type Collection struct {
 	WorkspaceID    *uuid.UUID `json:"workspace_id,omitempty"`
 	ProjectID      *uuid.UUID `json:"project_id,omitempty"`
 	Name           string     `json:"name"`
-	Description    *string    `json:"description,omitempty"`
-	Version        int64      `json:"version"`
+	Description    *string     `json:"description,omitempty"`
+	MinRole        ProjectRole `json:"min_role"`
+	Version        int64       `json:"version"`
 	CreatedBy      uuid.UUID  `json:"created_by"`
 	LastModifiedBy *uuid.UUID `json:"last_modified_by,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`

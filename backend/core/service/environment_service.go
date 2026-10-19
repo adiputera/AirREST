@@ -167,6 +167,12 @@ func (s *EnvironmentService) Update(ctx context.Context, user *domain.User, env 
 		}
 	}
 
+	if env.Name == "" {
+		env.Name = existing.Name
+	}
+	if env.Variables == nil {
+		env.Variables = existing.Variables
+	}
 	if env.MinRole == "" {
 		env.MinRole = existing.MinRole
 	}

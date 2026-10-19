@@ -93,6 +93,7 @@ export interface Collection {
   items: CollectionItem[];
   createdAt: number;
   updatedAt: number;
+  _origin?: 'offline' | 'cloud';
 }
 
 export interface HistoryItem {

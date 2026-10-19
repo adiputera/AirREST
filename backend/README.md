@@ -154,10 +154,11 @@ go test -v ./...
 - `DELETE /api/v1/projects/{id}/members/{userId}` — Unassign member from project
 
 ### Collections & Items
-- `GET /api/v1/collections?workspace_id={id}&project_id={id}` — List collections
-- `POST /api/v1/collections` — Create collection
-- `GET /api/v1/collections/{id}` — Get collection and active items
-- `PUT /api/v1/collections/{id}` — Update collection (supports `base_version` OCC)
+- `GET /api/v1/collections?workspace_id={id}&project_id={id}` — List collections (automatically filtered by the caller's project role)
+- `POST /api/v1/collections` — Create collection (supports `min_role: 'admin' | 'maintainer' | 'contributor' | 'reader'`)
+- `GET /api/v1/collections/{id}` — Get collection and active items (enforces `min_role` RBAC)
+- `PUT /api/v1/collections/{id}` — Update collection (supports `base_version` OCC and `min_role`)
+- `POST /api/v1/collections/{id}/move` — Move collection between projects in the same team or between workspace and project (requires contributor+ role in source & target)
 - `PUT /api/v1/collections/{id}/reorder` — Batch reorder and reparent folders and requests inside a collection
 - `DELETE /api/v1/collections/{id}` — Soft delete collection (tombstone)
 - `POST /api/v1/items` — Create request or folder item

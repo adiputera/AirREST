@@ -53,7 +53,7 @@ func TestSuperadminTeamRules(t *testing.T) {
 }
 
 func TestCollectionPermissionRules(t *testing.T) {
-	colService := NewCollectionService(nil, nil, nil)
+	colService := NewCollectionService(nil, nil, nil, nil)
 
 	superadmin := &domain.User{
 		ID:   uuid.New(),
@@ -74,7 +74,7 @@ func TestCollectionPermissionRules(t *testing.T) {
 }
 
 func TestReorderItemPermissionRules(t *testing.T) {
-	colService := NewCollectionService(nil, nil, nil)
+	colService := NewCollectionService(nil, nil, nil, nil)
 
 	superadmin := &domain.User{
 		ID:   uuid.New(),

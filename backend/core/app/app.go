@@ -59,7 +59,7 @@ func New(ctx context.Context) (*App, error) {
 	workspaceService := service.NewWorkspaceService(workspaceRepo)
 	teamService := service.NewTeamService(teamRepo, userRepo)
 	projectService := service.NewProjectService(projectRepo, teamRepo, teamService)
-	collectionService := service.NewCollectionService(collectionRepo, workspaceRepo, projectService)
+	collectionService := service.NewCollectionService(collectionRepo, workspaceRepo, projectRepo, projectService)
 	envService := service.NewEnvironmentService(envRepo, collectionService, projectService)
 	syncService := service.NewSyncService(pool, collectionService, envService)
 
@@ -194,6 +194,7 @@ func New(ctx context.Context) (*App, error) {
 				r.Get("/{id}", collectionHandler.Get)
 				r.Put("/{id}", collectionHandler.Update)
 				r.Delete("/{id}", collectionHandler.Delete)
+				r.Post("/{id}/move", collectionHandler.Move)
 				r.Put("/{id}/reorder", collectionHandler.ReorderItems)
 				r.Put("/{id}/items/reorder", collectionHandler.ReorderItems)
 			})

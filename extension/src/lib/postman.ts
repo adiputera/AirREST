@@ -144,10 +144,10 @@ function parseHeaders(headers?: PostmanHeader[]): KeyValuePair[] {
   if (!Array.isArray(headers)) return [];
   return headers.map((h) => ({
     id: generateId(),
-    key: h.key || '',
-    value: h.value || '',
-    enabled: !h.disabled,
-    description: h.description,
+    key: String(h?.key ?? ''),
+    value: String(h?.value ?? ''),
+    enabled: !h?.disabled,
+    description: h?.description,
   }));
 }
 
@@ -156,9 +156,9 @@ function parseQueryParams(url?: string | PostmanUrlObject): KeyValuePair[] {
   if (Array.isArray(url.query)) {
     return url.query.map((q) => ({
       id: generateId(),
-      key: q.key || '',
-      value: q.value || '',
-      enabled: !q.disabled,
+      key: String(q?.key ?? ''),
+      value: String(q?.value ?? ''),
+      enabled: !q?.disabled,
     }));
   }
   return [];
@@ -341,10 +341,10 @@ export function parsePostmanAuth(rawAuth: PostmanAuth | Record<string, unknown> 
  * Extracts authorization from Authorization header if present.
  */
 export function extractAuthFromHeaders(headers: KeyValuePair[]): AuthConfig | null {
-  const authHeader = headers.find((h) => h.key.trim().toLowerCase() === 'authorization');
+  const authHeader = headers.find((h) => String(h?.key ?? '').trim().toLowerCase() === 'authorization');
   if (!authHeader || !authHeader.value) return null;
 
-  const val = authHeader.value.trim();
+  const val = String(authHeader.value).trim();
   if (/^bearer\s+/i.test(val)) {
     return {
       type: 'bearer',
@@ -437,15 +437,15 @@ function convertPostmanItem(item: PostmanRawItem, inheritedAuth?: AuthConfig): C
       if (urlencodedList.length > 0) {
         bodyUrlEncoded = urlencodedList.map((item) => ({
           id: generateId(),
-          key: item.key || '',
-          value: item.value || '',
-          enabled: item.disabled !== true,
-          description: item.description,
+          key: String(item?.key ?? ''),
+          value: String(item?.value ?? ''),
+          enabled: item?.disabled !== true,
+          description: item?.description,
         }));
         const urlParams = new URLSearchParams();
         for (const item of bodyUrlEncoded) {
-          if (item.enabled && item.key.trim()) {
-            urlParams.append(item.key.trim(), item.value);
+          if (item.enabled && String(item.key ?? '').trim()) {
+            urlParams.append(String(item.key).trim(), String(item.value ?? ''));
           }
         }
         bodyContent = urlParams.toString();
@@ -474,10 +474,10 @@ function convertPostmanItem(item: PostmanRawItem, inheritedAuth?: AuthConfig): C
       if (formdataList.length > 0) {
         bodyFormData = formdataList.map((item) => ({
           id: generateId(),
-          key: item.key || '',
-          type: item.type === 'file' ? 'file' : 'text',
-          value: item.value || item.src || '',
-          enabled: item.disabled !== true,
+          key: String(item?.key ?? ''),
+          type: item?.type === 'file' ? 'file' : 'text',
+          value: String(item?.value ?? item?.src ?? ''),
+          enabled: item?.disabled !== true,
         }));
       }
       if (bodyFormData.length === 0) {

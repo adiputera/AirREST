@@ -235,9 +235,9 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
 
   // Extract auth from Authorization header if not already specified with -u
   if (auth.type === 'none') {
-    const authHeader = headers.find((h) => h.key.trim().toLowerCase() === 'authorization');
+    const authHeader = headers.find((h) => String(h?.key ?? '').trim().toLowerCase() === 'authorization');
     if (authHeader && authHeader.value) {
-      const val = authHeader.value.trim();
+      const val = String(authHeader.value).trim();
       if (/^bearer\s+/i.test(val)) {
         auth = {
           type: 'bearer',
@@ -264,13 +264,13 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
 
   // If auth was extracted, clean up redundant Authorization header
   const cleanHeaders = auth.type !== 'none'
-    ? headers.filter((h) => h.key.trim().toLowerCase() !== 'authorization')
+    ? headers.filter((h) => String(h?.key ?? '').trim().toLowerCase() !== 'authorization')
     : headers;
 
   // Check Content-Type header if present to refine bodyType and rawType
-  const contentTypeHeader = cleanHeaders.find((h) => h.key.trim().toLowerCase() === 'content-type');
+  const contentTypeHeader = cleanHeaders.find((h) => String(h?.key ?? '').trim().toLowerCase() === 'content-type');
   if (contentTypeHeader && bodyType !== 'none' && bodyType !== 'form-data' && bodyType !== 'binary') {
-    const ctVal = contentTypeHeader.value.toLowerCase();
+    const ctVal = String(contentTypeHeader.value ?? '').toLowerCase();
     if (ctVal.includes('application/xml') || ctVal.includes('text/xml')) {
       bodyType = 'xml';
       rawType = 'xml';
@@ -359,21 +359,21 @@ export function generateCurlCommand(
 
   // Append query parameters
   if (request.params && request.params.length > 0) {
-    const activeParams = request.params.filter((p) => p.enabled && p.key.trim());
+    const activeParams = request.params.filter((p) => p.enabled && String(p?.key ?? '').trim());
     if (activeParams.length > 0) {
       try {
         const dummyBase = !/^https?:\/\//i.test(url) ? 'http://placeholder' : undefined;
         const parsedUrl = new URL(url, dummyBase);
         for (const p of activeParams) {
-          const k = interpolateVariables(p.key.trim(), variables);
-          const v = interpolateVariables(p.value, variables);
+          const k = interpolateVariables(String(p.key).trim(), variables);
+          const v = interpolateVariables(String(p.value ?? ''), variables);
           parsedUrl.searchParams.set(k, v);
         }
         url = dummyBase ? parsedUrl.pathname + parsedUrl.search : parsedUrl.toString();
       } catch {
         if (!url.includes('?')) {
           const queryString = activeParams
-            .map((p) => `${encodeURIComponent(interpolateVariables(p.key.trim(), variables))}=${encodeURIComponent(interpolateVariables(p.value, variables))}`)
+            .map((p) => `${encodeURIComponent(interpolateVariables(String(p.key).trim(), variables))}=${encodeURIComponent(interpolateVariables(String(p.value ?? ''), variables))}`)
             .join('&');
           url += '?' + queryString;
         }

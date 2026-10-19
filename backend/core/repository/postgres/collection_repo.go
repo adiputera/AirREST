@@ -28,9 +28,12 @@ func NewCollectionRepository(pool *pgxpool.Pool) *CollectionRepository {
 
 // CreateCollection inserts a collection with version 1
 func (r *CollectionRepository) CreateCollection(ctx context.Context, c *domain.Collection) error {
+	if c.MinRole == "" {
+		c.MinRole = domain.ProjectRoleReader
+	}
 	query := `
-		INSERT INTO collections (id, workspace_id, project_id, name, description, version, created_by, last_modified_by, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, 1, $6, $6, $7, $8)
+		INSERT INTO collections (id, workspace_id, project_id, name, description, min_role, version, created_by, last_modified_by, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $7, $8, $9)
 	`
 	if c.ID == uuid.Nil {
 		c.ID = uuid.New()
@@ -40,7 +43,7 @@ func (r *CollectionRepository) CreateCollection(ctx context.Context, c *domain.C
 	c.CreatedAt = now
 	c.UpdatedAt = now
 
-	_, err := r.pool.Exec(ctx, query, c.ID, c.WorkspaceID, c.ProjectID, c.Name, c.Description, c.CreatedBy, c.CreatedAt, c.UpdatedAt)
+	_, err := r.pool.Exec(ctx, query, c.ID, c.WorkspaceID, c.ProjectID, c.Name, c.Description, c.MinRole, c.CreatedBy, c.CreatedAt, c.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to insert collection: %w", err)
 	}
@@ -50,13 +53,13 @@ func (r *CollectionRepository) CreateCollection(ctx context.Context, c *domain.C
 // GetCollectionByID gets a collection by ID (active or deleted)
 func (r *CollectionRepository) GetCollectionByID(ctx context.Context, id uuid.UUID) (*domain.Collection, error) {
 	query := `
-		SELECT id, workspace_id, project_id, name, description, version, created_by, last_modified_by, created_at, updated_at, deleted_at
+		SELECT id, workspace_id, project_id, name, description, min_role, version, created_by, last_modified_by, created_at, updated_at, deleted_at
 		FROM collections
 		WHERE id = $1
 	`
 	var c domain.Collection
 	err := r.pool.QueryRow(ctx, query, id).Scan(
-		&c.ID, &c.WorkspaceID, &c.ProjectID, &c.Name, &c.Description,
+		&c.ID, &c.WorkspaceID, &c.ProjectID, &c.Name, &c.Description, &c.MinRole,
 		&c.Version, &c.CreatedBy, &c.LastModifiedBy, &c.CreatedAt, &c.UpdatedAt, &c.DeletedAt,
 	)
 	if err != nil {
@@ -76,7 +79,7 @@ func (r *CollectionRepository) ListCollections(ctx context.Context, workspaceID,
 
 	if workspaceID != nil {
 		query = `
-			SELECT id, workspace_id, project_id, name, description, version, created_by, last_modified_by, created_at, updated_at, deleted_at
+			SELECT id, workspace_id, project_id, name, description, min_role, version, created_by, last_modified_by, created_at, updated_at, deleted_at
 			FROM collections
 			WHERE workspace_id = $1 AND deleted_at IS NULL
 			ORDER BY created_at ASC
@@ -84,7 +87,7 @@ func (r *CollectionRepository) ListCollections(ctx context.Context, workspaceID,
 		rows, err = r.pool.Query(ctx, query, *workspaceID)
 	} else if projectID != nil {
 		query = `
-			SELECT id, workspace_id, project_id, name, description, version, created_by, last_modified_by, created_at, updated_at, deleted_at
+			SELECT id, workspace_id, project_id, name, description, min_role, version, created_by, last_modified_by, created_at, updated_at, deleted_at
 			FROM collections
 			WHERE project_id = $1 AND deleted_at IS NULL
 			ORDER BY created_at ASC
@@ -103,7 +106,7 @@ func (r *CollectionRepository) ListCollections(ctx context.Context, workspaceID,
 	for rows.Next() {
 		var c domain.Collection
 		if err := rows.Scan(
-			&c.ID, &c.WorkspaceID, &c.ProjectID, &c.Name, &c.Description,
+			&c.ID, &c.WorkspaceID, &c.ProjectID, &c.Name, &c.Description, &c.MinRole,
 			&c.Version, &c.CreatedBy, &c.LastModifiedBy, &c.CreatedAt, &c.UpdatedAt, &c.DeletedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan collection: %w", err)
@@ -117,11 +120,14 @@ func (r *CollectionRepository) ListCollections(ctx context.Context, workspaceID,
 func (r *CollectionRepository) UpdateCollection(ctx context.Context, c *domain.Collection, baseVersion int64) error {
 	query := `
 		UPDATE collections
-		SET name = $1, description = $2, version = version + 1, last_modified_by = $3, updated_at = $4
-		WHERE id = $5 AND version = $6 AND deleted_at IS NULL
+		SET name = $1, description = $2, min_role = $3, version = version + 1, last_modified_by = $4, updated_at = $5
+		WHERE id = $6 AND version = $7 AND deleted_at IS NULL
 	`
 	now := time.Now().UTC()
-	result, err := r.pool.Exec(ctx, query, c.Name, c.Description, c.LastModifiedBy, now, c.ID, baseVersion)
+	if c.MinRole == "" {
+		c.MinRole = domain.ProjectRoleReader
+	}
+	result, err := r.pool.Exec(ctx, query, c.Name, c.Description, c.MinRole, c.LastModifiedBy, now, c.ID, baseVersion)
 	if err != nil {
 		return fmt.Errorf("failed to update collection: %w", err)
 	}
@@ -130,6 +136,24 @@ func (r *CollectionRepository) UpdateCollection(ctx context.Context, c *domain.C
 	}
 	c.Version = baseVersion + 1
 	c.UpdatedAt = now
+	return nil
+}
+
+// MoveCollection moves a collection to a new workspace or project
+func (r *CollectionRepository) MoveCollection(ctx context.Context, id uuid.UUID, workspaceID, projectID *uuid.UUID, modifiedBy uuid.UUID) error {
+	query := `
+		UPDATE collections
+		SET workspace_id = $1, project_id = $2, version = version + 1, last_modified_by = $3, updated_at = $4
+		WHERE id = $5 AND deleted_at IS NULL
+	`
+	now := time.Now().UTC()
+	result, err := r.pool.Exec(ctx, query, workspaceID, projectID, modifiedBy, now, id)
+	if err != nil {
+		return fmt.Errorf("failed to move collection: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return ErrCollectionNotFound
+	}
 	return nil
 }
 

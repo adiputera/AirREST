@@ -9,9 +9,9 @@
 AirREST Hub is the companion web dashboard for managing collaboration in AirREST:
 - **Teams & Member Roles**: Create, edit (name & description), and delete teams (Superadmin only) with confirmation modal safeguards, invite users, and assign Team Admin and Member roles.
 - **Project Isolation**: Create, edit (name & description), and delete projects (Project Admins & Superadmins) with confirmation modal safeguards, and assign Project Admins, Maintainers, Contributors, or Readers.
+- **Project Collections & Environments**: View synchronized collection requests (clean read-only title list) and environment variables, with granular minimum-role access permissions (`admin`, `maintainer`, `contributor`, `reader`) configurable directly per collection and environment.
 - **Confirmation Safeguards**: Modern, dark-themed confirmation modals prevent accidental deletions of teams, projects, and member removals.
 - **Superadmin Panel**: System-level administrative tools to manage all registered users, provision system accounts, and reset user passwords.
-- **Extension Connect**: Easily view and copy connection settings for linking the AirREST Chrome Extension Studio to your cloud backend.
 - **Decoupled Architecture**: Runs entirely independent of the Chrome extension, keeping the extension bundle ultra-lightweight.
  
 ---

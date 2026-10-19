@@ -289,6 +289,35 @@ export async function batchImportToWorkspace(
   return batchImportToScope(apiUrl, token, workspaceId, collections, refreshToken);
 }
 
+export async function moveScopeCollection(
+  apiUrl: string,
+  token: string,
+  collectionId: string,
+  targetScope: ActiveScope,
+  refreshToken?: string
+) {
+  const payload: any = {};
+  if (targetScope.type === 'workspace') {
+    payload.target_workspace_id = targetScope.id;
+  } else {
+    payload.target_project_id = targetScope.id;
+  }
+
+  const res = await fetchWithAuth(`/api/v1/collections/${collectionId}/move`, {
+    method: 'POST',
+    apiUrl,
+    token,
+    refreshToken,
+    body: JSON.stringify(payload),
+  });
+
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(extractError(json, 'Failed to move collection'));
+  }
+  return unwrapData<any>(json);
+}
+
 function formatImportItem(item: any): any {
   return {
     id: item.id,
@@ -394,6 +423,46 @@ export async function deleteScopeEnvironment(
   const json = await res.json();
   if (!res.ok) {
     throw new Error(extractError(json, 'Failed to delete environment'));
+  }
+  return unwrapData<any>(json);
+}
+
+export async function deleteScopeCollection(
+  apiUrl: string,
+  token: string,
+  collectionId: string,
+  refreshToken?: string
+) {
+  const res = await fetchWithAuth(`/api/v1/collections/${collectionId}`, {
+    method: 'DELETE',
+    apiUrl,
+    token,
+    refreshToken,
+  });
+
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(extractError(json, 'Failed to delete collection'));
+  }
+  return unwrapData<any>(json);
+}
+
+export async function deleteScopeItem(
+  apiUrl: string,
+  token: string,
+  itemId: string,
+  refreshToken?: string
+) {
+  const res = await fetchWithAuth(`/api/v1/items/${itemId}`, {
+    method: 'DELETE',
+    apiUrl,
+    token,
+    refreshToken,
+  });
+
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(extractError(json, 'Failed to delete item'));
   }
   return unwrapData<any>(json);
 }

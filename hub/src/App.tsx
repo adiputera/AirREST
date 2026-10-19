@@ -6,7 +6,6 @@ import { LoginView } from './pages/LoginView';
 import { TeamsView } from './pages/TeamsView';
 import { ProjectsView } from './pages/ProjectsView';
 import { SuperadminView } from './pages/SuperadminView';
-import { ConnectView } from './pages/ConnectView';
 
 export const App: React.FC = () => {
   const token = useHubStore((state) => state.token);
@@ -27,7 +26,6 @@ export const App: React.FC = () => {
           {activeTab === 'teams' && <TeamsView />}
           {activeTab === 'projects' && <ProjectsView />}
           {activeTab === 'superadmin' && <SuperadminView />}
-          {activeTab === 'connect' && <ConnectView />}
         </main>
       </div>
     </div>

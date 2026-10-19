@@ -1,4 +1,4 @@
-import { User, Team, TeamMember, Project, ProjectMember } from '../types';
+import { User, Team, TeamMember, Project, ProjectMember, Collection, Environment, ProjectRole } from '../types';
 
 export interface TokenRefreshCallback {
   (tokens: { token: string; refreshToken: string; expiresAt: string }): void;
@@ -394,3 +394,139 @@ export async function apiResetUserPassword(
   if (!res.ok) throw new Error(extractError(json, 'Failed to reset user password'));
   return unwrapData<any>(json);
 }
+
+// ----------------- Project Collections & Environments Endpoints -----------------
+
+export async function apiListProjectCollections(
+  apiUrl: string,
+  token: string,
+  projectId: string,
+  refreshToken?: string
+): Promise<Collection[]> {
+  const res = await fetchWithAuth(`/api/v1/collections?project_id=${encodeURIComponent(projectId)}`, {
+    apiUrl,
+    token,
+    refreshToken,
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error(extractError(json, 'Failed to list collections'));
+  const data = unwrapData<any>(json);
+  return (Array.isArray(data) ? data : []) as Collection[];
+}
+
+export async function apiUpdateCollectionPermission(
+  apiUrl: string,
+  token: string,
+  collectionId: string,
+  minRole: ProjectRole,
+  baseVersion: number,
+  refreshToken?: string
+): Promise<Collection> {
+  const res = await fetchWithAuth(`/api/v1/collections/${collectionId}`, {
+    method: 'PUT',
+    apiUrl,
+    token,
+    refreshToken,
+    body: JSON.stringify({ min_role: minRole, base_version: baseVersion }),
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error(extractError(json, 'Failed to update collection permission'));
+  return unwrapData<Collection>(json);
+}
+
+export async function apiMoveCollection(
+  apiUrl: string,
+  token: string,
+  collectionId: string,
+  targetProjectId?: string,
+  targetWorkspaceId?: string,
+  refreshToken?: string
+): Promise<void> {
+  const payload: any = {};
+  if (targetProjectId) payload.target_project_id = targetProjectId;
+  if (targetWorkspaceId) payload.target_workspace_id = targetWorkspaceId;
+
+  const res = await fetchWithAuth(`/api/v1/collections/${collectionId}/move`, {
+    method: 'POST',
+    apiUrl,
+    token,
+    refreshToken,
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    throw new Error(extractError(json, 'Failed to move collection'));
+  }
+}
+
+export async function apiListProjectEnvironments(
+  apiUrl: string,
+  token: string,
+  projectId: string,
+  refreshToken?: string
+): Promise<Environment[]> {
+  const res = await fetchWithAuth(`/api/v1/environments?project_id=${encodeURIComponent(projectId)}`, {
+    apiUrl,
+    token,
+    refreshToken,
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error(extractError(json, 'Failed to list environments'));
+  const data = unwrapData<any>(json);
+  return (Array.isArray(data) ? data : []) as Environment[];
+}
+
+export async function apiUpdateEnvironmentPermission(
+  apiUrl: string,
+  token: string,
+  envId: string,
+  minRole: ProjectRole,
+  baseVersion: number,
+  refreshToken?: string
+): Promise<Environment> {
+  const res = await fetchWithAuth(`/api/v1/environments/${envId}`, {
+    method: 'PUT',
+    apiUrl,
+    token,
+    refreshToken,
+    body: JSON.stringify({ min_role: minRole, base_version: baseVersion }),
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error(extractError(json, 'Failed to update environment permission'));
+  return unwrapData<Environment>(json);
+}
+
+export async function apiDeleteCollection(
+  apiUrl: string,
+  token: string,
+  collectionId: string,
+  refreshToken?: string
+): Promise<{ message: string }> {
+  const res = await fetchWithAuth(`/api/v1/collections/${collectionId}`, {
+    method: 'DELETE',
+    apiUrl,
+    token,
+    refreshToken,
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(extractError(json, 'Failed to delete collection'));
+  return unwrapData<{ message: string }>(json);
+}
+
+export async function apiDeleteEnvironment(
+  apiUrl: string,
+  token: string,
+  envId: string,
+  refreshToken?: string
+): Promise<{ message: string }> {
+  const res = await fetchWithAuth(`/api/v1/environments/${envId}`, {
+    method: 'DELETE',
+    apiUrl,
+    token,
+    refreshToken,
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(extractError(json, 'Failed to delete environment'));
+  return unwrapData<{ message: string }>(json);
+}
+
