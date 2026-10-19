@@ -18,6 +18,7 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
   let url = '';
   const headers: KeyValuePair[] = [];
   const bodyFormData: FormDataItem[] = [];
+  const bodyUrlEncoded: KeyValuePair[] = [];
   let bodyBinaryFile: BinaryFileData | undefined = undefined;
   let bodyContent = '';
   let bodyType: ApiRequest['bodyType'] = 'none';
@@ -150,6 +151,30 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
           }
         }
       }
+    } else if (token === '--data-urlencode') {
+      const data = tokens[++i];
+      if (data !== undefined) {
+        bodyType = 'x-www-form-urlencoded';
+        const eqIdx = data.indexOf('=');
+        if (eqIdx > 0) {
+          bodyUrlEncoded.push({
+            id: generateId(),
+            key: data.substring(0, eqIdx).trim(),
+            value: data.substring(eqIdx + 1).trim(),
+            enabled: true,
+          });
+        } else {
+          bodyUrlEncoded.push({
+            id: generateId(),
+            key: data.trim(),
+            value: '',
+            enabled: true,
+          });
+        }
+        if (method === 'GET') {
+          method = 'POST';
+        }
+      }
     } else if (
       token === '-d' ||
       token === '--data' ||
@@ -258,6 +283,23 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
     } else if (ctVal.includes('text/plain')) {
       bodyType = 'raw';
       rawType = 'text';
+    } else if (ctVal.includes('application/x-www-form-urlencoded')) {
+      bodyType = 'x-www-form-urlencoded';
+      if (bodyContent && bodyUrlEncoded.length === 0) {
+        try {
+          const parsed = new URLSearchParams(bodyContent);
+          parsed.forEach((val, key) => {
+            bodyUrlEncoded.push({
+              id: generateId(),
+              key,
+              value: val,
+              enabled: true,
+            });
+          });
+        } catch {
+          // ignore
+        }
+      }
     }
   }
 
@@ -301,6 +343,7 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
     graphqlVariables,
     bodyFormData,
     bodyBinaryFile,
+    bodyUrlEncoded: bodyUrlEncoded.length > 0 ? bodyUrlEncoded : [{ id: generateId(), key: '', value: '', enabled: true }],
     name: url ? `${method} ${finalUrl.substring(0, 30)}` : 'Imported cURL Request',
   };
 }
@@ -404,11 +447,22 @@ export function generateCurlCommand(
     } else if (
       request.bodyType === 'json' ||
       request.bodyType === 'xml' ||
-      request.bodyType === 'raw' ||
-      request.bodyType === 'x-www-form-urlencoded'
+      request.bodyType === 'raw'
     ) {
       const body = interpolateVariables(request.bodyContent || '', variables);
       if (body) {
+        parts.push(`-d '${body.replace(/'/g, `'\\''`)}'`);
+      }
+    } else if (request.bodyType === 'x-www-form-urlencoded') {
+      const activeItems = (request.bodyUrlEncoded || []).filter((item) => item.enabled && item.key.trim());
+      if (activeItems.length > 0) {
+        for (const item of activeItems) {
+          const k = interpolateVariables(item.key.trim(), variables);
+          const v = interpolateVariables(item.value || '', variables);
+          parts.push(`--data-urlencode "${k}=${v}"`);
+        }
+      } else if (request.bodyContent) {
+        const body = interpolateVariables(request.bodyContent, variables);
         parts.push(`-d '${body.replace(/'/g, `'\\''`)}'`);
       }
     } else if (request.bodyType === 'form-data') {

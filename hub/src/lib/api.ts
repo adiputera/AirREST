@@ -155,6 +155,39 @@ export async function apiCreateTeam(apiUrl: string, token: string, name: string,
   return unwrapData<Team>(json);
 }
 
+export async function apiUpdateTeam(
+  apiUrl: string,
+  token: string,
+  teamId: string,
+  name: string,
+  description: string,
+  refreshToken?: string
+) {
+  const res = await fetchWithAuth(`/api/v1/teams/${teamId}`, {
+    method: 'PUT',
+    apiUrl,
+    token,
+    refreshToken,
+    body: JSON.stringify({ name, description }),
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error(extractError(json, 'Failed to update team'));
+  return unwrapData<Team>(json);
+}
+
+export async function apiDeleteTeam(apiUrl: string, token: string, teamId: string, refreshToken?: string) {
+  const res = await fetchWithAuth(`/api/v1/teams/${teamId}`, {
+    method: 'DELETE',
+    apiUrl,
+    token,
+    refreshToken,
+  });
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    throw new Error(extractError(json, 'Failed to delete team'));
+  }
+}
+
 export async function apiListTeamMembers(apiUrl: string, token: string, teamId: string, refreshToken?: string) {
   const res = await fetchWithAuth(`/api/v1/teams/${teamId}/members`, { apiUrl, token, refreshToken });
   const json = await res.json();
@@ -224,6 +257,39 @@ export async function apiCreateProject(
   const json = await res.json();
   if (!res.ok) throw new Error(extractError(json, 'Failed to create project'));
   return unwrapData<Project>(json);
+}
+
+export async function apiUpdateProject(
+  apiUrl: string,
+  token: string,
+  projectId: string,
+  name: string,
+  description: string,
+  refreshToken?: string
+) {
+  const res = await fetchWithAuth(`/api/v1/projects/${projectId}`, {
+    method: 'PUT',
+    apiUrl,
+    token,
+    refreshToken,
+    body: JSON.stringify({ name, description }),
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error(extractError(json, 'Failed to update project'));
+  return unwrapData<Project>(json);
+}
+
+export async function apiDeleteProject(apiUrl: string, token: string, projectId: string, refreshToken?: string) {
+  const res = await fetchWithAuth(`/api/v1/projects/${projectId}`, {
+    method: 'DELETE',
+    apiUrl,
+    token,
+    refreshToken,
+  });
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    throw new Error(extractError(json, 'Failed to delete project'));
+  }
 }
 
 export async function apiListProjectMembers(apiUrl: string, token: string, projectId: string, refreshToken?: string) {
@@ -308,4 +374,23 @@ export async function apiProvisionUser(
   const json = await res.json();
   if (!res.ok) throw new Error(extractError(json, 'Failed to provision user'));
   return unwrapData<User>(json);
+}
+
+export async function apiResetUserPassword(
+  apiUrl: string,
+  token: string,
+  userId: string,
+  newPassword: string,
+  refreshToken?: string
+) {
+  const res = await fetchWithAuth(`/api/v1/admin/users/${userId}/password`, {
+    method: 'PUT',
+    apiUrl,
+    token,
+    refreshToken,
+    body: JSON.stringify({ password: newPassword }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(extractError(json, 'Failed to reset user password'));
+  return unwrapData<any>(json);
 }

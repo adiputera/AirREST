@@ -40,6 +40,7 @@ import {
   buildEnvironmentsFromDelta,
 } from '@/lib/cloudSyncTransformer';
 import { isOfflineOnly } from '@/lib/edition';
+import { findSavedRequestInCollections } from '@/lib/requestDiff';
 
 function generateId(): string {
   return Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
@@ -82,6 +83,7 @@ const defaultRequest: ApiRequest = {
   graphqlQuery: '',
   graphqlVariables: '',
   bodyFormData: [],
+  bodyUrlEncoded: [{ id: 'u1', key: '', value: '', enabled: true }],
   preRequestScript: '// Example Pre-request Script:\n// pm.environment.set("timestamp", Date.now());\n// console.log("Request starting...");\n',
   postResponseScript: '// Example Tests / Post-response Script:\n// const data = pm.response.json();\n// if (data.token) pm.environment.set("token", data.token);\n',
   createdAt: Date.now(),
@@ -162,12 +164,19 @@ interface ApiStoreState {
   removeFormDataItem: (id: string) => void;
   setBodyBinaryFile: (file?: BinaryFileData) => void;
 
+  // URL-Encoded Form Items
+  updateUrlEncodedItem: (id: string, updates: Partial<KeyValuePair>) => void;
+  addUrlEncodedItem: () => void;
+  removeUrlEncodedItem: (id: string) => void;
+  setUrlEncodedItems: (items: KeyValuePair[]) => void;
+
   // Execution
   sendRequest: () => Promise<void>;
 
   // Collections & History
   createCollection: (name: string, description?: string) => string;
   saveRequestToCollection: (collectionId: string, folderId: string | null, request: ApiRequest) => void;
+  saveActiveRequest: () => { success: boolean; isDirectSaved: boolean };
   addCollection: (collection: Collection) => Promise<void> | void;
   importCollectionFromJson: (jsonStr: string) => Promise<{ success: boolean; error?: string }>;
   deleteCollection: (id: string) => void;
@@ -648,6 +657,7 @@ export const useApiStore = create<ApiStoreState>()(
           graphqlVariables: initial?.graphqlVariables || '',
           bodyFormData: initial?.bodyFormData || [],
           bodyBinaryFile: initial?.bodyBinaryFile,
+          bodyUrlEncoded: initial?.bodyUrlEncoded || [{ id: generateId(), key: '', value: '', enabled: true }],
           preRequestScript: initial?.preRequestScript || '',
           postResponseScript: initial?.postResponseScript || '',
           createdAt: Date.now(),
@@ -679,6 +689,7 @@ export const useApiStore = create<ApiStoreState>()(
               graphqlVariables: '',
               bodyFormData: [],
               bodyBinaryFile: undefined,
+              bodyUrlEncoded: [{ id: generateId(), key: '', value: '', enabled: true }],
               preRequestScript: '',
               postResponseScript: '',
               createdAt: Date.now(),
@@ -732,6 +743,7 @@ export const useApiStore = create<ApiStoreState>()(
             graphqlVariables: '',
             bodyFormData: [],
             bodyBinaryFile: undefined,
+            bodyUrlEncoded: [{ id: generateId(), key: '', value: '', enabled: true }],
             preRequestScript: '',
             postResponseScript: '',
             createdAt: Date.now(),
@@ -772,6 +784,7 @@ export const useApiStore = create<ApiStoreState>()(
             params: sourceTab.params.map((p) => ({ ...p, id: generateId() })),
             headers: sourceTab.headers.map((h) => ({ ...h, id: generateId() })),
             bodyFormData: sourceTab.bodyFormData ? sourceTab.bodyFormData.map((f) => ({ ...f, id: generateId() })) : [],
+            bodyUrlEncoded: sourceTab.bodyUrlEncoded ? sourceTab.bodyUrlEncoded.map((u) => ({ ...u, id: generateId() })) : [{ id: generateId(), key: '', value: '', enabled: true }],
           };
           const index = state.tabs.findIndex((t) => t.id === id);
           const newTabs = [...state.tabs];
@@ -896,8 +909,48 @@ export const useApiStore = create<ApiStoreState>()(
             let rawType = tab.rawType || 'text';
             if (bodyType === 'json') rawType = 'json';
             else if (bodyType === 'xml') rawType = 'xml';
-            const method = bodyType === 'graphql' && tab.method === 'GET' ? 'POST' : tab.method;
-            return { ...tab, bodyType, rawType, method, updatedAt: Date.now() };
+            const method = (bodyType === 'graphql' || bodyType === 'form-data' || bodyType === 'x-www-form-urlencoded') && tab.method === 'GET' ? 'POST' : tab.method;
+
+            let bodyUrlEncoded = tab.bodyUrlEncoded;
+            if (bodyType === 'x-www-form-urlencoded') {
+              const hasRealItems = bodyUrlEncoded && bodyUrlEncoded.some((item) => item.key.trim() || item.value.trim());
+              if (!hasRealItems) {
+                const trimmedBody = (tab.bodyContent || '').trim();
+                if (trimmedBody.startsWith('{')) {
+                  try {
+                    const parsed = JSON.parse(trimmedBody);
+                    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+                      const items: KeyValuePair[] = Object.entries(parsed).map(([k, v]) => ({
+                        id: generateId(),
+                        key: k,
+                        value: typeof v === 'object' ? JSON.stringify(v) : String(v ?? ''),
+                        enabled: true,
+                      }));
+                      if (items.length > 0) bodyUrlEncoded = items;
+                    }
+                  } catch {
+                    // ignore JSON parse error
+                  }
+                } else if (trimmedBody.includes('=')) {
+                  try {
+                    const params = new URLSearchParams(trimmedBody);
+                    const items: KeyValuePair[] = [];
+                    params.forEach((v, k) => {
+                      items.push({ id: generateId(), key: k, value: v, enabled: true });
+                    });
+                    if (items.length > 0) bodyUrlEncoded = items;
+                  } catch {
+                    // ignore
+                  }
+                }
+              }
+
+              if (!bodyUrlEncoded || bodyUrlEncoded.length === 0) {
+                bodyUrlEncoded = [{ id: generateId(), key: '', value: '', enabled: true }];
+              }
+            }
+
+            return { ...tab, bodyType, rawType, method, bodyUrlEncoded, updatedAt: Date.now() };
           }),
         }));
       },
@@ -1007,6 +1060,65 @@ export const useApiStore = create<ApiStoreState>()(
           tabs: state.tabs.map((tab) => {
             if (tab.id !== state.activeTabId) return tab;
             return { ...tab, bodyBinaryFile, updatedAt: Date.now() };
+          }),
+        }));
+      },
+
+      // URL-Encoded Form actions
+      updateUrlEncodedItem: (id, updates) => {
+        set((state) => ({
+          tabs: state.tabs.map((tab) => {
+            if (tab.id !== state.activeTabId) return tab;
+            const currentList = tab.bodyUrlEncoded || [];
+            return {
+              ...tab,
+              bodyUrlEncoded: currentList.map((item) => (item.id === id ? { ...item, ...updates } : item)),
+              updatedAt: Date.now(),
+            };
+          }),
+        }));
+      },
+
+      addUrlEncodedItem: () => {
+        set((state) => ({
+          tabs: state.tabs.map((tab) => {
+            if (tab.id !== state.activeTabId) return tab;
+            const currentList = tab.bodyUrlEncoded || [];
+            return {
+              ...tab,
+              bodyUrlEncoded: [
+                ...currentList,
+                { id: generateId(), key: '', value: '', enabled: true },
+              ],
+              updatedAt: Date.now(),
+            };
+          }),
+        }));
+      },
+
+      removeUrlEncodedItem: (id) => {
+        set((state) => ({
+          tabs: state.tabs.map((tab) => {
+            if (tab.id !== state.activeTabId) return tab;
+            const currentList = tab.bodyUrlEncoded || [];
+            return {
+              ...tab,
+              bodyUrlEncoded: currentList.filter((item) => item.id !== id),
+              updatedAt: Date.now(),
+            };
+          }),
+        }));
+      },
+
+      setUrlEncodedItems: (items) => {
+        set((state) => ({
+          tabs: state.tabs.map((tab) => {
+            if (tab.id !== state.activeTabId) return tab;
+            return {
+              ...tab,
+              bodyUrlEncoded: items,
+              updatedAt: Date.now(),
+            };
           }),
         }));
       },
@@ -1227,6 +1339,34 @@ export const useApiStore = create<ApiStoreState>()(
             offlineCollections: state.workspaceMode === 'offline' ? collections : state.offlineCollections,
           };
         });
+
+        const { workspaceMode, cloudConfig, collections } = get();
+        if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
+          const updatedCol = collections.find((c) => c.id === collectionId);
+          if (updatedCol) {
+            batchImportToScope(
+              cloudConfig.apiUrl,
+              cloudConfig.token,
+              cloudConfig.activeScope,
+              [updatedCol],
+              cloudConfig.refreshToken
+            ).catch((err) => console.error('Failed to sync updated collection item to cloud:', err));
+          }
+        }
+      },
+
+      saveActiveRequest: () => {
+        const { tabs, activeTabId, collections, saveRequestToCollection } = get();
+        const currentTab = tabs.find((t) => t.id === activeTabId);
+        if (!currentTab) return { success: false, isDirectSaved: false };
+
+        const saved = findSavedRequestInCollections(collections, currentTab.id);
+        if (saved) {
+          saveRequestToCollection(saved.collection.id, saved.folderId, currentTab);
+          return { success: true, isDirectSaved: true };
+        }
+
+        return { success: false, isDirectSaved: false };
       },
 
       addCollection: async (collection) => {

@@ -180,6 +180,7 @@ go test -v ./...
 ### Superadmin Administration
 - `GET /api/v1/admin/users` — List all registered users
 - `POST /api/v1/admin/users` — Provision new user with custom role
+- `PUT /api/v1/admin/users/{userId}/password` — Reset / change user password directly
 
 ---
 

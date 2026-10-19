@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldAlert, Plus, Search, Loader2, UserCheck, X } from 'lucide-react';
+import { ShieldAlert, Plus, Search, Loader2, UserCheck, X, Eye, EyeOff, KeyRound, AlertCircle } from 'lucide-react';
 import { useHubStore } from '../store/useHubStore';
-import { apiListAllUsers, apiProvisionUser } from '../lib/api';
+import { apiListAllUsers, apiProvisionUser, apiResetUserPassword } from '../lib/api';
 import { User } from '../types';
 
 export const SuperadminView: React.FC = () => {
@@ -17,10 +17,18 @@ export const SuperadminView: React.FC = () => {
   const [isProvisionOpen, setIsProvisionOpen] = useState(false);
   const [newEmail, setNewEmail] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(false);
   const [newName, setNewName] = useState('');
   const [newRole, setNewRole] = useState<'user' | 'superadmin'>('user');
   const [isProvisioning, setIsProvisioning] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Reset Password Modal
+  const [resetUser, setResetUser] = useState<User | null>(null);
+  const [resetPassword, setResetPassword] = useState('');
+  const [showResetPassword, setShowResetPassword] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
+  const [resetSuccessMsg, setResetSuccessMsg] = useState<string | null>(null);
 
   const loadUsers = async () => {
     if (!token) return;
@@ -63,6 +71,34 @@ export const SuperadminView: React.FC = () => {
       setErrorMsg(err.message || 'Provisioning failed');
     } finally {
       setIsProvisioning(false);
+    }
+  };
+
+  const handleOpenResetPassword = (u: User) => {
+    setResetUser(u);
+    setResetPassword('');
+    setShowResetPassword(false);
+    setErrorMsg(null);
+    setResetSuccessMsg(null);
+  };
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || !resetUser) return;
+    setIsResetting(true);
+    setErrorMsg(null);
+    setResetSuccessMsg(null);
+    try {
+      await apiResetUserPassword(apiUrl, token, resetUser.id, resetPassword, refreshToken || undefined);
+      setResetSuccessMsg(`Password for ${resetUser.email} has been updated successfully.`);
+      setTimeout(() => {
+        setResetUser(null);
+        setResetSuccessMsg(null);
+      }, 1500);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Failed to reset password');
+    } finally {
+      setIsResetting(false);
     }
   };
 
@@ -125,19 +161,20 @@ export const SuperadminView: React.FC = () => {
                 <th className="px-4 py-3">Email Address</th>
                 <th className="px-4 py-3">System Role</th>
                 <th className="px-4 py-3">User ID</th>
+                <th className="px-4 py-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/60 text-zinc-200">
               {isLoading ? (
                 <tr>
-                  <td colSpan={4} className="py-10 text-center text-zinc-500">
+                  <td colSpan={5} className="py-10 text-center text-zinc-500">
                     <Loader2 className="h-4 w-4 animate-spin inline mr-2 text-amber-400" />
                     Loading registered users...
                   </td>
                 </tr>
               ) : filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="py-10 text-center text-zinc-500">
+                  <td colSpan={5} className="py-10 text-center text-zinc-500">
                     No matching users found.
                   </td>
                 </tr>
@@ -163,6 +200,16 @@ export const SuperadminView: React.FC = () => {
                       </span>
                     </td>
                     <td className="px-4 py-3 text-zinc-500 font-mono text-[11px]">{u.id}</td>
+                    <td className="px-4 py-3 text-right">
+                      <button
+                        onClick={() => handleOpenResetPassword(u)}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 hover:text-white hover:border-amber-500/40 transition"
+                        title="Change / Reset Password"
+                      >
+                        <KeyRound className="h-3.5 w-3.5 text-amber-400" />
+                        <span>Change Password</span>
+                      </button>
+                    </td>
                   </tr>
                 ))
               )}
@@ -221,15 +268,26 @@ export const SuperadminView: React.FC = () => {
 
               <div>
                 <label className="block text-xs font-semibold text-zinc-300 mb-1">Password</label>
-                <input
-                  type="password"
-                  required
-                  minLength={8}
-                  placeholder="Minimum 8 characters"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs text-zinc-100 focus:border-amber-500 focus:outline-none"
-                />
+                <div className="relative">
+                  <input
+                    type={showNewPassword ? 'text' : 'password'}
+                    required
+                    minLength={8}
+                    placeholder="Minimum 8 characters"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="w-full rounded-lg border border-zinc-800 bg-zinc-900 pl-3 pr-10 py-2 text-xs text-zinc-100 focus:border-amber-500 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowNewPassword(!showNewPassword)}
+                    className="absolute right-3 top-2.5 text-zinc-500 hover:text-zinc-300 transition"
+                    title={showNewPassword ? 'Hide password' : 'Show password'}
+                    aria-label={showNewPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
               </div>
 
               <div>
@@ -258,6 +316,94 @@ export const SuperadminView: React.FC = () => {
                   className="flex items-center gap-1.5 rounded-lg bg-amber-500 px-4 py-1.5 text-xs font-semibold text-zinc-950 hover:bg-amber-400 transition shadow-md disabled:opacity-50"
                 >
                   {isProvisioning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Provision Account'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {/* Reset Password Modal */}
+      {resetUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
+                <KeyRound className="h-5 w-5 text-amber-400" />
+                <span>Change User Password</span>
+              </h3>
+              <button
+                onClick={() => setResetUser(null)}
+                className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Target user details */}
+            <div className="mb-4 rounded-xl border border-zinc-800 bg-zinc-900/60 p-3 text-xs">
+              <div className="text-zinc-400">Target User:</div>
+              <div className="font-semibold text-zinc-200 text-sm mt-0.5">{resetUser.name}</div>
+              <div className="text-zinc-400 text-[11px]">{resetUser.email}</div>
+            </div>
+
+            {errorMsg && (
+              <div className="mb-4 flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 p-2.5 text-xs text-rose-300">
+                <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />
+                <span>{errorMsg}</span>
+              </div>
+            )}
+
+            {resetSuccessMsg && (
+              <div className="mb-4 flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-2.5 text-xs text-emerald-300">
+                <UserCheck className="h-4 w-4 shrink-0 text-emerald-400" />
+                <span>{resetSuccessMsg}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleResetPassword} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1">
+                  New Password
+                </label>
+                <div className="relative">
+                  <input
+                    type={showResetPassword ? 'text' : 'password'}
+                    required
+                    minLength={8}
+                    placeholder="Minimum 8 characters"
+                    value={resetPassword}
+                    onChange={(e) => setResetPassword(e.target.value)}
+                    className="w-full rounded-lg border border-zinc-800 bg-zinc-900 pl-3 pr-10 py-2 text-xs text-zinc-100 focus:border-amber-500 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowResetPassword(!showResetPassword)}
+                    className="absolute right-3 top-2.5 text-zinc-500 hover:text-zinc-300 transition"
+                    title={showResetPassword ? 'Hide password' : 'Show password'}
+                    aria-label={showResetPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showResetPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+                <p className="text-[10px] text-zinc-500 mt-1">
+                  Directly updates the user&apos;s password hash in the database.
+                </p>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setResetUser(null)}
+                  className="rounded-lg border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isResetting || resetPassword.length < 8}
+                  className="flex items-center gap-1.5 rounded-lg bg-amber-500 px-4 py-1.5 text-xs font-semibold text-zinc-950 hover:bg-amber-400 transition shadow-md shadow-amber-500/20 disabled:opacity-50"
+                >
+                  {isResetting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Update Password'}
                 </button>
               </div>
             </form>

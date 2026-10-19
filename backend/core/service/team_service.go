@@ -79,11 +79,16 @@ func (s *TeamService) UpdateTeam(ctx context.Context, user *domain.User, id uuid
 	}
 
 	name = strings.TrimSpace(name)
-	if name != "" {
-		team.Name = name
+	if name == "" {
+		return nil, errors.New("team name is required")
 	}
-	if description != "" {
-		team.Description = &description
+	team.Name = name
+
+	descTrimmed := strings.TrimSpace(description)
+	if descTrimmed != "" {
+		team.Description = &descTrimmed
+	} else {
+		team.Description = nil
 	}
 
 	if err := s.teamRepo.Update(ctx, team); err != nil {

@@ -18,6 +18,7 @@ import { useApiStore } from '@/store/useApiStore';
 import { CollectionItem, ApiRequest, Collection } from '@/types/api';
 import { MethodBadge } from './MethodBadge';
 import { exportPostmanCollection } from '@/lib/postman';
+import { ConfirmModal } from './ConfirmModal';
 
 function filterCollectionItems(items: CollectionItem[], query: string): CollectionItem[] {
   return items
@@ -125,6 +126,8 @@ export const Sidebar: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [isCreatingCol, setIsCreatingCol] = useState(false);
   const [newColTitle, setNewColTitle] = useState('');
+  const [collectionToDelete, setCollectionToDelete] = useState<Collection | null>(null);
+  const [showClearHistoryConfirm, setShowClearHistoryConfirm] = useState(false);
 
   const trimmedQuery = searchQuery.trim().toLowerCase();
 
@@ -315,7 +318,7 @@ export const Sidebar: React.FC = () => {
                           <Download className="h-3.5 w-3.5" />
                         </button>
                         <button
-                          onClick={() => deleteCollection(col.id)}
+                          onClick={() => setCollectionToDelete(col)}
                           className="rounded p-1 text-zinc-500 hover:text-rose-400 hover:bg-zinc-800 transition"
                           title="Delete collection"
                         >
@@ -343,7 +346,7 @@ export const Sidebar: React.FC = () => {
             {history.length > 0 && (
               <div className="flex justify-end pb-1">
                 <button
-                  onClick={clearHistory}
+                  onClick={() => setShowClearHistoryConfirm(true)}
                   className="flex items-center gap-1 text-[11px] text-zinc-500 hover:text-rose-400 transition"
                 >
                   <Trash2 className="h-3 w-3" />
@@ -402,6 +405,39 @@ export const Sidebar: React.FC = () => {
           </div>
         )}
       </div>
+
+      <ConfirmModal
+        isOpen={!!collectionToDelete}
+        onClose={() => setCollectionToDelete(null)}
+        onConfirm={() => {
+          if (collectionToDelete) {
+            deleteCollection(collectionToDelete.id);
+            setCollectionToDelete(null);
+          }
+        }}
+        title="Delete Collection"
+        message={
+          <span>
+            Are you sure you want to delete collection{' '}
+            <strong className="text-zinc-200">"{collectionToDelete?.name}"</strong>? This will permanently remove the collection and all its requests.
+          </span>
+        }
+        confirmText="Delete Collection"
+        variant="danger"
+      />
+
+      <ConfirmModal
+        isOpen={showClearHistoryConfirm}
+        onClose={() => setShowClearHistoryConfirm(false)}
+        onConfirm={() => {
+          clearHistory();
+          setShowClearHistoryConfirm(false);
+        }}
+        title="Clear Request History"
+        message="Are you sure you want to clear your entire request history? This action cannot be undone."
+        confirmText="Clear All History"
+        variant="danger"
+      />
     </aside>
   );
 };

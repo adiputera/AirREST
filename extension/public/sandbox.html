@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>AirREST Script Sandbox</title>
+  </head>
+  <body>
+    <script>
+      window.addEventListener('message', function (event) {
+        if (!event.data || typeof event.data !== 'object') return;
+        const { id, script, response, environment = {}, variables = {} } = event.data;
+        if (!id || !script) return;
+
+        const currentEnv = Object.assign({}, environment);
+        const currentVars = Object.assign({}, variables);
+
+        const pm = {
+          environment: {
+            get: function (k) { return currentEnv[k]; },
+            set: function (k, v) { currentEnv[k] = String(v); },
+            unset: function (k) { delete currentEnv[k]; },
+            has: function (k) { return Object.prototype.hasOwnProperty.call(currentEnv, k); },
+            toObject: function () { return Object.assign({}, currentEnv); }
+          },
+          variables: {
+            get: function (k) { return currentVars[k] !== undefined ? currentVars[k] : currentEnv[k]; },
+            set: function (k, v) { currentVars[k] = String(v); },
+            toObject: function () { return Object.assign({}, currentVars); }
+          },
+          response: response ? {
+            code: response.status,
+            status: response.statusText,
+            headers: response.headers || {},
+            json: function () {
+              return typeof response.data === 'object' && response.data !== null
+                ? response.data
+                : JSON.parse(response.data || '{}');
+            },
+            text: function () {
+              return typeof response.data === 'string' ? response.data : JSON.stringify(response.data || '');
+            },
+            to: {
+              have: {
+                status: function (code) {
+                  if (response.status !== code) {
+                    throw new Error('Expected status code ' + code + ' but got ' + response.status);
+                  }
+                }
+              }
+            }
+          } : undefined,
+          test: function (name, fn) {
+            try {
+              if (typeof fn === 'function') fn();
+            } catch (err) {
+              throw new Error('Test [' + name + '] failed: ' + (err && err.message ? err.message : String(err)));
+            }
+          },
+          expect: function (actual) {
+            return {
+              to: {
+                be: function (expected) {
+                  if (actual !== expected) throw new Error('Expected ' + expected + ' but got ' + actual);
+                },
+                equal: function (expected) {
+                  if (actual != expected) throw new Error('Expected ' + expected + ' but got ' + actual);
+                }
+              }
+            };
+          }
+        };
+
+        // Legacy Postman API compatibility (postman.*, response, responseBody, responseCode, tests)
+        const postman = {
+          setEnvironmentVariable: function (k, v) { currentEnv[k] = String(v); },
+          getEnvironmentVariable: function (k) { return currentEnv[k]; },
+          clearEnvironmentVariable: function (k) { delete currentEnv[k]; },
+          setGlobalVariable: function (k, v) { currentVars[k] = String(v); },
+          getGlobalVariable: function (k) { return currentVars[k]; },
+          clearGlobalVariable: function (k) { delete currentVars[k]; }
+        };
+
+        const rawBody = response
+          ? (typeof response.data === 'string' ? response.data : JSON.stringify(response.data || ''))
+          : '';
+        const responseCode = response ? { code: response.status, name: response.statusText } : { code: 0, name: '' };
+        const responseTime = response ? (response.timeMs || 0) : 0;
+        const responseHeaders = response ? (response.headers || {}) : {};
+        const tests = {};
+
+        try {
+          const fn = new Function(
+            'pm',
+            'postman',
+            'response',
+            'responseBody',
+            'responseCode',
+            'responseTime',
+            'responseHeaders',
+            'tests',
+            script
+          );
+          fn(pm, postman, rawBody, rawBody, responseCode, responseTime, responseHeaders, tests);
+          event.source.postMessage({
+            id: id,
+            success: true,
+            environment: currentEnv,
+            variables: currentVars
+          }, event.origin || '*');
+        } catch (err) {
+          event.source.postMessage({
+            id: id,
+            success: false,
+            error: err && err.message ? err.message : String(err),
+            environment: currentEnv,
+            variables: currentVars
+          }, event.origin || '*');
+        }
+      });
+    </script>
+  </body>
+</html>

@@ -4,39 +4,27 @@
   "private": true,
   "type": "module",
   "workspaces": [
+    "extension",
     "hub"
   ],
   "scripts": {
-    "dev": "vite",
-    "dev:offline": "vite --mode offline",
-    "build": "vite build",
-    "build:full": "vite build --mode full",
-    "build:offline": "vite build --mode offline",
-    "build:extension": "vite build",
-    "build:all-extensions": "npm run build && npm run build:offline",
+    "dev": "npm run --prefix extension dev",
+    "dev:offline": "npm run --prefix extension dev:offline",
+    "build": "npm run --prefix extension build",
+    "build:full": "npm run --prefix extension build:full",
+    "build:offline": "npm run --prefix extension build:offline",
+    "build:extension": "npm run --prefix extension build",
+    "build:all-extensions": "npm run --prefix extension build:all-extensions",
     "dev:hub": "npm run --prefix hub dev",
     "build:hub": "npm run --prefix hub build",
     "build:all": "npm run build && npm run build:offline && npm run build:hub",
-    "preview": "vite preview",
+    "preview": "npm run --prefix extension preview",
+    "typecheck": "npm run --prefix extension typecheck && npm run --prefix hub typecheck",
     "lint": "eslint"
   },
-  "dependencies": {
-    "lucide-react": "^1.52.0",
-    "react": "19.3.0",
-    "react-dom": "19.3.0",
-    "zustand": "^5.0.15"
-  },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.3.3",
-    "@types/chrome": "^0.3.4",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "@vitejs/plugin-react": "^6.1.2",
     "eslint": "^9",
-    "tailwindcss": "^4",
     "typescript": "^5",
-    "typescript-eslint": "^8.71.1",
-    "vite": "^8.3.3"
+    "typescript-eslint": "^8.71.1"
   }
 }

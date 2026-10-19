@@ -35,9 +35,9 @@ AirREST uses a single codebase with multi-target compilation supporting two dist
 
 | Edition | Build Command | Output Directory | Target Distribution | Description |
 |---|---|---|---|---|
-| **Offline Only** | `npm run build:offline` | `dist-offline/` | **Chrome Web Store (Public)** | 100% offline, privacy-focused, zero cloud auth/sync UI, minimal permissions, instant approval. |
-| **Full (Cloud + Offline)** | `npm run build` | `dist/` | **Unlisted / Team Collaboration** | Dual-mode: offline storage + team workspace sync, RBAC, and Hub backend integration. |
-| **Both Editions** | `npm run build:all-extensions` | `dist/` & `dist-offline/` | All targets | Compiles both packages simultaneously with dead-code elimination. |
+| **Offline Only** | `npm run build:offline` | `extension/dist-offline/` | **Chrome Web Store (Public)** | 100% offline, privacy-focused, zero cloud auth/sync UI, minimal permissions, instant approval. |
+| **Full (Cloud + Offline)** | `npm run build` | `extension/dist/` | **Unlisted / Team Collaboration** | Dual-mode: offline storage + team workspace sync, RBAC, and Hub backend integration. |
+| **Both Editions** | `npm run build:all-extensions` | `extension/dist/` & `extension/dist-offline/` | All targets | Compiles both packages simultaneously with dead-code elimination. |
 
 ```bash
 # Clone the repository
@@ -56,8 +56,8 @@ npm run build
 1. Open Google Chrome and navigate to `chrome://extensions/`.
 2. Enable **Developer mode** in the upper-right corner.
 3. Click **Load unpacked** and select:
-   - **`dist-offline/`** to run or inspect the Chrome Web Store offline-only release.
-   - **`dist/`** to run or inspect the full cloud-sync edition.
+   - **`extension/dist-offline/`** to run or inspect the Chrome Web Store offline-only release.
+   - **`extension/dist/`** to run or inspect the full cloud-sync edition.
 
 ### 2. Deploy AirREST Hub to Vercel (Management Portal)
 AirREST Hub is located in the **`hub/`** directory and deploys to Vercel with zero configuration:
@@ -136,6 +136,7 @@ The backend reads configuration from environment variables or a local `backend/.
 - **Deep Hierarchy Preservation**: Preserves nested folder trees, query parameters, header tables, request bodies, and scripting hooks.
 - **Flexible Import**: Import collections via drag-and-drop file upload or direct JSON text paste.
 - **1-Click Export**: Export any individual collection directly from the sidebar or global header to Postman v2.1 JSON to share with teammates.
+- **Safe Management & Confirmations**: Deleting collections or environments triggers a modern confirmation dialog to prevent accidental data loss.
 - **Real-Time Search**: Instant filtering across collection names, folders, and nested request endpoints.
 - **Sample Collection**: One-click demo loader with pre-configured endpoints and assertions for quick testing.
 
@@ -196,6 +197,12 @@ The backend reads configuration from environment variables or a local `backend/.
   - Supports `form-data` with both **Text** key-value pairs and **File** attachments.
   - Integrated file selector with file name and size indicators.
   - Dispatches documents, images, and binary files with automatic boundary negotiation.
+- **URL-Encoded Form Data (`x-www-form-urlencoded`)**:
+  - Interactive **Key-Value Form table** (Key, Value, enable/disable checkboxes, row deletion, and variable templates `{{var}}`).
+  - **Bulk Edit Mode**: 1-click toggle between interactive form rows and multi-line bulk text (`key: value` or `key=value`).
+  - Intelligent conversion when switching from JSON payloads or parsing raw query strings.
+  - Automatically dispatches with `Content-Type: application/x-www-form-urlencoded` with standard URL encoding.
+  - Full two-way support in cURL (`--data-urlencode "key=value"`) and Postman Collection v2.1 import/export (`"mode": "urlencoded"`).
 
 ### 7. 📑 Multi-Tab Workspace & Request Builder
 - Concurrent, independent request tabs with method color badges, middle-click close, and close handlers.
@@ -215,7 +222,9 @@ The backend reads configuration from environment variables or a local `backend/.
   - **JSON Beautifier**: 1-click **Beautify JSON** formatting with error detection.
   - Full two-way support in cURL generation/parsing and Postman Collection v2.1 import/export (`options.raw.language: "xml" | "json" | "html" | "text"`).
 - Quick keyboard dispatch: <kbd>Ctrl + Enter</kbd> (Windows/Linux) or <kbd>Cmd + Enter</kbd> (macOS).
-- **Save to Collection**: Save active or modified requests directly to collections and subfolders.
+- **Save to Collection & Unsaved Changes Indicator**:
+  - **Postman-style Unsaved Indicator (`●`)**: Displays a glowing indicator dot on tabs and request headers whenever a request has unsaved modifications (such as changes to URL, method, headers, parameters, body payloads, or scripts).
+  - **Direct In-Place Save & Shortcut**: Pressing <kbd>Ctrl + S</kbd> / <kbd>Cmd + S</kbd> or clicking **Save** immediately saves updates in-place to the source collection item and clears the dot. For new requests, prompts the **Save to Collection** modal. **Save As** enables saving copies across collections.
 
 ### 8. 📊 Response Inspector
 - Real-time HTTP status badge, round-trip latency (`ms`), and payload size.
@@ -240,12 +249,16 @@ The backend reads configuration from environment variables or a local `backend/.
 | Command | Description |
 |---|---|
 | `npm run dev` | Runs the local Vite development server for the Chrome Extension studio |
-| `npm run build` | Builds the production Chrome Extension bundle into `dist/` |
+| `npm run dev:offline` | Runs the offline-only mode Vite development server |
+| `npm run build` | Builds the production Chrome Extension bundle into `extension/dist/` |
+| `npm run build:offline` | Builds the offline-only Chrome Extension bundle into `extension/dist-offline/` |
 | `npm run build:extension` | Alias for `npm run build` |
+| `npm run build:all-extensions` | Compiles both Chrome Extension editions simultaneously |
 | `npm run dev:hub` | Runs the local Vite development server for AirREST Hub (`hub/`) |
 | `npm run build:hub` | Builds the production AirREST Hub bundle into `hub/dist/` |
-| `npm run build:all` | Compiles both the Chrome Extension studio and the Hub portal |
-| `npm run preview` | Previews the production build locally |
+| `npm run build:all` | Compiles both Chrome Extension editions and the Hub portal |
+| `npm run preview` | Previews the production extension build locally |
+| `npm run typecheck` | Validates TypeScript types across both extension and hub |
 | `npm run lint` | Runs ESLint validation across the repository |
 
 ### Backend Scripts (Go & Docker)
@@ -263,32 +276,27 @@ The backend reads configuration from environment variables or a local `backend/.
 
 ```
 ├── .gitignore                    # Comprehensive ignore rules (.env, binaries, dist)
-├── package.json                  # Root npm workspace configuration
+├── package.json                  # Root npm workspace configuration (workspaces: ["extension", "hub"])
 ├── package-lock.json
-├── vite.config.ts                # Extension Vite bundler configuration
+├── eslint.config.mjs             # Monorepo-wide ESLint configuration
+├── tsconfig.json                 # Workspace root TypeScript configuration
 │
-├── dist/                         # Compiled Chrome extension (load unpacked in chrome://extensions)
+├── extension/                    # Chrome Extension (Manifest V3 + React 19 + Tailwind v4)
+│   ├── dist/                     # Compiled full edition (load unpacked in chrome://extensions)
+│   ├── dist-offline/             # Compiled offline-only edition
+│   ├── public/                   # Static assets (manifest.json, sandbox.html, service-worker.js, icons)
+│   ├── src/                      # Chrome Extension React 19 source code
+│   │   ├── components/           # UI components (Header, RequestEditor, ResponseViewer, Modals)
+│   │   ├── lib/                  # Utilities (cURL, fetcher, postman, scriptRunner, cloudApi)
+│   │   ├── store/                # Zustand persistent application store
+│   │   ├── types/                # TypeScript data models and interfaces
+│   │   ├── App.tsx               # Studio layout shell
+│   │   ├── index.css             # Tailwind CSS v4 styling
+│   │   └── main.tsx              # React DOM entrypoint
 │   ├── index.html                # Extension main window HTML
-│   ├── manifest.json             # Chrome Manifest V3 manifest
-│   ├── sandbox.html              # Isolated script execution sandbox
-│   ├── service-worker.js         # Extension background service worker
-│   ├── icons/                    # Extension icons (16px, 48px, 128px)
-│   └── assets/                   # Compiled JavaScript and CSS bundles
-│
-├── public/                       # Static extension assets copied during build
-│   ├── manifest.json
-│   ├── sandbox.html
-│   ├── service-worker.js
-│   └── icons/
-│
-├── src/                          # Chrome Extension React 19 source code
-│   ├── components/               # UI components (Header, RequestEditor, ResponseViewer, Modals)
-│   ├── lib/                      # Utilities (cURL, fetcher, postman, scriptRunner, cloudApi)
-│   ├── store/                    # Zustand persistent application store
-│   ├── types/                    # TypeScript data models and interfaces
-│   ├── App.tsx                   # Studio layout shell
-│   ├── index.css                 # Tailwind CSS v4 styling
-│   └── main.tsx                  # React DOM entrypoint
+│   ├── package.json              # Extension dependencies & scripts
+│   ├── tsconfig.json             # Extension TypeScript configuration
+│   └── vite.config.ts            # Extension Vite bundler configuration
 │
 ├── hub/                          # AirREST Hub management portal (Vite + React 19 + Tailwind v4)
 │   ├── src/                      # Hub pages (Teams, Projects, Superadmin, Connect)

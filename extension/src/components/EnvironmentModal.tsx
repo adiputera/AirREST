@@ -19,6 +19,7 @@ import {
 import { useApiStore } from '@/store/useApiStore';
 import { exportPostmanEnvironment } from '@/lib/postman';
 import { getRoleFromJwt } from '@/lib/jwt';
+import { ConfirmModal } from './ConfirmModal';
 
 interface EnvironmentModalProps {
   isOpen: boolean;
@@ -75,6 +76,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
   const [pastedJson, setPastedJson] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -413,7 +415,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
 
               {currentEnv && environments.length > 1 && (
                 <button
-                  onClick={() => deleteEnvironment(currentEnv.id)}
+                  onClick={() => setShowDeleteConfirm(true)}
                   disabled={isEnvReadOnly}
                   className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-900 hover:text-rose-400 disabled:opacity-40 disabled:cursor-not-allowed transition"
                   title={isEnvReadOnly ? 'Higher role required to delete this environment' : 'Delete Environment'}
@@ -583,6 +585,30 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
           ) : null}
         </div>
       </div>
+
+      <ConfirmModal
+        isOpen={showDeleteConfirm}
+        onClose={() => setShowDeleteConfirm(false)}
+        onConfirm={() => {
+          if (currentEnv) {
+            const nextEnv = environments.find((e) => e.id !== currentEnv.id);
+            if (nextEnv) {
+              setSelectedEnvId(nextEnv.id);
+            }
+            deleteEnvironment(currentEnv.id);
+            setShowDeleteConfirm(false);
+          }
+        }}
+        title="Delete Environment"
+        message={
+          <span>
+            Are you sure you want to delete environment{' '}
+            <strong className="text-zinc-200">"{currentEnv?.name}"</strong>? All variables defined in this environment will be permanently removed.
+          </span>
+        }
+        confirmText="Delete Environment"
+        variant="danger"
+      />
     </div>
   );
 };

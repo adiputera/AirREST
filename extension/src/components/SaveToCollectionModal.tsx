@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { Bookmark, X, Check } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
 import { ApiRequest, CollectionItem } from '@/types/api';
+import { findSavedRequestInCollections } from '@/lib/requestDiff';
 
 interface SaveToCollectionModalProps {
   isOpen: boolean;
@@ -19,12 +20,15 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
   const collections = useApiStore((state) => state.collections);
   const createCollection = useApiStore((state) => state.createCollection);
   const saveRequestToCollection = useApiStore((state) => state.saveRequestToCollection);
+  const updateActiveRequest = useApiStore((state) => state.updateActiveRequest);
+
+  const savedInfo = findSavedRequestInCollections(collections, request.id);
 
   const [requestName, setRequestName] = useState(request.name || 'Untitled Request');
   const [selectedCollectionId, setSelectedCollectionId] = useState<string>(
-    collections[0]?.id || ''
+    savedInfo?.collection.id || collections[0]?.id || ''
   );
-  const [selectedFolderId, setSelectedFolderId] = useState<string>('');
+  const [selectedFolderId, setSelectedFolderId] = useState<string>(savedInfo?.folderId || '');
   const [isCreatingCollection, setIsCreatingCollection] = useState(collections.length === 0);
   const [newCollectionName, setNewCollectionName] = useState('');
   const [isSaved, setIsSaved] = useState(false);
@@ -61,14 +65,16 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
 
     if (!targetCollectionId) return;
 
+    const finalName = requestName.trim() || 'Untitled Request';
     saveRequestToCollection(
       targetCollectionId,
       selectedFolderId ? selectedFolderId : null,
       {
         ...request,
-        name: requestName.trim() || 'Untitled Request',
+        name: finalName,
       }
     );
+    updateActiveRequest({ name: finalName });
 
     setIsSaved(true);
     setTimeout(() => {

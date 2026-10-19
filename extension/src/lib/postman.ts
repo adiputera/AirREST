@@ -10,6 +10,7 @@ import {
   BinaryFileData,
   BodyType,
   RawType,
+  FormDataItem,
 } from '@/types/api';
 
 interface PostmanHeader {
@@ -44,6 +45,21 @@ interface PostmanRequestBody {
     src?: string;
     content?: string;
   };
+  urlencoded?: Array<{
+    key?: string;
+    value?: string;
+    type?: string;
+    disabled?: boolean;
+    description?: string;
+  }>;
+  formdata?: Array<{
+    key?: string;
+    value?: string;
+    type?: 'text' | 'file';
+    src?: string;
+    disabled?: boolean;
+    description?: string;
+  }>;
   options?: {
     raw?: {
       language?: string;
@@ -387,6 +403,8 @@ function convertPostmanItem(item: PostmanRawItem, inheritedAuth?: AuthConfig): C
   let graphqlQuery = '';
   let graphqlVariables = '';
   let bodyBinaryFile: BinaryFileData | undefined = undefined;
+  let bodyFormData: FormDataItem[] = [];
+  let bodyUrlEncoded: KeyValuePair[] = [];
 
   if (rawReq.body) {
     if (rawReq.body.mode === 'graphql') {
@@ -415,7 +433,56 @@ function convertPostmanItem(item: PostmanRawItem, inheritedAuth?: AuthConfig): C
       bodyContent = rawStr;
     } else if (rawReq.body.mode === 'urlencoded') {
       bodyType = 'x-www-form-urlencoded';
-      bodyContent = rawReq.body.raw || '';
+      const urlencodedList = Array.isArray(rawReq.body.urlencoded) ? rawReq.body.urlencoded : [];
+      if (urlencodedList.length > 0) {
+        bodyUrlEncoded = urlencodedList.map((item) => ({
+          id: generateId(),
+          key: item.key || '',
+          value: item.value || '',
+          enabled: item.disabled !== true,
+          description: item.description,
+        }));
+        const urlParams = new URLSearchParams();
+        for (const item of bodyUrlEncoded) {
+          if (item.enabled && item.key.trim()) {
+            urlParams.append(item.key.trim(), item.value);
+          }
+        }
+        bodyContent = urlParams.toString();
+      } else if (rawReq.body.raw) {
+        bodyContent = rawReq.body.raw;
+        try {
+          const params = new URLSearchParams(rawReq.body.raw);
+          params.forEach((value, key) => {
+            bodyUrlEncoded.push({
+              id: generateId(),
+              key,
+              value,
+              enabled: true,
+            });
+          });
+        } catch {
+          // ignore
+        }
+      }
+      if (bodyUrlEncoded.length === 0) {
+        bodyUrlEncoded = [{ id: generateId(), key: '', value: '', enabled: true }];
+      }
+    } else if (rawReq.body.mode === 'formdata') {
+      bodyType = 'form-data';
+      const formdataList = Array.isArray(rawReq.body.formdata) ? rawReq.body.formdata : [];
+      if (formdataList.length > 0) {
+        bodyFormData = formdataList.map((item) => ({
+          id: generateId(),
+          key: item.key || '',
+          type: item.type === 'file' ? 'file' : 'text',
+          value: item.value || item.src || '',
+          enabled: item.disabled !== true,
+        }));
+      }
+      if (bodyFormData.length === 0) {
+        bodyFormData = [{ id: generateId(), key: '', type: 'text', value: '', enabled: true }];
+      }
     } else if (rawReq.body.mode === 'file') {
       bodyType = 'binary';
       const fileSrc =
@@ -449,6 +516,26 @@ function convertPostmanItem(item: PostmanRawItem, inheritedAuth?: AuthConfig): C
       } else if (ctVal.includes('text/html')) {
         bodyType = 'raw';
         rawType = 'html';
+      } else if (ctVal.includes('application/x-www-form-urlencoded')) {
+        bodyType = 'x-www-form-urlencoded';
+        if (bodyContent && bodyUrlEncoded.length === 0) {
+          try {
+            const params = new URLSearchParams(bodyContent);
+            params.forEach((value, key) => {
+              bodyUrlEncoded.push({
+                id: generateId(),
+                key,
+                value,
+                enabled: true,
+              });
+            });
+          } catch {
+            // ignore
+          }
+        }
+        if (bodyUrlEncoded.length === 0) {
+          bodyUrlEncoded = [{ id: generateId(), key: '', value: '', enabled: true }];
+        }
       }
     }
   }
@@ -509,7 +596,9 @@ function convertPostmanItem(item: PostmanRawItem, inheritedAuth?: AuthConfig): C
     bodyContent,
     graphqlQuery,
     graphqlVariables,
+    bodyFormData,
     bodyBinaryFile,
+    bodyUrlEncoded: bodyUrlEncoded.length > 0 ? bodyUrlEncoded : [{ id: generateId(), key: '', value: '', enabled: true }],
     preRequestScript,
     postResponseScript,
     createdAt: Date.now(),
@@ -627,7 +716,29 @@ function itemToPostmanJson(item: CollectionItem): PostmanRawItem {
         variables: req.graphqlVariables || '',
       },
     };
-  } else if (req.bodyType === 'raw' || req.bodyType === 'x-www-form-urlencoded') {
+  } else if (req.bodyType === 'x-www-form-urlencoded') {
+    body = {
+      mode: 'urlencoded',
+      urlencoded: (req.bodyUrlEncoded || []).map((item) => ({
+        key: item.key,
+        value: item.value,
+        type: 'text',
+        disabled: !item.enabled,
+        description: item.description,
+      })),
+    };
+  } else if (req.bodyType === 'form-data') {
+    body = {
+      mode: 'formdata',
+      formdata: (req.bodyFormData || []).map((item) => ({
+        key: item.key,
+        value: item.value,
+        type: item.type,
+        src: item.file?.name || (item.type === 'file' ? item.value : undefined),
+        disabled: !item.enabled,
+      })),
+    };
+  } else if (req.bodyType === 'raw') {
     body = {
       mode: 'raw',
       raw: req.bodyContent,

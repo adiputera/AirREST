@@ -34,4 +34,11 @@ func TestAuthServiceValidationRules(t *testing.T) {
 			t.Fatalf("expected 0 results for single character query, got: %d", len(results))
 		}
 	})
+
+	t.Run("ResetPasswordByAdmin requires minimum 8 characters", func(t *testing.T) {
+		err := authService.ResetPasswordByAdmin(ctx, uuid.New(), "short")
+		if err != ErrPasswordTooShort {
+			t.Fatalf("expected ErrPasswordTooShort, got: %v", err)
+		}
+	})
 }

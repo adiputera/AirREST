@@ -304,7 +304,9 @@ function formatImportItem(item: any): any {
     body_content: item.request?.bodyContent || '',
     graphql_query: item.request?.graphqlQuery || '',
     graphql_variables: item.request?.graphqlVariables || '',
-    body_form_data: item.request?.bodyFormData || [],
+    body_form_data: item.request?.bodyType === 'x-www-form-urlencoded'
+      ? item.request?.bodyUrlEncoded || []
+      : item.request?.bodyFormData || [],
     pre_request_script: item.request?.preRequestScript || '',
     post_response_script: item.request?.postResponseScript || '',
     items: (item.items || []).map(formatImportItem),

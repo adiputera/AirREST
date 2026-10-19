@@ -53,6 +53,7 @@ export interface ApiRequest {
   graphqlVariables?: string;
   bodyFormData?: FormDataItem[];
   bodyBinaryFile?: BinaryFileData;
+  bodyUrlEncoded?: KeyValuePair[];
   preRequestScript?: string;
   postResponseScript?: string;
   createdAt: number;

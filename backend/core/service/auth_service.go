@@ -284,6 +284,24 @@ func (s *AuthService) ChangePassword(ctx context.Context, userID uuid.UUID, curr
 	return s.userRepo.UpdatePassword(ctx, userID, newHash)
 }
 
+// ResetPasswordByAdmin allows superadmin to reset any user's password without requiring current password
+func (s *AuthService) ResetPasswordByAdmin(ctx context.Context, userID uuid.UUID, newPassword string) error {
+	if len(newPassword) < 8 {
+		return ErrPasswordTooShort
+	}
+
+	if _, err := s.userRepo.GetByID(ctx, userID); err != nil {
+		return err
+	}
+
+	newHash, err := hasher.HashPassword(newPassword)
+	if err != nil {
+		return fmt.Errorf("failed to hash new password: %w", err)
+	}
+
+	return s.userRepo.UpdatePassword(ctx, userID, newHash)
+}
+
 // SearchUsers searches users by email or name (minimum 2 characters query)
 func (s *AuthService) SearchUsers(ctx context.Context, query string) ([]*domain.User, error) {
 	query = strings.TrimSpace(query)

@@ -17,12 +17,15 @@ import { useHubStore } from '../store/useHubStore';
 import {
   apiListTeams,
   apiCreateTeam,
+  apiUpdateTeam,
+  apiDeleteTeam,
   apiListTeamMembers,
   apiAddTeamMember,
   apiRemoveTeamMember,
   apiSearchUsers,
 } from '../lib/api';
 import { Team, TeamMember, User } from '../types';
+import { ConfirmModal } from '../components/ConfirmModal';
 
 export const TeamsView: React.FC = () => {
   const apiUrl = useHubStore((state) => state.apiUrl);
@@ -44,6 +47,11 @@ export const TeamsView: React.FC = () => {
   const [newTeamName, setNewTeamName] = useState('');
   const [newTeamDesc, setNewTeamDesc] = useState('');
   const [isCreatingTeam, setIsCreatingTeam] = useState(false);
+
+  const [isEditTeamOpen, setIsEditTeamOpen] = useState(false);
+  const [editTeamName, setEditTeamName] = useState('');
+  const [editTeamDesc, setEditTeamDesc] = useState('');
+  const [isUpdatingTeam, setIsUpdatingTeam] = useState(false);
 
   const [isAddMemberOpen, setIsAddMemberOpen] = useState(false);
   const [userQuery, setUserQuery] = useState('');
@@ -125,6 +133,38 @@ export const TeamsView: React.FC = () => {
     }
   };
 
+  // Handle Open Edit Team
+  const handleOpenEditTeam = (team: Team) => {
+    setEditTeamName(team.name);
+    setEditTeamDesc(team.description || '');
+    setErrorMsg(null);
+    setIsEditTeamOpen(true);
+  };
+
+  // Handle Update Team
+  const handleUpdateTeam = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || !selectedTeamId) return;
+    setIsUpdatingTeam(true);
+    setErrorMsg(null);
+    try {
+      const updated = await apiUpdateTeam(
+        apiUrl,
+        token,
+        selectedTeamId,
+        editTeamName.trim(),
+        editTeamDesc.trim(),
+        refreshToken || undefined
+      );
+      setTeams(teams.map((t) => (t.id === selectedTeamId ? { ...t, ...updated } : t)));
+      setIsEditTeamOpen(false);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Failed to update team');
+    } finally {
+      setIsUpdatingTeam(false);
+    }
+  };
+
   // Search users for invite
   const handleUserSearch = async (query: string) => {
     setUserQuery(query);
@@ -167,15 +207,43 @@ export const TeamsView: React.FC = () => {
     }
   };
 
-  // Handle Remove Member
-  const handleRemoveMember = async (memberUserId: string) => {
-    if (!token || !selectedTeamId) return;
-    if (!confirm('Are you sure you want to remove this member from the team?')) return;
+  // State for Confirmations
+  const [memberToRemove, setMemberToRemove] = useState<TeamMember | null>(null);
+  const [isRemovingMember, setIsRemovingMember] = useState(false);
+  const [teamToDelete, setTeamToDelete] = useState<Team | null>(null);
+  const [isDeletingTeam, setIsDeletingTeam] = useState(false);
+
+  // Handle Remove Member Confirmation
+  const confirmRemoveMember = async () => {
+    if (!token || !selectedTeamId || !memberToRemove) return;
+    setIsRemovingMember(true);
     try {
-      await apiRemoveTeamMember(apiUrl, token, selectedTeamId, memberUserId, refreshToken || undefined);
-      setMembers(members.filter((m) => m.user_id !== memberUserId));
+      await apiRemoveTeamMember(apiUrl, token, selectedTeamId, memberToRemove.user_id, refreshToken || undefined);
+      setMembers(members.filter((m) => m.user_id !== memberToRemove.user_id));
+      setMemberToRemove(null);
     } catch (err: any) {
       alert(err.message || 'Failed to remove member');
+    } finally {
+      setIsRemovingMember(false);
+    }
+  };
+
+  // Handle Delete Team Confirmation
+  const confirmDeleteTeam = async () => {
+    if (!token || !teamToDelete) return;
+    setIsDeletingTeam(true);
+    try {
+      await apiDeleteTeam(apiUrl, token, teamToDelete.id, refreshToken || undefined);
+      const updatedTeams = teams.filter((t) => t.id !== teamToDelete.id);
+      setTeams(updatedTeams);
+      if (selectedTeamId === teamToDelete.id) {
+        setSelectedTeamId(updatedTeams[0]?.id || null);
+      }
+      setTeamToDelete(null);
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete team');
+    } finally {
+      setIsDeletingTeam(false);
     }
   };
 
@@ -288,24 +356,54 @@ export const TeamsView: React.FC = () => {
                   <span className="rounded-full border border-indigo-500/30 bg-indigo-500/10 px-2.5 py-0.5 text-xs font-semibold text-indigo-400">
                     Team Organization
                   </span>
+                  {user?.role === 'superadmin' && (
+                    <button
+                      onClick={() => handleOpenEditTeam(activeTeam)}
+                      className="rounded-lg p-1 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition"
+                      title="Edit Team"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                 </div>
                 <p className="text-xs text-zinc-400 max-w-xl">
                   {activeTeam.description || 'No description provided for this team.'}
                 </p>
               </div>
 
-              {/* View Projects Link */}
-              <button
-                onClick={() => {
-                  setSelectedTeamId(activeTeam.id);
-                  setActiveTab('projects');
-                }}
-                className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-sky-600 to-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-md shadow-sky-500/20 hover:from-sky-500 hover:to-indigo-500 transition shrink-0"
-              >
-                <FolderGit2 className="h-4 w-4" />
-                <span>Manage Team Projects</span>
-                <ArrowRight className="h-3.5 w-3.5" />
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                {user?.role === 'superadmin' && (
+                  <>
+                    <button
+                      onClick={() => handleOpenEditTeam(activeTeam)}
+                      className="flex items-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-800/80 px-3 py-2 text-xs font-semibold text-zinc-200 hover:bg-zinc-700 hover:text-white transition shadow-sm"
+                    >
+                      <Pencil className="h-3.5 w-3.5 text-zinc-400" />
+                      <span>Edit Team</span>
+                    </button>
+                    <button
+                      onClick={() => setTeamToDelete(activeTeam)}
+                      className="flex items-center gap-1.5 rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs font-semibold text-rose-300 hover:bg-rose-500/20 hover:text-rose-200 transition shadow-sm"
+                      title="Delete Team"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span>Delete Team</span>
+                    </button>
+                  </>
+                )}
+                {/* View Projects Link */}
+                <button
+                  onClick={() => {
+                    setSelectedTeamId(activeTeam.id);
+                    setActiveTab('projects');
+                  }}
+                  className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-sky-600 to-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-md shadow-sky-500/20 hover:from-sky-500 hover:to-indigo-500 transition"
+                >
+                  <FolderGit2 className="h-4 w-4" />
+                  <span>Manage Team Projects</span>
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
             </div>
 
             {/* Team Members Section */}
@@ -390,7 +488,7 @@ export const TeamsView: React.FC = () => {
                               </button>
                               {member.user_id !== user?.id && (
                                 <button
-                                  onClick={() => handleRemoveMember(member.user_id)}
+                                  onClick={() => setMemberToRemove(member)}
                                   className="rounded p-1 text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400 transition"
                                   title="Remove Member"
                                 >
@@ -638,6 +736,111 @@ export const TeamsView: React.FC = () => {
           </div>
         </div>
       )}
+      {/* Modal: Edit Team */}
+      {isEditTeamOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
+                <Pencil className="h-5 w-5 text-indigo-400" />
+                <span>Edit Team</span>
+              </h3>
+              <button
+                onClick={() => setIsEditTeamOpen(false)}
+                className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {errorMsg && (
+              <div className="mb-4 flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 p-2.5 text-xs text-rose-300">
+                <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />
+                <span>{errorMsg}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleUpdateTeam} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1">Team Name</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Core Engineering"
+                  value={editTeamName}
+                  onChange={(e) => setEditTeamName(e.target.value)}
+                  className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1">Description (Optional)</label>
+                <textarea
+                  placeholder="Team description or purpose"
+                  rows={3}
+                  value={editTeamDesc}
+                  onChange={(e) => setEditTeamDesc(e.target.value)}
+                  className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsEditTeamOpen(false)}
+                  className="rounded-lg border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isUpdatingTeam || !editTeamName.trim()}
+                  className="flex items-center gap-1.5 rounded-lg bg-sky-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-sky-500 transition shadow-md disabled:opacity-50"
+                >
+                  {isUpdatingTeam ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal for Removing Member */}
+      <ConfirmModal
+        isOpen={!!memberToRemove}
+        onClose={() => setMemberToRemove(null)}
+        onConfirm={confirmRemoveMember}
+        isLoading={isRemovingMember}
+        title="Remove Team Member"
+        message={
+          <span>
+            Are you sure you want to remove{' '}
+            <strong className="text-zinc-200">
+              {memberToRemove?.name || memberToRemove?.email || 'this member'}
+            </strong>{' '}
+            from the team? They will lose access to all projects and synchronized data in this team.
+          </span>
+        }
+        confirmText="Remove Member"
+        variant="danger"
+      />
+
+      {/* Confirmation Modal for Deleting Team */}
+      <ConfirmModal
+        isOpen={!!teamToDelete}
+        onClose={() => setTeamToDelete(null)}
+        onConfirm={confirmDeleteTeam}
+        isLoading={isDeletingTeam}
+        title="Delete Team"
+        message={
+          <span>
+            Are you sure you want to delete team{' '}
+            <strong className="text-zinc-200">"{teamToDelete?.name}"</strong>? This action cannot be undone and will permanently delete all associated projects, collections, and team memberships.
+          </span>
+        }
+        confirmText="Delete Team"
+        variant="danger"
+      />
     </div>
   );
 };

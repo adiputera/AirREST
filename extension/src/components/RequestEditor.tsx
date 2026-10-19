@@ -23,7 +23,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
-import { HttpMethod, BodyType, RawType } from '@/types/api';
+import { HttpMethod, BodyType, RawType, KeyValuePair } from '@/types/api';
 import { KeyValueEditor } from './KeyValueEditor';
 import { METHOD_COLORS } from './MethodBadge';
 import { SaveToCollectionModal } from './SaveToCollectionModal';
@@ -31,6 +31,7 @@ import { generateCurlCommand } from '@/lib/curl';
 import { VariableInput } from './VariableInput';
 import { interpolateVariables } from '@/lib/fetcher';
 import { beautifyXml, beautifyGraphQL, beautifyJson } from '@/lib/formatters';
+import { isRequestModified } from '@/lib/requestDiff';
 
 function formatFileSize(bytes: number): string {
   if (!bytes || bytes <= 0) return '0 B';
@@ -62,10 +63,16 @@ export const RequestEditor: React.FC = () => {
   const addFormDataItem = useApiStore((state) => state.addFormDataItem);
   const removeFormDataItem = useApiStore((state) => state.removeFormDataItem);
   const setBodyBinaryFile = useApiStore((state) => state.setBodyBinaryFile);
+  const updateUrlEncodedItem = useApiStore((state) => state.updateUrlEncodedItem);
+  const addUrlEncodedItem = useApiStore((state) => state.addUrlEncodedItem);
+  const removeUrlEncodedItem = useApiStore((state) => state.removeUrlEncodedItem);
+  const setUrlEncodedItems = useApiStore((state) => state.setUrlEncodedItems);
   const sendRequest = useApiStore((state) => state.sendRequest);
   const isLoading = useApiStore((state) => state.isLoading);
   const environments = useApiStore((state) => state.environments);
   const activeEnvironmentId = useApiStore((state) => state.activeEnvironmentId);
+  const collections = useApiStore((state) => state.collections);
+  const saveActiveRequest = useApiStore((state) => state.saveActiveRequest);
 
   const [activeTab, setActiveTab] = useState<'params' | 'headers' | 'auth' | 'body' | 'prerequest' | 'tests'>('params');
   const [jsonFormatError, setJsonFormatError] = useState<string | null>(null);
@@ -74,8 +81,74 @@ export const RequestEditor: React.FC = () => {
   const [graphqlVariablesError, setGraphqlVariablesError] = useState<string | null>(null);
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
   const [copiedCurl, setCopiedCurl] = useState(false);
+  const [isUrlEncodedBulkEdit, setIsUrlEncodedBulkEdit] = useState(false);
+  const [urlEncodedBulkText, setUrlEncodedBulkText] = useState('');
+  const [justSaved, setJustSaved] = useState(false);
 
   const currentTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
+  const isDirty = isRequestModified(currentTab, collections);
+
+  const handleSave = () => {
+    const res = saveActiveRequest();
+    if (res.isDirectSaved) {
+      setJustSaved(true);
+      setTimeout(() => setJustSaved(false), 1200);
+    } else {
+      setIsSaveModalOpen(true);
+    }
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        handleSave();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleSave]);
+
+  useEffect(() => {
+    setIsUrlEncodedBulkEdit(false);
+  }, [activeTabId, currentTab.bodyType]);
+
+  const handleToggleBulkEdit = () => {
+    if (!isUrlEncodedBulkEdit) {
+      const list = currentTab.bodyUrlEncoded || [];
+      const text = list
+        .filter((item) => item.key || item.value)
+        .map((item) => `${item.key}: ${item.value}`)
+        .join('\n');
+      setUrlEncodedBulkText(text);
+      setIsUrlEncodedBulkEdit(true);
+    } else {
+      const lines = urlEncodedBulkText.split('\n');
+      const items: KeyValuePair[] = [];
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let key = '';
+        let value = '';
+        const colonIdx = line.indexOf(':');
+        const eqIdx = line.indexOf('=');
+        if (colonIdx >= 0 && (eqIdx < 0 || colonIdx < eqIdx)) {
+          key = line.substring(0, colonIdx).trim();
+          value = line.substring(colonIdx + 1).trim();
+        } else if (eqIdx >= 0) {
+          key = line.substring(0, eqIdx).trim();
+          value = line.substring(eqIdx + 1).trim();
+        } else {
+          key = line.trim();
+        }
+        items.push({ id: `u_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`, key, value, enabled: true });
+      }
+      if (items.length === 0) {
+        items.push({ id: `u_${Date.now()}`, key: '', value: '', enabled: true });
+      }
+      setUrlEncodedItems(items);
+      setIsUrlEncodedBulkEdit(false);
+    }
+  };
 
   // Keyboard shortcut: Ctrl+Enter or Cmd+Enter to send request
   useEffect(() => {
@@ -181,21 +254,55 @@ export const RequestEditor: React.FC = () => {
         {/* Request Name and Actions Bar */}
         <div className="mb-3 flex items-center justify-between">
           <div className="flex items-center gap-2 flex-1 mr-4">
-            <input
-              type="text"
-              value={currentTab.name}
-              onChange={(e) => updateActiveRequest({ name: e.target.value })}
-              placeholder="Untitled Request Name"
-              className="bg-transparent font-medium text-xs text-zinc-300 hover:text-white focus:text-white focus:outline-none focus:border-b focus:border-sky-500 transition px-1 py-0.5 rounded w-full max-w-sm"
-            />
-            <button
-              onClick={() => setIsSaveModalOpen(true)}
-              className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs font-medium text-zinc-300 hover:bg-zinc-850 hover:text-white transition"
-              title="Save request to a collection"
-            >
-              <Bookmark className="h-3.5 w-3.5 text-amber-400" />
-              <span>Save</span>
-            </button>
+            <div className="relative flex items-center flex-1 max-w-sm">
+              <input
+                type="text"
+                value={currentTab.name}
+                onChange={(e) => updateActiveRequest({ name: e.target.value })}
+                placeholder="Untitled Request Name"
+                className="bg-transparent font-medium text-xs text-zinc-300 hover:text-white focus:text-white focus:outline-none focus:border-b focus:border-sky-500 transition px-1 py-0.5 rounded w-full pr-5"
+              />
+              {isDirty && (
+                <span
+                  className="absolute right-1 h-2 w-2 rounded-full bg-amber-400 shrink-0 shadow-sm shadow-amber-400/50"
+                  title="Unsaved changes"
+                />
+              )}
+            </div>
+
+            <div className="flex items-center rounded-lg border border-zinc-800 bg-zinc-900 overflow-hidden shadow-sm">
+              <button
+                onClick={handleSave}
+                className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium transition ${
+                  isDirty
+                    ? 'text-amber-300 hover:bg-amber-500/10'
+                    : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'
+                }`}
+                title="Save request (Ctrl+S / ⌘+S)"
+              >
+                {justSaved ? (
+                  <>
+                    <Check className="h-3.5 w-3.5 text-emerald-400" />
+                    <span className="text-emerald-400 font-semibold">Saved!</span>
+                  </>
+                ) : (
+                  <>
+                    <Bookmark className={`h-3.5 w-3.5 ${isDirty ? 'text-amber-400' : 'text-zinc-400'}`} />
+                    <span>Save</span>
+                    {isDirty && (
+                      <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+                    )}
+                  </>
+                )}
+              </button>
+              <button
+                onClick={() => setIsSaveModalOpen(true)}
+                className="border-l border-zinc-800 px-1.5 py-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition text-[10px] font-medium"
+                title="Save As (save a copy to another collection)"
+              >
+                Save As
+              </button>
+            </div>
           </div>
 
           <div className="flex items-center gap-3">
@@ -612,6 +719,18 @@ export const RequestEditor: React.FC = () => {
                       <span>Beautify XML</span>
                     </button>
                   )}
+
+                  {currentTab.bodyType === 'x-www-form-urlencoded' && (
+                    <button
+                      type="button"
+                      onClick={handleToggleBulkEdit}
+                      className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs font-medium text-zinc-300 hover:bg-zinc-800 hover:text-white transition"
+                      title="Toggle between Key-Value rows and Bulk Edit text"
+                    >
+                      <Sliders className="h-3.5 w-3.5 text-sky-400" />
+                      <span>{isUrlEncodedBulkEdit ? 'Key-Value Edit' : 'Bulk Edit'}</span>
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -721,6 +840,37 @@ export const RequestEditor: React.FC = () => {
                     <Plus className="h-3.5 w-3.5 text-sky-400" />
                     <span>Add Form Field</span>
                   </button>
+                </div>
+              ) : currentTab.bodyType === 'x-www-form-urlencoded' ? (
+                /* URL-Encoded Key-Value Form Table */
+                <div className="space-y-2">
+                  {isUrlEncodedBulkEdit ? (
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between text-[11px] text-zinc-400">
+                        <span>Enter fields as <code className="text-sky-300">key: value</code> or <code className="text-sky-300">key=value</code> (one per line):</span>
+                      </div>
+                      <textarea
+                        value={urlEncodedBulkText}
+                        onChange={(e) => setUrlEncodedBulkText(e.target.value)}
+                        placeholder="username: user123&#10;password: secret&#10;grant_type: password"
+                        rows={6}
+                        className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 p-3 font-mono text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition resize-y"
+                      />
+                    </div>
+                  ) : (
+                    <KeyValueEditor
+                      items={
+                        currentTab.bodyUrlEncoded && currentTab.bodyUrlEncoded.length > 0
+                          ? currentTab.bodyUrlEncoded
+                          : [{ id: 'u1', key: '', value: '', enabled: true }]
+                      }
+                      onUpdate={updateUrlEncodedItem}
+                      onAdd={addUrlEncodedItem}
+                      onRemove={removeUrlEncodedItem}
+                      keyPlaceholder="Field Key"
+                      valuePlaceholder="Field Value or {{variable}}"
+                    />
+                  )}
                 </div>
               ) : currentTab.bodyType === 'binary' ? (
                 /* Direct Raw Binary File Upload */

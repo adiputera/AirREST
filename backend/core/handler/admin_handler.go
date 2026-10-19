@@ -6,8 +6,11 @@ import (
 	"net/http"
 
 	"github.com/adiputera/airrest-backend/core/domain"
+	"github.com/adiputera/airrest-backend/core/repository/postgres"
 	"github.com/adiputera/airrest-backend/core/service"
 	"github.com/adiputera/airrest-backend/pkg/response"
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 )
 
 type AdminHandler struct {
@@ -23,6 +26,10 @@ type AdminCreateUserRequest struct {
 	Password string `json:"password"`
 	Name     string `json:"name"`
 	Role     string `json:"role"` // 'superadmin' or 'user'
+}
+
+type AdminResetPasswordRequest struct {
+	Password string `json:"password"`
 }
 
 // ListUsers lists all registered users in the platform
@@ -64,4 +71,35 @@ func (h *AdminHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response.JSON(w, http.StatusCreated, user)
+}
+
+// ResetUserPassword allows superadmin to reset another user's password without knowing old password
+func (h *AdminHandler) ResetUserPassword(w http.ResponseWriter, r *http.Request) {
+	userIdStr := chi.URLParam(r, "userId")
+	targetUserID, err := uuid.Parse(userIdStr)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "invalid user id", "BAD_REQUEST")
+		return
+	}
+
+	var req AdminResetPasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.Error(w, http.StatusBadRequest, "invalid request body", "BAD_REQUEST")
+		return
+	}
+
+	if err := h.authService.ResetPasswordByAdmin(r.Context(), targetUserID, req.Password); err != nil {
+		if errors.Is(err, service.ErrPasswordTooShort) {
+			response.Error(w, http.StatusBadRequest, err.Error(), "VALIDATION_ERROR")
+			return
+		}
+		if errors.Is(err, postgres.ErrUserNotFound) {
+			response.Error(w, http.StatusNotFound, "user not found", "NOT_FOUND")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, "failed to reset user password", "SERVER_ERROR")
+		return
+	}
+
+	response.JSON(w, http.StatusOK, map[string]string{"message": "user password reset successfully"})
 }

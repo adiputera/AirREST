@@ -22,7 +22,7 @@ export default defineConfig(({ mode }) => {
             if (isOffline) {
               manifest.name = 'AirREST - Offline REST & Postman Client';
               manifest.description =
-                'Fast, privacy-friendly, 100% offline browser-based API client with Postman collection compatibility, zero CORS blocks, and Intranet support.';
+                'Fast, privacy-friendly, 100% offline browser-based API client with Postman collection compatibility and zero CORS restrictions.';
               if (manifest.action) {
                 manifest.action.default_title = 'Open AirREST (Offline)';
               }
@@ -41,7 +41,7 @@ export default defineConfig(({ mode }) => {
             } else {
               manifest.name = 'AirREST - REST & Postman Client';
               manifest.description =
-                'Fast browser-based API client with Postman collection compatibility, zero CORS blocks, and Intranet support.';
+                'Fast browser-based API client with Postman collection compatibility and zero CORS restrictions.';
               if (manifest.action) {
                 manifest.action.default_title = 'Open AirREST';
               }

@@ -49,7 +49,7 @@ export function prepareRequest(
 } {
   let rawUrl = interpolateVariables(request.url.trim(), variables);
 
-  // If no scheme provided, default to http:// for localhost/intranet IPs or https:// for others
+  // If no scheme provided, default to http:// for localhost/private network IPs or https:// for others
   if (!/^https?:\/\//i.test(rawUrl)) {
     const isLocalOrIp = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)/i.test(rawUrl);
     rawUrl = isLocalOrIp ? `http://${rawUrl}` : `https://${rawUrl}`;
@@ -152,7 +152,20 @@ export function prepareRequest(
       if (!headers['Content-Type'] && !headers['content-type']) {
         headers['Content-Type'] = 'application/x-www-form-urlencoded';
       }
-      bodyPayload = interpolateVariables(request.bodyContent || '', variables);
+      const activeItems = (request.bodyUrlEncoded || []).filter(
+        (item) => item.enabled && item.key.trim() !== ''
+      );
+      if (activeItems.length > 0) {
+        const formParams = new URLSearchParams();
+        for (const item of activeItems) {
+          const k = interpolateVariables(item.key.trim(), variables);
+          const v = interpolateVariables(item.value || '', variables);
+          formParams.append(k, v);
+        }
+        bodyPayload = formParams.toString();
+      } else {
+        bodyPayload = interpolateVariables(request.bodyContent || '', variables);
+      }
     } else if (request.bodyType === 'form-data') {
       // Multipart Form Data with File support
       const formData = new FormData();

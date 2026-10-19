@@ -227,6 +227,7 @@ func New(ctx context.Context) (*App, error) {
 				r.Use(middleware.RequireSuperadmin)
 				r.Get("/users", adminHandler.ListUsers)
 				r.Post("/users", adminHandler.CreateUser)
+				r.Put("/users/{userId}/password", adminHandler.ResetUserPassword)
 			})
 		})
 	})

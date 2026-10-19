@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AirREST - REST & Postman Client",
   "version": "1.0.0",
-  "description": "Fast browser-based API client with Postman collection compatibility, zero CORS blocks, and Intranet support.",
+  "description": "Fast browser-based API client with Postman collection compatibility and zero CORS restrictions.",
   "permissions": [
     "storage"
   ],

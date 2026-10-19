@@ -115,11 +115,16 @@ func (s *ProjectService) UpdateProject(ctx context.Context, user *domain.User, p
 	}
 
 	name = strings.TrimSpace(name)
-	if name != "" {
-		project.Name = name
+	if name == "" {
+		return nil, errors.New("project name is required")
 	}
-	if description != "" {
-		project.Description = &description
+	project.Name = name
+
+	descTrimmed := strings.TrimSpace(description)
+	if descTrimmed != "" {
+		project.Description = &descTrimmed
+	} else {
+		project.Description = nil
 	}
 
 	if err := s.projectRepo.Update(ctx, project); err != nil {

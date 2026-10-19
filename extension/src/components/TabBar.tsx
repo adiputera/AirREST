@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Plus, X, Layers, ArrowRight, Trash2, Copy } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
 import { MethodBadge } from './MethodBadge';
+import { isRequestModified } from '@/lib/requestDiff';
 
 interface ContextMenuPosition {
   x: number;
@@ -13,6 +14,7 @@ interface ContextMenuPosition {
 
 export const TabBar: React.FC = () => {
   const tabs = useApiStore((state) => state.tabs);
+  const collections = useApiStore((state) => state.collections);
   const activeTabId = useApiStore((state) => state.activeTabId);
   const setActiveTabId = useApiStore((state) => state.setActiveTabId);
   const createTab = useApiStore((state) => state.createTab);
@@ -100,6 +102,7 @@ export const TabBar: React.FC = () => {
           {tabs.map((tab) => {
             const isActive = tab.id === activeTabId;
             const displayName = tab.name || tab.url || 'Untitled Request';
+            const isDirty = isRequestModified(tab, collections);
 
             return (
               <div
@@ -107,16 +110,24 @@ export const TabBar: React.FC = () => {
                 onClick={() => setActiveTabId(tab.id)}
                 onContextMenu={(e) => handleTabContextMenu(e, tab.id)}
                 onAuxClick={(e) => handleTabAuxClick(e, tab.id)}
-                className={`group flex items-center gap-2 max-w-[200px] cursor-pointer rounded-t-lg border-t-2 px-3 py-1.5 text-xs font-medium transition-all select-none ${
+                className={`group flex items-center gap-2 max-w-[205px] cursor-pointer rounded-t-lg border-t-2 px-3 py-1.5 text-xs font-medium transition-all select-none ${
                   isActive
                     ? 'border-sky-500 bg-zinc-900 text-zinc-100 shadow-sm'
                     : 'border-transparent bg-zinc-950/40 text-zinc-400 hover:bg-zinc-900/60 hover:text-zinc-200'
                 }`}
               >
                 <MethodBadge method={tab.method} size="sm" />
-                <span className="truncate max-w-[110px]" title={displayName}>
+                <span className="truncate max-w-[105px]" title={displayName}>
                   {displayName}
                 </span>
+
+                {isDirty && (
+                  <span
+                    className="h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0 shadow-sm shadow-amber-400/50"
+                    title="Unsaved changes"
+                  />
+                )}
+
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
