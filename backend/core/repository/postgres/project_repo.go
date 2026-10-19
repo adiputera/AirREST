@@ -54,15 +54,16 @@ func (r *ProjectRepository) ListForUser(ctx context.Context, teamID, userID uuid
 
 	if isSuperadmin || isTeamAdmin {
 		query = `
-			SELECT id, team_id, name, description, created_by, created_at, updated_at
-			FROM projects
-			WHERE team_id = $1
-			ORDER BY name ASC
+			SELECT p.id, p.team_id, p.name, p.description, p.created_by, p.created_at, p.updated_at, COALESCE(pm.role, 'admin')
+			FROM projects p
+			LEFT JOIN project_members pm ON p.id = pm.project_id AND pm.user_id = $2
+			WHERE p.team_id = $1
+			ORDER BY p.name ASC
 		`
-		rows, err = r.pool.Query(ctx, query, teamID)
+		rows, err = r.pool.Query(ctx, query, teamID, userID)
 	} else {
 		query = `
-			SELECT p.id, p.team_id, p.name, p.description, p.created_by, p.created_at, p.updated_at
+			SELECT p.id, p.team_id, p.name, p.description, p.created_by, p.created_at, p.updated_at, pm.role
 			FROM projects p
 			JOIN project_members pm ON p.id = pm.project_id
 			WHERE p.team_id = $1 AND pm.user_id = $2
@@ -79,9 +80,12 @@ func (r *ProjectRepository) ListForUser(ctx context.Context, teamID, userID uuid
 	var projects []*domain.Project
 	for rows.Next() {
 		var p domain.Project
-		if err := rows.Scan(&p.ID, &p.TeamID, &p.Name, &p.Description, &p.CreatedBy, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		var roleStr string
+		if err := rows.Scan(&p.ID, &p.TeamID, &p.Name, &p.Description, &p.CreatedBy, &p.CreatedAt, &p.UpdatedAt, &roleStr); err != nil {
 			return nil, fmt.Errorf("failed to scan project: %w", err)
 		}
+		role := domain.ProjectRole(roleStr)
+		p.UserRole = &role
 		projects = append(projects, &p)
 	}
 	return projects, nil

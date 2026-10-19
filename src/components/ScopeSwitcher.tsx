@@ -22,6 +22,7 @@ import {
   fetchTeamProjects,
 } from '@/lib/cloudApi';
 import { ActiveScope, CloudWorkspace, CloudTeam, CloudProject } from '@/types/api';
+import { getRoleFromJwt } from '@/lib/jwt';
 
 interface ScopeSwitcherProps {
   onOpenModeSelector: () => void;
@@ -93,6 +94,26 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
       );
 
       setTeamsWithProjects(teamProjects);
+
+      // Reconcile active project scope's role if updated on backend
+      const currentScope = useApiStore.getState().cloudConfig.activeScope;
+      if (currentScope?.type === 'project' && currentScope.id) {
+        for (const tp of teamProjects) {
+          const match = tp.projects.find((p) => p.id === currentScope.id);
+          if (match && match.user_role && match.user_role !== currentScope.role) {
+            useApiStore.setState((state) => ({
+              cloudConfig: {
+                ...state.cloudConfig,
+                activeScope: {
+                  ...state.cloudConfig.activeScope!,
+                  role: match.user_role,
+                },
+              },
+            }));
+            break;
+          }
+        }
+      }
     } catch (err) {
       console.error('Failed to load scopes:', err);
     } finally {
@@ -149,7 +170,8 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
       : activeScope.name
     : 'Select Workspace';
 
-  const scopeRole = activeScope?.role;
+  const jwtRole = getRoleFromJwt(cloudConfig.token);
+  const scopeRole = (jwtRole === 'superadmin' || jwtRole === 'admin') ? 'admin' : activeScope?.role;
 
   // Filter scopes based on search query
   const filteredWorkspaces = workspaces.filter((w) =>
@@ -328,7 +350,9 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                                     name: proj.name,
                                     teamId: team.id,
                                     teamName: team.name,
-                                    role: proj.user_role || 'contributor',
+                                    role: (jwtRole === 'superadmin' || jwtRole === 'admin')
+                                      ? 'admin'
+                                      : (proj.user_role || 'contributor'),
                                   })
                                 }
                                 className={`w-full flex items-center justify-between rounded px-2 py-1 text-left text-xs transition ${

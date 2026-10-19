@@ -56,6 +56,11 @@ func Authenticate(tm *token.TokenManager, authService *service.AuthService) func
 				return
 			}
 
+			// Ensure user role is derived directly from the cryptographically validated JWT claims
+			if claims.Role != "" {
+				user.Role = domain.SystemRole(claims.Role)
+			}
+
 			ctx := context.WithValue(r.Context(), UserContextKey, user)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})

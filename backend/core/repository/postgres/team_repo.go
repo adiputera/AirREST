@@ -50,11 +50,16 @@ func (r *TeamRepository) ListForUser(ctx context.Context, userID uuid.UUID, isSu
 	var err error
 
 	if isSuperadmin {
-		query = `SELECT id, name, description, created_by, created_at, updated_at FROM teams ORDER BY name ASC`
-		rows, err = r.pool.Query(ctx, query)
+		query = `
+			SELECT t.id, t.name, t.description, t.created_by, t.created_at, t.updated_at, COALESCE(tm.role, 'admin')
+			FROM teams t
+			LEFT JOIN team_members tm ON t.id = tm.team_id AND tm.user_id = $1
+			ORDER BY t.name ASC
+		`
+		rows, err = r.pool.Query(ctx, query, userID)
 	} else {
 		query = `
-			SELECT t.id, t.name, t.description, t.created_by, t.created_at, t.updated_at
+			SELECT t.id, t.name, t.description, t.created_by, t.created_at, t.updated_at, tm.role
 			FROM teams t
 			JOIN team_members tm ON t.id = tm.team_id
 			WHERE tm.user_id = $1
@@ -70,9 +75,12 @@ func (r *TeamRepository) ListForUser(ctx context.Context, userID uuid.UUID, isSu
 	var teams []*domain.Team
 	for rows.Next() {
 		var t domain.Team
-		if err := rows.Scan(&t.ID, &t.Name, &t.Description, &t.CreatedBy, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		var roleStr string
+		if err := rows.Scan(&t.ID, &t.Name, &t.Description, &t.CreatedBy, &t.CreatedAt, &t.UpdatedAt, &roleStr); err != nil {
 			return nil, fmt.Errorf("failed to scan team: %w", err)
 		}
+		role := domain.TeamRole(roleStr)
+		t.UserRole = &role
 		teams = append(teams, &t)
 	}
 	return teams, nil

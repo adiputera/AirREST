@@ -21,8 +21,9 @@ type Project struct {
 	Name        string    `json:"name"`
 	Description *string   `json:"description,omitempty"`
 	CreatedBy   uuid.UUID `json:"created_by"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	CreatedAt   time.Time    `json:"created_at"`
+	UpdatedAt   time.Time    `json:"updated_at"`
+	UserRole    *ProjectRole `json:"user_role,omitempty"`
 }
 
 type ProjectMember struct {

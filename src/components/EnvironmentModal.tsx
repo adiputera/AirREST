@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
 import { exportPostmanEnvironment } from '@/lib/postman';
+import { getRoleFromJwt } from '@/lib/jwt';
 
 interface EnvironmentModalProps {
   isOpen: boolean;
@@ -37,9 +38,17 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
   const importEnvironmentFromJson = useApiStore((state) => state.importEnvironmentFromJson);
   const cloudConfig = useApiStore((state) => state.cloudConfig);
 
+  // Decode role directly from JWT token as primary source of authority
+  const jwtRole = getRoleFromJwt(cloudConfig?.token);
+  const isSuperadminOrAdmin =
+    jwtRole === 'superadmin' ||
+    jwtRole === 'admin' ||
+    cloudConfig?.user?.role === 'superadmin' ||
+    cloudConfig?.user?.role === 'admin';
+
   const activeScope = cloudConfig?.activeScope;
   const isProjectScope = activeScope?.type === 'project';
-  const userRole = activeScope?.role || 'reader';
+  const projectRole = activeScope?.role || 'reader';
 
   const ROLE_RANK: Record<string, number> = {
     admin: 4,
@@ -48,7 +57,12 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
     contributor: 2,
     reader: 1,
   };
-  const userRank = !isProjectScope ? 4 : (ROLE_RANK[userRole] || 1);
+
+  // If JWT token establishes superadmin/admin role, grant full privileges (rank 4).
+  // Otherwise, use project role if in project scope, or JWT role, or full in personal workspace.
+  const userRank = isSuperadminOrAdmin
+    ? 4
+    : (!isProjectScope ? 4 : (ROLE_RANK[projectRole] || (jwtRole ? ROLE_RANK[jwtRole] || 2 : 2)));
   const isProjectAdmin = userRank >= 4;
 
   const [selectedEnvId, setSelectedEnvId] = useState<string>(
@@ -68,6 +82,9 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
 
   const currentEnv =
     environments.find((e) => e.id === selectedEnvId) || environments[0];
+  const isEnvReadOnly = currentEnv
+    ? userRank < 2 || userRank < (ROLE_RANK[currentEnv.minRole || 'reader'] || 1)
+    : false;
 
   const handleCreateEnv = () => {
     if (!newEnvName.trim()) return;
@@ -303,8 +320,9 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                 <input
                   type="text"
                   value={currentEnv.name}
+                  disabled={isEnvReadOnly}
                   onChange={(e) => updateEnvironment(currentEnv.id, { name: e.target.value })}
-                  className="bg-transparent font-bold text-sm text-zinc-100 focus:outline-none focus:border-b focus:border-sky-500 px-1 py-0.5 rounded"
+                  className="bg-transparent font-bold text-sm text-zinc-100 focus:outline-none focus:border-b focus:border-sky-500 px-1 py-0.5 rounded disabled:opacity-80"
                 />
                 <button
                   onClick={() =>
@@ -337,20 +355,30 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                     <span className="text-zinc-400 text-[11px]">Access:</span>
                     <select
                       value={currentEnv.minRole || 'reader'}
-                      disabled={userRank < 3 || userRank < (ROLE_RANK[currentEnv.minRole || 'reader'] || 1)}
+                      disabled={isEnvReadOnly}
                       onChange={(e) => updateEnvironment(currentEnv.id, { minRole: e.target.value as any })}
                       className="bg-transparent text-xs text-zinc-200 focus:outline-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 font-medium"
-                      title={userRank < 3 ? 'Maintainer or Admin access required to change access restrictions' : 'Change minimum required role'}
+                      title={
+                        userRank < 2
+                          ? 'Contributor, Maintainer, or Admin access required to change access restrictions'
+                          : userRank < (ROLE_RANK[currentEnv.minRole || 'reader'] || 1)
+                          ? 'Higher role required to edit this restricted environment'
+                          : 'Change minimum required role'
+                      }
                     >
                       <option value="reader" className="bg-zinc-900 text-zinc-200">
                         🟢 All Members (Reader+)
                       </option>
-                      <option value="contributor" className="bg-zinc-900 text-zinc-200">
-                        🟡 Contributor+
-                      </option>
-                      <option value="maintainer" className="bg-zinc-900 text-zinc-200">
-                        🔵 Maintainer+ (Production / Release)
-                      </option>
+                      {userRank >= 2 && (
+                        <option value="contributor" className="bg-zinc-900 text-zinc-200">
+                          🟡 Contributor+
+                        </option>
+                      )}
+                      {userRank >= 3 && (
+                        <option value="maintainer" className="bg-zinc-900 text-zinc-200">
+                          🔵 Maintainer+ (Production / Release)
+                        </option>
+                      )}
                       {userRank >= 4 && (
                         <option value="admin" className="bg-zinc-900 text-zinc-200">
                           🔴 Admin Only (Restricted)
@@ -358,6 +386,13 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                       )}
                     </select>
                   </div>
+                )}
+
+                {isEnvReadOnly && (
+                  <span className="flex items-center gap-1 rounded-md border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-400">
+                    <Lock className="h-3 w-3" />
+                    Read Only
+                  </span>
                 )}
               </div>
             ) : (
@@ -379,8 +414,9 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
               {currentEnv && environments.length > 1 && (
                 <button
                   onClick={() => deleteEnvironment(currentEnv.id)}
-                  className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-900 hover:text-rose-400 transition"
-                  title="Delete Environment"
+                  disabled={isEnvReadOnly}
+                  className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-900 hover:text-rose-400 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                  title={isEnvReadOnly ? 'Higher role required to delete this environment' : 'Delete Environment'}
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
@@ -470,45 +506,49 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                           <input
                             type="checkbox"
                             checked={v.enabled}
+                            disabled={isEnvReadOnly}
                             onChange={(e) =>
                               updateEnvironmentVariable(currentEnv.id, v.id, {
                                 enabled: e.target.checked,
                               })
                             }
-                            className="h-3.5 w-3.5 rounded border-zinc-700 bg-zinc-900 text-sky-500 accent-sky-500 cursor-pointer"
+                            className="h-3.5 w-3.5 rounded border-zinc-700 bg-zinc-900 text-sky-500 accent-sky-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                           />
                         </td>
                         <td className="px-2 py-1.5">
                           <input
                             type="text"
                             value={v.key}
+                            disabled={isEnvReadOnly}
                             onChange={(e) =>
                               updateEnvironmentVariable(currentEnv.id, v.id, {
                                 key: e.target.value,
                               })
                             }
                             placeholder="e.g. baseUrl"
-                            className="w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-sky-400 placeholder-zinc-600 focus:bg-zinc-900 focus:outline-none focus:ring-1 focus:ring-sky-500/50"
+                            className="w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-sky-400 placeholder-zinc-600 focus:bg-zinc-900 focus:outline-none focus:ring-1 focus:ring-sky-500/50 disabled:opacity-60 disabled:cursor-not-allowed"
                           />
                         </td>
                         <td className="px-2 py-1.5">
                           <input
                             type="text"
                             value={v.value}
+                            disabled={isEnvReadOnly}
                             onChange={(e) =>
                               updateEnvironmentVariable(currentEnv.id, v.id, {
                                 value: e.target.value,
                               })
                             }
                             placeholder="e.g. https://api.example.com"
-                            className="w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-zinc-200 placeholder-zinc-600 focus:bg-zinc-900 focus:outline-none focus:ring-1 focus:ring-sky-500/50"
+                            className="w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-zinc-200 placeholder-zinc-600 focus:bg-zinc-900 focus:outline-none focus:ring-1 focus:ring-sky-500/50 disabled:opacity-60 disabled:cursor-not-allowed"
                           />
                         </td>
                         <td className="px-2 py-1.5 text-center">
                           <button
                             onClick={() => removeEnvironmentVariable(currentEnv.id, v.id)}
-                            className="rounded p-1 text-zinc-600 opacity-60 hover:bg-zinc-800 hover:text-rose-400 group-hover:opacity-100 transition"
-                            title="Delete variable"
+                            disabled={isEnvReadOnly}
+                            className="rounded p-1 text-zinc-600 opacity-60 hover:bg-zinc-800 hover:text-rose-400 group-hover:opacity-100 disabled:opacity-20 disabled:cursor-not-allowed transition"
+                            title={isEnvReadOnly ? 'Read only' : 'Delete variable'}
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
@@ -522,8 +562,10 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
               <div className="mt-3 flex justify-between items-center">
                 <button
                   type="button"
+                  disabled={isEnvReadOnly}
                   onClick={() => addEnvironmentVariable(currentEnv.id)}
-                  className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-1.5 text-xs font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition"
+                  className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-1.5 text-xs font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                  title={isEnvReadOnly ? 'Read only' : 'Add Variable'}
                 >
                   <Plus className="h-3.5 w-3.5 text-sky-400" />
                   <span>Add Variable</span>

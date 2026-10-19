@@ -9,7 +9,8 @@ import {
   fetchUserTeams,
   fetchTeamProjects,
 } from '@/lib/cloudApi';
-import { ActiveScope } from '@/types/api';
+import { ActiveScope, CloudUser } from '@/types/api';
+import { getRoleFromJwt } from '@/lib/jwt';
 
 interface CloudAuthModalProps {
   isOpen: boolean;
@@ -77,7 +78,7 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
                 name: projects[0].name,
                 teamId: teams[0].id,
                 teamName: teams[0].name,
-                role: projects[0].user_role || 'contributor',
+                role: projects[0].user_role || (user.role === 'superadmin' ? 'admin' : 'contributor'),
               };
             }
           }
@@ -91,13 +92,19 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
         ? currentStore.offlineCollections.length
         : collections.length;
 
-      // 2. Commit auth to store
+      // 2. Commit auth to store with role derived from JWT token
+      const jwtRole = getRoleFromJwt(token);
+      const effectiveUser: CloudUser = {
+        ...user,
+        role: jwtRole || user.role,
+      };
+
       setCloudConfig({
         apiUrl: cleanUrl,
         token,
         refreshToken: refresh_token,
         tokenExpiresAt: expires_at,
-        user,
+        user: effectiveUser,
         activeScope: initialScope,
       });
 
