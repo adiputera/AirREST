@@ -14,6 +14,7 @@ import {
   ArrowUpRight,
   Download,
   FolderInput,
+  Upload,
 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
 import { CollectionItem, ApiRequest, Collection } from '@/types/api';
@@ -21,6 +22,7 @@ import { MethodBadge } from './MethodBadge';
 import { exportPostmanCollection } from '@/lib/postman';
 import { ConfirmModal } from './ConfirmModal';
 import { MoveCollectionModal } from './MoveCollectionModal';
+import { ImportModal } from './ImportModal';
 
 function filterCollectionItems(items: CollectionItem[], query: string): CollectionItem[] {
   return items
@@ -128,6 +130,7 @@ export const Sidebar: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [isCreatingCol, setIsCreatingCol] = useState(false);
   const [newColTitle, setNewColTitle] = useState('');
+  const [isImportOpen, setIsImportOpen] = useState(false);
   const [collectionToDelete, setCollectionToDelete] = useState<Collection | null>(null);
   const [collectionToMove, setCollectionToMove] = useState<Collection | null>(null);
   const [showClearHistoryConfirm, setShowClearHistoryConfirm] = useState(false);
@@ -232,7 +235,7 @@ export const Sidebar: React.FC = () => {
         </div>
 
         {sidebarTab === 'collections' && (
-          <div>
+          <div className="space-y-1.5">
             {isCreatingCol ? (
               <div className="flex items-center gap-1.5 pt-0.5">
                 <input
@@ -277,12 +280,22 @@ export const Sidebar: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setIsCreatingCol(true)}
-                className="flex w-full items-center justify-center gap-1 rounded-lg border border-dashed border-zinc-800 py-1 text-[11px] text-zinc-400 hover:border-zinc-700 hover:text-zinc-200 transition"
+                className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-zinc-800 py-1 text-[11px] text-zinc-400 hover:border-zinc-700 hover:text-zinc-200 transition"
               >
                 <FolderPlus className="h-3 w-3 text-sky-400" />
                 <span>New Collection</span>
               </button>
             )}
+
+            <button
+              type="button"
+              onClick={() => setIsImportOpen(true)}
+              className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-zinc-800 py-1 text-[11px] text-zinc-400 hover:border-zinc-700 hover:text-zinc-200 transition"
+              title="Import Postman Collection or Environment"
+            >
+              <Upload className="h-3 w-3 text-emerald-400" />
+              <span>Import</span>
+            </button>
           </div>
         )}
       </div>
@@ -298,8 +311,16 @@ export const Sidebar: React.FC = () => {
                 </div>
                 <h3 className="mt-3 text-xs font-semibold text-zinc-300">No Collections Yet</h3>
                 <p className="mt-1 text-[11px] text-zinc-500 leading-relaxed">
-                  Import your Postman v2.1 collection using the header button to organize your API requests.
+                  Create a new collection or import your Postman collection or environment to organize your API requests.
                 </p>
+                <button
+                  type="button"
+                  onClick={() => setIsImportOpen(true)}
+                  className="mt-3 flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-[11px] font-medium text-emerald-400 hover:bg-zinc-800 hover:border-emerald-500/30 transition shadow-sm"
+                >
+                  <Upload className="h-3 w-3" />
+                  <span>Import</span>
+                </button>
               </div>
             ) : filteredCollections.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-8 px-4 text-center">
@@ -494,6 +515,11 @@ export const Sidebar: React.FC = () => {
         isOpen={!!collectionToMove}
         onClose={() => setCollectionToMove(null)}
         collection={collectionToMove}
+      />
+
+      <ImportModal
+        isOpen={isImportOpen}
+        onClose={() => setIsImportOpen(false)}
       />
     </aside>
   );

@@ -16,13 +16,19 @@ import {
   Cloud,
 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
-import {
-  fetchUserWorkspaces,
-  fetchUserTeams,
-  fetchTeamProjects,
-} from '@/lib/cloudApi';
-import { ActiveScope, CloudWorkspace, CloudTeam, CloudProject } from '@/types/api';
+import { ActiveScope } from '@/types/api';
 import { getRoleFromJwt } from '@/lib/jwt';
+
+function formatTimeAgo(timestamp: number): string {
+  const diffSec = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (diffSec < 60) return 'just now';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHour = Math.floor(diffMin / 60);
+  if (diffHour < 24) return `${diffHour}h ago`;
+  const diffDay = Math.floor(diffHour / 24);
+  return `${diffDay}d ago`;
+}
 
 interface ScopeSwitcherProps {
   onOpenModeSelector: () => void;
@@ -37,11 +43,6 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
   const [search, setSearch] = useState('');
   const [isLoadingScopes, setIsLoadingScopes] = useState(false);
 
-  const [workspaces, setWorkspaces] = useState<CloudWorkspace[]>([]);
-  const [teamsWithProjects, setTeamsWithProjects] = useState<
-    { team: CloudTeam; projects: CloudProject[] }[]
-  >([]);
-
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const workspaceMode = useApiStore((state) => state.workspaceMode);
@@ -49,11 +50,17 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
   const activeScope = cloudConfig.activeScope;
   const syncStatus = useApiStore((state) => state.syncStatus);
   const syncError = useApiStore((state) => state.syncError);
+  const lastSyncedAt = useApiStore((state) => state.lastSyncedAt);
+  const scopesCache = useApiStore((state) => state.scopesCache);
 
   const setActiveScope = useApiStore((state) => state.setActiveScope);
   const pullCloudDelta = useApiStore((state) => state.pullCloudDelta);
+  const fetchScopes = useApiStore((state) => state.fetchScopes);
   const setWorkspaceMode = useApiStore((state) => state.setWorkspaceMode);
   const logoutCloud = useApiStore((state) => state.logoutCloud);
+
+  const workspaces = scopesCache?.workspaces || [];
+  const teamsWithProjects = scopesCache?.teamsWithProjects || [];
 
   const isOffline = workspaceMode === 'offline';
 
@@ -70,54 +77,12 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isOpen]);
 
-  // Load accessible workspaces and teams when opening or when token is present
-  const loadScopes = async () => {
+  // Load accessible workspaces and teams (uses 1-hour cache unless forced)
+  const loadScopes = async (force = false) => {
     if (!cloudConfig.token) return;
     setIsLoadingScopes(true);
     try {
-      const [wsList, teamList] = await Promise.all([
-        fetchUserWorkspaces(cloudConfig.apiUrl, cloudConfig.token, cloudConfig.refreshToken).catch(() => []),
-        fetchUserTeams(cloudConfig.apiUrl, cloudConfig.token, cloudConfig.refreshToken).catch(() => []),
-      ]);
-
-      setWorkspaces(wsList);
-
-      // Fetch projects for each accessible team
-      const teamProjects = await Promise.all(
-        teamList.map(async (t) => {
-          const projs = await fetchTeamProjects(
-            cloudConfig.apiUrl,
-            t.id,
-            cloudConfig.token!,
-            cloudConfig.refreshToken
-          ).catch(() => []);
-          return { team: t, projects: projs };
-        })
-      );
-
-      setTeamsWithProjects(teamProjects);
-
-      // Reconcile active project scope's role if updated on backend
-      const currentScope = useApiStore.getState().cloudConfig.activeScope;
-      if (currentScope?.type === 'project' && currentScope.id) {
-        for (const tp of teamProjects) {
-          const match = tp.projects.find((p) => p.id === currentScope.id);
-          if (match && match.user_role && match.user_role !== currentScope.role) {
-            useApiStore.setState((state) => ({
-              cloudConfig: {
-                ...state.cloudConfig,
-                activeScope: {
-                  ...state.cloudConfig.activeScope!,
-                  role: match.user_role,
-                },
-              },
-            }));
-            break;
-          }
-        }
-      }
-    } catch (err) {
-      console.error('Failed to load scopes:', err);
+      await fetchScopes(force);
     } finally {
       setIsLoadingScopes(false);
     }
@@ -125,7 +90,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
 
   useEffect(() => {
     if (cloudConfig.token) {
-      loadScopes();
+      loadScopes(false);
     }
   }, [cloudConfig.token]);
 
@@ -182,7 +147,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
           onClick={() => {
             const next = !isOpen;
             setIsOpen(next);
-            if (next && cloudConfig.token) loadScopes();
+            if (next && cloudConfig.token) loadScopes(false);
           }}
           className="group flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/90 px-2.5 py-1 text-xs text-zinc-200 hover:border-zinc-700 hover:bg-zinc-800 hover:text-white transition shadow-sm max-w-[280px]"
           title="Switch Workspace (Offline / Online)"
@@ -227,14 +192,20 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
           <button
             onClick={handleManualSync}
             disabled={syncStatus === 'syncing'}
-            className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium transition ${
+            className={`flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] font-medium transition ${
               syncStatus === 'syncing'
                 ? 'border-sky-500/30 bg-sky-500/10 text-sky-400'
                 : syncStatus === 'error'
                 ? 'border-rose-500/30 bg-rose-500/10 text-rose-400 hover:bg-rose-500/20'
-                : 'border-zinc-800 bg-zinc-900/80 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
+                : 'border-zinc-800 bg-zinc-900/80 text-zinc-300 hover:border-sky-500/30 hover:bg-zinc-850 hover:text-white'
             }`}
-            title={syncError ? `Sync Error: ${syncError}. Click to retry.` : 'Click to Synchronize with Cloud'}
+            title={
+              syncError
+                ? `Sync Error: ${syncError}. Click to retry.`
+                : syncStatus === 'syncing'
+                ? 'Synchronizing workspace with cloud...'
+                : `Synced online (${lastSyncedAt ? formatTimeAgo(lastSyncedAt) : 'cached'}). Click to sync online now.`
+            }
           >
             {syncStatus === 'syncing' ? (
               <>
@@ -248,8 +219,8 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
               </>
             ) : (
               <>
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
-                <span className="hidden sm:inline">Synced</span>
+                <RefreshCw className="h-3 w-3 text-emerald-400" />
+                <span className="hidden sm:inline text-emerald-400">Sync Online</span>
               </>
             )}
           </button>
@@ -320,7 +291,22 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
             <div>
               <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-sky-400 flex items-center justify-between border-t border-zinc-850 pt-2">
                 <span>Online Workspaces</span>
-                <span className="text-[9px] font-medium text-sky-400/80 uppercase">Cloud Sync</span>
+                {cloudConfig.token && (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        loadScopes(true);
+                      }}
+                      disabled={isLoadingScopes}
+                      title="Sync online workspaces & projects list (force refresh)"
+                      className="p-0.5 rounded text-sky-400/80 hover:text-sky-300 hover:bg-sky-500/10 transition"
+                    >
+                      <RefreshCw className={`h-3 w-3 ${isLoadingScopes ? 'animate-spin' : ''}`} />
+                    </button>
+                    <span className="text-[9px] font-medium text-sky-400/80 uppercase">Cloud Sync</span>
+                  </div>
+                )}
               </div>
 
               {cloudConfig.token ? (
@@ -473,17 +459,27 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
 
           {/* Footer Controls */}
           {cloudConfig.token && (
-            <div className="mt-2 border-t border-zinc-800 pt-2 space-y-0.5">
+            <div className="mt-2 border-t border-zinc-800 pt-2 space-y-1">
               <button
-                onClick={() => {
+                onClick={async () => {
                   setIsOpen(false);
-                  loadScopes();
-                  pullCloudDelta();
+                  await Promise.all([loadScopes(true), pullCloudDelta()]);
                 }}
-                className="w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-zinc-300 hover:bg-zinc-900 hover:text-white transition"
+                disabled={syncStatus === 'syncing'}
+                className="w-full flex items-center justify-between rounded-lg bg-sky-500/10 border border-sky-500/20 px-2.5 py-2 text-xs font-medium text-sky-300 hover:bg-sky-500/20 hover:text-white transition group"
+                title="Bypass 1-hour cache and synchronize active workspace with cloud"
               >
-                <RefreshCw className="h-3.5 w-3.5 text-sky-400" />
-                <span>Sync Cloud Changes Now</span>
+                <div className="flex items-center gap-2">
+                  <RefreshCw
+                    className={`h-3.5 w-3.5 text-sky-400 group-hover:rotate-180 transition-transform duration-500 ${
+                      syncStatus === 'syncing' ? 'animate-spin' : ''
+                    }`}
+                  />
+                  <span>Sync Workspace Online</span>
+                </div>
+                <span className="text-[10px] text-sky-400/70 font-mono">
+                  {lastSyncedAt ? formatTimeAgo(lastSyncedAt) : '1h cache'}
+                </span>
               </button>
 
               <button

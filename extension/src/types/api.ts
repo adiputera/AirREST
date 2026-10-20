@@ -173,3 +173,9 @@ export interface CloudConfig {
   activeScope?: ActiveScope;
 }
 
+export interface ScopesCacheData {
+  workspaces: CloudWorkspace[];
+  teamsWithProjects: { team: CloudTeam; projects: CloudProject[] }[];
+  lastFetchedAt: number;
+}
+

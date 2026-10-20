@@ -19,6 +19,7 @@ import {
   CloudConfig,
   ActiveScope,
   SyncStatus,
+  ScopesCacheData,
 } from '@/types/api';
 import { executeApiRequest } from '@/lib/fetcher';
 import {
@@ -38,6 +39,9 @@ import {
   deleteScopeCollection,
   deleteScopeItem,
   moveScopeCollection,
+  fetchUserWorkspaces,
+  fetchUserTeams,
+  fetchTeamProjects,
 } from '@/lib/cloudApi';
 import {
   buildCollectionsFromDelta,
@@ -129,6 +133,9 @@ function createInitialTab(): ApiRequest {
     updatedAt: Date.now(),
   };
 }
+
+export const SCOPE_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour cache for workspace collections/environments
+export const SCOPES_LIST_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour cache for workspace/project list
 
 export interface ScopeCacheEntry {
   collections: Collection[];
@@ -245,12 +252,14 @@ interface ApiStoreState {
   offlineActiveTabId?: string;
   offlineHistory?: HistoryItem[];
   scopeCache?: Record<string, ScopeCacheEntry>;
+  scopesCache?: ScopesCacheData;
   isSwitchingWorkspace?: boolean;
 
   setWorkspaceMode: (mode: WorkspaceMode) => void;
   setHasConfiguredMode: (configured: boolean) => void;
   setCloudConfig: (config: Partial<CloudConfig>) => void;
-  setActiveScope: (scope: ActiveScope) => Promise<void>;
+  setActiveScope: (scope: ActiveScope, forceSync?: boolean) => Promise<void>;
+  fetchScopes: (force?: boolean) => Promise<void>;
   logoutCloud: () => void;
   setSyncStatus: (status: SyncStatus, error?: string | null) => void;
   pullCloudDelta: () => Promise<void>;
@@ -286,6 +295,7 @@ export const useApiStore = create<ApiStoreState>()(
       offlineActiveTabId: defaultRequest.id,
       offlineHistory: [],
       scopeCache: {},
+      scopesCache: undefined,
       isSwitchingWorkspace: false,
 
       setWorkspaceMode: (workspaceMode) => {
@@ -365,6 +375,11 @@ export const useApiStore = create<ApiStoreState>()(
               ? cached.activeTabId
               : restoredTabs[0].id;
 
+          const isFresh = Boolean(
+            cached?.lastSyncedAt &&
+            Date.now() - cached.lastSyncedAt < SCOPE_CACHE_TTL_MS
+          );
+
           set({
             workspaceMode: isOfflineOnly ? 'offline' : 'cloud',
             hasConfiguredMode: true,
@@ -381,11 +396,12 @@ export const useApiStore = create<ApiStoreState>()(
             activeTabId: restoredActiveTabId,
             activeResponse: null,
             history: cached?.history || [],
-            syncStatus: targetScope ? 'syncing' : 'idle',
+            lastSyncedAt: cached?.lastSyncedAt || null,
+            syncStatus: isFresh ? 'synced' : (targetScope ? 'syncing' : 'idle'),
             syncError: null,
           });
 
-          if (!isOfflineOnly && targetScope && cloudConfig.token) {
+          if (!isOfflineOnly && targetScope && cloudConfig.token && !isFresh) {
             get()
               .pullCloudDelta()
               .finally(() => {
@@ -394,7 +410,7 @@ export const useApiStore = create<ApiStoreState>()(
           } else {
             setTimeout(() => {
               set({ isSwitchingWorkspace: false });
-            }, 250);
+            }, 100);
           }
         }
       },
@@ -406,7 +422,7 @@ export const useApiStore = create<ApiStoreState>()(
         set((state) => ({
           cloudConfig: { ...state.cloudConfig, ...updates },
         })),
-      setActiveScope: async (scope) => {
+      setActiveScope: async (scope, forceSync = false) => {
         const {
           workspaceMode,
           collections,
@@ -426,75 +442,84 @@ export const useApiStore = create<ApiStoreState>()(
           cloudConfig.activeScope.type === scope.type &&
           cloudConfig.activeScope.id === scope.id;
 
-        if (isSameScope && get().syncStatus !== 'idle') {
+        if (isSameScope && !forceSync && get().syncStatus !== 'idle') {
           return;
         }
 
-        set({ isSwitchingWorkspace: true });
+        const updatedScopeCache = { ...(scopeCache || {}) };
 
-        try {
-          const updatedScopeCache = { ...(scopeCache || {}) };
+        // If transitioning from offline mode, snapshot offline state
+        if (workspaceMode === 'offline') {
+          set({
+            offlineCollections: collections,
+            offlineEnvironments: environments,
+            offlineActiveEnvironmentId: activeEnvironmentId,
+            offlineTabs: tabs,
+            offlineActiveTabId: activeTabId,
+            offlineHistory: history,
+          });
+        } else if (cloudConfig.activeScope) {
+          // If transitioning from another cloud scope, snapshot old cloud scope into scopeCache
+          const prevKey = getScopeKey(cloudConfig.activeScope);
+          const prevEntry = updatedScopeCache[prevKey];
+          updatedScopeCache[prevKey] = {
+            ...prevEntry,
+            collections,
+            environments,
+            activeEnvironmentId,
+            lastSyncedAt,
+            tabs,
+            activeTabId,
+            history,
+          };
+        }
 
-          // If transitioning from offline mode, snapshot offline state
-          if (workspaceMode === 'offline') {
-            set({
-              offlineCollections: collections,
-              offlineEnvironments: environments,
-              offlineActiveEnvironmentId: activeEnvironmentId,
-              offlineTabs: tabs,
-              offlineActiveTabId: activeTabId,
-              offlineHistory: history,
-            });
-          } else if (cloudConfig.activeScope) {
-            // If transitioning from another cloud scope, snapshot old cloud scope into scopeCache
-            const prevKey = getScopeKey(cloudConfig.activeScope);
-            const prevEntry = updatedScopeCache[prevKey];
-            updatedScopeCache[prevKey] = {
-              ...prevEntry,
-              collections,
-              environments,
-              activeEnvironmentId,
-              lastSyncedAt,
-              tabs,
-              activeTabId,
-              history,
-            };
+        // Check if target scope already has cached data in local storage
+        const targetCache = updatedScopeCache[getScopeKey(scope)];
+
+        const targetTabs =
+          targetCache?.tabs && targetCache.tabs.length > 0
+            ? targetCache.tabs
+            : [createInitialTab()];
+        const targetActiveTabId =
+          targetCache?.activeTabId && targetTabs.some((t) => t.id === targetCache.activeTabId)
+            ? targetCache.activeTabId
+            : targetTabs[0].id;
+
+        const isFresh = Boolean(
+          !forceSync &&
+          targetCache &&
+          targetCache.lastSyncedAt &&
+          Date.now() - targetCache.lastSyncedAt < SCOPE_CACHE_TTL_MS
+        );
+
+        set((state) => ({
+          workspaceMode: 'cloud',
+          cloudConfig: {
+            ...state.cloudConfig,
+            activeScope: scope,
+          },
+          scopeCache: updatedScopeCache,
+          // Load cached data immediately for instant switching, or empty array if newly created/visited
+          collections: targetCache ? targetCache.collections : [],
+          environments: targetCache ? targetCache.environments : [],
+          activeEnvironmentId: targetCache ? (targetCache.activeEnvironmentId || null) : null,
+          tabs: targetTabs,
+          activeTabId: targetActiveTabId,
+          activeResponse: null,
+          history: targetCache?.history || [],
+          lastSyncedAt: targetCache?.lastSyncedAt || null,
+          syncStatus: isFresh ? 'synced' : 'syncing',
+          syncError: null,
+        }));
+
+        if (!isFresh) {
+          set({ isSwitchingWorkspace: true });
+          try {
+            await get().pullCloudDelta();
+          } finally {
+            set({ isSwitchingWorkspace: false });
           }
-
-          // Check if target scope already has cached data in local storage
-          const targetCache = updatedScopeCache[getScopeKey(scope)];
-
-          const targetTabs =
-            targetCache?.tabs && targetCache.tabs.length > 0
-              ? targetCache.tabs
-              : [createInitialTab()];
-          const targetActiveTabId =
-            targetCache?.activeTabId && targetTabs.some((t) => t.id === targetCache.activeTabId)
-              ? targetCache.activeTabId
-              : targetTabs[0].id;
-
-          set((state) => ({
-            workspaceMode: 'cloud',
-            cloudConfig: {
-              ...state.cloudConfig,
-              activeScope: scope,
-            },
-            scopeCache: updatedScopeCache,
-            // Load cached data immediately for instant switching, or empty array if newly created/visited
-            collections: targetCache ? targetCache.collections : [],
-            environments: targetCache ? targetCache.environments : [],
-            activeEnvironmentId: targetCache ? (targetCache.activeEnvironmentId || null) : null,
-            tabs: targetTabs,
-            activeTabId: targetActiveTabId,
-            activeResponse: null,
-            history: targetCache?.history || [],
-            syncStatus: 'syncing',
-            syncError: null,
-          }));
-
-          await get().pullCloudDelta();
-        } finally {
-          set({ isSwitchingWorkspace: false });
         }
       },
       logoutCloud: () => {
@@ -544,6 +569,7 @@ export const useApiStore = create<ApiStoreState>()(
           history: offlineHistory || [],
           offlineHistory: offlineHistory || [],
           scopeCache: {},
+          scopesCache: undefined,
           cloudConfig: {
             apiUrl: state.cloudConfig.apiUrl || 'http://localhost:8080',
           },
@@ -637,6 +663,71 @@ export const useApiStore = create<ApiStoreState>()(
         } catch (err: any) {
           set({ syncStatus: 'error', syncError: err.message || 'Import failed' });
           return { success: false, message: err.message || 'Import failed' };
+        }
+      },
+      fetchScopes: async (force = false) => {
+        if (isOfflineOnly) return;
+        const { cloudConfig, scopesCache } = get();
+        if (!cloudConfig.token) return;
+
+        const isFresh = Boolean(
+          !force &&
+          scopesCache?.lastFetchedAt &&
+          Date.now() - scopesCache.lastFetchedAt < SCOPES_LIST_CACHE_TTL_MS &&
+          (scopesCache.workspaces.length > 0 || scopesCache.teamsWithProjects.length > 0)
+        );
+
+        if (isFresh) {
+          return;
+        }
+
+        try {
+          const [wsList, teamList] = await Promise.all([
+            fetchUserWorkspaces(cloudConfig.apiUrl, cloudConfig.token, cloudConfig.refreshToken).catch(() => []),
+            fetchUserTeams(cloudConfig.apiUrl, cloudConfig.token, cloudConfig.refreshToken).catch(() => []),
+          ]);
+
+          const teamProjects = await Promise.all(
+            teamList.map(async (t) => {
+              const projs = await fetchTeamProjects(
+                cloudConfig.apiUrl,
+                t.id,
+                cloudConfig.token!,
+                cloudConfig.refreshToken
+              ).catch(() => []);
+              return { team: t, projects: projs };
+            })
+          );
+
+          set({
+            scopesCache: {
+              workspaces: wsList,
+              teamsWithProjects: teamProjects,
+              lastFetchedAt: Date.now(),
+            },
+          });
+
+          // Reconcile active project scope's role if updated on backend
+          const currentScope = get().cloudConfig.activeScope;
+          if (currentScope?.type === 'project' && currentScope.id) {
+            for (const tp of teamProjects) {
+              const match = tp.projects.find((p) => p.id === currentScope.id);
+              if (match && match.user_role && match.user_role !== currentScope.role) {
+                set((state) => ({
+                  cloudConfig: {
+                    ...state.cloudConfig,
+                    activeScope: {
+                      ...state.cloudConfig.activeScope!,
+                      role: match.user_role,
+                    },
+                  },
+                }));
+                break;
+              }
+            }
+          }
+        } catch (err) {
+          console.error('Failed to load scopes:', err);
         }
       },
 
@@ -2125,6 +2216,7 @@ export const useApiStore = create<ApiStoreState>()(
         offlineActiveTabId: state.offlineActiveTabId,
         offlineHistory: state.offlineHistory,
         scopeCache: state.scopeCache,
+        scopesCache: state.scopesCache,
         workspaceMode: isOfflineOnly ? 'offline' : state.workspaceMode,
         hasConfiguredMode: isOfflineOnly ? true : state.hasConfiguredMode,
         cloudConfig: state.cloudConfig,

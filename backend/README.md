@@ -92,7 +92,7 @@ The AirREST backend natively supports Vercel Serverless Functions via the `@verc
 ### 2. How It Works on Vercel
 - **Entrypoint**: `api/index.go` exports `func Handler(w http.ResponseWriter, r *http.Request)`.
 - **Routing**: `vercel.json` rewrites all incoming traffic `/(.*)` to `/api/index.go`.
-- **Serverless-Tuned Pooling**: When running on Vercel (`VERCEL=1`), `pgxpool` automatically switches to serverless-optimized bounds (`MaxConns: 4`, `MinConns: 1`) to prevent exhausting PostgreSQL connection limits.
+- **Serverless-Tuned Pooling**: When running on Vercel (`VERCEL=1`), `pgxpool` automatically switches to serverless-optimized bounds (`MaxConns: 4`, `MinConns: 1`) to maintain efficient PostgreSQL connection usage.
 - **Cold-Start Lazy Init**: Database connections and router setup are initialized lazily on the first request via `sync.Once`. Subsequent warm requests process with zero setup overhead (< 5ms dispatch).
 
 ### 3. Recommended Cloud PostgreSQL

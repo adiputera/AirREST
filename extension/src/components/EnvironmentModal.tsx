@@ -28,6 +28,7 @@ import { Environment } from '@/types/api';
 import { getRoleFromJwt } from '@/lib/jwt';
 import { ConfirmModal } from './ConfirmModal';
 import { EnvironmentConflictModal } from './EnvironmentConflictModal';
+import { handleCodeEditorKeyDown } from '@/lib/editorHelper';
 
 interface EnvironmentModalProps {
   isOpen: boolean;
@@ -550,6 +551,11 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
               <textarea
                 value={pastedJson}
                 onChange={(e) => setPastedJson(e.target.value)}
+                onKeyDown={(e) =>
+                  handleCodeEditorKeyDown(e, {
+                    onChange: (val) => setPastedJson(val),
+                  })
+                }
                 placeholder='{\n  "name": "My Environment",\n  "values": [\n    { "key": "baseUrl", "value": "https://api.example.com" }\n  ]\n}'
                 className="flex-1 rounded-xl border border-zinc-800 bg-zinc-900/90 p-3 font-mono text-xs text-zinc-100 placeholder-zinc-500 focus:border-sky-500 focus:outline-none resize-none"
               />

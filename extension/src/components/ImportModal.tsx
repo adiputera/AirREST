@@ -8,7 +8,6 @@ import {
   CheckCircle2,
   AlertCircle,
   AlertTriangle,
-  Sparkles,
   Terminal,
   Globe,
   Loader2,
@@ -34,188 +33,14 @@ import {
 } from '@/lib/requestDiff';
 import { Collection, Environment, HttpMethod } from '@/types/api';
 import { MethodBadge } from './MethodBadge';
+import { handleCodeEditorKeyDown } from '@/lib/editorHelper';
 
 interface ImportModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-const SAMPLE_POSTMAN_COLLECTION = {
-  info: {
-    _postman_id: 'demo-sample-collection-1',
-    name: 'JSONPlaceholder & Echo APIs',
-    description: 'Sample Postman v2.1 collection with public test endpoints and authorization',
-    schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json',
-  },
-  auth: {
-    type: 'bearer',
-    bearer: [
-      {
-        key: 'token',
-        value: '{{token}}',
-        type: 'string',
-      },
-    ],
-  },
-  item: [
-    {
-      name: 'Users & Posts',
-      item: [
-        {
-          name: 'Get Users List',
-          request: {
-            method: 'GET',
-            header: [{ key: 'Accept', value: 'application/json' }],
-            url: {
-              raw: 'https://jsonplaceholder.typicode.com/users',
-              protocol: 'https',
-              host: ['jsonplaceholder', 'typicode', 'com'],
-              path: ['users'],
-            },
-          },
-        },
-        {
-          name: 'Get Single Todo',
-          request: {
-            method: 'GET',
-            header: [],
-            url: {
-              raw: 'https://jsonplaceholder.typicode.com/todos/1',
-              protocol: 'https',
-              host: ['jsonplaceholder', 'typicode', 'com'],
-              path: ['todos', '1'],
-            },
-          },
-        },
-        {
-          name: 'Create New Post',
-          request: {
-            method: 'POST',
-            header: [{ key: 'Content-Type', value: 'application/json' }],
-            body: {
-              mode: 'raw',
-              raw: JSON.stringify(
-                {
-                  title: 'Testing AirREST',
-                  body: 'Seamless Postman collection import in the browser',
-                  userId: 1,
-                },
-                null,
-                2
-              ),
-              options: {
-                raw: {
-                  language: 'json',
-                },
-              },
-            },
-            url: {
-              raw: 'https://jsonplaceholder.typicode.com/posts',
-              protocol: 'https',
-              host: ['jsonplaceholder', 'typicode', 'com'],
-              path: ['posts'],
-            },
-          },
-        },
-      ],
-    },
-    {
-      name: 'HTTPBin Echo & Auth Tests',
-      item: [
-        {
-          name: 'Inherited Bearer Auth Test',
-          request: {
-            method: 'GET',
-            header: [],
-            url: {
-              raw: 'https://httpbin.org/bearer',
-              protocol: 'https',
-              host: ['httpbin', 'org'],
-              path: ['bearer'],
-            },
-          },
-        },
-        {
-          name: 'Basic Auth Override Test',
-          request: {
-            method: 'GET',
-            header: [],
-            auth: {
-              type: 'basic',
-              basic: [
-                { key: 'username', value: 'admin' },
-                { key: 'password', value: 'secret123' },
-              ],
-            },
-            url: {
-              raw: 'https://httpbin.org/basic-auth/admin/secret123',
-              protocol: 'https',
-              host: ['httpbin', 'org'],
-              path: ['basic-auth', 'admin', 'secret123'],
-            },
-          },
-        },
-        {
-          name: 'API Key Header Test',
-          request: {
-            method: 'GET',
-            header: [],
-            auth: {
-              type: 'apikey',
-              apikey: [
-                { key: 'key', value: 'X-API-KEY' },
-                { key: 'value', value: 'demo_api_key_token' },
-                { key: 'in', value: 'header' },
-              ],
-            },
-            url: {
-              raw: 'https://httpbin.org/headers',
-              protocol: 'https',
-              host: ['httpbin', 'org'],
-              path: ['headers'],
-            },
-          },
-        },
-        {
-          name: 'Inspect Query Params',
-          request: {
-            method: 'GET',
-            header: [],
-            url: {
-              raw: 'https://httpbin.org/get?source=apitester&mode=hybrid',
-              protocol: 'https',
-              host: ['httpbin', 'org'],
-              path: ['get'],
-              query: [
-                { key: 'source', value: 'apitester' },
-                { key: 'mode', value: 'hybrid' },
-              ],
-            },
-          },
-        },
-      ],
-    },
-  ],
-};
 
-const SAMPLE_POSTMAN_ENVIRONMENT = {
-  id: 'demo-env-sample-1',
-  name: 'Development (Sample)',
-  values: [
-    { key: 'baseUrl', value: 'https://httpbin.org', enabled: true },
-    { key: 'apiKey', value: 'demo_key_12345', enabled: true },
-    { key: 'token', value: 'jwt_sample_token', enabled: true },
-    { key: 'apiVersion', value: 'v1', enabled: true },
-  ],
-  _postman_variable_scope: 'environment',
-  _postman_exported_at: '2026-10-09T00:00:00.000Z',
-  _postman_exported_using: 'Postman/11.0.0',
-};
-
-const SAMPLE_CURL_COMMAND = `curl -X POST "https://jsonplaceholder.typicode.com/posts" \\
-  -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer my_secret_token_123" \\
-  -d '{"title": "Automated cURL Import", "body": "Imported directly into tab", "userId": 1}'`;
 
 export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => {
   const [activeImportTab, setActiveImportTab] = useState<'postman' | 'curl'>('postman');
@@ -429,20 +254,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
     }
   };
 
-  const handleLoadSampleCollection = () => {
-    setJsonText(JSON.stringify(SAMPLE_POSTMAN_COLLECTION, null, 2));
-    setErrorMsg(null);
-  };
 
-  const handleLoadSampleEnvironment = () => {
-    setJsonText(JSON.stringify(SAMPLE_POSTMAN_ENVIRONMENT, null, 2));
-    setErrorMsg(null);
-  };
-
-  const handleLoadSampleCurl = () => {
-    setCurlText(SAMPLE_CURL_COMMAND);
-    setErrorMsg(null);
-  };
 
   const handleModalClose = () => {
     setConflict(null);
@@ -983,41 +795,18 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
             {/* Tab 1: Postman Collection or Environment */}
             {activeImportTab === 'postman' && (
               <div className="mt-4 space-y-4">
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-                  <label className="flex flex-1 cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-zinc-700 bg-zinc-900/60 p-4 text-center transition hover:border-sky-500/50 hover:bg-zinc-900">
-                    <FileJson className="h-5 w-5 text-sky-400" />
-                    <span className="text-xs font-medium text-zinc-300">
-                      Choose or drag a Postman Collection or Environment .json file
-                    </span>
-                    <input
-                      type="file"
-                      accept=".json,application/json"
-                      onChange={handleFileUpload}
-                      className="hidden"
-                    />
-                  </label>
-
-                  <div className="flex sm:flex-col gap-2">
-                    <button
-                      type="button"
-                      onClick={handleLoadSampleCollection}
-                      className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-amber-300 hover:bg-zinc-800 hover:border-amber-500/30 transition shadow-sm"
-                      title="Load sample Postman collection"
-                    >
-                      <Sparkles className="h-3.5 w-3.5 text-amber-400" />
-                      + Sample Collection
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleLoadSampleEnvironment}
-                      className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-sky-300 hover:bg-zinc-800 hover:border-sky-500/30 transition shadow-sm"
-                      title="Load sample Postman environment"
-                    >
-                      <Globe className="h-3.5 w-3.5 text-sky-400" />
-                      + Sample Environment
-                    </button>
-                  </div>
-                </div>
+                <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-zinc-700 bg-zinc-900/60 p-4 text-center transition hover:border-sky-500/50 hover:bg-zinc-900">
+                  <FileJson className="h-5 w-5 text-sky-400" />
+                  <span className="text-xs font-medium text-zinc-300">
+                    Choose or drag a Postman Collection or Environment .json file
+                  </span>
+                  <input
+                    type="file"
+                    accept=".json,application/json"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                  />
+                </label>
 
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-zinc-300">
@@ -1026,6 +815,11 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
                   <textarea
                     value={jsonText}
                     onChange={(e) => setJsonText(e.target.value)}
+                    onKeyDown={(e) =>
+                      handleCodeEditorKeyDown(e, {
+                        onChange: (val) => setJsonText(val),
+                      })
+                    }
                     placeholder='Paste Postman Collection JSON (with "info", "item") OR Postman Environment JSON (with "name", "values"). Auto-detected automatically!'
                     className="h-44 w-full rounded-xl border border-zinc-800 bg-zinc-900/90 p-3 font-mono text-xs text-zinc-200 placeholder-zinc-500 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition resize-none"
                   />
@@ -1036,23 +830,18 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
             {/* Tab 2: cURL Command */}
             {activeImportTab === 'curl' && (
               <div className="mt-4 space-y-4">
-                <div className="flex items-center justify-between">
-                  <label className="block text-xs font-medium text-zinc-300">
-                    Paste raw cURL command from terminal, DevTools, or documentation:
-                  </label>
-                  <button
-                    type="button"
-                    onClick={handleLoadSampleCurl}
-                    className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-xs font-medium text-amber-300 hover:bg-zinc-800 transition"
-                  >
-                    <Sparkles className="h-3.5 w-3.5 text-amber-400" />
-                    Load Sample cURL
-                  </button>
-                </div>
+                <label className="block text-xs font-medium text-zinc-300">
+                  Paste raw cURL command from terminal, DevTools, or documentation:
+                </label>
 
                 <textarea
                   value={curlText}
                   onChange={(e) => setCurlText(e.target.value)}
+                  onKeyDown={(e) =>
+                    handleCodeEditorKeyDown(e, {
+                      onChange: (val) => setCurlText(val),
+                    })
+                  }
                   placeholder={`curl -X POST "https://api.example.com/v1/resource" \\\n  -H "Authorization: Bearer token" \\\n  -d '{"name": "value"}'`}
                   className="h-52 w-full rounded-xl border border-zinc-800 bg-zinc-900/90 p-3 font-mono text-xs text-zinc-200 placeholder-zinc-500 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition resize-none"
                 />

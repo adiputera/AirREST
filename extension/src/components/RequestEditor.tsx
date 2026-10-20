@@ -32,6 +32,7 @@ import { VariableInput } from './VariableInput';
 import { interpolateVariables } from '@/lib/fetcher';
 import { beautifyXml, beautifyGraphQL, beautifyJson } from '@/lib/formatters';
 import { isRequestModified } from '@/lib/requestDiff';
+import { handleCodeEditorKeyDown } from '@/lib/editorHelper';
 
 function formatFileSize(bytes: number): string {
   if (!bytes || bytes <= 0) return '0 B';
@@ -852,6 +853,11 @@ export const RequestEditor: React.FC = () => {
                       <textarea
                         value={urlEncodedBulkText}
                         onChange={(e) => setUrlEncodedBulkText(e.target.value)}
+                        onKeyDown={(e) =>
+                          handleCodeEditorKeyDown(e, {
+                            onChange: (val) => setUrlEncodedBulkText(val),
+                          })
+                        }
                         placeholder="username: user123&#10;password: secret&#10;grant_type: password"
                         rows={6}
                         className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 p-3 font-mono text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition resize-y"
@@ -1019,6 +1025,15 @@ export const RequestEditor: React.FC = () => {
                         setBodyContent(e.target.value);
                         if (graphqlQueryError) setGraphqlQueryError(null);
                       }}
+                      onKeyDown={(e) =>
+                        handleCodeEditorKeyDown(e, {
+                          onChange: (val) => {
+                            setGraphqlQuery(val);
+                            setBodyContent(val);
+                            if (graphqlQueryError) setGraphqlQueryError(null);
+                          },
+                        })
+                      }
                       placeholder={`query GetUsers($limit: Int) {\n  users(limit: $limit) {\n    id\n    name\n    email\n  }\n}`}
                       rows={8}
                       className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 p-3 font-mono text-xs text-zinc-100 placeholder-zinc-600 focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500 transition resize-y"
@@ -1051,6 +1066,14 @@ export const RequestEditor: React.FC = () => {
                         setGraphqlVariables(e.target.value);
                         if (graphqlVariablesError) setGraphqlVariablesError(null);
                       }}
+                      onKeyDown={(e) =>
+                        handleCodeEditorKeyDown(e, {
+                          onChange: (val) => {
+                            setGraphqlVariables(val);
+                            if (graphqlVariablesError) setGraphqlVariablesError(null);
+                          },
+                        })
+                      }
                       placeholder={`{\n  "limit": 10\n}`}
                       rows={4}
                       className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 p-3 font-mono text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition resize-y"
@@ -1069,6 +1092,15 @@ export const RequestEditor: React.FC = () => {
                       if (jsonFormatError) setJsonFormatError(null);
                       if (xmlFormatError) setXmlFormatError(null);
                     }}
+                    onKeyDown={(e) =>
+                      handleCodeEditorKeyDown(e, {
+                        onChange: (val) => {
+                          setBodyContent(val);
+                          if (jsonFormatError) setJsonFormatError(null);
+                          if (xmlFormatError) setXmlFormatError(null);
+                        },
+                      })
+                    }
                     placeholder={
                       currentTab.bodyType === 'json' || (currentTab.bodyType === 'raw' && currentTab.rawType === 'json')
                         ? '{\n  "title": "foo",\n  "userId": "{{userId}}"\n}'
@@ -1139,6 +1171,11 @@ export const RequestEditor: React.FC = () => {
               <textarea
                 value={currentTab.preRequestScript || ''}
                 onChange={(e) => setPreRequestScript(e.target.value)}
+                onKeyDown={(e) =>
+                  handleCodeEditorKeyDown(e, {
+                    onChange: (val) => setPreRequestScript(val),
+                  })
+                }
                 placeholder="// JavaScript code executed before sending request:\n// pm.environment.set('token', 'sample_bearer_token');\n// pm.variables.set('reqId', 'req_' + Date.now());"
                 rows={8}
                 className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 p-3 font-mono text-xs text-zinc-100 placeholder-zinc-600 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 transition resize-y"
@@ -1199,6 +1236,11 @@ export const RequestEditor: React.FC = () => {
               <textarea
                 value={currentTab.postResponseScript || ''}
                 onChange={(e) => setPostResponseScript(e.target.value)}
+                onKeyDown={(e) =>
+                  handleCodeEditorKeyDown(e, {
+                    onChange: (val) => setPostResponseScript(val),
+                  })
+                }
                 placeholder="// JavaScript executed after response is received:\n// const data = pm.response.json();\n// pm.environment.set('token', data.token);\n// if (pm.response.code !== 200) throw new Error('Status failed');"
                 rows={8}
                 className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 p-3 font-mono text-xs text-zinc-100 placeholder-zinc-600 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 transition resize-y"

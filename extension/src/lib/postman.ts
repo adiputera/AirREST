@@ -12,24 +12,27 @@ import {
   RawType,
   FormDataItem,
 } from '@/types/api';
+import { parseQueryParamsFromUrl } from '@/lib/urlParams';
 
-interface PostmanHeader {
+export interface PostmanHeader {
   key?: string;
   value?: string;
   disabled?: boolean;
   description?: string;
 }
 
-interface PostmanQueryParam {
+export interface PostmanQueryParam {
   key?: string;
   value?: string;
   disabled?: boolean;
+  description?: string;
 }
 
-interface PostmanUrlObject {
+export interface PostmanUrlObject {
   raw?: string;
   protocol?: string;
   host?: string[] | string;
+  port?: string;
   path?: string[] | string;
   query?: PostmanQueryParam[];
 }
@@ -151,17 +154,31 @@ function parseHeaders(headers?: PostmanHeader[]): KeyValuePair[] {
   }));
 }
 
-function parseQueryParams(url?: string | PostmanUrlObject): KeyValuePair[] {
-  if (!url || typeof url === 'string') return [];
-  if (Array.isArray(url.query)) {
-    return url.query.map((q) => ({
-      id: generateId(),
-      key: String(q?.key ?? ''),
-      value: String(q?.value ?? ''),
-      enabled: !q?.disabled,
-    }));
+function parseQueryParams(url?: string | PostmanUrlObject, rawUrl?: string): KeyValuePair[] {
+  if (url && typeof url === 'object' && Array.isArray(url.query)) {
+    const fromQuery: KeyValuePair[] = url.query
+      .filter((q) => String(q?.key ?? '').trim() !== '' || String(q?.value ?? '').trim() !== '')
+      .map((q) => ({
+        id: generateId(),
+        key: String(q?.key ?? ''),
+        value: String(q?.value ?? ''),
+        enabled: !q?.disabled,
+        description: q?.description,
+      }));
+    if (fromQuery.length > 0) {
+      if (!fromQuery.some((p) => p.key === '' && p.value === '')) {
+        fromQuery.push({ id: generateId(), key: '', value: '', enabled: true });
+      }
+      return fromQuery;
+    }
   }
-  return [];
+
+  const targetUrl = typeof url === 'string' ? url : (url?.raw || rawUrl || '');
+  if (targetUrl) {
+    return parseQueryParamsFromUrl(targetUrl);
+  }
+
+  return [{ id: generateId(), key: '', value: '', enabled: true }];
 }
 
 function extractRawUrl(url?: string | PostmanUrlObject): string {
@@ -172,7 +189,23 @@ function extractRawUrl(url?: string | PostmanUrlObject): string {
   let built = '';
   if (url.protocol) built += `${url.protocol}://`;
   if (url.host) built += Array.isArray(url.host) ? url.host.join('.') : url.host;
-  if (url.path) built += '/' + (Array.isArray(url.path) ? url.path.join('/') : url.path);
+  if (url.port) built += `:${url.port}`;
+  if (url.path) {
+    const pathStr = Array.isArray(url.path) ? url.path.join('/') : url.path;
+    if (pathStr) {
+      built += (built.endsWith('/') || pathStr.startsWith('/') ? '' : '/') + pathStr;
+    }
+  }
+  if (Array.isArray(url.query) && url.query.length > 0) {
+    const qParams = url.query
+      .filter((q) => !q.disabled && (String(q.key ?? '').trim() !== '' || String(q.value ?? '').trim() !== ''))
+      .map((q) => (q.value ? `${q.key}=${q.value}` : (q.key || '')))
+      .filter(Boolean)
+      .join('&');
+    if (qParams) {
+      built += `?${qParams}`;
+    }
+  }
   return built;
 }
 
@@ -655,17 +688,14 @@ function itemToPostmanJson(item: CollectionItem): PostmanRawItem {
     return { name: item.name };
   }
 
-  const headers: PostmanHeader[] = req.headers.map((h) => ({
-    key: h.key,
-    value: h.value,
-    disabled: !h.enabled,
-  }));
-
-  const queryParams: PostmanQueryParam[] = req.params.map((p) => ({
-    key: p.key,
-    value: p.value,
-    disabled: !p.enabled,
-  }));
+  const headers: PostmanHeader[] = (req.headers || [])
+    .filter((h) => h.key.trim() !== '' || h.value.trim() !== '')
+    .map((h) => ({
+      key: h.key,
+      value: h.value,
+      ...(h.enabled === false ? { disabled: true } : {}),
+      ...(h.description ? { description: h.description } : {}),
+    }));
 
   let body: PostmanRequestBody | undefined = undefined;
   if (req.bodyType === 'json' || (req.bodyType === 'raw' && req.rawType === 'json')) {
@@ -719,24 +749,28 @@ function itemToPostmanJson(item: CollectionItem): PostmanRawItem {
   } else if (req.bodyType === 'x-www-form-urlencoded') {
     body = {
       mode: 'urlencoded',
-      urlencoded: (req.bodyUrlEncoded || []).map((item) => ({
-        key: item.key,
-        value: item.value,
-        type: 'text',
-        disabled: !item.enabled,
-        description: item.description,
-      })),
+      urlencoded: (req.bodyUrlEncoded || [])
+        .filter((item) => item.key.trim() !== '' || item.value.trim() !== '')
+        .map((item) => ({
+          key: item.key,
+          value: item.value,
+          type: 'text',
+          ...(item.enabled === false ? { disabled: true } : {}),
+          ...(item.description ? { description: item.description } : {}),
+        })),
     };
   } else if (req.bodyType === 'form-data') {
     body = {
       mode: 'formdata',
-      formdata: (req.bodyFormData || []).map((item) => ({
-        key: item.key,
-        value: item.value,
-        type: item.type,
-        src: item.file?.name || (item.type === 'file' ? item.value : undefined),
-        disabled: !item.enabled,
-      })),
+      formdata: (req.bodyFormData || [])
+        .filter((item) => item.key.trim() !== '' || (item.value && item.value.trim() !== '') || item.file)
+        .map((item) => ({
+          key: item.key,
+          value: item.value,
+          type: item.type,
+          src: item.file?.name || (item.type === 'file' ? item.value : undefined),
+          ...(item.enabled === false ? { disabled: true } : {}),
+        })),
     };
   } else if (req.bodyType === 'raw') {
     body = {
@@ -824,20 +858,152 @@ function itemToPostmanJson(item: CollectionItem): PostmanRawItem {
     };
   }
 
+  const postmanUrl = buildPostmanUrl(req.url, req.params);
+
   return {
     name: req.name || item.name,
     request: {
       method: req.method,
       header: headers,
-      url: {
-        raw: req.url,
-        query: queryParams.length > 0 ? queryParams : undefined,
-      },
+      url: postmanUrl,
       body,
       auth,
     },
     event: event.length > 0 ? event : undefined,
   };
+}
+
+/**
+ * Builds a standard Postman v2.1 URL object from a raw URL string and query parameters.
+ * Accurately extracts protocol, host, port, path, and non-empty query parameters.
+ */
+export function buildPostmanUrl(rawUrl: string, params: KeyValuePair[] = []): PostmanUrlObject {
+  const trimmedUrl = (rawUrl || '').trim();
+
+  // 1. Filter out completely empty placeholder rows from params
+  const validParams: PostmanQueryParam[] = (params || [])
+    .filter((p) => p.key.trim() !== '' || p.value.trim() !== '')
+    .map((p) => ({
+      key: p.key,
+      value: p.value,
+      ...(p.enabled === false ? { disabled: true } : {}),
+      ...(p.description ? { description: p.description } : {}),
+    }));
+
+  if (!trimmedUrl) {
+    return {
+      raw: '',
+      ...(validParams.length > 0 ? { query: validParams } : {}),
+    };
+  }
+
+  // 2. Separate query and hash from the base url
+  let baseWithoutQueryOrHash = trimmedUrl;
+  const hashIdx = baseWithoutQueryOrHash.indexOf('#');
+  if (hashIdx >= 0) {
+    baseWithoutQueryOrHash = baseWithoutQueryOrHash.substring(0, hashIdx);
+  }
+  const queryIdx = baseWithoutQueryOrHash.indexOf('?');
+  if (queryIdx >= 0) {
+    baseWithoutQueryOrHash = baseWithoutQueryOrHash.substring(0, queryIdx);
+  }
+
+  // Fallback: If no validParams passed but rawUrl has query params, extract them
+  if (validParams.length === 0 && queryIdx >= 0) {
+    const qStr = trimmedUrl.substring(queryIdx + 1).split('#')[0];
+    if (qStr.trim()) {
+      const searchParams = new URLSearchParams(qStr);
+      searchParams.forEach((val, key) => {
+        if (key.trim() !== '' || val.trim() !== '') {
+          validParams.push({
+            key,
+            value: val,
+          });
+        }
+      });
+    }
+  }
+
+  // 3. Extract protocol (e.g., https://, http://, ws://, etc.)
+  let protocol: string | undefined;
+  let rest = baseWithoutQueryOrHash;
+
+  const protoMatch = rest.match(/^([a-zA-Z][a-zA-Z0-9+\-.]*):\/\//);
+  if (protoMatch) {
+    protocol = protoMatch[1].toLowerCase();
+    rest = rest.substring(protoMatch[0].length);
+  }
+
+  // 4. Separate host (+ port) and path
+  let hostStr = '';
+  let pathStr = '';
+
+  if (rest.startsWith('/')) {
+    pathStr = rest.substring(1);
+  } else {
+    const firstSlash = rest.indexOf('/');
+    if (firstSlash >= 0) {
+      hostStr = rest.substring(0, firstSlash);
+      pathStr = rest.substring(firstSlash + 1);
+    } else {
+      hostStr = rest;
+    }
+  }
+
+  // Remove credentials if any (e.g. user:pass@host)
+  const atIdx = hostStr.lastIndexOf('@');
+  if (atIdx >= 0) {
+    hostStr = hostStr.substring(atIdx + 1);
+  }
+
+  // 5. Extract port (e.g., :9002 or :{{port}})
+  let port: string | undefined;
+  const portMatch = hostStr.match(/:(\d+|{{[^}]+}})$/);
+  if (portMatch) {
+    port = portMatch[1];
+    hostStr = hostStr.substring(0, hostStr.length - portMatch[0].length);
+  }
+
+  // 6. Split host into segments (Postman standard)
+  let host: string[] | undefined;
+  if (hostStr) {
+    if (/^{{[^}]+}}$/.test(hostStr)) {
+      host = [hostStr];
+    } else {
+      host = hostStr.split('.').filter(Boolean);
+      if (host.length === 0) {
+        host = [hostStr];
+      }
+    }
+  }
+
+  // 7. Split path into segments
+  let path: string[] | undefined;
+  if (pathStr) {
+    path = pathStr.split('/').filter(Boolean);
+  }
+
+  const urlObj: PostmanUrlObject = {
+    raw: trimmedUrl,
+  };
+
+  if (protocol) {
+    urlObj.protocol = protocol;
+  }
+  if (host && host.length > 0) {
+    urlObj.host = host;
+  }
+  if (port) {
+    urlObj.port = port;
+  }
+  if (path && path.length > 0) {
+    urlObj.path = path;
+  }
+  if (validParams.length > 0) {
+    urlObj.query = validParams;
+  }
+
+  return urlObj;
 }
 
 /**
