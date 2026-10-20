@@ -11,6 +11,7 @@ import {
   User,
   ShieldCheck,
   ArrowRight,
+  Laptop,
 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
 import { Collection, ActiveScope } from '@/types/api';
@@ -20,6 +21,7 @@ import {
   fetchTeamProjects,
 } from '@/lib/cloudApi';
 import { getRoleFromJwt } from '@/lib/jwt';
+import { isOfflineOnly } from '@/lib/edition';
 
 interface MoveCollectionModalProps {
   isOpen: boolean;
@@ -43,6 +45,9 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
   const cloudConfig = useApiStore((state) => state.cloudConfig);
   const moveCollection = useApiStore((state) => state.moveCollection);
 
+  const offlineWorkspaces = useApiStore((state) => state.offlineWorkspaces) || [];
+  const activeOfflineWorkspaceId = useApiStore((state) => state.activeOfflineWorkspaceId);
+
   const [isLoadingTargets, setIsLoadingTargets] = useState(false);
   const [targetOptions, setTargetOptions] = useState<TargetOption[]>([]);
   const [selectedTargetScope, setSelectedTargetScope] = useState<ActiveScope | null>(null);
@@ -55,7 +60,7 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
 
   // Load eligible target workspaces / projects
   useEffect(() => {
-    if (!isOpen || !cloudConfig.token) {
+    if (!isOpen) {
       setTargetOptions([]);
       setSelectedTargetScope(null);
       setErrorMsg(null);
@@ -68,106 +73,121 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
 
     const loadTargets = async () => {
       try {
-        const jwtRole = getRoleFromJwt(cloudConfig.token);
-        const isSuperadmin = jwtRole === 'superadmin' || cloudConfig.user?.role === 'superadmin';
-
-        const [workspaces, teams] = await Promise.all([
-          fetchUserWorkspaces(cloudConfig.apiUrl, cloudConfig.token!, cloudConfig.refreshToken).catch(() => []),
-          fetchUserTeams(cloudConfig.apiUrl, cloudConfig.token!, cloudConfig.refreshToken).catch(() => []),
-        ]);
-
-        const teamProjects = await Promise.all(
-          teams.map(async (t) => {
-            const projs = await fetchTeamProjects(
-              cloudConfig.apiUrl,
-              t.id,
-              cloudConfig.token!,
-              cloudConfig.refreshToken
-            ).catch(() => []);
-            return { team: t, projects: projs };
-          })
-        );
-
-        if (!isMounted) return;
-
         const options: TargetOption[] = [];
 
-        // 1. Personal Workspace Option (only if source is not already this personal workspace)
-        for (const ws of workspaces) {
-          const isCurrentWs = workspaceMode === 'cloud' && activeScope?.type === 'workspace' && activeScope.id === ws.id;
-          if (!isCurrentWs && !isSourceProject) {
-            options.push({
-              scope: {
-                id: ws.id,
-                name: ws.name || 'Personal Workspace',
-                type: 'workspace',
-              },
-              label: ws.name || 'Personal Workspace',
-              subLabel: 'Private Workspace',
-              role: 'Owner',
-            });
-          }
+        // 1. Offline Workspaces (available in all editions)
+        const otherOfflineWorkspaces = (offlineWorkspaces || []).filter(
+          (w) => !(workspaceMode === 'offline' && w.id === activeOfflineWorkspaceId)
+        );
+
+        for (const ws of otherOfflineWorkspaces) {
+          options.push({
+            scope: {
+              id: ws.id,
+              name: ws.name,
+              type: 'offline_workspace',
+            },
+            label: ws.name,
+            subLabel: 'Offline Workspace (Local Storage)',
+            role: 'Local',
+          });
         }
 
-        // 2. Team Projects Options
-        for (const tp of teamProjects) {
-          const isTeamAdmin =
-            isSuperadmin ||
-            tp.team.role === 'admin' ||
-            tp.team.role === 'owner' ||
-            (tp.team as any).user_role === 'admin' ||
-            (tp.team as any).user_role === 'owner';
+        // 2. Cloud Workspaces & Projects (Full edition only, if authenticated)
+        if (!isOfflineOnly && cloudConfig.token) {
+          const jwtRole = getRoleFromJwt(cloudConfig.token);
+          const isSuperadmin = jwtRole === 'superadmin' || cloudConfig.user?.role === 'superadmin';
 
-          // Rule: If source is a Project, target MUST be within the SAME team!
-          if (isSourceProject && sourceTeamId && tp.team.id !== sourceTeamId) {
-            continue;
-          }
+          const [workspaces, teams] = await Promise.all([
+            fetchUserWorkspaces(cloudConfig.apiUrl, cloudConfig.token!, cloudConfig.refreshToken).catch(() => []),
+            fetchUserTeams(cloudConfig.apiUrl, cloudConfig.token!, cloudConfig.refreshToken).catch(() => []),
+          ]);
 
-          for (const proj of tp.projects) {
-            // Cannot move to the exact same project
-            if (isSourceProject && proj.id === activeScope?.id) {
-              continue;
-            }
+          const teamProjects = await Promise.all(
+            teams.map(async (t) => {
+              const projs = await fetchTeamProjects(
+                cloudConfig.apiUrl,
+                t.id,
+                cloudConfig.token!,
+                cloudConfig.refreshToken
+              ).catch(() => []);
+              return { team: t, projects: projs };
+            })
+          );
 
-            // Role check: User must be at least Contributor (or Team Admin / Superadmin)
-            const effectiveRole = isTeamAdmin ? 'admin' : proj.user_role;
-            const isEligible =
-              isSuperadmin ||
-              isTeamAdmin ||
-              effectiveRole === 'admin' ||
-              effectiveRole === 'maintainer' ||
-              effectiveRole === 'contributor';
-
-            if (isEligible) {
+          // Personal Cloud Workspace Option
+          for (const ws of workspaces) {
+            const isCurrentWs = workspaceMode === 'cloud' && activeScope?.type === 'workspace' && activeScope.id === ws.id;
+            if (!isCurrentWs && !isSourceProject) {
               options.push({
                 scope: {
-                  id: proj.id,
-                  name: proj.name,
-                  type: 'project',
-                  teamId: tp.team.id,
-                  teamName: tp.team.name,
-                  role: effectiveRole,
+                  id: ws.id,
+                  name: ws.name || 'Personal Workspace',
+                  type: 'workspace',
                 },
-                label: `${tp.team.name} / ${proj.name}`,
-                subLabel: `Team: ${tp.team.name}`,
-                role: effectiveRole ? effectiveRole.toUpperCase() : undefined,
+                label: ws.name || 'Personal Workspace',
+                subLabel: 'Private Cloud Workspace',
+                role: 'Owner',
               });
             }
           }
+
+          // Team Projects Options
+          for (const tp of teamProjects) {
+            const isTeamAdmin =
+              isSuperadmin ||
+              tp.team.role === 'admin' ||
+              tp.team.role === 'owner' ||
+              (tp.team as any).user_role === 'admin' ||
+              (tp.team as any).user_role === 'owner';
+
+            if (isSourceProject && sourceTeamId && tp.team.id !== sourceTeamId) {
+              continue;
+            }
+
+            for (const proj of tp.projects) {
+              if (isSourceProject && proj.id === activeScope?.id) {
+                continue;
+              }
+
+              const effectiveRole = isTeamAdmin ? 'admin' : proj.user_role;
+              const isEligible =
+                isSuperadmin ||
+                isTeamAdmin ||
+                effectiveRole === 'admin' ||
+                effectiveRole === 'maintainer' ||
+                effectiveRole === 'contributor';
+
+              if (isEligible) {
+                options.push({
+                  scope: {
+                    id: proj.id,
+                    name: proj.name,
+                    type: 'project',
+                    teamId: tp.team.id,
+                    teamName: tp.team.name,
+                    role: effectiveRole,
+                  },
+                  label: `${tp.team.name} / ${proj.name}`,
+                  subLabel: `Team: ${tp.team.name}`,
+                  role: effectiveRole ? effectiveRole.toUpperCase() : undefined,
+                });
+              }
+            }
+          }
         }
+
+        if (!isMounted) return;
 
         setTargetOptions(options);
         if (options.length > 0) {
           setSelectedTargetScope(options[0].scope);
         }
       } catch (err: any) {
-        if (isMounted) {
-          setErrorMsg(err.message || 'Failed to load eligible workspaces');
-        }
+        if (!isMounted) return;
+        setErrorMsg(err.message || 'Failed to load destination workspaces');
       } finally {
-        if (isMounted) {
-          setIsLoadingTargets(false);
-        }
+        if (isMounted) setIsLoadingTargets(false);
       }
     };
 
@@ -176,7 +196,7 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [isOpen, cloudConfig.token, workspaceMode, activeScope, isSourceProject, sourceTeamId]);
+  }, [isOpen, cloudConfig.token, workspaceMode, activeOfflineWorkspaceId, offlineWorkspaces]);
 
   if (!isOpen || !collection) return null;
 
@@ -197,10 +217,11 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
 
   const getSourceDisplay = () => {
     if (workspaceMode === 'offline') {
+      const currentOfflineWs = (offlineWorkspaces || []).find((w) => w.id === activeOfflineWorkspaceId);
       return {
-        title: 'Offline Workspace',
+        title: currentOfflineWs ? currentOfflineWs.name : 'Offline Workspace',
         subtitle: 'Stored locally in browser',
-        badge: 'Local',
+        badge: 'Offline',
       };
     }
     if (activeScope?.type === 'project') {
@@ -271,55 +292,49 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
         {/* Target selection */}
         <div className="mt-4">
           <label className="block text-xs font-semibold text-zinc-300 mb-2">
-            Select Destination Workspace / Project
+            Select Destination Workspace
           </label>
 
-          {!cloudConfig.token ? (
-            <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-4 text-center">
-              <AlertCircle className="h-6 w-6 text-amber-400 mx-auto" />
-              <div className="text-xs font-bold text-zinc-200 mt-2">
-                Cloud Authentication Required
-              </div>
-              <p className="text-[11px] text-zinc-400 mt-1">
-                To move this collection to an online project or workspace, please log in with your account first.
-              </p>
-            </div>
-          ) : isLoadingTargets ? (
+          {isLoadingTargets ? (
             <div className="flex items-center justify-center py-8 text-zinc-400 gap-2">
               <Loader2 className="h-4 w-4 animate-spin text-sky-400" />
-              <span className="text-xs">Loading eligible workspaces...</span>
+              <span className="text-xs">Loading available workspaces...</span>
             </div>
           ) : targetOptions.length === 0 ? (
             <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4 text-center">
               <AlertCircle className="h-6 w-6 text-zinc-500 mx-auto" />
               <div className="text-xs font-bold text-zinc-300 mt-2">
-                No Eligible Target Projects Found
+                No Other Workspaces Available
               </div>
               <p className="text-[11px] text-zinc-400 mt-1 leading-relaxed">
-                {isSourceProject
-                  ? 'Moving collections between projects is restricted to the same team. You must have at least Contributor role in the destination project.'
-                  : 'You must have at least Contributor role in an online project to move this collection.'}
+                Create another offline workspace or connect to a cloud account to move this collection.
               </p>
             </div>
           ) : (
-            <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
+            <div className="max-h-52 overflow-y-auto space-y-1.5 pr-1">
               {targetOptions.map((opt) => {
                 const isSelected = selectedTargetScope?.id === opt.scope.id;
+                const isOfflineTarget = opt.scope.type === 'offline_workspace';
+
                 return (
                   <div
                     key={opt.scope.id}
                     onClick={() => setSelectedTargetScope(opt.scope)}
                     className={`flex items-center justify-between p-2.5 rounded-xl border cursor-pointer transition ${
                       isSelected
-                        ? 'border-sky-500/50 bg-sky-500/10 text-white'
+                        ? isOfflineTarget
+                          ? 'border-amber-500/50 bg-amber-500/10 text-white'
+                          : 'border-sky-500/50 bg-sky-500/10 text-white'
                         : 'border-zinc-800/80 bg-zinc-900/30 hover:bg-zinc-900 text-zinc-300'
                     }`}
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
-                      {opt.scope.type === 'workspace' ? (
+                      {isOfflineTarget ? (
+                        <Laptop className={`h-4 w-4 shrink-0 ${isSelected ? 'text-amber-400' : 'text-zinc-500'}`} />
+                      ) : opt.scope.type === 'workspace' ? (
                         <User className={`h-4 w-4 shrink-0 ${isSelected ? 'text-sky-400' : 'text-zinc-500'}`} />
                       ) : (
-                        <Building2 className={`h-4 w-4 shrink-0 ${isSelected ? 'text-sky-400' : 'text-zinc-500'}`} />
+                        <Building2 className={`h-4 w-4 shrink-0 ${isSelected ? 'text-indigo-400' : 'text-zinc-500'}`} />
                       )}
                       <div className="min-w-0">
                         <div className="text-xs font-bold truncate">{opt.label}</div>
@@ -331,7 +346,11 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
                     {opt.role && (
                       <span
                         className={`text-[9px] font-bold px-2 py-0.5 rounded uppercase tracking-wider shrink-0 ${
-                          isSelected
+                          isOfflineTarget
+                            ? isSelected
+                              ? 'bg-amber-500/20 text-amber-300'
+                              : 'bg-amber-500/10 text-amber-400/80 border border-amber-500/20'
+                            : isSelected
                             ? 'bg-sky-500/20 text-sky-300'
                             : 'bg-zinc-800 text-zinc-400'
                         }`}
@@ -360,7 +379,7 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
             type="button"
             onClick={onClose}
             disabled={isSubmitting}
-            className="rounded-xl px-4 py-2 text-xs font-semibold text-zinc-400 hover:text-white hover:bg-zinc-900 transition"
+            className="rounded-xl px-4 py-2 text-xs font-medium text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200 transition"
           >
             Cancel
           </button>
@@ -368,7 +387,7 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
             type="button"
             onClick={handleConfirmMove}
             disabled={isSubmitting || !selectedTargetScope || targetOptions.length === 0}
-            className="flex items-center gap-2 rounded-xl bg-sky-500 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-sky-500/20 hover:bg-sky-400 transition disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 px-4 py-2 text-xs font-semibold text-zinc-950 shadow-lg shadow-amber-500/20 hover:from-amber-400 hover:to-amber-500 active:scale-95 disabled:opacity-40 disabled:pointer-events-none transition"
           >
             {isSubmitting ? (
               <>
@@ -377,8 +396,8 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
               </>
             ) : (
               <>
-                <ArrowRight className="h-3.5 w-3.5" />
                 <span>Move Collection</span>
+                <ArrowRight className="h-3.5 w-3.5" />
               </>
             )}
           </button>

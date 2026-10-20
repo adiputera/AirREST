@@ -121,6 +121,14 @@ export interface Environment {
 
 export type WorkspaceMode = 'offline' | 'cloud';
 
+export interface OfflineWorkspace {
+  id: string;
+  name: string;
+  description?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface CloudUser {
   id: string;
   email: string;
@@ -153,7 +161,7 @@ export interface CloudProject {
 }
 
 export interface ActiveScope {
-  type: 'workspace' | 'project';
+  type: 'workspace' | 'project' | 'offline_workspace';
   id: string;
   name: string;
   teamId?: string;

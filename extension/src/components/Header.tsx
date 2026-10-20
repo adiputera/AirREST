@@ -77,15 +77,13 @@ export const Header: React.FC = () => {
             </span>
           </div>
 
-          {/* Scope & Team Switcher (Full edition only) */}
-          {!isOfflineOnly && (
-            <div className="relative z-30 border-l border-zinc-800/80 pl-3">
-              <ScopeSwitcher
-                onOpenModeSelector={() => setIsModeSelectorOpen(true)}
-                onOpenCloudAuth={() => setIsCloudAuthOpen(true)}
-              />
-            </div>
-          )}
+          {/* Scope & Workspace Switcher */}
+          <div className="relative z-30 border-l border-zinc-800/80 pl-3">
+            <ScopeSwitcher
+              onOpenModeSelector={() => setIsModeSelectorOpen(true)}
+              onOpenCloudAuth={() => setIsCloudAuthOpen(true)}
+            />
+          </div>
         </div>
 
         {/* Global Actions */}

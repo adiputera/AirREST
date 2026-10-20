@@ -130,62 +130,23 @@ export async function idbDel(key: string): Promise<void> {
   });
 }
 
-const LEGACY_STORAGE_KEYS = ['api-tester-storage-v2', 'api-tester-storage'];
-
 /**
- * StateStorage adapter for Zustand Persist backed by IndexedDB.
- * Seamlessly migrates existing legacy data from localStorage and legacy keys to the new storage key.
+ * StateStorage adapter for Zustand Persist backed by IndexedDB with localStorage fallback.
  */
 export const appStorage: StateStorage = {
   getItem: async (name: string): Promise<string | null> => {
-    // 1. Try reading the active key from IndexedDB
     try {
       const val = await idbGet(name);
       if (val !== null) {
         return val;
       }
     } catch (err) {
-      console.warn('[AirREST Storage] IndexedDB read failed, checking legacy fallbacks:', err);
+      console.warn('[AirREST Storage] IndexedDB read failed:', err);
     }
 
-    // 2. Check IndexedDB for legacy keys (e.g. 'api-tester-storage-v2')
-    const keysToCheck = [name, ...LEGACY_STORAGE_KEYS.filter((k) => k !== name)];
-
-    for (const key of keysToCheck) {
-      if (key === name) continue;
-      try {
-        const legacyVal = await idbGet(key);
-        if (legacyVal !== null) {
-          try {
-            await idbSet(name, legacyVal);
-            await idbDel(key);
-            console.info(`[AirREST Storage] Migrated IndexedDB key "${key}" to "${name}".`);
-          } catch (migrateErr) {
-            console.warn(`[AirREST Storage] Failed to migrate IndexedDB key "${key}":`, migrateErr);
-          }
-          return legacyVal;
-        }
-      } catch {
-        // continue checking
-      }
-    }
-
-    // 3. Check localStorage for active or legacy keys to automatically migrate
     try {
       if (typeof localStorage !== 'undefined') {
-        for (const key of keysToCheck) {
-          const localVal = localStorage.getItem(key);
-          if (localVal !== null) {
-            try {
-              await idbSet(name, localVal);
-              localStorage.removeItem(key);
-              console.info(`[AirREST Storage] Migrated localStorage "${key}" to IndexedDB "${name}".`);
-            } catch (migrateErr) {
-              console.warn(`[AirREST Storage] Failed to migrate localStorage "${key}":`, migrateErr);
-            }
-            return localVal;
-          }
-        }
+        return localStorage.getItem(name);
       }
     } catch (err) {
       console.warn('[AirREST Storage] localStorage read failed:', err);
@@ -197,25 +158,6 @@ export const appStorage: StateStorage = {
   setItem: async (name: string, value: string): Promise<void> => {
     try {
       await idbSet(name, value);
-
-      // Clean up legacy keys from localStorage and IndexedDB if still present
-      const keysToClean = [name, ...LEGACY_STORAGE_KEYS.filter((k) => k !== name)];
-      for (const key of keysToClean) {
-        if (key !== name) {
-          try {
-            await idbDel(key);
-          } catch {
-            // Ignore
-          }
-        }
-        try {
-          if (typeof localStorage !== 'undefined') {
-            localStorage.removeItem(key);
-          }
-        } catch {
-          // Ignore
-        }
-      }
       return;
     } catch (err) {
       console.error('[AirREST Storage] IndexedDB write failed, falling back to localStorage:', err);
@@ -226,20 +168,18 @@ export const appStorage: StateStorage = {
   },
 
   removeItem: async (name: string): Promise<void> => {
-    const keysToClean = [name, ...LEGACY_STORAGE_KEYS.filter((k) => k !== name)];
-    for (const key of keysToClean) {
-      try {
-        await idbDel(key);
-      } catch (err) {
-        console.warn(`[AirREST Storage] IndexedDB delete failed for "${key}":`, err);
+    try {
+      await idbDel(name);
+    } catch (err) {
+      console.warn(`[AirREST Storage] IndexedDB delete failed for "${name}":`, err);
+    }
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem(name);
       }
-      try {
-        if (typeof localStorage !== 'undefined') {
-          localStorage.removeItem(key);
-        }
-      } catch {
-        // Ignore
-      }
+    } catch {
+      // Ignore
     }
   },
 };
+

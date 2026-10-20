@@ -20,6 +20,7 @@ import {
   ActiveScope,
   SyncStatus,
   ScopesCacheData,
+  OfflineWorkspace,
 } from '@/types/api';
 import { executeApiRequest } from '@/lib/fetcher';
 import {
@@ -66,34 +67,11 @@ function generateId(): string {
   });
 }
 
-const defaultEnvironments: Environment[] = [
-  {
-    id: 'env-localhost',
-    name: 'Localhost',
-    variables: [
-      { id: 'v1', key: 'baseUrl', value: 'http://localhost:3000', enabled: true },
-      { id: 'v2', key: 'port', value: '3000', enabled: true },
-    ],
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  },
-  {
-    id: 'env-jsonplaceholder',
-    name: 'JSONPlaceholder',
-    variables: [
-      { id: 'v3', key: 'baseUrl', value: 'https://jsonplaceholder.typicode.com', enabled: true },
-      { id: 'v4', key: 'userId', value: '1', enabled: true },
-    ],
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  },
-];
-
 const defaultRequest: ApiRequest = {
   id: 'req-default-1',
-  name: 'Sample GET Request',
+  name: 'New Request',
   method: 'GET',
-  url: '{{baseUrl}}/todos/{{userId}}',
+  url: '',
   params: [{ id: 'p1', key: '', value: '', enabled: true }],
   headers: [{ id: 'h1', key: 'Accept', value: 'application/json', enabled: true }],
   auth: { type: 'none' },
@@ -104,8 +82,8 @@ const defaultRequest: ApiRequest = {
   graphqlVariables: '',
   bodyFormData: [],
   bodyUrlEncoded: [{ id: 'u1', key: '', value: '', enabled: true }],
-  preRequestScript: '// Example Pre-request Script:\n// pm.environment.set("timestamp", Date.now());\n// console.log("Request starting...");\n',
-  postResponseScript: '// Example Tests / Post-response Script:\n// const data = pm.response.json();\n// if (data.token) pm.environment.set("token", data.token);\n',
+  preRequestScript: '',
+  postResponseScript: '',
   createdAt: Date.now(),
   updatedAt: Date.now(),
 };
@@ -151,6 +129,16 @@ function getScopeKey(scope?: ActiveScope | null): string {
   if (!scope || !scope.id) return 'default';
   return `${scope.type}:${scope.id}`;
 }
+
+export const DEFAULT_OFFLINE_WORKSPACE_ID = 'ws-default-local';
+
+export const defaultOfflineWorkspace: OfflineWorkspace = {
+  id: DEFAULT_OFFLINE_WORKSPACE_ID,
+  name: 'Default Workspace',
+  description: 'Default local workspace on this device',
+  createdAt: 1700000000000,
+  updatedAt: 1700000000000,
+};
 
 interface ApiStoreState {
   tabs: ApiRequest[];
@@ -227,6 +215,9 @@ interface ApiStoreState {
 
   // Collections & History
   createCollection: (name: string, description?: string) => string;
+  createFolder: (collectionId: string, parentFolderId: string | null, name?: string) => string;
+  createRequestInCollection: (collectionId: string, folderId: string | null, name?: string) => ApiRequest;
+  deleteCollectionItem: (collectionId: string, itemId: string) => void;
   saveRequestToCollection: (collectionId: string, folderId: string | null, request: ApiRequest) => void;
   saveActiveRequest: () => { success: boolean; isDirectSaved: boolean };
   addCollection: (collection: Collection) => Promise<void> | void;
@@ -238,6 +229,16 @@ interface ApiStoreState {
   clearHistory: () => void;
   deleteHistoryItem: (id: string) => void;
 
+  // Offline Workspaces
+  offlineWorkspaces?: OfflineWorkspace[];
+  activeOfflineWorkspaceId?: string;
+  offlineScopeCache?: Record<string, ScopeCacheEntry>;
+  createOfflineWorkspace: (name: string, description?: string) => string;
+  switchOfflineWorkspace: (workspaceId: string) => void;
+  renameOfflineWorkspace: (id: string, name: string) => void;
+  deleteOfflineWorkspace: (id: string) => { success: boolean; error?: string };
+  duplicateOfflineWorkspace: (id: string, newName?: string) => string;
+
   // Workspace Mode & Cloud Synchronization
   workspaceMode: WorkspaceMode;
   hasConfiguredMode: boolean;
@@ -245,12 +246,6 @@ interface ApiStoreState {
   syncStatus: SyncStatus;
   lastSyncedAt: number | null;
   syncError: string | null;
-  offlineCollections?: Collection[];
-  offlineEnvironments?: Environment[];
-  offlineActiveEnvironmentId?: string | null;
-  offlineTabs?: ApiRequest[];
-  offlineActiveTabId?: string;
-  offlineHistory?: HistoryItem[];
   scopeCache?: Record<string, ScopeCacheEntry>;
   scopesCache?: ScopesCacheData;
   isSwitchingWorkspace?: boolean;
@@ -276,8 +271,22 @@ export const useApiStore = create<ApiStoreState>()(
       collections: [],
       history: [],
       sidebarTab: 'collections',
-      environments: defaultEnvironments,
-      activeEnvironmentId: 'env-jsonplaceholder',
+      environments: [],
+      activeEnvironmentId: null,
+
+      // Offline Workspaces
+      offlineWorkspaces: [defaultOfflineWorkspace],
+      activeOfflineWorkspaceId: DEFAULT_OFFLINE_WORKSPACE_ID,
+      offlineScopeCache: {
+        [DEFAULT_OFFLINE_WORKSPACE_ID]: {
+          collections: [],
+          environments: [],
+          activeEnvironmentId: null,
+          tabs: [defaultRequest],
+          activeTabId: defaultRequest.id,
+          history: [],
+        },
+      },
 
       // Workspace Mode & Cloud Sync State
       workspaceMode: 'offline',
@@ -288,12 +297,6 @@ export const useApiStore = create<ApiStoreState>()(
       syncStatus: 'idle',
       lastSyncedAt: null,
       syncError: null,
-      offlineCollections: [],
-      offlineEnvironments: defaultEnvironments,
-      offlineActiveEnvironmentId: 'env-jsonplaceholder',
-      offlineTabs: [defaultRequest],
-      offlineActiveTabId: defaultRequest.id,
-      offlineHistory: [],
       scopeCache: {},
       scopesCache: undefined,
       isSwitchingWorkspace: false,
@@ -323,35 +326,38 @@ export const useApiStore = create<ApiStoreState>()(
             };
           }
 
-          const {
-            offlineCollections,
-            offlineEnvironments,
-            offlineActiveEnvironmentId,
-            offlineTabs,
-            offlineActiveTabId,
-            offlineHistory,
-          } = get();
+          const activeLocalId = get().activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID;
+          const localEntry = (get().offlineScopeCache || {})[activeLocalId] || {
+            collections: [],
+            environments: [],
+            activeEnvironmentId: null,
+            tabs: [createInitialTab()],
+            activeTabId: '',
+            history: [],
+          };
 
-          const restoredTabs =
-            offlineTabs && offlineTabs.length > 0
-              ? offlineTabs
-              : [createInitialTab()];
-          const restoredActiveTabId =
-            offlineActiveTabId && restoredTabs.some((t) => t.id === offlineActiveTabId)
-              ? offlineActiveTabId
-              : restoredTabs[0].id;
+          const restoredCollections = localEntry.collections || [];
+          const restoredEnvironments = localEntry.environments || [];
+          const restoredActiveEnvId = localEntry.activeEnvironmentId || null;
+          const rawTabs = (localEntry.tabs && localEntry.tabs.length > 0) ? localEntry.tabs : [createInitialTab()];
+          const restoredTabs = rawTabs;
+          const rawActiveTabId = localEntry.activeTabId;
+          const restoredActiveTabId = rawActiveTabId && restoredTabs.some((t) => t.id === rawActiveTabId)
+            ? rawActiveTabId
+            : restoredTabs[0].id;
+          const restoredHistory = localEntry.history || [];
 
           set({
             workspaceMode: 'offline',
             hasConfiguredMode: true,
             scopeCache: updatedScopeCache,
-            collections: offlineCollections || [],
-            environments: (offlineEnvironments && offlineEnvironments.length > 0) ? offlineEnvironments : defaultEnvironments,
-            activeEnvironmentId: offlineActiveEnvironmentId || defaultEnvironments[0]?.id || null,
+            collections: restoredCollections,
+            environments: restoredEnvironments,
+            activeEnvironmentId: restoredActiveEnvId,
             tabs: restoredTabs,
             activeTabId: restoredActiveTabId,
             activeResponse: null,
-            history: offlineHistory || [],
+            history: restoredHistory,
             syncStatus: 'idle',
             syncError: null,
           });
@@ -362,7 +368,31 @@ export const useApiStore = create<ApiStoreState>()(
         } else {
           // Entering cloud mode: snapshot current offline state only if we were actually in offline mode
           const isCurrentlyOffline = get().workspaceMode === 'offline';
-          const { collections, environments, activeEnvironmentId, cloudConfig, scopeCache, tabs, activeTabId, history } = get();
+          const {
+            collections,
+            environments,
+            activeEnvironmentId,
+            cloudConfig,
+            scopeCache,
+            tabs,
+            activeTabId,
+            history,
+            offlineScopeCache,
+            activeOfflineWorkspaceId,
+          } = get();
+
+          const updatedOfflineCache = { ...(offlineScopeCache || {}) };
+          if (isCurrentlyOffline && activeOfflineWorkspaceId) {
+            updatedOfflineCache[activeOfflineWorkspaceId] = {
+              collections,
+              environments,
+              activeEnvironmentId,
+              tabs,
+              activeTabId,
+              history,
+            };
+          }
+
           const targetScope = cloudConfig.activeScope;
           const cached = targetScope ? scopeCache?.[getScopeKey(targetScope)] : null;
 
@@ -383,12 +413,7 @@ export const useApiStore = create<ApiStoreState>()(
           set({
             workspaceMode: isOfflineOnly ? 'offline' : 'cloud',
             hasConfiguredMode: true,
-            offlineCollections: isCurrentlyOffline ? collections : (get().offlineCollections || []),
-            offlineEnvironments: isCurrentlyOffline ? environments : (get().offlineEnvironments || defaultEnvironments),
-            offlineActiveEnvironmentId: isCurrentlyOffline ? activeEnvironmentId : (get().offlineActiveEnvironmentId || null),
-            offlineTabs: isCurrentlyOffline ? tabs : (get().offlineTabs || [createInitialTab()]),
-            offlineActiveTabId: isCurrentlyOffline ? activeTabId : (get().offlineActiveTabId || ''),
-            offlineHistory: isCurrentlyOffline ? history : (get().offlineHistory || []),
+            offlineScopeCache: updatedOfflineCache,
             collections: cached ? cached.collections : [],
             environments: cached ? cached.environments : [],
             activeEnvironmentId: cached ? (cached.activeEnvironmentId || null) : null,
@@ -450,13 +475,18 @@ export const useApiStore = create<ApiStoreState>()(
 
         // If transitioning from offline mode, snapshot offline state
         if (workspaceMode === 'offline') {
+          const activeLocalId = get().activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID;
+          const updatedOfflineCache = { ...(get().offlineScopeCache || {}) };
+          updatedOfflineCache[activeLocalId] = {
+            collections,
+            environments,
+            activeEnvironmentId,
+            tabs,
+            activeTabId,
+            history,
+          };
           set({
-            offlineCollections: collections,
-            offlineEnvironments: environments,
-            offlineActiveEnvironmentId: activeEnvironmentId,
-            offlineTabs: tabs,
-            offlineActiveTabId: activeTabId,
-            offlineHistory: history,
+            offlineScopeCache: updatedOfflineCache,
           });
         } else if (cloudConfig.activeScope) {
           // If transitioning from another cloud scope, snapshot old cloud scope into scopeCache
@@ -524,50 +554,34 @@ export const useApiStore = create<ApiStoreState>()(
       },
       logoutCloud: () => {
         set({ isSwitchingWorkspace: true });
-        const { offlineCollections, offlineEnvironments, offlineActiveEnvironmentId, offlineTabs, offlineActiveTabId, offlineHistory, scopeCache } = get();
-
-        // 1. Collect all collection IDs belonging to any cloud scope or currently loaded in cloud mode
-        const cloudColIds = new Set<string>();
-        if (scopeCache) {
-          for (const entry of Object.values(scopeCache)) {
-            if (entry.collections) {
-              for (const c of entry.collections) {
-                cloudColIds.add(c.id);
-              }
-            }
-          }
-        }
-        if (get().workspaceMode === 'cloud' && get().collections) {
-          for (const c of get().collections) {
-            cloudColIds.add(c.id);
-          }
-        }
-
-        // 2. Filter out any cloud-specific collections that leaked into offlineCollections
-        const pureOfflineCollections = (offlineCollections || []).filter(
-          (c) => c._origin === 'offline' || (!cloudColIds.has(c.id) && c._origin !== 'cloud')
-        );
+        const { offlineScopeCache, activeOfflineWorkspaceId } = get();
+        const activeLocalId = activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID;
+        const localEntry = (offlineScopeCache || {})[activeLocalId] || {
+          collections: [],
+          environments: [],
+          activeEnvironmentId: null,
+          tabs: [createInitialTab()],
+          history: [],
+        };
 
         const restoredTabs =
-          offlineTabs && offlineTabs.length > 0
-            ? offlineTabs
+          localEntry.tabs && localEntry.tabs.length > 0
+            ? localEntry.tabs
             : [createInitialTab()];
         const restoredActiveTabId =
-          offlineActiveTabId && restoredTabs.some((t) => t.id === offlineActiveTabId)
-            ? offlineActiveTabId
+          localEntry.activeTabId && restoredTabs.some((t) => t.id === localEntry.activeTabId)
+            ? localEntry.activeTabId
             : restoredTabs[0].id;
 
         set((state) => ({
           workspaceMode: 'offline',
-          collections: pureOfflineCollections,
-          offlineCollections: pureOfflineCollections,
-          environments: (offlineEnvironments && offlineEnvironments.length > 0) ? offlineEnvironments : defaultEnvironments,
-          activeEnvironmentId: offlineActiveEnvironmentId || defaultEnvironments[0]?.id || null,
+          collections: localEntry.collections || [],
+          environments: localEntry.environments || [],
+          activeEnvironmentId: localEntry.activeEnvironmentId || null,
           tabs: restoredTabs,
           activeTabId: restoredActiveTabId,
           activeResponse: null,
-          history: offlineHistory || [],
-          offlineHistory: offlineHistory || [],
+          history: localEntry.history || [],
           scopeCache: {},
           scopesCache: undefined,
           cloudConfig: {
@@ -638,9 +652,11 @@ export const useApiStore = create<ApiStoreState>()(
         }
       },
       importLocalToCloud: async () => {
-        const { cloudConfig, offlineCollections, collections } = get();
-        const colsToImport = (offlineCollections && offlineCollections.length > 0)
-          ? offlineCollections
+        const { cloudConfig, offlineScopeCache, activeOfflineWorkspaceId, collections } = get();
+        const activeLocalId = activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID;
+        const localEntry = (offlineScopeCache || {})[activeLocalId];
+        const colsToImport = (localEntry?.collections && localEntry.collections.length > 0)
+          ? localEntry.collections
           : collections;
 
         if (!cloudConfig.token || !cloudConfig.activeScope) {
@@ -731,12 +747,264 @@ export const useApiStore = create<ApiStoreState>()(
         }
       },
 
+      // Offline Workspaces Actions
+      createOfflineWorkspace: (name, description) => {
+        const trimmedName = name.trim() || 'New Workspace';
+        const newId = `ws_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+        const newWs: OfflineWorkspace = {
+          id: newId,
+          name: trimmedName,
+          description: description?.trim(),
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+
+        const {
+          workspaceMode,
+          activeOfflineWorkspaceId,
+          offlineWorkspaces,
+          offlineScopeCache,
+          collections,
+          environments,
+          activeEnvironmentId,
+          tabs,
+          activeTabId,
+          history,
+        } = get();
+
+        const updatedOfflineCache = { ...(offlineScopeCache || {}) };
+        if (workspaceMode === 'offline' && activeOfflineWorkspaceId) {
+          updatedOfflineCache[activeOfflineWorkspaceId] = {
+            collections,
+            environments,
+            activeEnvironmentId,
+            tabs,
+            activeTabId,
+            history,
+          };
+        }
+
+        const initialTab = createInitialTab();
+        updatedOfflineCache[newId] = {
+          collections: [],
+          environments: [],
+          activeEnvironmentId: null,
+          tabs: [initialTab],
+          activeTabId: initialTab.id,
+          history: [],
+        };
+
+        set({
+          offlineWorkspaces: [...(offlineWorkspaces || [defaultOfflineWorkspace]), newWs],
+          offlineScopeCache: updatedOfflineCache,
+        });
+
+        get().switchOfflineWorkspace(newId);
+        return newId;
+      },
+
+      switchOfflineWorkspace: (workspaceId) => {
+        const {
+          activeOfflineWorkspaceId,
+          offlineScopeCache,
+          workspaceMode,
+          cloudConfig,
+          scopeCache,
+          collections,
+          environments,
+          activeEnvironmentId,
+          tabs,
+          activeTabId,
+          history,
+          lastSyncedAt,
+        } = get();
+
+        if (workspaceMode === 'offline' && activeOfflineWorkspaceId === workspaceId) {
+          return;
+        }
+
+        set({ isSwitchingWorkspace: true });
+
+        const updatedOfflineCache = { ...(offlineScopeCache || {}) };
+        const updatedScopeCache = { ...(scopeCache || {}) };
+
+        if (workspaceMode === 'offline' && activeOfflineWorkspaceId) {
+          updatedOfflineCache[activeOfflineWorkspaceId] = {
+            collections,
+            environments,
+            activeEnvironmentId,
+            tabs,
+            activeTabId,
+            history,
+          };
+        } else if (cloudConfig.activeScope) {
+          const cloudKey = getScopeKey(cloudConfig.activeScope);
+          updatedScopeCache[cloudKey] = {
+            ...(updatedScopeCache[cloudKey] || {}),
+            collections,
+            environments,
+            activeEnvironmentId,
+            lastSyncedAt,
+            tabs,
+            activeTabId,
+            history,
+          };
+        }
+
+        const targetEntry = updatedOfflineCache[workspaceId] || {
+          collections: [],
+          environments: [],
+          activeEnvironmentId: null,
+          tabs: [createInitialTab()],
+          activeTabId: '',
+          history: [],
+        };
+
+        const restoredTabs =
+          targetEntry.tabs && targetEntry.tabs.length > 0
+            ? targetEntry.tabs
+            : [createInitialTab()];
+        const restoredActiveTabId =
+          targetEntry.activeTabId && restoredTabs.some((t) => t.id === targetEntry.activeTabId)
+            ? targetEntry.activeTabId
+            : restoredTabs[0].id;
+
+        set({
+          workspaceMode: 'offline',
+          hasConfiguredMode: true,
+          activeOfflineWorkspaceId: workspaceId,
+          offlineScopeCache: updatedOfflineCache,
+          scopeCache: updatedScopeCache,
+          collections: targetEntry.collections || [],
+          environments: targetEntry.environments || [],
+          activeEnvironmentId: targetEntry.activeEnvironmentId || null,
+          tabs: restoredTabs,
+          activeTabId: restoredActiveTabId,
+          activeResponse: null,
+          history: targetEntry.history || [],
+          syncStatus: 'idle',
+          syncError: null,
+        });
+
+        setTimeout(() => {
+          set({ isSwitchingWorkspace: false });
+        }, 80);
+      },
+
+      renameOfflineWorkspace: (id, name) => {
+        const trimmed = name.trim();
+        if (!trimmed) return;
+        set((state) => ({
+          offlineWorkspaces: (state.offlineWorkspaces || [defaultOfflineWorkspace]).map((w) =>
+            w.id === id ? { ...w, name: trimmed, updatedAt: Date.now() } : w
+          ),
+        }));
+      },
+
+      deleteOfflineWorkspace: (id) => {
+        const { offlineWorkspaces, activeOfflineWorkspaceId, offlineScopeCache } = get();
+        const list = offlineWorkspaces || [defaultOfflineWorkspace];
+        if (list.length <= 1) {
+          return { success: false, error: 'Cannot delete the only offline workspace' };
+        }
+
+        const remainingWorkspaces = list.filter((w) => w.id !== id);
+        const updatedOfflineCache = { ...(offlineScopeCache || {}) };
+        delete updatedOfflineCache[id];
+
+        if (activeOfflineWorkspaceId === id) {
+          const nextWs = remainingWorkspaces[0];
+          set({
+            offlineWorkspaces: remainingWorkspaces,
+            offlineScopeCache: updatedOfflineCache,
+          });
+          get().switchOfflineWorkspace(nextWs.id);
+        } else {
+          set({
+            offlineWorkspaces: remainingWorkspaces,
+            offlineScopeCache: updatedOfflineCache,
+          });
+        }
+
+        return { success: true };
+      },
+
+      duplicateOfflineWorkspace: (id, newName) => {
+        const {
+          offlineWorkspaces,
+          activeOfflineWorkspaceId,
+          offlineScopeCache,
+          workspaceMode,
+          collections,
+          environments,
+          activeEnvironmentId,
+          tabs,
+          activeTabId,
+          history,
+        } = get();
+
+        const list = offlineWorkspaces || [defaultOfflineWorkspace];
+        const sourceWs = list.find((w) => w.id === id);
+        if (!sourceWs) return '';
+
+        const updatedOfflineCache = { ...(offlineScopeCache || {}) };
+        if (workspaceMode === 'offline' && activeOfflineWorkspaceId === id) {
+          updatedOfflineCache[id] = {
+            collections,
+            environments,
+            activeEnvironmentId,
+            tabs,
+            activeTabId,
+            history,
+          };
+        }
+
+        const sourceData = updatedOfflineCache[id] || {
+          collections: [],
+          environments: [],
+          activeEnvironmentId: null,
+          tabs: [createInitialTab()],
+          activeTabId: '',
+          history: [],
+        };
+
+        const newId = `ws_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+        const cloneName = newName?.trim() || `${sourceWs.name} (Copy)`;
+        const clonedWs: OfflineWorkspace = {
+          id: newId,
+          name: cloneName,
+          description: sourceWs.description,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+
+        const clonedCollections = JSON.parse(JSON.stringify(sourceData.collections || []));
+        const clonedEnvironments = JSON.parse(JSON.stringify(sourceData.environments || []));
+        const clonedTabs = JSON.parse(
+          JSON.stringify(sourceData.tabs && sourceData.tabs.length > 0 ? sourceData.tabs : [createInitialTab()])
+        );
+
+        updatedOfflineCache[newId] = {
+          collections: clonedCollections,
+          environments: clonedEnvironments,
+          activeEnvironmentId: sourceData.activeEnvironmentId || null,
+          tabs: clonedTabs,
+          activeTabId: clonedTabs[0]?.id || '',
+          history: [...(sourceData.history || [])],
+        };
+
+        set({
+          offlineWorkspaces: [...list, clonedWs],
+          offlineScopeCache: updatedOfflineCache,
+        });
+
+        get().switchOfflineWorkspace(newId);
+        return newId;
+      },
+
       // Environment actions
       setActiveEnvironmentId: (activeEnvironmentId) =>
-        set((state) => ({
-          activeEnvironmentId,
-          offlineActiveEnvironmentId: state.workspaceMode === 'offline' ? activeEnvironmentId : state.offlineActiveEnvironmentId,
-        })),
+        set({ activeEnvironmentId }),
 
       createEnvironment: (name, minRole = 'reader') => {
         const newEnv: Environment = {
@@ -750,12 +1018,6 @@ export const useApiStore = create<ApiStoreState>()(
         set((state) => ({
           environments: [...state.environments, newEnv],
           activeEnvironmentId: newEnv.id,
-          offlineEnvironments: state.workspaceMode === 'offline'
-            ? [...(state.offlineEnvironments || defaultEnvironments), newEnv]
-            : state.offlineEnvironments,
-          offlineActiveEnvironmentId: state.workspaceMode === 'offline'
-            ? newEnv.id
-            : state.offlineActiveEnvironmentId,
         }));
 
         const { workspaceMode, cloudConfig } = get();
@@ -789,12 +1051,6 @@ export const useApiStore = create<ApiStoreState>()(
         set((state) => ({
           environments: state.environments.filter((e) => e.id !== id),
           activeEnvironmentId: state.activeEnvironmentId === id ? null : state.activeEnvironmentId,
-          offlineEnvironments: state.workspaceMode === 'offline'
-            ? (state.offlineEnvironments || defaultEnvironments).filter((e) => e.id !== id)
-            : state.offlineEnvironments,
-          offlineActiveEnvironmentId: state.workspaceMode === 'offline' && state.offlineActiveEnvironmentId === id
-            ? null
-            : state.offlineActiveEnvironmentId,
         }));
 
         const { workspaceMode, cloudConfig } = get();
@@ -817,7 +1073,6 @@ export const useApiStore = create<ApiStoreState>()(
           });
           return {
             environments: updatedEnvs,
-            offlineEnvironments: state.workspaceMode === 'offline' ? updatedEnvs : state.offlineEnvironments,
           };
         });
 
@@ -853,7 +1108,6 @@ export const useApiStore = create<ApiStoreState>()(
           });
           return {
             environments: updatedEnvs,
-            offlineEnvironments: state.workspaceMode === 'offline' ? updatedEnvs : state.offlineEnvironments,
           };
         });
 
@@ -887,7 +1141,6 @@ export const useApiStore = create<ApiStoreState>()(
           });
           return {
             environments: updatedEnvs,
-            offlineEnvironments: state.workspaceMode === 'offline' ? updatedEnvs : state.offlineEnvironments,
           };
         });
 
@@ -921,7 +1174,6 @@ export const useApiStore = create<ApiStoreState>()(
           });
           return {
             environments: updatedEnvs,
-            offlineEnvironments: state.workspaceMode === 'offline' ? updatedEnvs : state.offlineEnvironments,
           };
         });
 
@@ -945,12 +1197,6 @@ export const useApiStore = create<ApiStoreState>()(
         set((state) => ({
           environments: [...state.environments, env],
           activeEnvironmentId: env.id,
-          offlineEnvironments: state.workspaceMode === 'offline'
-            ? [...(state.offlineEnvironments || defaultEnvironments), env]
-            : state.offlineEnvironments,
-          offlineActiveEnvironmentId: state.workspaceMode === 'offline'
-            ? env.id
-            : state.offlineActiveEnvironmentId,
         }));
 
         const { workspaceMode, cloudConfig } = get();
@@ -971,10 +1217,6 @@ export const useApiStore = create<ApiStoreState>()(
               set((state) => ({
                 environments: state.environments.map((e) => (e.id === env.id ? { ...e, id: created.id } : e)),
                 activeEnvironmentId: state.activeEnvironmentId === env.id ? created.id : state.activeEnvironmentId,
-                offlineEnvironments: state.workspaceMode === 'offline'
-                  ? (state.offlineEnvironments || []).map((e) => (e.id === env.id ? { ...e, id: created.id } : e))
-                  : state.offlineEnvironments,
-                offlineActiveEnvironmentId: state.offlineActiveEnvironmentId === env.id ? created.id : state.offlineActiveEnvironmentId,
               }));
               return created.id;
             }
@@ -1006,12 +1248,6 @@ export const useApiStore = create<ApiStoreState>()(
         set((s) => ({
           environments: s.environments.map((e) => (e.id === existingId ? replacedEnv : e)),
           activeEnvironmentId: existingId,
-          offlineEnvironments: s.workspaceMode === 'offline'
-            ? (s.offlineEnvironments || defaultEnvironments).map((e) => (e.id === existingId ? replacedEnv : e))
-            : s.offlineEnvironments,
-          offlineActiveEnvironmentId: s.workspaceMode === 'offline'
-            ? existingId
-            : s.offlineActiveEnvironmentId,
         }));
 
         const { workspaceMode, cloudConfig } = get();
@@ -1618,7 +1854,6 @@ export const useApiStore = create<ApiStoreState>()(
                 activeResponse: finalResponse,
                 isLoading: false,
                 history: newHistory,
-                offlineHistory: newHistory,
               };
             }
 
@@ -1676,9 +1911,6 @@ export const useApiStore = create<ApiStoreState>()(
         };
         set((state) => ({
           collections: [newCol, ...state.collections],
-          offlineCollections: state.workspaceMode === 'offline'
-            ? [newCol, ...(state.offlineCollections || [])]
-            : state.offlineCollections,
         }));
 
         const { workspaceMode, cloudConfig } = get();
@@ -1695,6 +1927,208 @@ export const useApiStore = create<ApiStoreState>()(
         }
 
         return newCol.id;
+      },
+
+      createFolder: (collectionId, parentFolderId, name) => {
+        const newFolderId = generateId();
+        const folderName = name?.trim() || 'New Folder';
+        const newFolder: CollectionItem = {
+          id: newFolderId,
+          name: folderName,
+          type: 'folder',
+          items: [],
+        };
+
+        set((state) => {
+          const updateItems = (items: CollectionItem[]): CollectionItem[] => {
+            if (!parentFolderId) {
+              return [...items, newFolder];
+            }
+            return items.map((item) => {
+              if (item.type === 'folder') {
+                if (item.id === parentFolderId) {
+                  return {
+                    ...item,
+                    items: [...(item.items || []), newFolder],
+                  };
+                }
+                return {
+                  ...item,
+                  items: updateItems(item.items || []),
+                };
+              }
+              return item;
+            });
+          };
+
+          const collections = state.collections.map((col) => {
+            if (col.id !== collectionId) return col;
+            return {
+              ...col,
+              items: updateItems(col.items),
+              updatedAt: Date.now(),
+            };
+          });
+
+          return {
+            collections,
+          };
+        });
+
+        const { workspaceMode, cloudConfig, collections } = get();
+        if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
+          const updatedCol = collections.find((c) => c.id === collectionId);
+          if (updatedCol) {
+            batchImportToScope(
+              cloudConfig.apiUrl,
+              cloudConfig.token,
+              cloudConfig.activeScope,
+              [updatedCol],
+              cloudConfig.refreshToken
+            ).catch((err) => console.error('Failed to sync created folder to cloud:', err));
+          }
+        }
+
+        return newFolderId;
+      },
+
+      createRequestInCollection: (collectionId, folderId, name) => {
+        const reqId = generateId();
+        const reqName = name?.trim() || 'New Request';
+        const newReq: ApiRequest = {
+          id: reqId,
+          name: reqName,
+          method: 'GET',
+          url: '',
+          params: [{ id: generateId(), key: '', value: '', enabled: true }],
+          headers: [{ id: generateId(), key: '', value: '', enabled: true }],
+          auth: { type: 'none' },
+          bodyType: 'none',
+          rawType: 'text',
+          bodyContent: '',
+          graphqlQuery: '',
+          graphqlVariables: '',
+          bodyFormData: [],
+          bodyUrlEncoded: [{ id: generateId(), key: '', value: '', enabled: true }],
+          preRequestScript: '',
+          postResponseScript: '',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+
+        const newColItem: CollectionItem = {
+          id: reqId,
+          name: reqName,
+          type: 'request',
+          request: newReq,
+        };
+
+        set((state) => {
+          const updateItems = (items: CollectionItem[]): CollectionItem[] => {
+            if (!folderId) {
+              return [...items, newColItem];
+            }
+            return items.map((item) => {
+              if (item.type === 'folder') {
+                if (item.id === folderId) {
+                  return {
+                    ...item,
+                    items: [...(item.items || []), newColItem],
+                  };
+                }
+                return {
+                  ...item,
+                  items: updateItems(item.items || []),
+                };
+              }
+              return item;
+            });
+          };
+
+          const collections = state.collections.map((col) => {
+            if (col.id !== collectionId) return col;
+            return {
+              ...col,
+              items: updateItems(col.items),
+              updatedAt: Date.now(),
+            };
+          });
+
+          return {
+            collections,
+            tabs: [...state.tabs, newReq],
+            activeTabId: reqId,
+            activeResponse: null,
+          };
+        });
+
+        const { workspaceMode, cloudConfig, collections } = get();
+        if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
+          const updatedCol = collections.find((c) => c.id === collectionId);
+          if (updatedCol) {
+            batchImportToScope(
+              cloudConfig.apiUrl,
+              cloudConfig.token,
+              cloudConfig.activeScope,
+              [updatedCol],
+              cloudConfig.refreshToken
+            ).catch((err) => console.error('Failed to sync created request to cloud:', err));
+          }
+        }
+
+        return newReq;
+      },
+
+      deleteCollectionItem: (collectionId, itemId) => {
+        set((state) => {
+          const filterItems = (items: CollectionItem[]): CollectionItem[] => {
+            return items
+              .filter((item) => item.id !== itemId)
+              .map((item) => {
+                if (item.type === 'folder' && item.items) {
+                  return {
+                    ...item,
+                    items: filterItems(item.items),
+                  };
+                }
+                return item;
+              });
+          };
+
+          const collections = state.collections.map((col) => {
+            if (col.id !== collectionId) return col;
+            return {
+              ...col,
+              items: filterItems(col.items),
+              updatedAt: Date.now(),
+            };
+          });
+
+          return {
+            collections,
+          };
+        });
+
+        const { workspaceMode, cloudConfig, collections } = get();
+        if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
+          deleteScopeItem(
+            cloudConfig.apiUrl,
+            cloudConfig.token,
+            itemId,
+            cloudConfig.refreshToken
+          ).catch((err) => console.error('Failed to delete item from cloud:', err));
+
+          const updatedCol = collections.find((c) => c.id === collectionId);
+          if (updatedCol) {
+            batchImportToScope(
+              cloudConfig.apiUrl,
+              cloudConfig.token,
+              cloudConfig.activeScope,
+              [updatedCol],
+              cloudConfig.refreshToken
+            ).catch((err) => console.error('Failed to sync item deletion to cloud:', err));
+          }
+        }
       },
 
       saveRequestToCollection: (collectionId, folderId, request) => {
@@ -1781,7 +2215,6 @@ export const useApiStore = create<ApiStoreState>()(
           return {
             collections,
             tabs,
-            offlineCollections: state.workspaceMode === 'offline' ? collections : state.offlineCollections,
           };
         });
 
@@ -1821,9 +2254,6 @@ export const useApiStore = create<ApiStoreState>()(
         };
         set((state) => ({
           collections: [taggedCol, ...state.collections],
-          offlineCollections: state.workspaceMode === 'offline'
-            ? [taggedCol, ...(state.offlineCollections || [])]
-            : state.offlineCollections,
         }));
 
         const { workspaceMode, cloudConfig } = get();
@@ -1870,9 +2300,6 @@ export const useApiStore = create<ApiStoreState>()(
 
         set((s) => ({
           collections: s.collections.map((c) => (c.id === existingId ? replacedCol : c)),
-          offlineCollections: s.workspaceMode === 'offline'
-            ? (s.offlineCollections || []).map((c) => (c.id === existingId ? replacedCol : c))
-            : s.offlineCollections,
         }));
 
         const { workspaceMode, cloudConfig } = get();
@@ -1909,12 +2336,6 @@ export const useApiStore = create<ApiStoreState>()(
           set((state) => ({
             environments: [...state.environments, imported],
             activeEnvironmentId: imported.id,
-            offlineEnvironments: state.workspaceMode === 'offline'
-              ? [...(state.offlineEnvironments || defaultEnvironments), imported]
-              : state.offlineEnvironments,
-            offlineActiveEnvironmentId: state.workspaceMode === 'offline'
-              ? imported.id
-              : state.offlineActiveEnvironmentId,
           }));
 
           const { workspaceMode, cloudConfig } = get();
@@ -1996,9 +2417,6 @@ export const useApiStore = create<ApiStoreState>()(
       deleteCollection: (id) => {
         set((state) => ({
           collections: state.collections.filter((c) => c.id !== id),
-          offlineCollections: state.workspaceMode === 'offline'
-            ? (state.offlineCollections || []).filter((c) => c.id !== id)
-            : state.offlineCollections,
         }));
 
         const { workspaceMode, cloudConfig } = get();
@@ -2010,14 +2428,68 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       moveCollection: async (collectionId, targetScope) => {
-        const { workspaceMode, collections, offlineCollections, cloudConfig } = get();
+        const {
+          workspaceMode,
+          collections,
+          cloudConfig,
+          activeOfflineWorkspaceId,
+          offlineScopeCache,
+          scopeCache,
+        } = get();
+
+        // 1. Target is an offline workspace
+        if (targetScope.type === 'offline_workspace') {
+          const col = collections.find((c) => c.id === collectionId);
+          if (!col) {
+            return { success: false, error: 'Collection not found' };
+          }
+
+          if (workspaceMode === 'offline' && targetScope.id === activeOfflineWorkspaceId) {
+            return { success: false, error: 'Cannot move to the current active workspace' };
+          }
+
+          const remainingActive = collections.filter((c) => c.id !== collectionId);
+          const updatedOfflineCache = { ...(offlineScopeCache || {}) };
+
+          if (workspaceMode === 'offline' && activeOfflineWorkspaceId) {
+            updatedOfflineCache[activeOfflineWorkspaceId] = {
+              ...(updatedOfflineCache[activeOfflineWorkspaceId] || {}),
+              collections: remainingActive,
+              environments: get().environments,
+              activeEnvironmentId: get().activeEnvironmentId,
+              tabs: get().tabs,
+              activeTabId: get().activeTabId,
+              history: get().history,
+            };
+          }
+
+          const targetEntry = updatedOfflineCache[targetScope.id] || {
+            collections: [],
+            environments: [],
+            tabs: [createInitialTab()],
+            history: [],
+          };
+
+          updatedOfflineCache[targetScope.id] = {
+            ...targetEntry,
+            collections: [...(targetEntry.collections || []), { ...col, _origin: 'offline' }],
+          };
+
+          set({
+            collections: remainingActive,
+            offlineScopeCache: updatedOfflineCache,
+          });
+
+          return { success: true };
+        }
+
         if (isOfflineOnly) {
           return { success: false, error: 'Offline edition cannot move collections to online scopes' };
         }
 
         if (workspaceMode === 'offline') {
           // Moving from offline to online scope
-          const col = (offlineCollections || collections).find((c) => c.id === collectionId);
+          const col = collections.find((c) => c.id === collectionId);
           if (!col) {
             return { success: false, error: 'Collection not found' };
           }
@@ -2035,9 +2507,16 @@ export const useApiStore = create<ApiStoreState>()(
               cloudConfig.refreshToken
             );
 
-            // Remove from offline collections
-            const remainingOffline = (offlineCollections || []).filter((c) => c.id !== collectionId);
+            // Remove from active offline workspace cache
             const remainingActive = collections.filter((c) => c.id !== collectionId);
+
+            const updatedOfflineCache = { ...(offlineScopeCache || {}) };
+            if (activeOfflineWorkspaceId && updatedOfflineCache[activeOfflineWorkspaceId]) {
+              updatedOfflineCache[activeOfflineWorkspaceId] = {
+                ...updatedOfflineCache[activeOfflineWorkspaceId],
+                collections: remainingActive,
+              };
+            }
 
             // Update target scope cache if present
             const targetKey = getScopeKey(targetScope);
@@ -2052,7 +2531,7 @@ export const useApiStore = create<ApiStoreState>()(
 
             set({
               collections: remainingActive,
-              offlineCollections: remainingOffline,
+              offlineScopeCache: updatedOfflineCache,
               scopeCache: updatedScopeCache,
               syncStatus: 'idle',
             });
@@ -2144,7 +2623,7 @@ export const useApiStore = create<ApiStoreState>()(
       clearHistory: () => {
         set((s) => {
           if (s.workspaceMode === 'offline') {
-            return { history: [], offlineHistory: [] };
+            return { history: [] };
           }
           const activeScope = s.cloudConfig.activeScope;
           let updatedScopeCache = s.scopeCache;
@@ -2174,7 +2653,6 @@ export const useApiStore = create<ApiStoreState>()(
           if (state.workspaceMode === 'offline') {
             return {
               history: newHistory,
-              offlineHistory: newHistory,
             };
           }
           const activeScope = state.cloudConfig.activeScope;
@@ -2202,47 +2680,106 @@ export const useApiStore = create<ApiStoreState>()(
     {
       name: 'air-rest-storage',
       storage: createJSONStorage(() => appStorage),
-      partialize: (state) => ({
-        tabs: state.tabs,
-        activeTabId: state.activeTabId,
-        collections: state.collections,
-        history: state.history,
-        environments: state.environments,
-        activeEnvironmentId: state.activeEnvironmentId,
-        offlineCollections: state.offlineCollections,
-        offlineEnvironments: state.offlineEnvironments,
-        offlineActiveEnvironmentId: state.offlineActiveEnvironmentId,
-        offlineTabs: state.offlineTabs,
-        offlineActiveTabId: state.offlineActiveTabId,
-        offlineHistory: state.offlineHistory,
-        scopeCache: state.scopeCache,
-        scopesCache: state.scopesCache,
-        workspaceMode: isOfflineOnly ? 'offline' : state.workspaceMode,
-        hasConfiguredMode: isOfflineOnly ? true : state.hasConfiguredMode,
-        cloudConfig: state.cloudConfig,
-      }),
+      partialize: (state) => {
+        let syncOfflineCache = state.offlineScopeCache || {};
+        if (state.workspaceMode === 'offline' && state.activeOfflineWorkspaceId) {
+          syncOfflineCache = {
+            ...syncOfflineCache,
+            [state.activeOfflineWorkspaceId]: {
+              ...(syncOfflineCache[state.activeOfflineWorkspaceId] || {}),
+              collections: state.collections,
+              environments: state.environments,
+              activeEnvironmentId: state.activeEnvironmentId,
+              tabs: state.tabs,
+              activeTabId: state.activeTabId,
+              history: state.history,
+            },
+          };
+        }
+        let syncCloudCache = state.scopeCache || {};
+        if (state.workspaceMode === 'cloud' && state.cloudConfig.activeScope) {
+          const key = getScopeKey(state.cloudConfig.activeScope);
+          syncCloudCache = {
+            ...syncCloudCache,
+            [key]: {
+              ...(syncCloudCache[key] || {}),
+              collections: state.collections,
+              environments: state.environments,
+              activeEnvironmentId: state.activeEnvironmentId,
+              tabs: state.tabs,
+              activeTabId: state.activeTabId,
+              history: state.history,
+              lastSyncedAt: state.lastSyncedAt,
+            },
+          };
+        }
+        return {
+          tabs: state.tabs,
+          activeTabId: state.activeTabId,
+          collections: state.collections,
+          history: state.history,
+          environments: state.environments,
+          activeEnvironmentId: state.activeEnvironmentId,
+          offlineWorkspaces: state.offlineWorkspaces,
+          activeOfflineWorkspaceId: state.activeOfflineWorkspaceId,
+          offlineScopeCache: syncOfflineCache,
+          scopeCache: syncCloudCache,
+          scopesCache: state.scopesCache,
+          workspaceMode: isOfflineOnly ? 'offline' : state.workspaceMode,
+          hasConfiguredMode: isOfflineOnly ? true : state.hasConfiguredMode,
+          cloudConfig: state.cloudConfig,
+        };
+      },
       onRehydrateStorage: () => (state) => {
         if (!state) return;
+
+        // 1. Ensure offlineWorkspaces has at least the default workspace
+        if (!state.offlineWorkspaces || state.offlineWorkspaces.length === 0) {
+          state.offlineWorkspaces = [defaultOfflineWorkspace];
+          state.activeOfflineWorkspaceId = DEFAULT_OFFLINE_WORKSPACE_ID;
+        }
+
+        // 2. Ensure activeOfflineWorkspaceId is valid
+        if (
+          !state.activeOfflineWorkspaceId ||
+          !state.offlineWorkspaces.some((w) => w.id === state.activeOfflineWorkspaceId)
+        ) {
+          state.activeOfflineWorkspaceId = state.offlineWorkspaces[0].id;
+        }
+
+        // 3. Ensure offlineScopeCache exists
+        if (!state.offlineScopeCache) {
+          state.offlineScopeCache = {};
+        }
+
+        const activeLocalId = state.activeOfflineWorkspaceId;
+        if (!state.offlineScopeCache[activeLocalId]) {
+          state.offlineScopeCache[activeLocalId] = {
+            collections: state.workspaceMode === 'offline' ? state.collections : [],
+            environments: state.workspaceMode === 'offline' ? state.environments : [],
+            activeEnvironmentId: state.workspaceMode === 'offline' ? state.activeEnvironmentId : null,
+            tabs: (state.workspaceMode === 'offline' && state.tabs && state.tabs.length > 0)
+              ? state.tabs
+              : [createInitialTab()],
+            activeTabId: state.workspaceMode === 'offline' ? state.activeTabId : undefined,
+            history: state.workspaceMode === 'offline' ? state.history : [],
+          };
+        }
+
+        // 4. If currently in offline mode, ensure state aligns with the active offline workspace
         if (state.workspaceMode === 'offline') {
-          if (!state.offlineCollections) {
-            state.offlineCollections = [];
-          }
-          if (!state.offlineEnvironments || state.offlineEnvironments.length === 0) {
-            state.offlineEnvironments = defaultEnvironments;
-          }
-          if (!state.offlineActiveEnvironmentId) {
-            state.offlineActiveEnvironmentId = defaultEnvironments[0]?.id || null;
-          }
-          if (!state.offlineTabs || state.offlineTabs.length === 0) {
-            state.offlineTabs = [createInitialTab()];
-            state.offlineActiveTabId = state.offlineTabs[0].id;
-          }
-          if (!state.offlineHistory) {
-            state.offlineHistory = state.history || [];
-          }
-        } else {
-          if (!state.offlineHistory) {
-            state.offlineHistory = [];
+          const currentEntry = state.offlineScopeCache[activeLocalId];
+          if (currentEntry) {
+            state.collections = currentEntry.collections || [];
+            state.environments = currentEntry.environments || [];
+            state.activeEnvironmentId = currentEntry.activeEnvironmentId || null;
+            if (currentEntry.tabs && currentEntry.tabs.length > 0) {
+              state.tabs = currentEntry.tabs;
+              state.activeTabId = currentEntry.activeTabId && state.tabs.some((t) => t.id === currentEntry.activeTabId)
+                ? currentEntry.activeTabId
+                : state.tabs[0].id;
+            }
+            state.history = currentEntry.history || [];
           }
         }
       },

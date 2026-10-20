@@ -9,6 +9,8 @@ import {
   ChevronRight,
   ChevronDown,
   Search,
+  Plus,
+  FileCode,
   FolderPlus,
   Layers,
   ArrowUpRight,
@@ -52,19 +54,55 @@ function filterCollectionItems(items: CollectionItem[], query: string): Collecti
 
 interface FolderItemProps {
   item: CollectionItem;
+  collectionId: string;
   level?: number;
   onSelectRequest: (req: ApiRequest) => void;
+  onRequestDelete: (item: CollectionItem) => void;
 }
 
-const FolderItem: React.FC<FolderItemProps> = ({ item, level = 0, onSelectRequest }) => {
+const FolderItem: React.FC<FolderItemProps> = ({
+  item,
+  collectionId,
+  level = 0,
+  onSelectRequest,
+  onRequestDelete,
+}) => {
   const [isOpen, setIsOpen] = useState(true);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isCreatingSubfolder, setIsCreatingSubfolder] = useState(false);
+  const [subfolderName, setSubfolderName] = useState('');
+
+  const createFolder = useApiStore((state) => state.createFolder);
+  const createRequestInCollection = useApiStore((state) => state.createRequestInCollection);
+
+  const handleCreateRequest = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsMenuOpen(false);
+    setIsOpen(true);
+    createRequestInCollection(collectionId, item.id, 'New Request');
+  };
+
+  const handleStartCreateSubfolder = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsMenuOpen(false);
+    setIsOpen(true);
+    setIsCreatingSubfolder(true);
+    setSubfolderName('');
+  };
+
+  const handleConfirmCreateSubfolder = () => {
+    const trimmed = subfolderName.trim() || 'New Folder';
+    createFolder(collectionId, item.id, trimmed);
+    setIsCreatingSubfolder(false);
+    setSubfolderName('');
+  };
 
   if (item.type === 'folder') {
     return (
       <div className="select-none">
         <div
           onClick={() => setIsOpen(!isOpen)}
-          className="flex items-center gap-1.5 py-1 px-2 rounded-md hover:bg-zinc-900/80 text-zinc-300 hover:text-white cursor-pointer text-xs font-medium transition"
+          className="group relative flex items-center gap-1.5 py-1 px-2 rounded-md hover:bg-zinc-900/80 text-zinc-300 hover:text-white cursor-pointer text-xs font-medium transition"
           style={{ paddingLeft: `${Math.max(level * 12, 8)}px` }}
         >
           {isOpen ? (
@@ -77,11 +115,111 @@ const FolderItem: React.FC<FolderItemProps> = ({ item, level = 0, onSelectReques
           ) : (
             <Folder className="h-3.5 w-3.5 text-sky-400 shrink-0" />
           )}
-          <span className="truncate">{item.name}</span>
-          <span className="ml-auto text-[10px] text-zinc-500">
+          <span className="truncate flex-1">{item.name}</span>
+          <span className="text-[10px] text-zinc-500 font-mono mr-1">
             {item.items?.length || 0}
           </span>
+
+          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition shrink-0">
+            {/* Add Button */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsMenuOpen(!isMenuOpen);
+                }}
+                className="rounded p-0.5 text-zinc-400 hover:text-sky-400 hover:bg-zinc-800 transition"
+                title="Add to folder"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+
+              {isMenuOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setIsMenuOpen(false);
+                    }}
+                  />
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="absolute right-0 top-full mt-1 z-50 w-36 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-xl"
+                  >
+                    <button
+                      type="button"
+                      onClick={handleCreateRequest}
+                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition"
+                    >
+                      <FileCode className="h-3.5 w-3.5 text-sky-400" />
+                      <span>New Request</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleStartCreateSubfolder}
+                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-amber-400 transition"
+                    >
+                      <FolderPlus className="h-3.5 w-3.5 text-amber-400" />
+                      <span>New Subfolder</span>
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Delete Folder Button */}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRequestDelete(item);
+              }}
+              className="rounded p-0.5 text-zinc-400 hover:text-rose-400 hover:bg-zinc-800 transition"
+              title="Delete folder"
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+          </div>
         </div>
+
+        {/* Inline Subfolder creation */}
+        {isOpen && isCreatingSubfolder && (
+          <div
+            className="flex items-center gap-1.5 py-1 px-2 border-l border-zinc-800/60 ml-3.5 mt-0.5"
+            style={{ paddingLeft: `${Math.max((level + 1) * 12, 8)}px` }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Folder className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+            <input
+              type="text"
+              autoFocus
+              value={subfolderName}
+              onChange={(e) => setSubfolderName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleConfirmCreateSubfolder();
+                else if (e.key === 'Escape') setIsCreatingSubfolder(false);
+              }}
+              placeholder="Folder name (Enter)"
+              className="w-full rounded bg-zinc-900 border border-sky-500/50 px-2 py-0.5 text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={handleConfirmCreateSubfolder}
+              className="rounded bg-sky-500/20 px-1.5 py-0.5 text-[10px] font-medium text-sky-400 hover:bg-sky-500/30"
+            >
+              Add
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsCreatingSubfolder(false)}
+              className="rounded px-1 py-0.5 text-[10px] text-zinc-400 hover:text-white"
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
         {isOpen && item.items && item.items.length > 0 && (
           <div className="border-l border-zinc-800/60 ml-3.5 mt-0.5">
@@ -89,8 +227,10 @@ const FolderItem: React.FC<FolderItemProps> = ({ item, level = 0, onSelectReques
               <FolderItem
                 key={child.id}
                 item={child}
+                collectionId={collectionId}
                 level={level + 1}
                 onSelectRequest={onSelectRequest}
+                onRequestDelete={onRequestDelete}
               />
             ))}
           </div>
@@ -112,7 +252,20 @@ const FolderItem: React.FC<FolderItemProps> = ({ item, level = 0, onSelectReques
       <span className="truncate flex-1 group-hover:text-zinc-100" title={item.name}>
         {item.name}
       </span>
-      <ArrowUpRight className="h-3 w-3 text-zinc-600 opacity-0 group-hover:opacity-100 transition shrink-0" />
+      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition shrink-0">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onRequestDelete(item);
+          }}
+          className="rounded p-0.5 text-zinc-500 hover:text-rose-400 hover:bg-zinc-800 transition"
+          title="Remove from collection"
+        >
+          <Trash2 className="h-3 w-3" />
+        </button>
+        <ArrowUpRight className="h-3 w-3 text-zinc-600 group-hover:text-zinc-400 transition" />
+      </div>
     </div>
   );
 };
@@ -124,6 +277,9 @@ export const Sidebar: React.FC = () => {
   const history = useApiStore((state) => state.history);
   const deleteCollection = useApiStore((state) => state.deleteCollection);
   const createCollection = useApiStore((state) => state.createCollection);
+  const createFolder = useApiStore((state) => state.createFolder);
+  const createRequestInCollection = useApiStore((state) => state.createRequestInCollection);
+  const deleteCollectionItem = useApiStore((state) => state.deleteCollectionItem);
   const clearHistory = useApiStore((state) => state.clearHistory);
   const openRequestInTab = useApiStore((state) => state.openRequestInTab);
 
@@ -135,6 +291,16 @@ export const Sidebar: React.FC = () => {
   const [collectionToMove, setCollectionToMove] = useState<Collection | null>(null);
   const [showClearHistoryConfirm, setShowClearHistoryConfirm] = useState(false);
   const [collapsedCollections, setCollapsedCollections] = useState<Record<string, boolean>>({});
+
+  const [activeAddMenuColId, setActiveAddMenuColId] = useState<string | null>(null);
+  const [creatingFolderInCol, setCreatingFolderInCol] = useState<string | null>(null);
+  const [newFolderName, setNewFolderName] = useState('');
+  const [itemToDelete, setItemToDelete] = useState<{
+    collectionId: string;
+    itemId: string;
+    name: string;
+    type: 'folder' | 'request';
+  } | null>(null);
 
   const toggleCollectionCollapse = (colId: string) => {
     setCollapsedCollections((prev) => ({
@@ -362,6 +528,63 @@ export const Sidebar: React.FC = () => {
                           </span>
                         </div>
                         <div className="flex items-center gap-0.5 shrink-0 ml-1">
+                          {/* Add button with menu */}
+                          <div className="relative">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActiveAddMenuColId(activeAddMenuColId === col.id ? null : col.id);
+                              }}
+                              className="rounded p-1 text-zinc-500 hover:text-sky-400 hover:bg-zinc-800 transition"
+                              title="Add to collection"
+                            >
+                              <Plus className="h-3.5 w-3.5" />
+                            </button>
+
+                            {activeAddMenuColId === col.id && (
+                              <>
+                                <div
+                                  className="fixed inset-0 z-40"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setActiveAddMenuColId(null);
+                                  }}
+                                />
+                                <div
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="absolute right-0 top-full mt-1 z-50 w-36 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-xl"
+                                >
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveAddMenuColId(null);
+                                      setCollapsedCollections((prev) => ({ ...prev, [col.id]: false }));
+                                      createRequestInCollection(col.id, null, 'New Request');
+                                    }}
+                                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition"
+                                  >
+                                    <FileCode className="h-3.5 w-3.5 text-sky-400" />
+                                    <span>New Request</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveAddMenuColId(null);
+                                      setCollapsedCollections((prev) => ({ ...prev, [col.id]: false }));
+                                      setCreatingFolderInCol(col.id);
+                                      setNewFolderName('');
+                                    }}
+                                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-amber-400 transition"
+                                  >
+                                    <FolderPlus className="h-3.5 w-3.5 text-amber-400" />
+                                    <span>New Folder</span>
+                                  </button>
+                                </div>
+                              </>
+                            )}
+                          </div>
+
                           <button
                             onClick={(e) => handleExportCollection(e, col)}
                             className="rounded p-1 text-zinc-500 hover:text-sky-400 hover:bg-zinc-800 transition"
@@ -394,14 +617,70 @@ export const Sidebar: React.FC = () => {
 
                       {!isCollapsed && (
                         <div className="mt-1 space-y-0.5 border-t border-zinc-850/50 pt-1">
-                          {col.items.length === 0 ? (
+                          {/* Inline folder creation */}
+                          {creatingFolderInCol === col.id && (
+                            <div
+                              className="flex items-center gap-1.5 py-1 px-2 border-l border-zinc-800/60 ml-3.5 mb-1"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <Folder className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+                              <input
+                                type="text"
+                                autoFocus
+                                value={newFolderName}
+                                onChange={(e) => setNewFolderName(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    const trimmed = newFolderName.trim() || 'New Folder';
+                                    createFolder(col.id, null, trimmed);
+                                    setCreatingFolderInCol(null);
+                                    setNewFolderName('');
+                                  } else if (e.key === 'Escape') {
+                                    setCreatingFolderInCol(null);
+                                  }
+                                }}
+                                placeholder="Folder name (Enter)"
+                                className="w-full rounded bg-zinc-900 border border-sky-500/50 px-2 py-0.5 text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const trimmed = newFolderName.trim() || 'New Folder';
+                                  createFolder(col.id, null, trimmed);
+                                  setCreatingFolderInCol(null);
+                                  setNewFolderName('');
+                                }}
+                                className="rounded bg-sky-500/20 px-1.5 py-0.5 text-[10px] font-medium text-sky-400 hover:bg-sky-500/30"
+                              >
+                                Add
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setCreatingFolderInCol(null)}
+                                className="rounded px-1 py-0.5 text-[10px] text-zinc-400 hover:text-white"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          )}
+
+                          {col.items.length === 0 && creatingFolderInCol !== col.id ? (
                             <div className="px-2 py-1 text-[11px] text-zinc-500 italic">Empty collection</div>
                           ) : (
                             col.items.map((item) => (
                               <FolderItem
                                 key={item.id}
                                 item={item}
+                                collectionId={col.id}
                                 onSelectRequest={openRequestInTab}
+                                onRequestDelete={(targetItem) =>
+                                  setItemToDelete({
+                                    collectionId: col.id,
+                                    itemId: targetItem.id,
+                                    name: targetItem.name,
+                                    type: targetItem.type,
+                                  })
+                                }
                               />
                             ))
                           )}
@@ -508,6 +787,27 @@ export const Sidebar: React.FC = () => {
         title="Clear Request History"
         message="Are you sure you want to clear your entire request history? This action cannot be undone."
         confirmText="Clear All History"
+        variant="danger"
+      />
+
+      <ConfirmModal
+        isOpen={!!itemToDelete}
+        onClose={() => setItemToDelete(null)}
+        onConfirm={() => {
+          if (itemToDelete) {
+            deleteCollectionItem(itemToDelete.collectionId, itemToDelete.itemId);
+            setItemToDelete(null);
+          }
+        }}
+        title={itemToDelete?.type === 'folder' ? 'Delete Folder' : 'Remove Request'}
+        message={
+          <span>
+            Are you sure you want to {itemToDelete?.type === 'folder' ? 'delete folder' : 'remove request'}{' '}
+            <strong className="text-zinc-200">"{itemToDelete?.name}"</strong>
+            {itemToDelete?.type === 'folder' ? ' and all its contents?' : ' from this collection?'}
+          </span>
+        }
+        confirmText={itemToDelete?.type === 'folder' ? 'Delete Folder' : 'Remove Request'}
         variant="danger"
       />
 

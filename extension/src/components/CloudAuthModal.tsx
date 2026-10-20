@@ -34,6 +34,11 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
   const pullCloudDelta = useApiStore((state) => state.pullCloudDelta);
   const importLocalToCloud = useApiStore((state) => state.importLocalToCloud);
   const collections = useApiStore((state) => state.collections);
+  const offlineScopeCache = useApiStore((state) => state.offlineScopeCache);
+  const activeOfflineWorkspaceId = useApiStore((state) => state.activeOfflineWorkspaceId);
+
+  const localCols = offlineScopeCache?.[activeOfflineWorkspaceId || 'local-default']?.collections || collections;
+  const localCount = localCols.length;
 
   const [apiUrl, setApiUrl] = useState(cloudConfig.apiUrl || 'http://localhost:8080');
 
@@ -89,9 +94,10 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
       }
 
       const currentStore = useApiStore.getState();
-      const localCount = (currentStore.offlineCollections && currentStore.offlineCollections.length > 0)
-        ? currentStore.offlineCollections.length
-        : collections.length;
+      const activeWsId = currentStore.activeOfflineWorkspaceId || 'local-default';
+      const localEntry = currentStore.offlineScopeCache?.[activeWsId];
+      const localCols = localEntry?.collections || (currentStore.workspaceMode === 'offline' ? currentStore.collections : []);
+      const localCount = localCols.length;
 
       // 2. Commit auth to store with role derived from JWT token
       const jwtRole = getRoleFromJwt(token);
@@ -161,7 +167,7 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
             </div>
             <h3 className="text-base font-bold text-zinc-100">Successfully Signed In!</h3>
             <p className="text-xs text-zinc-400 mt-2 leading-relaxed">
-              We detected <strong className="text-sky-400">{(useApiStore.getState().offlineCollections?.length || collections.length)} collection(s)</strong> in your local browser storage.
+              We detected <strong className="text-sky-400">{localCount} collection(s)</strong> in your local offline workspace.
               Would you like to import them into your active cloud workspace?
             </p>
 
