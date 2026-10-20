@@ -2,7 +2,7 @@
 
 > A fast, lightweight, and modern browser-based REST API testing studio packaged as a **Google Chrome Extension (Manifest V3)** and standalone web client with optional cloud team synchronization. Built with **React 19**, **Vite**, **Tailwind CSS v4**, **Zustand**, and a **Go + PostgreSQL** backend.
 
-[![GitHub Repository](https://img.shields.io/badge/GitHub-adiputera%2Fapi--tester-181717?logo=github)](https://github.com/adiputera/api-tester)
+[![GitHub Repository](https://img.shields.io/badge/GitHub-adiputera%2FAirREST-181717?logo=github)](https://github.com/adiputera/AirREST)
 [![Manifest V3](https://img.shields.io/badge/Chrome%20Extension-Manifest%20V3-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=white)](https://vitejs.dev/)
@@ -19,9 +19,9 @@ AirREST is an API testing client that runs directly inside Google Chrome as a Ma
 ### Core Highlights
 - ⚡ **Direct In-Browser Dispatching**: Chrome host permissions enable unrestricted HTTP and HTTPS requests directly from the client without CORS or mixed-content limitations.
 - 💾 **Dual Storage Modes**: Works in 100% Offline Mode with local storage, or connects to Cloud Sync Mode for multi-device backup and team collaboration.
-- 👥 **Workspace & Project Switcher**: Unified scope switcher between Offline Workspace and Cloud Workspaces (Personal & Team Projects) with per-scope tab/history isolation.
-- 📁 **Postman v2.1 Native Compatibility**: Full import and export support for Postman Collections and Environments.
-- 📜 **Sandboxed Scripting**: Pre-request and test scripting engine (`pm.*`) running in an isolated environment.
+- 🗂️ **Multi Offline Workspaces & Cloud Scopes**: Create, rename, clone, and switch between multiple isolated Offline Workspaces, or connect to Cloud Workspaces (Personal & Team Projects) with per-scope tab/history isolation.
+- 📁 **Postman v2.1 Native Compatibility**: Full import and export support for Postman Collections and Environments with duplicate resolution and diff inspector.
+- 📜 **Sandboxed Scripting Engine**: Pre-request automation and post-response test scripting (`pm.*` & legacy `postman.*`) running inside an isolated sandbox with automated token chaining.
 - 🏢 **AirREST Hub**: Dedicated web portal for managing teams, project permissions, and user administration.
 
 ---
@@ -45,14 +45,18 @@ AirREST is an API testing client that runs directly inside Google Chrome as a Ma
 - **Multipart Form-Data (`multipart/form-data`)**: Key-value form supporting text fields and file attachments with boundary negotiation.
 - **Binary Upload (`bodyType = 'binary'`)**: Drag-and-drop dropzone for raw files (images, PDFs, archives, firmware) displaying file name, size, and MIME type.
 
-### 3. 📁 Postman v2.1 Collection Support
+### 3. 📁 Postman v2.1 Collection Support & Management
 - **Full Schema Interoperability**: Imports and exports collections following the Postman Collection v2.1.0 schema.
-- **Hierarchy Preservation**: Retains nested folders, headers, query parameters, authorization settings, request payloads, and scripts.
+- **Hierarchy Preservation**: Retains nested folders, headers, query parameters, authorization settings, request payloads, and pre-request/test scripts.
 - **Flexible Import Methods**: Import files via drag-and-drop or direct JSON text paste.
 - **Duplicate Name Resolution**: Detects matching collection names during import and offers **Import as Copy** (with new UUIDs) or **Replace** (updates existing items in place).
 - **Difference Inspector**: Visual breakdown highlighting added, modified, or removed endpoints prior to replacing.
 - **Clean Export**: Decomposes URLs into canonical Postman v2.1 components (`protocol`, `host`, `port`, `path`) and filters blank placeholder rows for clean compatibility with Postman desktop and web clients.
-- **Collection Relocation**: Move collections between Offline storage and Cloud Workspaces or across projects within the same team.
+- **Collection Relocation (Move Collection)**: Move collections seamlessly across scopes:
+  - Between different **Offline Workspaces**.
+  - Between an **Offline Workspace** and a **Cloud Project** (Personal or Team).
+  - Across different **Cloud Projects** or **Teams**.
+- **Auto-Sync on Import**: Importing collections in Cloud mode automatically syncs all endpoints and folders directly to the backend.
 - **Search & Filter**: Real-time filtering across collections, folders, and individual endpoints.
 - **Confirmation Modals**: Dialog prompts require explicit confirmation before deleting collections.
 
@@ -81,12 +85,134 @@ AirREST is an API testing client that runs directly inside Google Chrome as a Ma
 - **Copy as cURL**: Generates shell-ready cURL commands with resolved variables, query parameters, headers, and request bodies.
 - **Import from cURL**: Parses cURL commands from terminals or browser DevTools into the active request builder (supports `-X`, `-H`, `-d`, `--json`, `--data-binary`, `-F`, `-u`, `-b`, and query parameters).
 
-### 7. 📜 Sandboxed Scripting Engine
-- **Pre-Request Scripts**: Run JavaScript before request dispatch to compute headers, timestamps, or signatures, with full Tab indentation support.
-- **Post-Response Scripts**: Inspect responses programmatically with `pm.response.code`, `pm.response.headers`, and `pm.response.json()`.
-- **Dynamic Variable Chaining**: Save tokens or values to the active environment via `pm.environment.set("key", value)` for downstream requests.
-- **Isolated Execution**: Runs scripts within an isolated Manifest V3 sandbox (`sandbox.html`).
-- **Test Feedback**: Shows assertions and script output in the response viewer.
+### 7. 📜 Sandboxed Scripting Engine (`pm.*` & `postman.*`)
+
+AirREST provides a complete JavaScript scripting engine designed for **Pre-Request Automation**, **Response Assertions & Tests**, and **Automated Environment Chaining** (e.g., automatically capturing authentication tokens and passing them to subsequent requests).
+
+#### 🛡️ Architecture & Security
+Scripts are executed in a sandboxed, isolated environment using a dedicated Manifest V3 sandbox iframe (`sandbox.html`):
+- **Full Isolation**: The sandbox cannot access the extension's DOM, cookies, or privileged Chrome extension APIs, ensuring complete safety when executing user or imported scripts.
+- **Message-Based Communication**: The extension interacts with the sandbox strictly through asynchronous `window.postMessage`.
+- **Timeout Protection**: Script execution is bounded by a strict **2000ms timeout guard** to prevent infinite loops or frozen tabs.
+
+#### 🔄 Script Execution Lifecycle
+```
+[User clicks Send]
+        │
+        ▼
+1. Pre-Request Script Execution (sandbox)
+        │ ── Evaluates dynamic values (signatures, timestamps, hashes)
+        │ ── Updates environment via pm.environment.set()
+        ▼
+2. Variable Interpolation & Request Preparation
+        │ ── Resolves {{variables}} in URL, headers, auth, and payload
+        ▼
+3. HTTP / HTTPS Dispatch (via Chrome host permissions)
+        │ ── Unrestricted in-browser dispatch (zero CORS limitations)
+        ▼
+4. Post-Response Script / Tests Execution (sandbox)
+        │ ── Validates status codes, headers, and payload structures
+        │ ── Extracts tokens/IDs and updates active environment
+        ▼
+[Response Viewer & Test Feedback Rendered]
+```
+
+#### 📚 Script API Reference
+
+##### Environment & Variable Management (`pm.environment` & `pm.variables`)
+| API Method | Description |
+|---|---|
+| `pm.environment.get(key)` | Retrieves the string value of a variable from the active environment. |
+| `pm.environment.set(key, value)` | Sets a variable in the active environment. **Automatically persisted to storage** and available as `{{key}}` in all subsequent requests. |
+| `pm.environment.unset(key)` | Removes a variable from the active environment. |
+| `pm.environment.has(key)` | Returns `true` if the variable exists in the active environment. |
+| `pm.environment.toObject()` | Returns a copy of all active environment variables as a key-value object. |
+| `pm.variables.get(key)` | Retrieves a runtime variable, falling back to environment variables if not found. |
+| `pm.variables.set(key, value)` | Sets a temporary runtime variable scoped to the current execution. |
+| `pm.variables.toObject()` | Returns a copy of all runtime variables as a key-value object. |
+
+##### Response Inspection (`pm.response`)
+*Available in the Tests / Post-response script tab:*
+| Property / Method | Description |
+|---|---|
+| `pm.response.code` | HTTP status code as a number (e.g., `200`, `201`, `404`). |
+| `pm.response.status` | HTTP status message string (e.g., `'OK'`, `'Created'`). |
+| `pm.response.headers` | Object containing all received response headers. |
+| `pm.response.json()` | Parses and returns the response body as a JavaScript JSON object. |
+| `pm.response.text()` | Returns the response body as a raw string. |
+| `pm.response.to.have.status(code)` | Asserts that the response HTTP status code strictly equals `code`. Throws an error on mismatch. |
+
+##### Assertions & Testing (`pm.test` & `pm.expect`)
+| Syntax | Description |
+|---|---|
+| `pm.test(testName, fn)` | Defines an assertion block. If `fn` throws an error, the test fails and reports the error message. |
+| `pm.expect(actual).to.be(expected)` | Asserts strict equality (`===`) between `actual` and `expected`. |
+| `pm.expect(actual).to.equal(expected)` | Asserts loose equality (`==`) between `actual` and `expected`. |
+
+##### Postman Legacy API Compatibility
+AirREST also provides backward compatibility for legacy Postman scripts:
+- `postman.setEnvironmentVariable(key, value)` / `postman.getEnvironmentVariable(key)` / `postman.clearEnvironmentVariable(key)`
+- `postman.setGlobalVariable(key, value)` / `postman.getGlobalVariable(key)` / `postman.clearGlobalVariable(key)`
+- Global convenience objects: `responseBody`, `responseCode` (`{ code, name }`), `responseTime`, `responseHeaders`, and `tests`
+
+#### 💡 Practical Scripting Examples
+
+##### Example 1: Automatic Authentication Token Chaining (Post-Response Script)
+Extract a JWT or Bearer token from a login response and save it directly into the active environment so that downstream requests automatically authenticate using `{{token}}`:
+```javascript
+// Parse response JSON payload
+const res = pm.response.json();
+
+// Extract token from common response structures
+const token = res.token || res.access_token || res.data?.token || res.id_token;
+
+if (token) {
+  pm.environment.set("token", token);
+  console.log("Token successfully saved as {{token}}");
+} else {
+  throw new Error("Authentication token not found in response payload");
+}
+```
+
+##### Example 2: Status Code and JSON Schema Validation (Post-Response Script)
+```javascript
+// Test 1: Check HTTP status code
+pm.test("Status is 200 OK", function () {
+  pm.response.to.have.status(200);
+});
+
+// Test 2: Validate payload contents
+pm.test("Response contains valid user details", function () {
+  const data = pm.response.json();
+  pm.expect(data.status).to.be("success");
+  pm.expect(typeof data.user.id).to.be("string");
+  
+  // Persist user ID for subsequent requests
+  pm.environment.set("userId", data.user.id);
+});
+```
+
+##### Example 3: Dynamic Headers or Nonce (Pre-Request Script)
+```javascript
+// Generate request tracking ID and timestamp before dispatch
+const reqId = "req_" + Math.random().toString(36).substring(2, 9);
+const now = new Date().toISOString();
+
+pm.variables.set("clientRequestId", reqId);
+pm.environment.set("lastRequestTimestamp", now);
+```
+
+#### 🎨 Scripting UI & Developer Experience
+- **Dedicated Script Tabs**: Separate tabs for **Pre-request Script** and **Tests (Post-response)** in the Request Editor.
+- **1-Click Snippet Helpers**: Insert battle-tested code snippets instantly with buttons:
+  - `+ Save Auth Token to Env`
+  - `+ Set Env from JSON`
+  - `+ Status 200 Check`
+- **Tab & Keyboard Indentation**: Full code editor support for `Tab` (2-space indent), `Shift+Tab` (outdent), and native Undo/Redo preservation.
+- **Active Script Indicators**: Tabs display badge indicators when a script is configured.
+- **Visual Response Feedback**:
+  - 🟢 **Green Alert Banner**: Displays real-time confirmation when environment variables are updated (e.g., `Environment Variables Updated: {{token}}`).
+  - 🔴 **Red Alert Banner**: Displays clear error messages when assertions fail or scripts encounter runtime errors.
 
 ### 8. 📊 Response Inspector
 - **Execution Metrics**: Shows HTTP status code, round-trip latency (`ms`), and payload byte size.
@@ -102,8 +228,12 @@ AirREST is an API testing client that runs directly inside Google Chrome as a Ma
 - **IndexedDB Storage**: Uses IndexedDB with the `unlimitedStorage` permission to support large collections and environments without 5MB storage limits.
 - **Local Persistence**: Restores open tabs, unsaved modifications, and active configuration across browser reloads.
 
-### 10. 👥 Teams, Projects & Cloud Synchronization
-- **Scope Switcher**: Switch between Offline LocalStorage and Cloud Workspaces (Personal & Team Projects) with RBAC role badges (`Admin`, `Maintainer`, `Contributor`, `Reader`).
+### 10. 👥 Multi Offline Workspaces, Teams & Cloud Synchronization
+- **Multi Offline Workspaces**:
+  - Create and manage multiple isolated offline workspaces (e.g., per client or local project).
+  - Rename, duplicate/clone, or delete offline workspaces safely.
+  - Each offline workspace maintains its own isolated tabs, collections, environments, and history.
+- **Scope Switcher**: Seamlessly switch between Offline Workspaces and Cloud Workspaces (Personal & Team Projects) with RBAC role badges (`Admin`, `Maintainer`, `Contributor`, `Reader`).
 - **Scoped Data Isolation**: Separate tabs, history, and active environments per workspace scope.
 - **Smart Client Caching**: 1-hour cache enables instant project switching without redundant network fetches.
 - **Manual Sync**: Dedicated sync button to trigger immediate synchronization with the cloud backend.
@@ -133,8 +263,11 @@ AirREST supports two build targets:
 
 ```bash
 # Clone the repository
-git clone git@github.com:adiputera/api-tester.git
-cd api-tester
+git clone git@github.com:adiputera/AirREST.git
+# Or via HTTPS:
+# git clone https://github.com/adiputera/AirREST.git
+
+cd AirREST
 
 # Install dependencies
 npm install
