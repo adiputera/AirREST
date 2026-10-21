@@ -115,6 +115,7 @@ export interface Environment {
   name: string;
   variables: EnvironmentVariable[];
   minRole?: 'admin' | 'maintainer' | 'contributor' | 'reader';
+  version?: number;
   createdAt: number;
   updatedAt: number;
 }

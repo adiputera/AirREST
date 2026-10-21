@@ -417,8 +417,10 @@ export async function updateScopeEnvironment(
     name: updates.name,
     variables: updates.variables,
     min_role: updates.min_role,
-    base_version: updates.base_version || 1,
   };
+  if (typeof updates.base_version === 'number' && updates.base_version > 0) {
+    payload.base_version = updates.base_version;
+  }
 
   const res = await fetchWithAuth(`/api/v1/environments/${envId}`, {
     method: 'PUT',
@@ -430,7 +432,11 @@ export async function updateScopeEnvironment(
 
   const json = await res.json();
   if (!res.ok) {
-    throw new Error(extractError(json, 'Failed to update environment'));
+    const errorMsg = extractError(json, 'Failed to update environment');
+    const err: any = new Error(errorMsg);
+    err.status = res.status;
+    err.data = json?.data;
+    throw err;
   }
   return unwrapData<any>(json);
 }

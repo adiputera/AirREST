@@ -25,9 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Top-down transaction lock acquisition (`collections` $\rightarrow$ `collection_items`) in PostgreSQL `BatchReorderItems` to prevent deadlock conflicts.
   - Deterministic item ID sorting prior to batch execution to ensure uniform row-lock acquisition.
   - Automatic transaction retry up to 3 times with exponential backoff for transient deadlock/serialization errors (`SQLSTATE 40P01` / `40001`).
-- **Client Auto-Recovery**:
+- **Client Auto-Recovery & Concurrency Resilience**:
   - Automatic single-retry mechanism in frontend for transient cloud reorder sync failures.
   - Self-clearing error banner upon subsequent successful synchronization operations.
+  - **Environment OCC Sync Resilience**: Implemented version tracking (`version`) on frontend `Environment` models and added 300ms debouncing for variable edits to eliminate false self-conflicts during repeated edits.
+  - Automatic recovery and single-retry with latest remote version upon receiving HTTP 409 Conflict.
+  - Added backend fallback in `EnvironmentService.Update` defaulting `base_version` to `existing.Version` when omitted or non-positive.
 
 ### Changed
 - **Smart Workspace Caching**:

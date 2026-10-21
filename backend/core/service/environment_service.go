@@ -178,6 +178,9 @@ func (s *EnvironmentService) Update(ctx context.Context, user *domain.User, env 
 	}
 
 	env.LastModifiedBy = &user.ID
+	if baseVersion <= 0 {
+		baseVersion = existing.Version
+	}
 	err = s.envRepo.Update(ctx, env, baseVersion)
 	if err != nil {
 		if errors.Is(err, postgres.ErrVersionConflict) {

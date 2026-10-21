@@ -275,6 +275,92 @@ interface ApiStoreState {
   importLocalToCloud: () => Promise<{ success: boolean; message: string }>;
 }
 
+const envSyncDebounceTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+
+function scheduleEnvironmentCloudSync(
+  envId: string,
+  get: () => ApiStoreState,
+  set: (fn: (state: ApiStoreState) => Partial<ApiStoreState>) => void
+) {
+  if (isOfflineOnly) return;
+
+  if (envSyncDebounceTimers[envId]) {
+    clearTimeout(envSyncDebounceTimers[envId]);
+  }
+
+  envSyncDebounceTimers[envId] = setTimeout(async () => {
+    delete envSyncDebounceTimers[envId];
+
+    const { workspaceMode, cloudConfig, environments } = get();
+    if (workspaceMode !== 'cloud' || !cloudConfig.token) return;
+
+    const currentEnv = environments.find((e) => e.id === envId);
+    if (!currentEnv) return;
+
+    try {
+      const res = await updateScopeEnvironment(
+        cloudConfig.apiUrl,
+        cloudConfig.token,
+        envId,
+        {
+          name: currentEnv.name,
+          variables: currentEnv.variables,
+          min_role: currentEnv.minRole,
+          base_version: currentEnv.version || 1,
+        },
+        cloudConfig.refreshToken
+      );
+
+      if (res && typeof res.version === 'number') {
+        set((s) => ({
+          environments: s.environments.map((e) =>
+            e.id === envId ? { ...e, version: res.version } : e
+          ),
+        }));
+      }
+    } catch (err: any) {
+      if (err?.status === 409 && err?.data?.version) {
+        console.warn('Environment conflict encountered, auto-recovering base version:', err.data.version);
+        set((s) => ({
+          environments: s.environments.map((e) =>
+            e.id === envId ? { ...e, version: err.data.version } : e
+          ),
+        }));
+        // Auto-retry once with the latest base_version from server
+        try {
+          const retryEnv = get().environments.find((e) => e.id === envId);
+          if (retryEnv) {
+            const retryRes = await updateScopeEnvironment(
+              cloudConfig.apiUrl,
+              cloudConfig.token,
+              envId,
+              {
+                name: retryEnv.name,
+                variables: retryEnv.variables,
+                min_role: retryEnv.minRole,
+                base_version: err.data.version,
+              },
+              cloudConfig.refreshToken
+            );
+            if (retryRes && typeof retryRes.version === 'number') {
+              set((s) => ({
+                environments: s.environments.map((e) =>
+                  e.id === envId ? { ...e, version: retryRes.version } : e
+                ),
+              }));
+              return;
+            }
+          }
+        } catch (retryErr) {
+          console.error('Failed to sync updated environment after conflict resolution:', retryErr);
+        }
+      } else {
+        console.error('Failed to sync updated environment to cloud:', err);
+      }
+    }
+  }, 300);
+}
+
 export const useApiStore = create<ApiStoreState>()(
   persist(
     (set, get) => ({
@@ -1026,6 +1112,7 @@ export const useApiStore = create<ApiStoreState>()(
           name: name.trim() || 'New Environment',
           variables: [{ id: generateId(), key: '', value: '', enabled: true }],
           minRole,
+          version: 1,
           createdAt: Date.now(),
           updatedAt: Date.now(),
         };
@@ -1049,7 +1136,11 @@ export const useApiStore = create<ApiStoreState>()(
           ).then((created) => {
             if (created && created.id) {
               set((state) => ({
-                environments: state.environments.map((e) => (e.id === newEnv.id ? { ...e, id: created.id } : e)),
+                environments: state.environments.map((e) =>
+                  e.id === newEnv.id
+                    ? { ...e, id: created.id, version: created.version || 1 }
+                    : e
+                ),
                 activeEnvironmentId: state.activeEnvironmentId === newEnv.id ? created.id : state.activeEnvironmentId,
               }));
             }
@@ -1062,6 +1153,11 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       deleteEnvironment: (id) => {
+        if (envSyncDebounceTimers[id]) {
+          clearTimeout(envSyncDebounceTimers[id]);
+          delete envSyncDebounceTimers[id];
+        }
+
         set((state) => ({
           environments: state.environments.filter((e) => e.id !== id),
           activeEnvironmentId: state.activeEnvironmentId === id ? null : state.activeEnvironmentId,
@@ -1076,135 +1172,61 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       updateEnvironment: (id, updates) => {
-        let updatedEnv: Environment | undefined;
-        set((state) => {
-          const updatedEnvs = state.environments.map((e) => {
+        set((state) => ({
+          environments: state.environments.map((e) => {
             if (e.id === id) {
-              updatedEnv = { ...e, ...updates, updatedAt: Date.now() };
-              return updatedEnv;
+              return { ...e, ...updates, updatedAt: Date.now() };
             }
             return e;
-          });
-          return {
-            environments: updatedEnvs,
-          };
-        });
+          }),
+        }));
 
-        const { workspaceMode, cloudConfig } = get();
-        if (workspaceMode === 'cloud' && cloudConfig.token && updatedEnv) {
-          updateScopeEnvironment(
-            cloudConfig.apiUrl,
-            cloudConfig.token,
-            id,
-            {
-              name: updatedEnv.name,
-              variables: updatedEnv.variables,
-              min_role: updatedEnv.minRole,
-            },
-            cloudConfig.refreshToken
-          ).catch((err) => {
-            console.error('Failed to sync updated environment to cloud:', err);
-          });
-        }
+        scheduleEnvironmentCloudSync(id, get, set);
       },
 
       addEnvironmentVariable: (envId) => {
-        let updatedEnv: Environment | undefined;
-        set((state) => {
-          const updatedEnvs = state.environments.map((e) => {
+        set((state) => ({
+          environments: state.environments.map((e) => {
             if (e.id !== envId) return e;
-            updatedEnv = {
+            return {
               ...e,
               variables: [...e.variables, { id: generateId(), key: '', value: '', enabled: true }],
               updatedAt: Date.now(),
             };
-            return updatedEnv;
-          });
-          return {
-            environments: updatedEnvs,
-          };
-        });
+          }),
+        }));
 
-        const { workspaceMode, cloudConfig } = get();
-        if (workspaceMode === 'cloud' && cloudConfig.token && updatedEnv) {
-          updateScopeEnvironment(
-            cloudConfig.apiUrl,
-            cloudConfig.token,
-            envId,
-            {
-              name: updatedEnv.name,
-              variables: updatedEnv.variables,
-              min_role: updatedEnv.minRole,
-            },
-            cloudConfig.refreshToken
-          ).catch(() => {});
-        }
+        scheduleEnvironmentCloudSync(envId, get, set);
       },
 
       updateEnvironmentVariable: (envId, varId, updates) => {
-        let updatedEnv: Environment | undefined;
-        set((state) => {
-          const updatedEnvs = state.environments.map((e) => {
+        set((state) => ({
+          environments: state.environments.map((e) => {
             if (e.id !== envId) return e;
-            updatedEnv = {
+            return {
               ...e,
               variables: e.variables.map((v) => (v.id === varId ? { ...v, ...updates } : v)),
               updatedAt: Date.now(),
             };
-            return updatedEnv;
-          });
-          return {
-            environments: updatedEnvs,
-          };
-        });
+          }),
+        }));
 
-        const { workspaceMode, cloudConfig } = get();
-        if (workspaceMode === 'cloud' && cloudConfig.token && updatedEnv) {
-          updateScopeEnvironment(
-            cloudConfig.apiUrl,
-            cloudConfig.token,
-            envId,
-            {
-              name: updatedEnv.name,
-              variables: updatedEnv.variables,
-              min_role: updatedEnv.minRole,
-            },
-            cloudConfig.refreshToken
-          ).catch(() => {});
-        }
+        scheduleEnvironmentCloudSync(envId, get, set);
       },
 
       removeEnvironmentVariable: (envId, varId) => {
-        let updatedEnv: Environment | undefined;
-        set((state) => {
-          const updatedEnvs = state.environments.map((e) => {
+        set((state) => ({
+          environments: state.environments.map((e) => {
             if (e.id !== envId) return e;
-            updatedEnv = {
+            return {
               ...e,
               variables: e.variables.filter((v) => v.id !== varId),
               updatedAt: Date.now(),
             };
-            return updatedEnv;
-          });
-          return {
-            environments: updatedEnvs,
-          };
-        });
+          }),
+        }));
 
-        const { workspaceMode, cloudConfig } = get();
-        if (workspaceMode === 'cloud' && cloudConfig.token && updatedEnv) {
-          updateScopeEnvironment(
-            cloudConfig.apiUrl,
-            cloudConfig.token,
-            envId,
-            {
-              name: updatedEnv.name,
-              variables: updatedEnv.variables,
-              min_role: updatedEnv.minRole,
-            },
-            cloudConfig.refreshToken
-          ).catch(() => {});
-        }
+        scheduleEnvironmentCloudSync(envId, get, set);
       },
 
       addEnvironment: async (env: Environment) => {
@@ -1229,7 +1251,9 @@ export const useApiStore = create<ApiStoreState>()(
             );
             if (created && created.id) {
               set((state) => ({
-                environments: state.environments.map((e) => (e.id === env.id ? { ...e, id: created.id } : e)),
+                environments: state.environments.map((e) =>
+                  e.id === env.id ? { ...e, id: created.id, version: created.version || 1 } : e
+                ),
                 activeEnvironmentId: state.activeEnvironmentId === env.id ? created.id : state.activeEnvironmentId,
               }));
               return created.id;
@@ -1242,6 +1266,11 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       replaceEnvironment: async (existingId: string, incomingEnv: Environment) => {
+        if (envSyncDebounceTimers[existingId]) {
+          clearTimeout(envSyncDebounceTimers[existingId]);
+          delete envSyncDebounceTimers[existingId];
+        }
+
         const state = get();
         const existingEnv = state.environments.find((e) => e.id === existingId);
         if (!existingEnv) {
@@ -1256,6 +1285,7 @@ export const useApiStore = create<ApiStoreState>()(
           name: incomingEnv.name,
           variables: alignedVars,
           minRole: incomingEnv.minRole || existingEnv.minRole,
+          version: existingEnv.version || 1,
           updatedAt: Date.now(),
         };
 
@@ -1267,7 +1297,7 @@ export const useApiStore = create<ApiStoreState>()(
         const { workspaceMode, cloudConfig } = get();
         if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
           try {
-            await updateScopeEnvironment(
+            const res = await updateScopeEnvironment(
               cloudConfig.apiUrl,
               cloudConfig.token,
               existingId,
@@ -1275,10 +1305,41 @@ export const useApiStore = create<ApiStoreState>()(
                 name: replacedEnv.name,
                 variables: replacedEnv.variables,
                 min_role: replacedEnv.minRole,
+                base_version: replacedEnv.version || 1,
               },
               cloudConfig.refreshToken
             );
+            if (res && typeof res.version === 'number') {
+              set((s) => ({
+                environments: s.environments.map((e) =>
+                  e.id === existingId ? { ...e, version: res.version } : e
+                ),
+              }));
+            }
           } catch (err: any) {
+            if (err?.status === 409 && err?.data?.version) {
+              console.warn('Conflict while replacing environment, retrying with server version:', err.data.version);
+              const retryRes = await updateScopeEnvironment(
+                cloudConfig.apiUrl,
+                cloudConfig.token,
+                existingId,
+                {
+                  name: replacedEnv.name,
+                  variables: replacedEnv.variables,
+                  min_role: replacedEnv.minRole,
+                  base_version: err.data.version,
+                },
+                cloudConfig.refreshToken
+              );
+              if (retryRes && typeof retryRes.version === 'number') {
+                set((s) => ({
+                  environments: s.environments.map((e) =>
+                    e.id === existingId ? { ...e, version: retryRes.version } : e
+                  ),
+                }));
+                return;
+              }
+            }
             console.error('Failed to sync replaced environment to cloud:', err);
             throw err;
           }
@@ -2367,7 +2428,9 @@ export const useApiStore = create<ApiStoreState>()(
             ).then((created) => {
               if (created?.id) {
                 set((state) => ({
-                  environments: state.environments.map((e) => (e.id === imported.id ? { ...e, id: created.id } : e)),
+                  environments: state.environments.map((e) =>
+                    e.id === imported.id ? { ...e, id: created.id, version: created.version || 1 } : e
+                  ),
                   activeEnvironmentId: state.activeEnvironmentId === imported.id ? created.id : state.activeEnvironmentId,
                 }));
               }
