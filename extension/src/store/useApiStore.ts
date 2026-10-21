@@ -40,10 +40,12 @@ import {
   deleteScopeCollection,
   deleteScopeItem,
   moveScopeCollection,
+  reorderCollectionItems,
   fetchUserWorkspaces,
   fetchUserTeams,
   fetchTeamProjects,
 } from '@/lib/cloudApi';
+import { reorderItemInTree } from '@/lib/treeHelper';
 import {
   buildCollectionsFromDelta,
   buildEnvironmentsFromDelta,
@@ -112,8 +114,8 @@ function createInitialTab(): ApiRequest {
   };
 }
 
-export const SCOPE_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour cache for workspace collections/environments
-export const SCOPES_LIST_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour cache for workspace/project list
+export const SCOPE_CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours cache for workspace collections/environments
+export const SCOPES_LIST_CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours cache for workspace/project list
 
 export interface ScopeCacheEntry {
   collections: Collection[];
@@ -225,6 +227,18 @@ interface ApiStoreState {
   importCollectionFromJson: (jsonStr: string) => Promise<{ success: boolean; error?: string }>;
   deleteCollection: (id: string) => void;
   moveCollection: (collectionId: string, targetScope: ActiveScope) => Promise<{ success: boolean; error?: string }>;
+  moveRequest: (
+    sourceCollectionId: string,
+    requestId: string,
+    targetCollectionId: string,
+    targetFolderId: string | null
+  ) => Promise<{ success: boolean; error?: string }>;
+  reorderItem: (
+    collectionId: string,
+    activeId: string,
+    targetId: string,
+    position: 'before' | 'after' | 'inside'
+  ) => Promise<{ success: boolean; error?: string }>;
   openRequestInTab: (request: ApiRequest) => void;
   clearHistory: () => void;
   deleteHistoryItem: (id: string) => void;
@@ -2425,6 +2439,197 @@ export const useApiStore = create<ApiStoreState>()(
             console.error('Failed to delete collection from cloud:', err);
           });
         }
+      },
+
+      moveRequest: async (sourceCollectionId, requestId, targetCollectionId, targetFolderId) => {
+        const { collections } = get();
+        const sourceCol = collections.find((c) => c.id === sourceCollectionId);
+        const targetCol = collections.find((c) => c.id === targetCollectionId);
+
+        if (!sourceCol) {
+          return { success: false, error: 'Source collection not found' };
+        }
+        if (!targetCol) {
+          return { success: false, error: 'Target collection not found' };
+        }
+
+        // 1. Locate and extract the item from source collection
+        let itemToMove: CollectionItem | null = null;
+
+        const removeItem = (items: CollectionItem[]): CollectionItem[] => {
+          const result: CollectionItem[] = [];
+          for (const it of items) {
+            if (it.type === 'request' && (it.id === requestId || it.request?.id === requestId)) {
+              itemToMove = it;
+              continue;
+            }
+            if (it.type === 'folder') {
+              result.push({
+                ...it,
+                items: removeItem(it.items || []),
+              });
+              continue;
+            }
+            result.push(it);
+          }
+          return result;
+        };
+
+        const updatedSourceItems = removeItem(sourceCol.items);
+
+        if (!itemToMove) {
+          return { success: false, error: 'Request not found in source collection' };
+        }
+
+        // 2. Insert item into target collection
+        const insertItem = (items: CollectionItem[]): CollectionItem[] => {
+          if (!targetFolderId) {
+            return [...items, itemToMove!];
+          }
+          return items.map((it) => {
+            if (it.type === 'folder') {
+              if (it.id === targetFolderId) {
+                return {
+                  ...it,
+                  items: [...(it.items || []), itemToMove!],
+                };
+              }
+              return {
+                ...it,
+                items: insertItem(it.items || []),
+              };
+            }
+            return it;
+          });
+        };
+
+        set((state) => {
+          let newCollections: Collection[];
+
+          if (sourceCollectionId === targetCollectionId) {
+            // Move within the same collection
+            const updatedItemsWithInsert = insertItem(updatedSourceItems);
+            newCollections = state.collections.map((col) => {
+              if (col.id !== sourceCollectionId) return col;
+              return {
+                ...col,
+                items: updatedItemsWithInsert,
+                updatedAt: Date.now(),
+              };
+            });
+          } else {
+            // Move across different collections
+            newCollections = state.collections.map((col) => {
+              if (col.id === sourceCollectionId) {
+                return {
+                  ...col,
+                  items: updatedSourceItems,
+                  updatedAt: Date.now(),
+                };
+              }
+              if (col.id === targetCollectionId) {
+                return {
+                  ...col,
+                  items: insertItem(col.items),
+                  updatedAt: Date.now(),
+                };
+              }
+              return col;
+            });
+          }
+
+          return { collections: newCollections };
+        });
+
+        // 3. Sync to Cloud if active
+        const { workspaceMode, cloudConfig, collections: currentCols } = get();
+        if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
+          const colsToSync = currentCols.filter(
+            (c) => c.id === sourceCollectionId || c.id === targetCollectionId
+          );
+          if (colsToSync.length > 0) {
+            batchImportToScope(
+              cloudConfig.apiUrl,
+              cloudConfig.token,
+              cloudConfig.activeScope,
+              colsToSync,
+              cloudConfig.refreshToken
+            )
+              .then(() => {
+                if (get().syncStatus === 'error') {
+                  set({ syncStatus: 'idle', syncError: null });
+                }
+              })
+              .catch((err) => {
+                console.error('Failed to sync moved request to cloud:', err);
+                set({ syncStatus: 'error', syncError: err.message || 'Failed to sync moved request to cloud' });
+              });
+          }
+        }
+
+        return { success: true };
+      },
+
+      reorderItem: async (collectionId, activeId, targetId, position) => {
+        const { collections } = get();
+        const col = collections.find((c) => c.id === collectionId);
+        if (!col) return { success: false, error: 'Collection not found' };
+
+        const result = reorderItemInTree(col.items, activeId, targetId, position);
+        if (!result) return { success: false, error: 'Invalid reorder operation' };
+
+        const { updatedItems, payload } = result;
+
+        set((state) => ({
+          collections: state.collections.map((c) => {
+            if (c.id !== collectionId) return c;
+            return {
+              ...c,
+              items: updatedItems,
+              updatedAt: Date.now(),
+            };
+          }),
+        }));
+
+        const { workspaceMode, cloudConfig } = get();
+        const token = cloudConfig.token;
+        if (!isOfflineOnly && workspaceMode === 'cloud' && token) {
+          const sendReorder = async () => {
+            try {
+              await reorderCollectionItems(
+                cloudConfig.apiUrl,
+                token,
+                collectionId,
+                payload,
+                cloudConfig.refreshToken
+              );
+              if (get().syncStatus === 'error') {
+                set({ syncStatus: 'idle', syncError: null });
+              }
+            } catch (err: any) {
+              // Retry once after 250ms for transient race condition or network glitch
+              await new Promise((r) => setTimeout(r, 250));
+              try {
+                await reorderCollectionItems(
+                  cloudConfig.apiUrl,
+                  token,
+                  collectionId,
+                  payload,
+                  cloudConfig.refreshToken
+                );
+                if (get().syncStatus === 'error') {
+                  set({ syncStatus: 'idle', syncError: null });
+                }
+              } catch (retryErr: any) {
+                console.error('Failed to sync reordered items to cloud:', retryErr);
+                set({ syncStatus: 'error', syncError: retryErr.message || 'Failed to sync reordered items to cloud' });
+              }
+            }
+          };
+          sendReorder();
+        }
+
+        return { success: true };
       },
 
       moveCollection: async (collectionId, targetScope) => {

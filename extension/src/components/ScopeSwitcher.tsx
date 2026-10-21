@@ -101,7 +101,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isOpen]);
 
-  // Load accessible workspaces and teams (uses 1-hour cache unless forced)
+  // Load accessible workspaces and teams (uses 12-hour cache unless forced)
   const loadScopes = async (force = false) => {
     if (isOfflineOnly || !cloudConfig.token) return;
     setIsLoadingScopes(true);
@@ -675,7 +675,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                   }}
                   disabled={syncStatus === 'syncing'}
                   className="w-full flex items-center justify-between rounded-lg bg-sky-500/10 border border-sky-500/20 px-2.5 py-2 text-xs font-medium text-sky-300 hover:bg-sky-500/20 hover:text-white transition group"
-                  title="Bypass 1-hour cache and synchronize active workspace with cloud"
+                  title="Bypass 12-hour cache and synchronize active workspace with cloud"
                 >
                   <div className="flex items-center gap-2">
                     <RefreshCw

@@ -24,7 +24,9 @@ import { MethodBadge } from './MethodBadge';
 import { exportPostmanCollection } from '@/lib/postman';
 import { ConfirmModal } from './ConfirmModal';
 import { MoveCollectionModal } from './MoveCollectionModal';
+import { MoveRequestModal } from './MoveRequestModal';
 import { ImportModal } from './ImportModal';
+import { isDescendantOf } from '@/lib/treeHelper';
 
 function filterCollectionItems(items: CollectionItem[], query: string): CollectionItem[] {
   return items
@@ -52,12 +54,28 @@ function filterCollectionItems(items: CollectionItem[], query: string): Collecti
     .filter((item): item is CollectionItem => item !== null);
 }
 
+export interface DraggedItemState {
+  id: string;
+  type: 'folder' | 'request';
+  collectionId: string;
+  name: string;
+}
+
 interface FolderItemProps {
   item: CollectionItem;
   collectionId: string;
   level?: number;
   onSelectRequest: (req: ApiRequest) => void;
   onRequestDelete: (item: CollectionItem) => void;
+  onRequestMove: (item: CollectionItem, collectionId: string) => void;
+  draggedItem: DraggedItemState | null;
+  setDraggedItem: (item: DraggedItemState | null) => void;
+  onReorderItem: (
+    collectionId: string,
+    activeId: string,
+    targetId: string,
+    position: 'before' | 'after' | 'inside'
+  ) => void;
 }
 
 const FolderItem: React.FC<FolderItemProps> = ({
@@ -66,14 +84,142 @@ const FolderItem: React.FC<FolderItemProps> = ({
   level = 0,
   onSelectRequest,
   onRequestDelete,
+  onRequestMove,
+  draggedItem,
+  setDraggedItem,
+  onReorderItem,
 }) => {
   const [isOpen, setIsOpen] = useState(true);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isCreatingSubfolder, setIsCreatingSubfolder] = useState(false);
   const [subfolderName, setSubfolderName] = useState('');
 
+  const [dropPosition, setDropPosition] = useState<'before' | 'after' | 'inside' | null>(null);
+  const [isForbidden, setIsForbidden] = useState(false);
+
+  const collections = useApiStore((state) => state.collections);
+  const currentCol = collections.find((c) => c.id === collectionId);
+  const collectionItems = currentCol?.items || [];
+
   const createFolder = useApiStore((state) => state.createFolder);
   const createRequestInCollection = useApiStore((state) => state.createRequestInCollection);
+
+  const isBeingDragged = draggedItem?.id === item.id;
+
+  const handleDragStart = (e: React.DragEvent) => {
+    e.stopPropagation();
+    setDraggedItem({
+      id: item.id,
+      type: item.type,
+      collectionId,
+      name: item.name,
+    });
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', item.id);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedItem(null);
+    setDropPosition(null);
+    setIsForbidden(false);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    if (!draggedItem) return;
+    e.stopPropagation();
+
+    // 1. Cross-collection move via drag-and-drop is forbidden: pointer not allowed!
+    if (draggedItem.collectionId !== collectionId) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'none';
+      if (!isForbidden) setIsForbidden(true);
+      if (dropPosition !== null) setDropPosition(null);
+      return;
+    }
+
+    // 2. Self drop is forbidden
+    if (draggedItem.id === item.id) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'none';
+      if (!isForbidden) setIsForbidden(true);
+      if (dropPosition !== null) setDropPosition(null);
+      return;
+    }
+
+    // 3. Circular folder dependency is forbidden (cannot drop parent into child/descendant)
+    if (
+      draggedItem.type === 'folder' &&
+      isDescendantOf(collectionItems, draggedItem.id, item.id)
+    ) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'none';
+      if (!isForbidden) setIsForbidden(true);
+      if (dropPosition !== null) setDropPosition(null);
+      return;
+    }
+
+    // Valid drop target!
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (isForbidden) setIsForbidden(false);
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const offsetY = e.clientY - rect.top;
+    const height = rect.height;
+
+    let pos: 'before' | 'after' | 'inside';
+    if (item.type === 'folder') {
+      if (offsetY < height * 0.28) {
+        pos = 'before';
+      } else if (offsetY > height * 0.72) {
+        pos = 'after';
+      } else {
+        pos = 'inside';
+      }
+    } else {
+      if (offsetY < height * 0.5) {
+        pos = 'before';
+      } else {
+        pos = 'after';
+      }
+    }
+
+    if (dropPosition !== pos) {
+      setDropPosition(pos);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setDropPosition(null);
+      setIsForbidden(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const currentPos = dropPosition;
+    const forbidden = isForbidden;
+    setDropPosition(null);
+    setIsForbidden(false);
+
+    if (!draggedItem || forbidden || !currentPos) {
+      return;
+    }
+
+    if (draggedItem.collectionId !== collectionId || draggedItem.id === item.id) {
+      return;
+    }
+
+    if (currentPos === 'inside') {
+      setIsOpen(true);
+    }
+
+    onReorderItem(collectionId, draggedItem.id, item.id, currentPos);
+    setDraggedItem(null);
+  };
 
   const handleCreateRequest = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -101,10 +247,34 @@ const FolderItem: React.FC<FolderItemProps> = ({
     return (
       <div className="select-none">
         <div
+          draggable={!isCreatingSubfolder}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
           onClick={() => setIsOpen(!isOpen)}
-          className="group relative flex items-center gap-1.5 py-1 px-2 rounded-md hover:bg-zinc-900/80 text-zinc-300 hover:text-white cursor-pointer text-xs font-medium transition"
+          className={`group relative flex items-center gap-1.5 py-1 px-2 rounded-md transition text-xs font-medium ${
+            isForbidden
+              ? 'cursor-not-allowed bg-rose-500/10 text-rose-300'
+              : isBeingDragged
+              ? 'opacity-40 bg-zinc-900/60 cursor-grabbing'
+              : dropPosition === 'inside'
+              ? 'bg-sky-500/20 ring-1 ring-sky-400/60 text-white cursor-pointer'
+              : 'hover:bg-zinc-900/80 text-zinc-300 hover:text-white cursor-pointer'
+          }`}
           style={{ paddingLeft: `${Math.max(level * 12, 8)}px` }}
         >
+          {dropPosition === 'before' && !isForbidden && (
+            <div className="absolute top-0 left-0 right-0 h-0.5 bg-sky-400 z-30 shadow-[0_0_8px_rgba(56,189,248,0.9)] pointer-events-none flex items-center">
+              <div className="w-1.5 h-1.5 rounded-full bg-sky-400 -ml-0.5" />
+            </div>
+          )}
+          {dropPosition === 'after' && !isForbidden && (
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-sky-400 z-30 shadow-[0_0_8px_rgba(56,189,248,0.9)] pointer-events-none flex items-center">
+              <div className="w-1.5 h-1.5 rounded-full bg-sky-400 -ml-0.5" />
+            </div>
+          )}
           {isOpen ? (
             <ChevronDown className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
           ) : (
@@ -221,6 +391,39 @@ const FolderItem: React.FC<FolderItemProps> = ({
           </div>
         )}
 
+        {isOpen && (!item.items || item.items.length === 0) && !isCreatingSubfolder && (
+          <div
+            onDragOver={(e) => {
+              if (!draggedItem || draggedItem.collectionId !== collectionId) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'none';
+                return;
+              }
+              if (
+                draggedItem.id === item.id ||
+                (draggedItem.type === 'folder' && isDescendantOf(collectionItems, draggedItem.id, item.id))
+              ) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'none';
+                return;
+              }
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'move';
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (!draggedItem || draggedItem.collectionId !== collectionId || draggedItem.id === item.id) return;
+              if (draggedItem.type === 'folder' && isDescendantOf(collectionItems, draggedItem.id, item.id)) return;
+              onReorderItem(collectionId, draggedItem.id, item.id, 'inside');
+              setDraggedItem(null);
+            }}
+            className="ml-3.5 mt-0.5 border-l border-zinc-800/60 pl-3 py-1 text-[10px] text-zinc-600 hover:text-sky-400 hover:bg-sky-500/10 rounded transition select-none"
+          >
+            Empty folder (drop here)
+          </div>
+        )}
+
         {isOpen && item.items && item.items.length > 0 && (
           <div className="border-l border-zinc-800/60 ml-3.5 mt-0.5">
             {item.items.map((child) => (
@@ -231,6 +434,10 @@ const FolderItem: React.FC<FolderItemProps> = ({
                 level={level + 1}
                 onSelectRequest={onSelectRequest}
                 onRequestDelete={onRequestDelete}
+                onRequestMove={onRequestMove}
+                draggedItem={draggedItem}
+                setDraggedItem={setDraggedItem}
+                onReorderItem={onReorderItem}
               />
             ))}
           </div>
@@ -244,15 +451,48 @@ const FolderItem: React.FC<FolderItemProps> = ({
 
   return (
     <div
+      draggable={true}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
       onClick={() => onSelectRequest(item.request!)}
-      className="group flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-zinc-900 text-zinc-300 hover:text-white cursor-pointer text-xs transition"
+      className={`group relative flex items-center gap-2 py-1.5 px-2 rounded-md transition text-xs ${
+        isForbidden
+          ? 'cursor-not-allowed bg-rose-500/10 text-rose-300'
+          : isBeingDragged
+          ? 'opacity-40 bg-zinc-900/60 cursor-grabbing'
+          : 'hover:bg-zinc-900 text-zinc-300 hover:text-white cursor-pointer'
+      }`}
       style={{ paddingLeft: `${Math.max(level * 12, 8)}px` }}
     >
+      {dropPosition === 'before' && !isForbidden && (
+        <div className="absolute top-0 left-0 right-0 h-0.5 bg-sky-400 z-30 shadow-[0_0_8px_rgba(56,189,248,0.9)] pointer-events-none flex items-center">
+          <div className="w-1.5 h-1.5 rounded-full bg-sky-400 -ml-0.5" />
+        </div>
+      )}
+      {dropPosition === 'after' && !isForbidden && (
+        <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-sky-400 z-30 shadow-[0_0_8px_rgba(56,189,248,0.9)] pointer-events-none flex items-center">
+          <div className="w-1.5 h-1.5 rounded-full bg-sky-400 -ml-0.5" />
+        </div>
+      )}
       <MethodBadge method={item.request.method} size="sm" />
       <span className="truncate flex-1 group-hover:text-zinc-100" title={item.name}>
         {item.name}
       </span>
       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition shrink-0">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onRequestMove(item, collectionId);
+          }}
+          className="rounded p-0.5 text-zinc-500 hover:text-sky-400 hover:bg-zinc-800 transition"
+          title="Move request to folder or collection"
+        >
+          <FolderInput className="h-3 w-3" />
+        </button>
         <button
           type="button"
           onClick={(e) => {
@@ -295,6 +535,12 @@ export const Sidebar: React.FC = () => {
   const [activeAddMenuColId, setActiveAddMenuColId] = useState<string | null>(null);
   const [creatingFolderInCol, setCreatingFolderInCol] = useState<string | null>(null);
   const [newFolderName, setNewFolderName] = useState('');
+  const [requestToMove, setRequestToMove] = useState<{
+    item: CollectionItem;
+    collectionId: string;
+  } | null>(null);
+  const [draggedItem, setDraggedItem] = useState<DraggedItemState | null>(null);
+  const reorderItem = useApiStore((state) => state.reorderItem);
   const [itemToDelete, setItemToDelete] = useState<{
     collectionId: string;
     itemId: string;
@@ -681,6 +927,15 @@ export const Sidebar: React.FC = () => {
                                     type: targetItem.type,
                                   })
                                 }
+                                onRequestMove={(targetItem, colId) =>
+                                  setRequestToMove({
+                                    item: targetItem,
+                                    collectionId: colId,
+                                  })
+                                }
+                                draggedItem={draggedItem}
+                                setDraggedItem={setDraggedItem}
+                                onReorderItem={reorderItem}
                               />
                             ))
                           )}
@@ -815,6 +1070,13 @@ export const Sidebar: React.FC = () => {
         isOpen={!!collectionToMove}
         onClose={() => setCollectionToMove(null)}
         collection={collectionToMove}
+      />
+
+      <MoveRequestModal
+        isOpen={!!requestToMove}
+        onClose={() => setRequestToMove(null)}
+        item={requestToMove?.item || null}
+        sourceCollectionId={requestToMove?.collectionId || ''}
       />
 
       <ImportModal

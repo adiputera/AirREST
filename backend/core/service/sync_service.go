@@ -464,6 +464,9 @@ func (s *SyncService) insertImportItems(
 				$21, $21
 			)
 			ON CONFLICT (id) DO UPDATE SET
+				collection_id = EXCLUDED.collection_id,
+				parent_id = EXCLUDED.parent_id,
+				deleted_at = NULL,
 				name = EXCLUDED.name,
 				method = EXCLUDED.method,
 				url = EXCLUDED.url,

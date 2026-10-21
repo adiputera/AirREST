@@ -20,6 +20,7 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
   const collections = useApiStore((state) => state.collections);
   const createCollection = useApiStore((state) => state.createCollection);
   const saveRequestToCollection = useApiStore((state) => state.saveRequestToCollection);
+  const moveRequest = useApiStore((state) => state.moveRequest);
   const updateActiveRequest = useApiStore((state) => state.updateActiveRequest);
 
   const savedInfo = findSavedRequestInCollections(collections, request.id);
@@ -66,9 +67,25 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
     if (!targetCollectionId) return;
 
     const finalName = requestName.trim() || 'Untitled Request';
+    const targetFolder = selectedFolderId ? selectedFolderId : null;
+
+    const isRelocating =
+      savedInfo &&
+      (savedInfo.collection.id !== targetCollectionId ||
+        (savedInfo.folderId || null) !== targetFolder);
+
+    if (isRelocating) {
+      moveRequest(
+        savedInfo.collection.id,
+        request.id,
+        targetCollectionId,
+        targetFolder
+      );
+    }
+
     saveRequestToCollection(
       targetCollectionId,
-      selectedFolderId ? selectedFolderId : null,
+      targetFolder,
       {
         ...request,
         name: finalName,

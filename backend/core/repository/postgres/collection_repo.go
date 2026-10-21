@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/adiputera/airrest-backend/core/domain"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -345,6 +347,38 @@ func (r *CollectionRepository) BatchReorderItems(ctx context.Context, collection
 		return nil
 	}
 
+	// Sort items deterministically by ID to ensure uniform row-lock acquisition order
+	sortedItems := make([]domain.ReorderItemPosition, len(items))
+	copy(sortedItems, items)
+	sort.Slice(sortedItems, func(i, j int) bool {
+		return sortedItems[i].ID.String() < sortedItems[j].ID.String()
+	})
+
+	const maxRetries = 3
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		err := r.execBatchReorder(ctx, collectionID, sortedItems, modifiedBy)
+		if err == nil {
+			return nil
+		}
+
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && (pgErr.Code == "40P01" || pgErr.Code == "40001") {
+			if attempt < maxRetries-1 {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(time.Duration(50*(attempt+1)) * time.Millisecond):
+					continue
+				}
+			}
+		}
+		return err
+	}
+
+	return nil
+}
+
+func (r *CollectionRepository) execBatchReorder(ctx context.Context, collectionID uuid.UUID, items []domain.ReorderItemPosition, modifiedBy uuid.UUID) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
@@ -352,6 +386,20 @@ func (r *CollectionRepository) BatchReorderItems(ctx context.Context, collection
 	defer tx.Rollback(ctx)
 
 	now := time.Now().UTC()
+
+	// 1. Touch parent collection version and updated_at FIRST.
+	// This acquires an exclusive row lock on collections(id) upfront, establishing a consistent
+	// lock order (collections -> collection_items) that prevents deadlocks with concurrent syncs or reorders.
+	colQuery := `
+		UPDATE collections
+		SET updated_at = $1, last_modified_by = $2, version = version + 1
+		WHERE id = $3 AND deleted_at IS NULL
+	`
+	if _, err := tx.Exec(ctx, colQuery, now, modifiedBy, collectionID); err != nil {
+		return fmt.Errorf("failed to touch collection version: %w", err)
+	}
+
+	// 2. Update items in deterministic sorted order
 	query := `
 		UPDATE collection_items
 		SET parent_id = $1, sort_order = $2, updated_at = $3, last_modified_by = $4, version = version + 1
@@ -362,16 +410,6 @@ func (r *CollectionRepository) BatchReorderItems(ctx context.Context, collection
 		if err != nil {
 			return fmt.Errorf("failed to update item %s position: %w", item.ID, err)
 		}
-	}
-
-	// Touch parent collection version and updated_at for delta sync
-	colQuery := `
-		UPDATE collections
-		SET updated_at = $1, last_modified_by = $2, version = version + 1
-		WHERE id = $3 AND deleted_at IS NULL
-	`
-	if _, err := tx.Exec(ctx, colQuery, now, modifiedBy, collectionID); err != nil {
-		return fmt.Errorf("failed to touch collection version: %w", err)
 	}
 
 	return tx.Commit(ctx)

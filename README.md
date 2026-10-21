@@ -3,6 +3,7 @@
 > A fast, lightweight, and modern browser-based REST API testing studio packaged as a **Google Chrome Extension (Manifest V3)** and standalone web client with optional cloud team synchronization. Built with **React 19**, **Vite**, **Tailwind CSS v4**, **Zustand**, and a **Go + PostgreSQL** backend.
 
 [![GitHub Repository](https://img.shields.io/badge/GitHub-adiputera%2FAirREST-181717?logo=github)](https://github.com/adiputera/AirREST)
+[![Version](https://img.shields.io/badge/Version-1.1.0-blue.svg)](CHANGELOG.md)
 [![Manifest V3](https://img.shields.io/badge/Chrome%20Extension-Manifest%20V3-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=white)](https://vitejs.dev/)
@@ -56,6 +57,17 @@ AirREST is an API testing client that runs directly inside Google Chrome as a Ma
   - Between different **Offline Workspaces**.
   - Between an **Offline Workspace** and a **Cloud Project** (Personal or Team).
   - Across different **Cloud Projects** or **Teams**.
+- **Request Relocation (Move Request)**: Move any individual request between nested folders or across different collections:
+  - Move between nested subfolders within the same collection.
+  - Move from one collection to another collection's root or any nested subfolder.
+  - Interactive **Move Request Modal** with current location badges and hierarchical folder selector paths.
+  - Smart re-saving in **Save to Collection Modal** automatically moves already-saved requests to the new destination instead of duplicating them.
+- **Drag-and-Drop Tree Reordering**: Organize requests and nested folders seamlessly within any collection:
+  - Drag items up or down to reorder siblings with dynamic blue drop line indicators (`before` / `after`).
+  - Drop requests or folders directly into a target folder with folder highlighting (`inside`).
+  - **Cross-Collection Safety Guard**: Hovering over a different collection displays a `not-allowed` pointer and disables dropping to prevent unintended cross-collection movements (use Move Request modal instead).
+  - **Circular Dependency Guard**: Dropping a folder into itself or any of its nested children is strictly blocked with a `not-allowed` pointer.
+  - Automatic synchronization: Updates positions in local storage and dispatches batch reordering (`PUT /api/v1/collections/{id}/reorder`) in Cloud mode.
 - **Auto-Sync on Import**: Importing collections in Cloud mode automatically syncs all endpoints and folders directly to the backend.
 - **Search & Filter**: Real-time filtering across collections, folders, and individual endpoints.
 - **Confirmation Modals**: Dialog prompts require explicit confirmation before deleting collections.
@@ -235,7 +247,7 @@ pm.environment.set("lastRequestTimestamp", now);
   - Each offline workspace maintains its own isolated tabs, collections, environments, and history.
 - **Scope Switcher**: Seamlessly switch between Offline Workspaces and Cloud Workspaces (Personal & Team Projects) with RBAC role badges (`Admin`, `Maintainer`, `Contributor`, `Reader`).
 - **Scoped Data Isolation**: Separate tabs, history, and active environments per workspace scope.
-- **Smart Client Caching**: 1-hour cache enables instant project switching without redundant network fetches.
+- **Smart Client Caching**: 12-hour cache enables instant project switching without redundant network fetches.
 - **Manual Sync**: Dedicated sync button to trigger immediate synchronization with the cloud backend.
 - **Rolling Refresh Tokens**: 30-day token rotation with background refresh keeps active sessions connected.
 - **Optimistic Concurrency Control (OCC)**: Version-checked updates handle concurrent modifications cleanly.
@@ -419,6 +431,12 @@ The server listens at `http://localhost:8080`, automatically applies database mi
     ├── vercel.json               # Vercel serverless rewrite configuration
     └── README.md                 # Backend documentation & API reference
 ```
+
+---
+
+## 📝 Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for detailed release notes and version history.
 
 ---
 

@@ -318,6 +318,34 @@ export async function moveScopeCollection(
   return unwrapData<any>(json);
 }
 
+export interface ReorderItemPayload {
+  id: string;
+  parent_id: string | null;
+  sort_order: number;
+}
+
+export async function reorderCollectionItems(
+  apiUrl: string,
+  token: string,
+  collectionId: string,
+  items: ReorderItemPayload[],
+  refreshToken?: string
+) {
+  const res = await fetchWithAuth(`/api/v1/collections/${collectionId}/reorder`, {
+    method: 'PUT',
+    apiUrl,
+    token,
+    refreshToken,
+    body: JSON.stringify({ items }),
+  });
+
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(extractError(json, 'Failed to reorder collection items'));
+  }
+  return unwrapData<any>(json);
+}
+
 function formatImportItem(item: any): any {
   return {
     id: item.id,
