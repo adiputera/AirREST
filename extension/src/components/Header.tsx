@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Plus, Upload, Download, Terminal, Globe, Settings2 } from 'lucide-react';
+import { Plus, Upload, Download, Globe, Settings2 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
 import { ImportModal } from './ImportModal';
 import { EnvironmentModal } from './EnvironmentModal';
@@ -53,19 +53,12 @@ export const Header: React.FC = () => {
       <header className="relative z-30 flex h-14 w-full items-center justify-between border-b border-zinc-800 bg-zinc-950/80 px-4 backdrop-blur-md">
         {/* Brand & Team/Project Scope Switcher */}
         <div className="flex items-center gap-3">
-          <div
-            className={`flex h-8 w-8 items-center justify-center rounded-lg shadow-md shrink-0 text-white ${
-              isOfflineOnly
-                ? 'bg-gradient-to-tr from-emerald-600 to-teal-500 shadow-emerald-500/20'
-                : 'bg-gradient-to-tr from-sky-600 to-indigo-600 shadow-sky-500/20'
-            }`}
-          >
-            <Terminal className="h-4 w-4" />
-          </div>
           <div className="flex items-center gap-2 mr-1">
-            <h1 className="text-sm font-bold tracking-tight text-zinc-100">
-              AirREST
-            </h1>
+            <img
+              src={isOfflineOnly && import.meta.env.DEV ? '/icons-offline/logo.png' : '/icons/logo.png'}
+              alt="AirREST"
+              className="h-8 w-auto rounded-lg object-contain shadow-sm"
+            />
             <span
               className={`hidden sm:inline-block rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
                 isOfflineOnly
