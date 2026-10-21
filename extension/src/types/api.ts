@@ -60,6 +60,8 @@ export interface ApiRequest {
   updatedAt: number;
 }
 
+export type NetworkErrorCategory = 'ssl' | 'connection_refused' | 'dns' | 'timeout' | 'other';
+
 export interface ApiResponse {
   status: number;
   statusText: string;
@@ -76,6 +78,9 @@ export interface ApiResponse {
   isBinary?: boolean;
   isImage?: boolean;
   blobUrl?: string;
+  requestUrl?: string;
+  netErrorCode?: string;
+  netErrorCategory?: NetworkErrorCategory;
 }
 
 export interface CollectionItem {

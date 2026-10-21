@@ -5,7 +5,8 @@
   "description": "Fast browser-based API client with Postman collection compatibility and zero CORS restrictions.",
   "permissions": [
     "storage",
-    "unlimitedStorage"
+    "unlimitedStorage",
+    "webRequest"
   ],
   "host_permissions": [
     "<all_urls>"

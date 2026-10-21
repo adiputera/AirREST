@@ -1,4 +1,4 @@
-import { ApiRequest, ApiResponse } from '@/types/api';
+import { ApiRequest, ApiResponse, NetworkErrorCategory } from '@/types/api';
 
 /**
  * Replaces {{variable}} placeholders with values from variables map
@@ -295,6 +295,71 @@ export function detectMediaType(
  * Dispatches an API request with full variable interpolation,
  * file upload support, and zero CORS limitations.
  */
+const localRecentErrors = new Map<string, { error: string; timestamp: number }>();
+
+if (typeof chrome !== 'undefined' && chrome.webRequest?.onErrorOccurred) {
+  try {
+    chrome.webRequest.onErrorOccurred.addListener(
+      (details) => {
+        localRecentErrors.set(details.url, { error: details.error, timestamp: Date.now() });
+      },
+      { urls: ['<all_urls>'] }
+    );
+  } catch {
+    // webRequest listener may fail if unsupported in this window context
+  }
+}
+
+export function categorizeNetworkError(code?: string | null): NetworkErrorCategory {
+  if (!code) return 'other';
+  const c = code.toUpperCase();
+  if (c.includes('CERT') || c.includes('AUTHORITY') || c.includes('SSL')) return 'ssl';
+  if (c.includes('CONNECTION_REFUSED')) return 'connection_refused';
+  if (c.includes('NAME_NOT_RESOLVED') || c.includes('DNS')) return 'dns';
+  if (c.includes('TIMED_OUT') || c.includes('TIMEOUT')) return 'timeout';
+  return 'other';
+}
+
+async function getChromiumNetworkError(url: string): Promise<string | null> {
+  const findInMap = (targetUrl: string): string | null => {
+    const exact = localRecentErrors.get(targetUrl);
+    if (exact && Date.now() - exact.timestamp < 10000) return exact.error;
+
+    const alt = targetUrl.endsWith('/') ? targetUrl.slice(0, -1) : targetUrl + '/';
+    const altMatch = localRecentErrors.get(alt);
+    if (altMatch && Date.now() - altMatch.timestamp < 10000) return altMatch.error;
+
+    for (const [key, val] of localRecentErrors.entries()) {
+      if (Date.now() - val.timestamp < 4000 && (key === targetUrl || key.startsWith(targetUrl) || targetUrl.startsWith(key))) {
+        return val.error;
+      }
+    }
+    return null;
+  };
+
+  const local = findInMap(url);
+  if (local) return local;
+
+  if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+    try {
+      const res = await new Promise<{ error: string | null }>((resolve) => {
+        chrome.runtime.sendMessage({ type: 'GET_RECENT_NETWORK_ERROR', url }, (response) => {
+          if (chrome.runtime.lastError || !response) {
+            resolve({ error: null });
+          } else {
+            resolve(response);
+          }
+        });
+      });
+      if (res?.error) return res.error;
+    } catch {
+      // ignore
+    }
+  }
+
+  return null;
+}
+
 export async function executeApiRequest(
   request: ApiRequest,
   variables: Record<string, string> = {}
@@ -360,20 +425,36 @@ export async function executeApiRequest(
       isBinary,
       isImage,
       blobUrl,
+      requestUrl: finalUrl,
     };
   } catch (err: unknown) {
     const timeMs = Math.round(performance.now() - startTime);
     const errorMsg = err instanceof Error ? err.message : String(err);
 
+    // Wait briefly for Chrome webRequest.onErrorOccurred to record exact net error
+    let netErrorCode = await getChromiumNetworkError(finalUrl);
+    if (!netErrorCode) {
+      await new Promise((r) => setTimeout(r, 60));
+      netErrorCode = await getChromiumNetworkError(finalUrl);
+    }
+
+    const netErrorCategory = categorizeNetworkError(netErrorCode);
+    const statusText = netErrorCode
+      ? `Network Error (${netErrorCode.replace(/^net::/, '')})`
+      : 'Network / Connection Error';
+
     return {
       status: 0,
-      statusText: 'Network / Connection Error',
+      statusText,
       timeMs,
       sizeBytes: 0,
       headers: {},
-      data: `Failed to connect to ${finalUrl}.\n\nPossible causes:\n1. Server is offline or unreachable on your current network/VPN.\n2. URL is invalid or DNS resolution failed.\n3. Exact error: ${errorMsg}`,
+      data: `Failed to connect to ${finalUrl}\nError: ${netErrorCode || errorMsg}`,
       isError: true,
-      errorDetail: errorMsg,
+      errorDetail: netErrorCode ? `${netErrorCode} (${errorMsg})` : errorMsg,
+      requestUrl: finalUrl,
+      netErrorCode: netErrorCode || undefined,
+      netErrorCategory,
       timestamp: Date.now(),
     };
   }

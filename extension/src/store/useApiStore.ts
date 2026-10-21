@@ -1967,6 +1967,7 @@ export const useApiStore = create<ApiStoreState>()(
             data: `Failed to initiate request: ${errorMsg}`,
             isError: true,
             errorDetail: errorMsg,
+            requestUrl: activeReq.url,
             timestamp: Date.now(),
           };
 

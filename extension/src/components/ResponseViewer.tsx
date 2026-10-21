@@ -16,6 +16,11 @@ import {
   CheckCircle2,
   Image as ImageIcon,
   FileDown,
+  ShieldAlert,
+  RotateCw,
+  ServerOff,
+  Globe,
+  WifiOff,
 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
 
@@ -51,11 +56,31 @@ function getFileNameFromHeaders(headers: Record<string, string> = {}, defaultExt
   return `response-${Date.now()}${defaultExt}`;
 }
 
+function parseUrlDetails(urlStr: string): { host: string; port: string; protocol: string } {
+  try {
+    const u = new URL(urlStr);
+    return {
+      host: u.hostname,
+      port: u.port || (u.protocol === 'https:' ? '443' : '80'),
+      protocol: u.protocol.replace(':', ''),
+    };
+  } catch {
+    return { host: urlStr, port: '', protocol: '' };
+  }
+}
+
 export const ResponseViewer: React.FC = () => {
   const activeResponse = useApiStore((state) => state.activeResponse);
   const isLoading = useApiStore((state) => state.isLoading);
   const updateActiveRequest = useApiStore((state) => state.updateActiveRequest);
   const sendRequest = useApiStore((state) => state.sendRequest);
+  const activeTabRequest = useApiStore((state) => state.tabs.find((t) => t.id === state.activeTabId));
+
+  const targetUrl = activeResponse?.requestUrl || activeTabRequest?.url || '';
+  const isHttps = targetUrl.toLowerCase().startsWith('https://');
+  const { host: targetHost, port: targetPort } = parseUrlDetails(targetUrl);
+  const netCategory = activeResponse?.netErrorCategory;
+  const netCode = activeResponse?.netErrorCode;
 
   const [activeTab, setActiveTab] = useState<'body' | 'headers'>('body');
   const [viewMode, setViewMode] = useState<'pretty' | 'raw'>('pretty');
@@ -409,18 +434,221 @@ export const ResponseViewer: React.FC = () => {
         ) : activeTab === 'body' ? (
           <div>
             {activeResponse.isError && activeResponse.status === 0 && (
-              <div className="mb-4 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-xs text-rose-300">
-                <div className="flex items-center gap-2 font-semibold">
-                  <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400" />
-                  <span>Localhost / CORS Connection Failure</span>
-                </div>
-                <p className="mt-2 text-rose-200/90 leading-relaxed font-sans">
-                  The request could not reach the server or was blocked by browser CORS policy.
-                </p>
-                <ul className="mt-2 list-disc list-inside space-y-1 text-rose-300/80 font-mono text-[11px]">
-                  <li>Ensure your local server is actively running on this port.</li>
-                  <li>Ensure your server sets header: <code className="text-white">Access-Control-Allow-Origin: *</code></li>
-                </ul>
+              <div className="mb-4">
+                {netCategory === 'ssl' || (netCode && (netCode.includes('CERT') || netCode.includes('AUTHORITY'))) ? (
+                  /* 1. Verified SSL Certificate Error */
+                  <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs text-amber-200 shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-500/20 pb-3">
+                      <div className="flex items-center gap-2 font-semibold text-amber-300">
+                        <ShieldAlert className="h-4 w-4 shrink-0 text-amber-400" />
+                        <span>Untrusted SSL / Self-Signed Certificate Detected</span>
+                        {netCode && (
+                          <span className="rounded bg-amber-500/20 border border-amber-500/30 px-1.5 py-0.5 font-mono text-[10px] text-amber-300">
+                            {netCode}
+                          </span>
+                        )}
+                      </div>
+                      {targetUrl && (
+                        <div className="flex items-center gap-2">
+                          <a
+                            href={targetUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/20 px-2.5 py-1 text-[11px] font-semibold text-amber-100 hover:bg-amber-500/30 hover:text-white transition shadow-sm"
+                            title="Open URL in new browser tab"
+                          >
+                            <span>Open URL in New Tab</span>
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                          <button
+                            type="button"
+                            onClick={() => sendRequest()}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-750 bg-zinc-900/80 px-2.5 py-1 text-[11px] font-medium text-zinc-200 hover:bg-zinc-800 hover:text-white transition"
+                            title="Retry sending this request"
+                          >
+                            <RotateCw className="h-3 w-3 text-sky-400" />
+                            <span>Retry Request</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-3 space-y-2.5">
+                      <p className="text-amber-200/90 leading-relaxed font-sans">
+                        Chrome blocked this HTTPS request because the server certificate is self-signed, invalid, or expired.
+                      </p>
+                      <div className="rounded-lg bg-black/25 p-3 border border-amber-500/20">
+                        <div className="font-semibold text-amber-300 mb-1.5">To allow this endpoint:</div>
+                        <ol className="list-decimal list-inside space-y-1.5 text-amber-100/90 font-sans text-[11px] leading-relaxed">
+                          <li>
+                            Click <strong className="text-amber-300">Open URL in New Tab</strong> above to open the endpoint in a new Chrome tab.
+                          </li>
+                          <li>
+                            On Chrome's security warning page, click <strong className="text-white underline underline-offset-2">Advanced</strong> (or <em>Lanjutan</em>) and select <strong className="text-white underline underline-offset-2">Proceed to ... (unsafe)</strong>.
+                          </li>
+                          <li>
+                            Once authorized in that tab, return here and click <strong className="text-sky-300">Retry Request</strong> (or <strong>Send</strong>).
+                          </li>
+                        </ol>
+                      </div>
+                      <div className="text-[11px] text-amber-200/70 font-sans flex flex-wrap items-center gap-1.5 pt-1">
+                        <span>Target endpoint:</span>
+                        <code className="text-white bg-black/30 px-1.5 py-0.5 rounded font-mono break-all">{targetUrl}</code>
+                      </div>
+                    </div>
+                  </div>
+                ) : netCategory === 'connection_refused' ? (
+                  /* 2. Connection Refused / Server Offline (HTTP or HTTPS) */
+                  <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-xs text-rose-300 shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rose-500/20 pb-3">
+                      <div className="flex items-center gap-2 font-semibold text-rose-300">
+                        <ServerOff className="h-4 w-4 shrink-0 text-rose-400" />
+                        <span>Server Offline / Connection Refused</span>
+                        <span className="rounded bg-rose-500/20 border border-rose-500/30 px-1.5 py-0.5 font-mono text-[10px] text-rose-300">
+                          {netCode || 'net::ERR_CONNECTION_REFUSED'}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => sendRequest()}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-750 bg-zinc-900/80 px-2.5 py-1 text-[11px] font-medium text-zinc-200 hover:bg-zinc-800 hover:text-white transition"
+                        title="Retry sending this request"
+                      >
+                        <RotateCw className="h-3 w-3 text-sky-400" />
+                        <span>Retry Request</span>
+                      </button>
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      <p className="text-rose-200/90 leading-relaxed font-sans">
+                        No active server is listening on port <span className="font-mono text-white font-semibold">{targetPort || 'specified'}</span> at <span className="font-mono text-white font-semibold">{targetHost}</span>.
+                      </p>
+                      <ul className="mt-2 list-disc list-inside space-y-1 text-rose-300/80 font-mono text-[11px]">
+                        <li>Make sure your backend server process has been started (e.g. <span className="text-white">npm run dev</span>, <span className="text-white">go run</span>, Docker).</li>
+                        <li>Verify that port <span className="text-white font-semibold">{targetPort}</span> matches your server's listening port.</li>
+                      </ul>
+                      <div className="text-[11px] text-rose-300/70 font-sans flex flex-wrap items-center gap-1.5 pt-1">
+                        <span>Target:</span>
+                        <code className="text-white bg-black/30 px-1.5 py-0.5 rounded font-mono break-all">{targetUrl}</code>
+                      </div>
+                    </div>
+                  </div>
+                ) : netCategory === 'dns' ? (
+                  /* 3. DNS / Hostname Not Found */
+                  <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-xs text-rose-300 shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rose-500/20 pb-3">
+                      <div className="flex items-center gap-2 font-semibold text-rose-300">
+                        <Globe className="h-4 w-4 shrink-0 text-rose-400" />
+                        <span>Hostname Not Found / DNS Error</span>
+                        <span className="rounded bg-rose-500/20 border border-rose-500/30 px-1.5 py-0.5 font-mono text-[10px] text-rose-300">
+                          {netCode || 'net::ERR_NAME_NOT_RESOLVED'}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => sendRequest()}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-750 bg-zinc-900/80 px-2.5 py-1 text-[11px] font-medium text-zinc-200 hover:bg-zinc-800 hover:text-white transition"
+                        title="Retry sending this request"
+                      >
+                        <RotateCw className="h-3 w-3 text-sky-400" />
+                        <span>Retry Request</span>
+                      </button>
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      <p className="text-rose-200/90 leading-relaxed font-sans">
+                        The host <span className="font-mono text-white font-semibold">{targetHost}</span> could not be resolved by your DNS server.
+                      </p>
+                      <ul className="mt-2 list-disc list-inside space-y-1 text-rose-300/80 font-mono text-[11px]">
+                        <li>Check for typos in the hostname or domain name.</li>
+                        <li>Verify if you need to connect to an internal VPN or configure your local <code className="text-white">/etc/hosts</code> file.</li>
+                      </ul>
+                      <div className="text-[11px] text-rose-300/70 font-sans flex flex-wrap items-center gap-1.5 pt-1">
+                        <span>Target:</span>
+                        <code className="text-white bg-black/30 px-1.5 py-0.5 rounded font-mono break-all">{targetUrl}</code>
+                      </div>
+                    </div>
+                  </div>
+                ) : netCategory === 'timeout' ? (
+                  /* 4. Connection Timed Out */
+                  <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs text-amber-200 shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-500/20 pb-3">
+                      <div className="flex items-center gap-2 font-semibold text-amber-300">
+                        <Clock className="h-4 w-4 shrink-0 text-amber-400" />
+                        <span>Connection Timed Out</span>
+                        <span className="rounded bg-amber-500/20 border border-amber-500/30 px-1.5 py-0.5 font-mono text-[10px] text-amber-300">
+                          {netCode || 'net::ERR_TIMED_OUT'}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => sendRequest()}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-750 bg-zinc-900/80 px-2.5 py-1 text-[11px] font-medium text-zinc-200 hover:bg-zinc-800 hover:text-white transition"
+                        title="Retry sending this request"
+                      >
+                        <RotateCw className="h-3 w-3 text-sky-400" />
+                        <span>Retry Request</span>
+                      </button>
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      <p className="text-amber-200/90 leading-relaxed font-sans">
+                        The server at <span className="font-mono text-white font-semibold">{targetHost}</span> took too long to respond.
+                      </p>
+                      <ul className="mt-2 list-disc list-inside space-y-1 text-amber-200/80 font-mono text-[11px]">
+                        <li>Verify if the server process is hanging, overloaded, or blocked by a network firewall.</li>
+                      </ul>
+                    </div>
+                  </div>
+                ) : (
+                  /* 5. General Fallback Card */
+                  <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-xs text-rose-300 shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rose-500/20 pb-3">
+                      <div className="flex items-center gap-2 font-semibold text-rose-300">
+                        <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400" />
+                        <span>Connection / Network Failure</span>
+                        {netCode && (
+                          <span className="rounded bg-rose-500/20 border border-rose-500/30 px-1.5 py-0.5 font-mono text-[10px] text-rose-300">
+                            {netCode}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {isHttps && targetUrl && (
+                          <a
+                            href={targetUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/20 px-2.5 py-1 text-[11px] font-semibold text-rose-100 hover:bg-rose-500/30 hover:text-white transition shadow-sm"
+                            title="Open URL in new browser tab to check SSL or certificate"
+                          >
+                            <span>Open in Tab</span>
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => sendRequest()}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-750 bg-zinc-900/80 px-2.5 py-1 text-[11px] font-medium text-zinc-200 hover:bg-zinc-800 hover:text-white transition"
+                          title="Retry sending this request"
+                        >
+                          <RotateCw className="h-3 w-3 text-sky-400" />
+                          <span>Retry Request</span>
+                        </button>
+                      </div>
+                    </div>
+                    <p className="mt-2 text-rose-200/90 leading-relaxed font-sans">
+                      The request could not reach the server or was terminated by browser network security policy.
+                    </p>
+                    <ul className="mt-2 list-disc list-inside space-y-1 text-rose-300/80 font-mono text-[11px]">
+                      <li>Ensure your server is actively running on port <span className="text-white font-mono">{targetPort}</span>.</li>
+                      {isHttps && (
+                        <li>If testing local HTTPS: the certificate might be self-signed (click <span className="text-white">Open in Tab</span> to verify).</li>
+                      )}
+                      {targetUrl && (
+                        <li className="break-all font-sans">
+                          Target endpoint: <span className="font-mono text-white">{targetUrl}</span>
+                        </li>
+                      )}
+                    </ul>
+                  </div>
+                )}
               </div>
             )}
 

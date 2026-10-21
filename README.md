@@ -233,6 +233,7 @@ pm.environment.set("lastRequestTimestamp", now);
   - **Image Preview**: Renders images (`webp`, `png`, `jpeg`, `gif`, `svg`, `avif`) with dimensions, transparency background, and full-screen view.
   - **Binary File Card**: Displays details for non-image binary downloads with a 1-click native file download button.
   - **Headers Table**: Structured view of response headers.
+- **Intelligent Connection & SSL Diagnostics**: Automatically diagnoses network failures (`status === 0`). For HTTPS endpoints with untrusted or self-signed certificates, renders a dedicated helper card with a 1-click **Open URL in New Tab** shortcut, step-by-step guidance (*Advanced -> Proceed to unsafe*), and an instant **Retry Request** button.
 - **Export Options**: 1-click response body copy and file download with automatic extension resolution.
 
 ### 9. 🕒 History & Persistent Storage
