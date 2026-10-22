@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/adiputera/airrest-backend/core/domain"
+	"github.com/adiputera/airrest-backend/core/middleware"
 	"github.com/adiputera/airrest-backend/core/repository/postgres"
 	"github.com/adiputera/airrest-backend/core/service"
 	"github.com/adiputera/airrest-backend/pkg/response"
@@ -103,3 +104,39 @@ func (h *AdminHandler) ResetUserPassword(w http.ResponseWriter, r *http.Request)
 
 	response.JSON(w, http.StatusOK, map[string]string{"message": "user password reset successfully"})
 }
+
+// DeleteUser allows superadmin to permanently remove a user account
+func (h *AdminHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
+	adminID, ok := middleware.GetUserIDFromContext(r.Context())
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "unauthenticated", "UNAUTHORIZED")
+		return
+	}
+
+	userIdStr := chi.URLParam(r, "userId")
+	targetUserID, err := uuid.Parse(userIdStr)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "invalid user id", "BAD_REQUEST")
+		return
+	}
+
+	if err := h.authService.DeleteUserByAdmin(r.Context(), adminID, targetUserID); err != nil {
+		if errors.Is(err, service.ErrCannotDeleteSelf) {
+			response.Error(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST")
+			return
+		}
+		if errors.Is(err, service.ErrCannotDeleteLastAdmin) {
+			response.Error(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST")
+			return
+		}
+		if errors.Is(err, postgres.ErrUserNotFound) {
+			response.Error(w, http.StatusNotFound, "user not found", "NOT_FOUND")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, "failed to delete user: "+err.Error(), "SERVER_ERROR")
+		return
+	}
+
+	response.JSON(w, http.StatusOK, map[string]string{"message": "user deleted successfully"})
+}
+

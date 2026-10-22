@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "AirREST Backend API Contract",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "description": "# AirREST Cloud Backend API Specification & Contract\n\nThis document defines the formal API Contract for the AirREST backend synchronization and collaboration service.\nAny backend implementation (written in Go, Node.js/TypeScript, Python, Java, Rust, C#, PHP, etc.) that complies\nwith this specification will work as an immediate drop-in replacement for:\n- **AirREST Chrome Extension** (DevTools / Popup REST client)\n- **AirREST Hub** (Web-based workspace and team collaboration dashboard)\n\n---\n\n## Key Architectural Principles\n\n### 1. Standard Response Envelope\nAll HTTP endpoints return responses wrapped in a consistent Envelope structure:\n```json\n{\n  \"success\": true,\n  \"data\": { ... }\n}\n```\nOn errors:\n```json\n{\n  \"success\": false,\n  \"error\": \"Human-readable error description\",\n  \"code\": \"ERROR_CODE_STRING\"\n}\n```\n\n### 2. Authentication & Silent Rolling Refresh\n- Authenticated endpoints require `Authorization: Bearer <access_token>`.\n- Access tokens are JWTs (HS256) valid for 72 hours.\n- Refresh tokens are rolling 30-day tokens.\n- When the client receives HTTP `401 Unauthorized`, it transparently calls `POST /api/v1/auth/refresh`\n  with `{ \"refresh_token\": \"...\" }` and retries the original request upon renewal.\n\n### 3. Optimistic Concurrency Control (OCC)\n- Mutable entities (`collections`, `collection_items`, `environments`) include a numeric `version` (int64).\n- When updating, clients send `base_version`.\n- If `base_version != current_server_version`, the server aborts the write and returns HTTP `409 Conflict`:\n  ```json\n  {\n    \"success\": false,\n    \"error\": \"conflict: item has been modified by another user\",\n    \"code\": \"CONFLICT\",\n    \"data\": { ...latest_server_object... }\n  }\n  ```\n\n### 4. Soft-Deletes & Tombstone Deltas\n- Deletions are soft-deletes setting `deleted_at = NOW()`.\n- `GET /api/v1/sync/pull?since=<timestamp>` returns active items AND deleted items (`deleted_at != null`)\n  so that distributed clients purge deleted entities locally and never re-upload them as zombies.\n\n### 5. Hierarchical RBAC & Project Isolation\n- **System Roles**: `superadmin`, `user`\n- **Team Roles**: `admin`, `member`\n- **Project Roles**: `admin`, `maintainer`, `contributor`, `reader`\n- **Project Isolation**: Non-superadmin users can only view or query projects to which they are explicitly assigned.\n- **Granular Permissions**: Collections and Environments support `min_role` (`admin`, `maintainer`, `contributor`, `reader`).\n  Users with a project role below `min_role` are prohibited from reading or writing that resource.\n\n### 6. CORS Requirements\nThe backend MUST support CORS with:\n- Allowed Origins: `*` or user-configured hosts, including `chrome-extension://*`\n- Allowed Methods: `GET, POST, PUT, PATCH, DELETE, OPTIONS`\n- Allowed Headers: `Accept, Authorization, Content-Type, X-CSRF-Token`\n- Exposed Headers: `Link`\n- Allow Credentials: `true`\n"
   },
   "servers": [
@@ -1283,6 +1283,15 @@
               "format": "uuid"
             },
             "description": "Filter by project ID"
+          },
+          {
+            "in": "query",
+            "name": "include_items",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "Whether to attach active collection items to each collection in the list. Defaults to false to prevent payload overflow on serverless platforms. Detailed items should be fetched 1-by-1 via GET /api/v1/collections/{id}."
           }
         ],
         "responses": {
@@ -2210,6 +2219,83 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/MessageEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/users/{userId}": {
+      "delete": {
+        "tags": [
+          "Admin Management"
+        ],
+        "summary": "Permanently delete a user account (Superadmin only)",
+        "description": "Permanently removes a user account, their private workspaces, and cascades memberships while safely reassigning created teams and projects to the executing superadmin.",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User deleted successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Cannot delete own account or last superadmin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated or deactivated session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden (Superadmin required).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { User } from '../types';
-import { DEFAULT_API_URL, registerHubTokenRefresh } from '../lib/api';
+import { DEFAULT_API_URL, registerHubTokenRefresh, registerHubAuthEvicted } from '../lib/api';
 
 export type HubTab = 'teams' | 'projects' | 'superadmin';
 
@@ -83,4 +83,9 @@ export const useHubStore = create<HubStoreState>()(
 // Register silent token refresh callback to persist renewed tokens
 registerHubTokenRefresh((newTokens) => {
   useHubStore.getState().updateTokens(newTokens.token, newTokens.refreshToken, newTokens.expiresAt);
+});
+
+// Register auth eviction callback to automatically log out if account is deleted/deactivated
+registerHubAuthEvicted(() => {
+  useHubStore.getState().logout();
 });

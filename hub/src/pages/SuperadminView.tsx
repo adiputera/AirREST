@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldAlert, Plus, Search, Loader2, UserCheck, X, Eye, EyeOff, KeyRound, AlertCircle } from 'lucide-react';
+import { ShieldAlert, Plus, Search, Loader2, UserCheck, X, Eye, EyeOff, KeyRound, AlertCircle, Trash2, AlertTriangle } from 'lucide-react';
 import { useHubStore } from '../store/useHubStore';
-import { apiListAllUsers, apiProvisionUser, apiResetUserPassword } from '../lib/api';
+import { apiListAllUsers, apiProvisionUser, apiResetUserPassword, apiDeleteUser } from '../lib/api';
 import { User } from '../types';
 
 export const SuperadminView: React.FC = () => {
   const apiUrl = useHubStore((state) => state.apiUrl);
   const token = useHubStore((state) => state.token);
   const refreshToken = useHubStore((state) => state.refreshToken);
+  const currentUser = useHubStore((state) => state.user);
 
   const [users, setUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -29,6 +30,11 @@ export const SuperadminView: React.FC = () => {
   const [showResetPassword, setShowResetPassword] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const [resetSuccessMsg, setResetSuccessMsg] = useState<string | null>(null);
+
+  // Delete User Modal
+  const [userToDelete, setUserToDelete] = useState<User | null>(null);
+  const [isDeletingUser, setIsDeletingUser] = useState(false);
+  const [deleteErrorMsg, setDeleteErrorMsg] = useState<string | null>(null);
 
   const loadUsers = async () => {
     if (!token) return;
@@ -99,6 +105,21 @@ export const SuperadminView: React.FC = () => {
       setErrorMsg(err.message || 'Failed to reset password');
     } finally {
       setIsResetting(false);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!token || !userToDelete) return;
+    setIsDeletingUser(true);
+    setDeleteErrorMsg(null);
+    try {
+      await apiDeleteUser(apiUrl, token, userToDelete.id, refreshToken || undefined);
+      setUserToDelete(null);
+      loadUsers();
+    } catch (err: any) {
+      setDeleteErrorMsg(err.message || 'Failed to delete user');
+    } finally {
+      setIsDeletingUser(false);
     }
   };
 
@@ -201,14 +222,39 @@ export const SuperadminView: React.FC = () => {
                     </td>
                     <td className="px-4 py-3 text-zinc-500 font-mono text-[11px]">{u.id}</td>
                     <td className="px-4 py-3 text-right">
-                      <button
-                        onClick={() => handleOpenResetPassword(u)}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 hover:text-white hover:border-amber-500/40 transition"
-                        title="Change / Reset Password"
-                      >
-                        <KeyRound className="h-3.5 w-3.5 text-amber-400" />
-                        <span>Change Password</span>
-                      </button>
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => handleOpenResetPassword(u)}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 hover:text-white hover:border-amber-500/40 transition"
+                          title="Change / Reset Password"
+                        >
+                          <KeyRound className="h-3.5 w-3.5 text-amber-400" />
+                          <span>Change Password</span>
+                        </button>
+
+                        {u.id === currentUser?.id ? (
+                          <button
+                            disabled
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800/40 bg-zinc-900/30 px-2.5 py-1 text-xs font-semibold text-zinc-600 cursor-not-allowed"
+                            title="You cannot delete your own account"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            <span>Delete</span>
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              setUserToDelete(u);
+                              setDeleteErrorMsg(null);
+                            }}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs font-semibold text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/40 hover:text-rose-300 transition"
+                            title="Permanently remove user"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            <span>Delete</span>
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -410,6 +456,82 @@ export const SuperadminView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Delete User Confirmation Modal */}
+      {userToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                  <AlertTriangle className="h-4 w-4" />
+                </div>
+                <span>Delete User Account</span>
+              </h3>
+              <button
+                onClick={() => setUserToDelete(null)}
+                disabled={isDeletingUser}
+                className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800 transition"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {deleteErrorMsg && (
+              <div className="mb-4 rounded-lg border border-rose-500/30 bg-rose-500/10 p-2.5 text-xs text-rose-300">
+                {deleteErrorMsg}
+              </div>
+            )}
+
+            <p className="text-xs text-zinc-300 leading-relaxed mb-4">
+              Are you sure you want to permanently delete user{' '}
+              <strong className="text-white font-semibold">{userToDelete.name}</strong> ({userToDelete.email})?
+            </p>
+
+            <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-3 text-[11px] text-zinc-400 space-y-1.5 mb-5">
+              <div className="font-semibold text-rose-300 flex items-center gap-1.5">
+                <AlertCircle className="h-3.5 w-3.5" />
+                <span>This action is permanent and irreversible:</span>
+              </div>
+              <ul className="list-disc pl-4 space-y-0.5 text-zinc-400">
+                <li>All private workspaces and collections owned by this user will be removed.</li>
+                <li>Active sessions in the AirREST Extension and Hub will be immediately revoked.</li>
+                <li>Shared teams and projects created by this user will be preserved and reassigned to you.</li>
+              </ul>
+            </div>
+
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={isDeletingUser}
+                onClick={() => setUserToDelete(null)}
+                className="rounded-lg px-3 py-1.5 text-xs font-semibold text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingUser}
+                onClick={handleConfirmDelete}
+                className="flex items-center gap-1.5 rounded-lg bg-rose-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-rose-500 transition shadow-md shadow-rose-600/20 disabled:opacity-50"
+              >
+                {isDeletingUser ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>Delete User</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+

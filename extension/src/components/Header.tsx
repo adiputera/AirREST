@@ -1,14 +1,13 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Plus, Upload, Download, Globe, Settings2 } from 'lucide-react';
+import { Upload, Globe, Settings2 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
 import { ImportModal } from './ImportModal';
 import { EnvironmentModal } from './EnvironmentModal';
 import { ModeSelectorModal } from './ModeSelectorModal';
 import { CloudAuthModal } from './CloudAuthModal';
 import { ScopeSwitcher } from './ScopeSwitcher';
-import { exportPostmanCollection } from '@/lib/postman';
 import { isOfflineOnly } from '@/lib/edition';
 
 export const Header: React.FC = () => {
@@ -17,8 +16,6 @@ export const Header: React.FC = () => {
   const [isModeSelectorOpen, setIsModeSelectorOpen] = useState(false);
   const [isCloudAuthOpen, setIsCloudAuthOpen] = useState(false);
 
-  const createTab = useApiStore((state) => state.createTab);
-  const collections = useApiStore((state) => state.collections);
   const environments = useApiStore((state) => state.environments);
   const activeEnvironmentId = useApiStore((state) => state.activeEnvironmentId);
   const setActiveEnvironmentId = useApiStore((state) => state.setActiveEnvironmentId);
@@ -30,23 +27,6 @@ export const Header: React.FC = () => {
       setIsModeSelectorOpen(true);
     }
   }, [isOfflineOnly, hasConfiguredMode]);
-
-  const handleExportAll = () => {
-    if (collections.length === 0) {
-      alert('No collections to export! Create or import a collection first.');
-      return;
-    }
-
-    const firstCollection = collections[0];
-    const postmanJson = exportPostmanCollection(firstCollection);
-    const blob = new Blob([postmanJson], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${firstCollection.name.toLowerCase().replace(/\s+/g, '-')}-postman-v2.1.json`;
-    link.click();
-    URL.revokeObjectURL(url);
-  };
 
   return (
     <>
@@ -108,31 +88,12 @@ export const Header: React.FC = () => {
           </div>
 
           <button
-            onClick={() => createTab()}
-            className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-800 hover:text-white transition"
-          >
-            <Plus className="h-3.5 w-3.5 text-sky-400" />
-            <span className="hidden sm:inline">New Request</span>
-          </button>
-
-          <button
             onClick={() => setIsImportOpen(true)}
             className="flex items-center gap-1.5 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-xs font-medium text-sky-300 hover:bg-sky-500/20 transition shadow-sm"
           >
             <Upload className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">Import</span>
           </button>
-
-          {collections.length > 0 && (
-            <button
-              onClick={handleExportAll}
-              className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-800 hover:text-white transition"
-              title="Export primary collection to Postman v2.1 JSON"
-            >
-              <Download className="h-3.5 w-3.5 text-zinc-400" />
-              <span className="hidden md:inline">Export</span>
-            </button>
-          )}
         </div>
       </header>
 

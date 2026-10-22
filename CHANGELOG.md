@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.1] - 2026-10-22
+
+### Added
+- **Superadmin User Deprovisioning & Deletion**:
+  - Added `DELETE /api/v1/admin/users/{userId}` backend endpoint with `RequireSuperadmin` authorization.
+  - Implemented safe atomic database transaction in PostgreSQL: reassigns created teams, projects, and collections to the executing superadmin, clears last modified metadata, and cascades removal of private workspaces and team/project memberships.
+  - Added guardrails preventing self-deletion and preventing deletion of the last superadmin on the platform.
+  - Added **Delete User** action button and interactive confirmation modal in AirREST Hub's Superadmin Console (`SuperadminView.tsx`).
+- **Resilient Client Auth Eviction & Auto-Recovery**:
+  - Implemented client-side auth eviction callbacks (`registerAuthEvictedCallback` in Extension, `registerHubAuthEvicted` in Hub).
+  - When an account is deleted or refresh token is rejected with HTTP 401/403, the client automatically evicts stale credentials, safely switches to the local offline workspace, and displays an informative notification.
+  - Network-resilience guard: Transient network disconnects, offline state, or 5xx server errors do NOT evict user sessions, allowing automatic sync retry once reconnected.
+
+### Changed
+- **UI Customization & Component Polish**:
+  - Refined dropdown menus, header actions, and trigger buttons across ScopeSwitcher, Workspace Switcher, and Sidebar navigation.
+  - Improved button padding, hover states, border accents, and active scope indicators for a cleaner, modern aesthetic.
+- **Serverless Cloud Sync Payload Optimization**:
+  - Transitioned cloud pull synchronization to lightweight collection metadata listing followed by 1-by-1 collection detail fetching (`fetchScopeCollections` + `fetchCollectionById`).
+  - Completely prevents Vercel serverless `FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE` (4.5 MB response payload limit) errors for workspaces with extensive request trees.
+
+---
+
 ## [1.1.0] - 2026-10-21
 
 ### Added

@@ -229,6 +229,7 @@ func New(ctx context.Context) (*App, error) {
 				r.Get("/users", adminHandler.ListUsers)
 				r.Post("/users", adminHandler.CreateUser)
 				r.Put("/users/{userId}/password", adminHandler.ResetUserPassword)
+				r.Delete("/users/{userId}", adminHandler.DeleteUser)
 			})
 		})
 	})

@@ -22,6 +22,8 @@ var (
 	ErrInvalidEmail             = errors.New("invalid email address")
 	ErrIncorrectCurrentPassword = errors.New("current password is incorrect")
 	ErrNameRequired             = errors.New("name is required")
+	ErrCannotDeleteSelf         = errors.New("cannot delete your own account")
+	ErrCannotDeleteLastAdmin    = errors.New("cannot delete the last superadmin account")
 )
 
 type AuthService struct {
@@ -309,5 +311,29 @@ func (s *AuthService) SearchUsers(ctx context.Context, query string) ([]*domain.
 		return []*domain.User{}, nil
 	}
 	return s.userRepo.SearchUsers(ctx, query, 20)
+}
+
+// DeleteUserByAdmin removes a user from the platform, reassigning their created entities to the superadmin
+func (s *AuthService) DeleteUserByAdmin(ctx context.Context, adminID, targetUserID uuid.UUID) error {
+	if adminID == targetUserID {
+		return ErrCannotDeleteSelf
+	}
+
+	targetUser, err := s.userRepo.GetByID(ctx, targetUserID)
+	if err != nil {
+		return err
+	}
+
+	if targetUser.IsSuperadmin() {
+		count, err := s.userRepo.CountSuperadmins(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to count superadmins: %w", err)
+		}
+		if count <= 1 {
+			return ErrCannotDeleteLastAdmin
+		}
+	}
+
+	return s.userRepo.Delete(ctx, targetUserID, adminID)
 }
 

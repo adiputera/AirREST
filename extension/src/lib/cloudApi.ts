@@ -12,12 +12,20 @@ export interface TokenRefreshCallback {
   (tokens: { token: string; refreshToken: string; expiresAt: string }): void;
 }
 
+export interface AuthEvictedCallback {
+  (reason: string): void;
+}
+
 let onTokenRefreshed: TokenRefreshCallback | null = null;
+let onAuthEvicted: AuthEvictedCallback | null = null;
 let isRefreshing = false;
-let refreshPromise: Promise<string | null> | null = null;
 
 export function registerTokenRefreshCallback(cb: TokenRefreshCallback | null) {
   onTokenRefreshed = cb;
+}
+
+export function registerAuthEvictedCallback(cb: AuthEvictedCallback | null) {
+  onAuthEvicted = cb;
 }
 
 export interface ApiFetchOptions extends RequestInit {
@@ -62,27 +70,42 @@ export async function fetchWithAuth(
   // If 401 Unauthorized, attempt background refresh if refreshToken is available
   if (response.status === 401 && refreshToken) {
     try {
-      const newToken = await handleSilentRefresh(apiUrl, refreshToken);
-      if (newToken) {
-        headers.set('Authorization', `Bearer ${newToken}`);
+      const result = await handleSilentRefresh(apiUrl, refreshToken);
+      if (result.token) {
+        headers.set('Authorization', `Bearer ${result.token}`);
         // Retry the original request
         response = await fetch(url, { ...fetchInit, headers });
+      } else if (result.evicted) {
+        if (onAuthEvicted) {
+          onAuthEvicted('Your account has been deactivated or removed from the server. Switched to Offline mode.');
+        }
       }
     } catch {
-      // If refresh fails, return original 401 response
+      // Network or transient error during refresh attempt - do not evict session
+    }
+  } else if (response.status === 401 && !refreshToken) {
+    if (onAuthEvicted) {
+      onAuthEvicted('Your account has been deactivated or removed from the server. Switched to Offline mode.');
     }
   }
 
   return response;
 }
 
-async function handleSilentRefresh(apiUrl: string, refreshTokenStr: string): Promise<string | null> {
+interface SilentRefreshResult {
+  token: string | null;
+  evicted: boolean;
+}
+
+let refreshPromise: Promise<SilentRefreshResult> | null = null;
+
+async function handleSilentRefresh(apiUrl: string, refreshTokenStr: string): Promise<SilentRefreshResult> {
   if (isRefreshing && refreshPromise) {
     return refreshPromise;
   }
 
   isRefreshing = true;
-  refreshPromise = (async () => {
+  refreshPromise = (async (): Promise<SilentRefreshResult> => {
     try {
       const res = await fetch(`${apiUrl.replace(/\/+$/, '')}/api/v1/auth/refresh`, {
         method: 'POST',
@@ -90,8 +113,12 @@ async function handleSilentRefresh(apiUrl: string, refreshTokenStr: string): Pro
         body: JSON.stringify({ refresh_token: refreshTokenStr }),
       });
 
+      if (res.status === 401 || res.status === 403) {
+        return { token: null, evicted: true };
+      }
+
       if (!res.ok) {
-        return null;
+        return { token: null, evicted: false };
       }
 
       const json = await res.json();
@@ -104,11 +131,11 @@ async function handleSilentRefresh(apiUrl: string, refreshTokenStr: string): Pro
             expiresAt: data.expires_at,
           });
         }
-        return data.token as string;
+        return { token: data.token as string, evicted: false };
       }
-      return null;
+      return { token: null, evicted: false };
     } catch {
-      return null;
+      return { token: null, evicted: false };
     } finally {
       isRefreshing = false;
       refreshPromise = null;
@@ -499,4 +526,88 @@ export async function deleteScopeItem(
     throw new Error(extractError(json, 'Failed to delete item'));
   }
   return unwrapData<any>(json);
+}
+
+/**
+ * Fetches lightweight collection list (id, name, description, min_role, version, etc.)
+ * without heavy items payload to prevent Vercel FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE.
+ */
+export async function fetchScopeCollections(
+  apiUrl: string,
+  token: string,
+  scope: ActiveScope,
+  refreshToken?: string
+): Promise<any[]> {
+  const query = new URLSearchParams();
+  if (scope.type === 'workspace') {
+    query.set('workspace_id', scope.id);
+  } else {
+    query.set('project_id', scope.id);
+  }
+
+  const res = await fetchWithAuth(`/api/v1/collections?${query.toString()}`, {
+    apiUrl,
+    token,
+    refreshToken,
+  });
+
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(extractError(json, 'Failed to fetch collections'));
+  }
+  const data = unwrapData<any>(json);
+  return (Array.isArray(data) ? data : []) as any[];
+}
+
+/**
+ * Fetches a single collection by ID including all its items.
+ * Allows pulling large project collections 1-by-1 without overflowing serverless limits.
+ */
+export async function fetchCollectionById(
+  apiUrl: string,
+  token: string,
+  collectionId: string,
+  refreshToken?: string
+): Promise<any> {
+  const res = await fetchWithAuth(`/api/v1/collections/${collectionId}`, {
+    apiUrl,
+    token,
+    refreshToken,
+  });
+
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(extractError(json, 'Failed to fetch collection'));
+  }
+  return unwrapData<any>(json);
+}
+
+/**
+ * Fetches environments belonging to a specific workspace or project scope.
+ */
+export async function fetchScopeEnvironments(
+  apiUrl: string,
+  token: string,
+  scope: ActiveScope,
+  refreshToken?: string
+): Promise<any[]> {
+  const query = new URLSearchParams();
+  if (scope.type === 'workspace') {
+    query.set('workspace_id', scope.id);
+  } else {
+    query.set('project_id', scope.id);
+  }
+
+  const res = await fetchWithAuth(`/api/v1/environments?${query.toString()}`, {
+    apiUrl,
+    token,
+    refreshToken,
+  });
+
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(extractError(json, 'Failed to fetch environments'));
+  }
+  const data = unwrapData<any>(json);
+  return (Array.isArray(data) ? data : []) as any[];
 }

@@ -164,8 +164,7 @@ go test -v ./...
 - `POST /api/v1/projects/{id}/members` — Assign user to project with role (`admin`, `contributor`, `reader`)
 - `DELETE /api/v1/projects/{id}/members/{userId}` — Unassign member from project
 
-### Collections & Items
-- `GET /api/v1/collections?workspace_id={id}&project_id={id}` — List collections (automatically filtered by the caller's project role)
+- `GET /api/v1/collections?workspace_id={id}&project_id={id}&include_items={bool}` — List collections (returns lightweight metadata by default; full collection items fetched 1-by-1 via `/api/v1/collections/{id}` to prevent serverless payload limits)
 - `POST /api/v1/collections` — Create collection (supports `min_role: 'admin' | 'maintainer' | 'contributor' | 'reader'`)
 - `GET /api/v1/collections/{id}` — Get collection and active items (enforces `min_role` RBAC)
 - `PUT /api/v1/collections/{id}` — Update collection (supports `base_version` OCC and `min_role`)
@@ -193,6 +192,7 @@ go test -v ./...
 - `GET /api/v1/admin/users` — List all registered users
 - `POST /api/v1/admin/users` — Provision new user with custom role
 - `PUT /api/v1/admin/users/{userId}/password` — Reset / change user password directly
+- `DELETE /api/v1/admin/users/{userId}` — Permanently delete user account and cascade private workspaces
 
 ---
 

@@ -266,3 +266,45 @@ func (r *UserRepository) SearchUsers(ctx context.Context, queryStr string, limit
 	}
 	return users, nil
 }
+
+// Delete permanently removes a user and cascades their workspaces, reassigning created entities to reassignToUserID
+func (r *UserRepository) Delete(ctx context.Context, targetUserID, reassignToUserID uuid.UUID) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Reassign created_by for teams, projects, collections if targetUser was creator
+	if _, err := tx.Exec(ctx, `UPDATE teams SET created_by = $1 WHERE created_by = $2`, reassignToUserID, targetUserID); err != nil {
+		return fmt.Errorf("failed to reassign teams creator: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE projects SET created_by = $1 WHERE created_by = $2`, reassignToUserID, targetUserID); err != nil {
+		return fmt.Errorf("failed to reassign projects creator: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE collections SET created_by = $1 WHERE created_by = $2`, reassignToUserID, targetUserID); err != nil {
+		return fmt.Errorf("failed to reassign collections creator: %w", err)
+	}
+
+	// Clear last_modified_by references
+	if _, err := tx.Exec(ctx, `UPDATE collections SET last_modified_by = NULL WHERE last_modified_by = $1`, targetUserID); err != nil {
+		return fmt.Errorf("failed to clear collections last_modified_by: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE collection_items SET last_modified_by = NULL WHERE last_modified_by = $1`, targetUserID); err != nil {
+		return fmt.Errorf("failed to clear collection_items last_modified_by: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE environments SET last_modified_by = NULL WHERE last_modified_by = $1`, targetUserID); err != nil {
+		return fmt.Errorf("failed to clear environments last_modified_by: %w", err)
+	}
+
+	// Delete user (cascades to workspaces, team_members, project_members)
+	res, err := tx.Exec(ctx, `DELETE FROM users WHERE id = $1`, targetUserID)
+	if err != nil {
+		return fmt.Errorf("failed to delete user: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return ErrUserNotFound
+	}
+
+	return tx.Commit(ctx)
+}

@@ -83,6 +83,24 @@ func CanAccessCollection(userRole domain.ProjectRole, minRole domain.ProjectRole
 	return userRank >= minRank
 }
 
+// CheckCollectionAccess checks both container-level permissions and granular min_role on the collection
+func (s *CollectionService) CheckCollectionAccess(ctx context.Context, user *domain.User, col *domain.Collection, requireWrite bool) error {
+	if err := s.CheckPermission(ctx, user, col.WorkspaceID, col.ProjectID, requireWrite); err != nil {
+		return err
+	}
+
+	if col.ProjectID != nil && !user.IsSuperadmin() {
+		role, err := s.projectService.GetEffectiveRole(ctx, user, *col.ProjectID)
+		if err != nil {
+			return ErrForbidden
+		}
+		if !CanAccessCollection(role, col.MinRole) {
+			return ErrForbidden
+		}
+	}
+	return nil
+}
+
 // CreateCollection creates a collection in workspace or project
 func (s *CollectionService) CreateCollection(ctx context.Context, user *domain.User, c *domain.Collection) error {
 	if err := s.CheckPermission(ctx, user, c.WorkspaceID, c.ProjectID, true); err != nil {
@@ -119,8 +137,10 @@ func (s *CollectionService) CreateCollection(ctx context.Context, user *domain.U
 	return s.collectionRepo.CreateCollection(ctx, c)
 }
 
-// ListCollections lists collections in workspace or project
-func (s *CollectionService) ListCollections(ctx context.Context, user *domain.User, workspaceID, projectID *uuid.UUID) ([]*domain.Collection, error) {
+// ListCollections lists collections in workspace or project. If includeItems is false,
+// only collection metadata (ID, name, role, version, timestamps) is returned, preventing
+// payload overflow on serverless platforms. Detailed items can be retrieved 1-by-1 via GetCollection.
+func (s *CollectionService) ListCollections(ctx context.Context, user *domain.User, workspaceID, projectID *uuid.UUID, includeItems bool) ([]*domain.Collection, error) {
 	if err := s.CheckPermission(ctx, user, workspaceID, projectID, false); err != nil {
 		return nil, err
 	}
@@ -146,11 +166,13 @@ func (s *CollectionService) ListCollections(ctx context.Context, user *domain.Us
 		collections = filtered
 	}
 
-	// Attach active items to each collection
-	for _, col := range collections {
-		items, err := s.collectionRepo.ListActiveItemsByCollection(ctx, col.ID)
-		if err == nil {
-			col.Items = items
+	// Optionally attach active items to each collection if explicitly requested
+	if includeItems {
+		for _, col := range collections {
+			items, err := s.collectionRepo.ListActiveItemsByCollection(ctx, col.ID)
+			if err == nil {
+				col.Items = items
+			}
 		}
 	}
 
@@ -164,18 +186,12 @@ func (s *CollectionService) GetCollection(ctx context.Context, user *domain.User
 		return nil, err
 	}
 
-	if err := s.CheckPermission(ctx, user, col.WorkspaceID, col.ProjectID, false); err != nil {
-		return nil, err
+	if col.DeletedAt != nil {
+		return nil, postgres.ErrCollectionNotFound
 	}
 
-	if col.ProjectID != nil && !user.IsSuperadmin() {
-		role, err := s.projectService.GetEffectiveRole(ctx, user, *col.ProjectID)
-		if err != nil {
-			return nil, ErrForbidden
-		}
-		if !CanAccessCollection(role, col.MinRole) {
-			return nil, ErrForbidden
-		}
+	if err := s.CheckCollectionAccess(ctx, user, col, false); err != nil {
+		return nil, err
 	}
 
 	items, err := s.collectionRepo.ListActiveItemsByCollection(ctx, col.ID)
@@ -234,7 +250,7 @@ func (s *CollectionService) DeleteCollection(ctx context.Context, user *domain.U
 		return err
 	}
 
-	if err := s.CheckPermission(ctx, user, col.WorkspaceID, col.ProjectID, true); err != nil {
+	if err := s.CheckCollectionAccess(ctx, user, col, true); err != nil {
 		return err
 	}
 
@@ -300,10 +316,10 @@ func (s *CollectionService) MoveCollection(ctx context.Context, user *domain.Use
 				return errors.New("collections can only be moved between projects within the same team")
 			}
 
-			// Check source project role: user must be at least contributor
+			// Check source project role: user must be at least contributor and meet collection min_role
 			sourceRole, err := s.projectService.GetEffectiveRole(ctx, user, *col.ProjectID)
-			if err != nil || !isAtLeastContributor(sourceRole) {
-				return errors.New("at least contributor role required in source project")
+			if err != nil || !isAtLeastContributor(sourceRole) || !CanAccessCollection(sourceRole, col.MinRole) {
+				return errors.New("insufficient permission to move collection from source project")
 			}
 		} else if col.WorkspaceID != nil {
 			// Moving from personal workspace to project
@@ -342,8 +358,8 @@ func (s *CollectionService) MoveCollection(ctx context.Context, user *domain.Use
 			}
 		} else if col.ProjectID != nil {
 			sourceRole, err := s.projectService.GetEffectiveRole(ctx, user, *col.ProjectID)
-			if err != nil || !isAtLeastContributor(sourceRole) {
-				return errors.New("at least contributor role required in source project")
+			if err != nil || !isAtLeastContributor(sourceRole) || !CanAccessCollection(sourceRole, col.MinRole) {
+				return errors.New("insufficient permission to move collection from source project")
 			}
 		}
 
@@ -360,7 +376,7 @@ func (s *CollectionService) CreateItem(ctx context.Context, user *domain.User, i
 		return err
 	}
 
-	if err := s.CheckPermission(ctx, user, col.WorkspaceID, col.ProjectID, true); err != nil {
+	if err := s.CheckCollectionAccess(ctx, user, col, true); err != nil {
 		return err
 	}
 
@@ -380,7 +396,7 @@ func (s *CollectionService) UpdateItem(ctx context.Context, user *domain.User, i
 		return nil, err
 	}
 
-	if err := s.CheckPermission(ctx, user, col.WorkspaceID, col.ProjectID, true); err != nil {
+	if err := s.CheckCollectionAccess(ctx, user, col, true); err != nil {
 		return nil, err
 	}
 
@@ -410,7 +426,7 @@ func (s *CollectionService) DeleteItem(ctx context.Context, user *domain.User, i
 		return err
 	}
 
-	if err := s.CheckPermission(ctx, user, col.WorkspaceID, col.ProjectID, true); err != nil {
+	if err := s.CheckCollectionAccess(ctx, user, col, true); err != nil {
 		return err
 	}
 
@@ -424,12 +440,16 @@ func (s *CollectionService) GetItem(ctx context.Context, user *domain.User, id u
 		return nil, err
 	}
 
+	if item.DeletedAt != nil {
+		return nil, postgres.ErrItemNotFound
+	}
+
 	col, err := s.collectionRepo.GetCollectionByID(ctx, item.CollectionID)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := s.CheckPermission(ctx, user, col.WorkspaceID, col.ProjectID, false); err != nil {
+	if err := s.CheckCollectionAccess(ctx, user, col, false); err != nil {
 		return nil, err
 	}
 
@@ -443,7 +463,7 @@ func (s *CollectionService) ReorderItems(ctx context.Context, user *domain.User,
 		return nil, err
 	}
 
-	if err := s.CheckPermission(ctx, user, col.WorkspaceID, col.ProjectID, true); err != nil {
+	if err := s.CheckCollectionAccess(ctx, user, col, true); err != nil {
 		return nil, err
 	}
 

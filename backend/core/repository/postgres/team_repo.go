@@ -157,6 +157,14 @@ func (r *TeamRepository) UpdateMemberRole(ctx context.Context, teamID, userID uu
 }
 
 func (r *TeamRepository) RemoveMember(ctx context.Context, teamID, userID uuid.UUID) error {
+	// Clean up any project assignments under this team for the user
+	cleanupProjectsQuery := `
+		DELETE FROM project_members
+		WHERE project_id IN (SELECT id FROM projects WHERE team_id = $1)
+		  AND user_id = $2
+	`
+	_, _ = r.pool.Exec(ctx, cleanupProjectsQuery, teamID, userID)
+
 	query := `DELETE FROM team_members WHERE team_id = $1 AND user_id = $2`
 	result, err := r.pool.Exec(ctx, query, teamID, userID)
 	if err != nil {

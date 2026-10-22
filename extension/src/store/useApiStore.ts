@@ -20,6 +20,7 @@ import {
   ActiveScope,
   SyncStatus,
   ScopesCacheData,
+  CloudProject,
   OfflineWorkspace,
 } from '@/types/api';
 import { executeApiRequest } from '@/lib/fetcher';
@@ -31,9 +32,9 @@ import {
 import { executePreRequestScript, executePostResponseScript } from '@/lib/scriptRunner';
 import { parseQueryParamsFromUrl, buildUrlWithParams } from '@/lib/urlParams';
 import {
-  pullScopeDelta,
   batchImportToScope,
   registerTokenRefreshCallback,
+  registerAuthEvictedCallback,
   createScopeEnvironment,
   updateScopeEnvironment,
   deleteScopeEnvironment,
@@ -44,10 +45,14 @@ import {
   fetchUserWorkspaces,
   fetchUserTeams,
   fetchTeamProjects,
+  fetchScopeCollections,
+  fetchCollectionById,
+  fetchScopeEnvironments,
 } from '@/lib/cloudApi';
 import { reorderItemInTree } from '@/lib/treeHelper';
 import {
   buildCollectionsFromDelta,
+  buildCollectionFromDetails,
   buildEnvironmentsFromDelta,
 } from '@/lib/cloudSyncTransformer';
 import { isOfflineOnly } from '@/lib/edition';
@@ -269,6 +274,7 @@ interface ApiStoreState {
   setCloudConfig: (config: Partial<CloudConfig>) => void;
   setActiveScope: (scope: ActiveScope, forceSync?: boolean) => Promise<void>;
   fetchScopes: (force?: boolean) => Promise<void>;
+  fetchProjectsForTeam: (teamId: string, force?: boolean) => Promise<CloudProject[]>;
   logoutCloud: () => void;
   setSyncStatus: (status: SyncStatus, error?: string | null) => void;
   pullCloudDelta: () => Promise<void>;
@@ -705,15 +711,78 @@ export const useApiStore = create<ApiStoreState>()(
         }
         set({ syncStatus: 'syncing', syncError: null });
         try {
-          const delta = await pullScopeDelta(
+          // For all cloud scopes (workspace & project):
+          // Pull lightweight collection list (metadata only: id, name, version, updated_at),
+          // then fetch each modified/new collection 1-by-1 to prevent Vercel FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE.
+          const colList = await fetchScopeCollections(
             cloudConfig.apiUrl,
             cloudConfig.token,
             cloudConfig.activeScope,
-            null,
             cloudConfig.refreshToken
           );
-          const pulledCols = buildCollectionsFromDelta(delta.collections, delta.items);
-          const pulledEnvs = buildEnvironmentsFromDelta(delta.environments);
+
+          const existingColsMap = new Map<string, Collection>(
+            (get().collections || []).map((c) => [c.id, c])
+          );
+          const pulledCols: Collection[] = [];
+
+          for (const colMeta of colList) {
+            if (colMeta.deleted_at) continue;
+
+            const existing = existingColsMap.get(colMeta.id);
+            const serverUpdatedAt = new Date(colMeta.updated_at || 0).getTime();
+            const serverVersion = colMeta.version;
+
+            // Smart cache: If collection already exists locally and neither version nor updatedAt changed, reuse existing items
+            if (
+              existing &&
+              ((typeof serverVersion === 'number' && existing.version === serverVersion) ||
+                (serverUpdatedAt > 0 && existing.updatedAt === serverUpdatedAt))
+            ) {
+              pulledCols.push({
+                ...existing,
+                name: colMeta.name,
+                description: colMeta.description || '',
+                minRole: colMeta.min_role || existing.minRole,
+                version: serverVersion ?? existing.version,
+                updatedAt: serverUpdatedAt || existing.updatedAt,
+              });
+              continue;
+            }
+
+            // Otherwise, fetch 1-by-1 only for new or modified collections
+            try {
+              const detail = await fetchCollectionById(
+                cloudConfig.apiUrl,
+                cloudConfig.token,
+                colMeta.id,
+                cloudConfig.refreshToken
+              );
+              if (detail && !detail.deleted_at) {
+                pulledCols.push(buildCollectionFromDetails(detail));
+              }
+            } catch (colErr) {
+              console.warn(`Failed to fetch details for collection ${colMeta.id}:`, colErr);
+              pulledCols.push({
+                id: colMeta.id,
+                name: colMeta.name,
+                description: colMeta.description || '',
+                items: existing?.items || [],
+                version: serverVersion,
+                createdAt: new Date(colMeta.created_at || Date.now()).getTime(),
+                updatedAt: new Date(colMeta.updated_at || Date.now()).getTime(),
+                _origin: 'cloud',
+              });
+            }
+          }
+
+          const envList = await fetchScopeEnvironments(
+            cloudConfig.apiUrl,
+            cloudConfig.token,
+            cloudConfig.activeScope,
+            cloudConfig.refreshToken
+          );
+          const pulledEnvs = buildEnvironmentsFromDelta(envList);
 
           const targetActiveId = pulledEnvs.some((e) => e.id === get().activeEnvironmentId)
             ? get().activeEnvironmentId
@@ -790,7 +859,7 @@ export const useApiStore = create<ApiStoreState>()(
           !force &&
           scopesCache?.lastFetchedAt &&
           Date.now() - scopesCache.lastFetchedAt < SCOPES_LIST_CACHE_TTL_MS &&
-          (scopesCache.workspaces.length > 0 || scopesCache.teamsWithProjects.length > 0)
+          (scopesCache.workspaces.length > 0 || (scopesCache.teams && scopesCache.teams.length > 0) || (scopesCache.teamsWithProjects && scopesCache.teamsWithProjects.length > 0))
         );
 
         if (isFresh) {
@@ -803,32 +872,72 @@ export const useApiStore = create<ApiStoreState>()(
             fetchUserTeams(cloudConfig.apiUrl, cloudConfig.token, cloudConfig.refreshToken).catch(() => []),
           ]);
 
-          const teamProjects = await Promise.all(
-            teamList.map(async (t) => {
-              const projs = await fetchTeamProjects(
+          const currentTeamProjects: Record<string, CloudProject[]> = {
+            ...(scopesCache?.teamProjects || {}),
+          };
+
+          // Migrate legacy teamsWithProjects cache if teamProjects is empty
+          if (Object.keys(currentTeamProjects).length === 0 && scopesCache?.teamsWithProjects) {
+            for (const tp of scopesCache.teamsWithProjects) {
+              if (tp.team?.id && tp.projects) {
+                currentTeamProjects[tp.team.id] = tp.projects;
+              }
+            }
+          }
+
+          // If current active scope is a project, prefill its team projects to reconcile user role
+          const currentScope = get().cloudConfig.activeScope;
+          if (currentScope?.type === 'project' && currentScope.teamId) {
+            try {
+              const activeTeamProjects = await fetchTeamProjects(
                 cloudConfig.apiUrl,
-                t.id,
+                currentScope.teamId,
                 cloudConfig.token!,
                 cloudConfig.refreshToken
-              ).catch(() => []);
-              return { team: t, projects: projs };
-            })
-          );
+              );
+              currentTeamProjects[currentScope.teamId] = activeTeamProjects;
+            } catch {
+              // ignore background fetch error
+            }
+          }
+
+          // Clean up orphan team projects from cache if user is no longer in that team
+          const validTeamIds = new Set(teamList.map((t) => t.id));
+          for (const cachedTeamId of Object.keys(currentTeamProjects)) {
+            if (!validTeamIds.has(cachedTeamId)) {
+              delete currentTeamProjects[cachedTeamId];
+            }
+          }
+
+          const teamProjects = teamList.map((t) => ({
+            team: t,
+            projects: currentTeamProjects[t.id] || [],
+          }));
 
           set({
             scopesCache: {
               workspaces: wsList,
+              teams: teamList,
+              teamProjects: currentTeamProjects,
               teamsWithProjects: teamProjects,
               lastFetchedAt: Date.now(),
             },
           });
 
-          // Reconcile active project scope's role if updated on backend
-          const currentScope = get().cloudConfig.activeScope;
-          if (currentScope?.type === 'project' && currentScope.id) {
-            for (const tp of teamProjects) {
-              const match = tp.projects.find((p) => p.id === currentScope.id);
-              if (match && match.user_role && match.user_role !== currentScope.role) {
+          // Check if active project scope was removed or user's role changed
+          if (currentScope?.type === 'project') {
+            let accessRevoked = false;
+            // Case 1: user removed from the team
+            if (currentScope.teamId && !validTeamIds.has(currentScope.teamId)) {
+              accessRevoked = true;
+            } else if (currentScope.teamId && currentScope.id) {
+              // Case 2: user removed from this specific project
+              const projectsForActiveTeam = currentTeamProjects[currentScope.teamId] || [];
+              const match = projectsForActiveTeam.find((p) => p.id === currentScope.id);
+              if (!match && projectsForActiveTeam.length > 0) {
+                accessRevoked = true;
+              } else if (match && match.user_role && match.user_role !== currentScope.role) {
+                // Reconcile active project scope's role if updated on backend
                 set((state) => ({
                   cloudConfig: {
                     ...state.cloudConfig,
@@ -838,12 +947,155 @@ export const useApiStore = create<ApiStoreState>()(
                     },
                   },
                 }));
-                break;
               }
+            }
+
+            if (accessRevoked) {
+              const defaultWs = wsList[0];
+              if (defaultWs) {
+                await get().setActiveScope(
+                  {
+                    type: 'workspace',
+                    id: defaultWs.id,
+                    name: defaultWs.name,
+                    role: 'owner',
+                  },
+                  true
+                );
+              } else {
+                get().switchOfflineWorkspace(get().activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID);
+              }
+              set({
+                syncError: `Access to "${currentScope.name}" was revoked. Switched to ${
+                  defaultWs ? defaultWs.name : 'Offline Workspace'
+                }.`,
+              });
             }
           }
         } catch (err) {
           console.error('Failed to load scopes:', err);
+        }
+      },
+
+      fetchProjectsForTeam: async (teamId: string, force = false) => {
+        if (isOfflineOnly) return [];
+        const { cloudConfig, scopesCache } = get();
+        if (!cloudConfig.token || !teamId) return [];
+
+        if (!force && scopesCache?.teamProjects?.[teamId]) {
+          return scopesCache.teamProjects[teamId];
+        }
+
+        try {
+          const projects = await fetchTeamProjects(
+            cloudConfig.apiUrl,
+            teamId,
+            cloudConfig.token,
+            cloudConfig.refreshToken
+          );
+
+          const updatedTeamProjects = {
+            ...(scopesCache?.teamProjects || {}),
+            [teamId]: projects,
+          };
+
+          const teams = scopesCache?.teams || [];
+          const updatedTeamsWithProjects = teams.map((t) => ({
+            team: t,
+            projects: updatedTeamProjects[t.id] || [],
+          }));
+
+          set({
+            scopesCache: {
+              workspaces: scopesCache?.workspaces || [],
+              teams,
+              teamProjects: updatedTeamProjects,
+              teamsWithProjects: updatedTeamsWithProjects,
+              lastFetchedAt: scopesCache?.lastFetchedAt || Date.now(),
+            },
+          });
+
+          // Check if active project scope was in this team and user has been unassigned
+          const currentScope = get().cloudConfig.activeScope;
+          if (
+            currentScope?.type === 'project' &&
+            currentScope.teamId === teamId &&
+            currentScope.id &&
+            !projects.some((p) => p.id === currentScope.id)
+          ) {
+            const defaultWs = scopesCache?.workspaces?.[0];
+            if (defaultWs) {
+              await get().setActiveScope(
+                {
+                  type: 'workspace',
+                  id: defaultWs.id,
+                  name: defaultWs.name,
+                  role: 'owner',
+                },
+                true
+              );
+            } else {
+              get().switchOfflineWorkspace(get().activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID);
+            }
+            set({
+              syncError: `Access to "${currentScope.name}" was revoked. Switched to ${
+                defaultWs ? defaultWs.name : 'Offline Workspace'
+              }.`,
+            });
+          }
+
+          return projects;
+        } catch (err: any) {
+          console.error(`Failed to fetch projects for team ${teamId}:`, err);
+
+          // If 403 Forbidden: user has been kicked from the team
+          const isForbidden =
+            err?.message?.toLowerCase().includes('forbidden') ||
+            err?.message?.toLowerCase().includes('not found') ||
+            err?.status === 403;
+
+          if (isForbidden) {
+            const updatedTeams = (scopesCache?.teams || []).filter((t) => t.id !== teamId);
+            const updatedTeamProjects = { ...(scopesCache?.teamProjects || {}) };
+            delete updatedTeamProjects[teamId];
+
+            set({
+              scopesCache: {
+                workspaces: scopesCache?.workspaces || [],
+                teams: updatedTeams,
+                teamProjects: updatedTeamProjects,
+                teamsWithProjects: updatedTeams.map((t) => ({
+                  team: t,
+                  projects: updatedTeamProjects[t.id] || [],
+                })),
+                lastFetchedAt: Date.now(),
+              },
+            });
+
+            const currentScope = get().cloudConfig.activeScope;
+            if (currentScope?.type === 'project' && currentScope.teamId === teamId) {
+              const defaultWs = scopesCache?.workspaces?.[0];
+              if (defaultWs) {
+                await get().setActiveScope(
+                  {
+                    type: 'workspace',
+                    id: defaultWs.id,
+                    name: defaultWs.name,
+                    role: 'owner',
+                  },
+                  true
+                );
+              } else {
+                get().switchOfflineWorkspace(get().activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID);
+              }
+              set({
+                syncError: `Removed from team. Switched to ${
+                  defaultWs ? defaultWs.name : 'Offline Workspace'
+                }.`,
+              });
+            }
+          }
+          return [];
         }
       },
 
@@ -3064,5 +3316,15 @@ if (!isOfflineOnly) {
       refreshToken: newTokens.refreshToken,
       tokenExpiresAt: newTokens.expiresAt,
     });
+  });
+
+  registerAuthEvictedCallback((reason) => {
+    const state = useApiStore.getState();
+    if (state.workspaceMode === 'cloud') {
+      state.logoutCloud();
+      setTimeout(() => {
+        useApiStore.setState({ syncError: reason });
+      }, 300);
+    }
   });
 }

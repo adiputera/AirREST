@@ -17,6 +17,8 @@ import {
   Download,
   FolderInput,
   Upload,
+  ChevronsUpDown,
+  ChevronsDownUp,
 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
 import { CollectionItem, ApiRequest, Collection } from '@/types/api';
@@ -61,10 +63,37 @@ export interface DraggedItemState {
   name: string;
 }
 
+function getAllFolderIds(item: CollectionItem): string[] {
+  const ids: string[] = [];
+  if (item.type === 'folder') {
+    ids.push(item.id);
+    if (item.items) {
+      for (const child of item.items) {
+        ids.push(...getAllFolderIds(child));
+      }
+    }
+  }
+  return ids;
+}
+
+function getAllFolderIdsInCollection(collection: Collection): string[] {
+  const ids: string[] = [];
+  for (const item of collection.items) {
+    ids.push(...getAllFolderIds(item));
+  }
+  return ids;
+}
+
 interface FolderItemProps {
   item: CollectionItem;
   collectionId: string;
   level?: number;
+  openFolders: Record<string, boolean>;
+  onToggleFolder: (folderId: string, item: CollectionItem) => void;
+  onOpenFolder: (folderId: string) => void;
+  onExpandAllInFolder: (item: CollectionItem) => void;
+  onCollapseAllInFolder: (item: CollectionItem) => void;
+  isSearching: boolean;
   onSelectRequest: (req: ApiRequest) => void;
   onRequestDelete: (item: CollectionItem) => void;
   onRequestMove: (item: CollectionItem, collectionId: string) => void;
@@ -82,6 +111,12 @@ const FolderItem: React.FC<FolderItemProps> = ({
   item,
   collectionId,
   level = 0,
+  openFolders,
+  onToggleFolder,
+  onOpenFolder,
+  onExpandAllInFolder,
+  onCollapseAllInFolder,
+  isSearching,
   onSelectRequest,
   onRequestDelete,
   onRequestMove,
@@ -89,7 +124,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
   setDraggedItem,
   onReorderItem,
 }) => {
-  const [isOpen, setIsOpen] = useState(true);
+  const isOpen = isSearching ? true : !!openFolders[item.id];
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isCreatingSubfolder, setIsCreatingSubfolder] = useState(false);
   const [subfolderName, setSubfolderName] = useState('');
@@ -214,7 +249,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
     }
 
     if (currentPos === 'inside') {
-      setIsOpen(true);
+      onOpenFolder(item.id);
     }
 
     onReorderItem(collectionId, draggedItem.id, item.id, currentPos);
@@ -224,14 +259,14 @@ const FolderItem: React.FC<FolderItemProps> = ({
   const handleCreateRequest = (e: React.MouseEvent) => {
     e.stopPropagation();
     setIsMenuOpen(false);
-    setIsOpen(true);
+    onOpenFolder(item.id);
     createRequestInCollection(collectionId, item.id, 'New Request');
   };
 
   const handleStartCreateSubfolder = (e: React.MouseEvent) => {
     e.stopPropagation();
     setIsMenuOpen(false);
-    setIsOpen(true);
+    onOpenFolder(item.id);
     setIsCreatingSubfolder(true);
     setSubfolderName('');
   };
@@ -253,7 +288,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
-          onClick={() => setIsOpen(!isOpen)}
+          onClick={() => onToggleFolder(item.id, item)}
           className={`group relative flex items-center gap-1.5 py-1 px-2 rounded-md transition text-xs font-medium ${
             isForbidden
               ? 'cursor-not-allowed bg-rose-500/10 text-rose-300'
@@ -290,8 +325,12 @@ const FolderItem: React.FC<FolderItemProps> = ({
             {item.items?.length || 0}
           </span>
 
-          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition shrink-0">
-            {/* Add Button */}
+          <div
+            className={`items-center gap-0.5 shrink-0 transition ${
+              isMenuOpen ? 'flex' : 'hidden group-hover:flex group-focus-within:flex'
+            }`}
+          >
+            {/* Options Button */}
             <div className="relative">
               <button
                 type="button"
@@ -300,7 +339,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
                   setIsMenuOpen(!isMenuOpen);
                 }}
                 className="rounded p-0.5 text-zinc-400 hover:text-sky-400 hover:bg-zinc-800 transition"
-                title="Add to folder"
+                title="Folder options"
               >
                 <Plus className="h-3.5 w-3.5" />
               </button>
@@ -316,7 +355,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
                   />
                   <div
                     onClick={(e) => e.stopPropagation()}
-                    className="absolute right-0 top-full mt-1 z-50 w-36 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-xl"
+                    className="absolute right-0 top-full mt-1 z-50 w-40 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-xl"
                   >
                     <button
                       type="button"
@@ -333,6 +372,31 @@ const FolderItem: React.FC<FolderItemProps> = ({
                     >
                       <FolderPlus className="h-3.5 w-3.5 text-amber-400" />
                       <span>New Subfolder</span>
+                    </button>
+                    <div className="my-1 border-t border-zinc-800/80" />
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsMenuOpen(false);
+                        onExpandAllInFolder(item);
+                      }}
+                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 transition"
+                    >
+                      <ChevronsUpDown className="h-3.5 w-3.5 text-zinc-400" />
+                      <span>Expand All</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsMenuOpen(false);
+                        onCollapseAllInFolder(item);
+                      }}
+                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 transition"
+                    >
+                      <ChevronsDownUp className="h-3.5 w-3.5 text-zinc-400" />
+                      <span>Collapse All</span>
                     </button>
                   </div>
                 </>
@@ -432,6 +496,12 @@ const FolderItem: React.FC<FolderItemProps> = ({
                 item={child}
                 collectionId={collectionId}
                 level={level + 1}
+                openFolders={openFolders}
+                onToggleFolder={onToggleFolder}
+                onOpenFolder={onOpenFolder}
+                onExpandAllInFolder={onExpandAllInFolder}
+                onCollapseAllInFolder={onCollapseAllInFolder}
+                isSearching={isSearching}
                 onSelectRequest={onSelectRequest}
                 onRequestDelete={onRequestDelete}
                 onRequestMove={onRequestMove}
@@ -481,7 +551,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
       <span className="truncate flex-1 group-hover:text-zinc-100" title={item.name}>
         {item.name}
       </span>
-      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition shrink-0">
+      <div className="hidden group-hover:flex group-focus-within:flex items-center gap-1 transition shrink-0">
         <button
           type="button"
           onClick={(e) => {
@@ -531,6 +601,7 @@ export const Sidebar: React.FC = () => {
   const [collectionToMove, setCollectionToMove] = useState<Collection | null>(null);
   const [showClearHistoryConfirm, setShowClearHistoryConfirm] = useState(false);
   const [collapsedCollections, setCollapsedCollections] = useState<Record<string, boolean>>({});
+  const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({});
 
   const [activeAddMenuColId, setActiveAddMenuColId] = useState<string | null>(null);
   const [creatingFolderInCol, setCreatingFolderInCol] = useState<string | null>(null);
@@ -548,14 +619,121 @@ export const Sidebar: React.FC = () => {
     type: 'folder' | 'request';
   } | null>(null);
 
-  const toggleCollectionCollapse = (colId: string) => {
-    setCollapsedCollections((prev) => ({
+  const trimmedQuery = searchQuery.trim().toLowerCase();
+
+  const handleToggleFolder = (folderId: string, currentItem: CollectionItem) => {
+    const isCurrentlyOpen = !!openFolders[folderId];
+    if (isCurrentlyOpen) {
+      // Collapsing: collapse this folder and reset descendant folders
+      const descendantIds = getAllFolderIds(currentItem);
+      setOpenFolders((prev) => {
+        const next = { ...prev };
+        for (const id of descendantIds) {
+          delete next[id];
+        }
+        return next;
+      });
+    } else {
+      // Expanding: 1 level only (subfolders remain collapsed by default)
+      setOpenFolders((prev) => ({
+        ...prev,
+        [folderId]: true,
+      }));
+    }
+  };
+
+  const handleOpenFolder = (folderId: string) => {
+    setOpenFolders((prev) => ({
       ...prev,
-      [colId]: !prev[colId],
+      [folderId]: true,
     }));
   };
 
-  const trimmedQuery = searchQuery.trim().toLowerCase();
+  const handleExpandAllInFolder = (item: CollectionItem) => {
+    const ids = getAllFolderIds(item);
+    setOpenFolders((prev) => {
+      const next = { ...prev };
+      for (const id of ids) {
+        next[id] = true;
+      }
+      return next;
+    });
+  };
+
+  const handleCollapseAllInFolder = (item: CollectionItem) => {
+    const subfolderIds = (item.items || []).flatMap((child) => getAllFolderIds(child));
+    setOpenFolders((prev) => {
+      const next = { ...prev };
+      if (subfolderIds.length > 0) {
+        // Keep this folder open at level 1, but collapse all nested subfolders
+        next[item.id] = true;
+        for (const id of subfolderIds) {
+          delete next[id];
+        }
+      } else {
+        // No subfolders, collapse this folder itself
+        delete next[item.id];
+      }
+      return next;
+    });
+  };
+
+  const toggleCollectionCollapse = (col: Collection) => {
+    const isCurrentlyCollapsed = !trimmedQuery && !!collapsedCollections[col.id];
+    if (!isCurrentlyCollapsed) {
+      // Currently open -> collapsing!
+      // Reset all folders in this collection so next time it expands 1 level only
+      const folderIds = getAllFolderIdsInCollection(col);
+      setOpenFolders((prev) => {
+        const next = { ...prev };
+        for (const id of folderIds) {
+          delete next[id];
+        }
+        return next;
+      });
+      setCollapsedCollections((prev) => ({
+        ...prev,
+        [col.id]: true,
+      }));
+    } else {
+      // Expanding! Default is 1 level only (folders inside remain collapsed)
+      setCollapsedCollections((prev) => ({
+        ...prev,
+        [col.id]: false,
+      }));
+    }
+  };
+
+  const handleExpandAllInCollection = (col: Collection) => {
+    const folderIds = getAllFolderIdsInCollection(col);
+    setOpenFolders((prev) => {
+      const next = { ...prev };
+      for (const id of folderIds) {
+        next[id] = true;
+      }
+      return next;
+    });
+    setCollapsedCollections((prev) => ({
+      ...prev,
+      [col.id]: false,
+    }));
+  };
+
+  const handleCollapseAllInCollection = (col: Collection) => {
+    const folderIds = getAllFolderIdsInCollection(col);
+    setOpenFolders((prev) => {
+      const next = { ...prev };
+      for (const id of folderIds) {
+        delete next[id];
+      }
+      return next;
+    });
+    // Ensure collection stays open at 1 level
+    setCollapsedCollections((prev) => ({
+      ...prev,
+      [col.id]: false,
+    }));
+  };
 
   const filteredCollections = !trimmedQuery
     ? collections
@@ -750,10 +928,10 @@ export const Sidebar: React.FC = () => {
                   return (
                     <div key={col.id} className="rounded-lg border border-zinc-850 bg-zinc-900/40 p-1.5 transition">
                       <div
-                        onClick={() => toggleCollectionCollapse(col.id)}
+                        onClick={() => toggleCollectionCollapse(col)}
                         className="flex items-center justify-between px-2 py-1 rounded-md hover:bg-zinc-850/60 cursor-pointer transition select-none group"
                       >
-                        <div className="flex items-center gap-1.5 min-w-0">
+                        <div className="flex items-center gap-1.5 min-w-0 flex-1 mr-1">
                           <div className="text-zinc-500 group-hover:text-zinc-300 transition shrink-0">
                             {isCollapsed ? (
                               <ChevronRight className="h-3.5 w-3.5" />
@@ -773,8 +951,14 @@ export const Sidebar: React.FC = () => {
                             {col.items.length}
                           </span>
                         </div>
-                        <div className="flex items-center gap-0.5 shrink-0 ml-1">
-                          {/* Add button with menu */}
+                        <div
+                          className={`items-center gap-0.5 shrink-0 ml-1 ${
+                            activeAddMenuColId === col.id
+                              ? 'flex'
+                              : 'hidden group-hover:flex group-focus-within:flex'
+                          }`}
+                        >
+                          {/* Options button with menu */}
                           <div className="relative">
                             <button
                               type="button"
@@ -783,7 +967,7 @@ export const Sidebar: React.FC = () => {
                                 setActiveAddMenuColId(activeAddMenuColId === col.id ? null : col.id);
                               }}
                               className="rounded p-1 text-zinc-500 hover:text-sky-400 hover:bg-zinc-800 transition"
-                              title="Add to collection"
+                              title="Collection options"
                             >
                               <Plus className="h-3.5 w-3.5" />
                             </button>
@@ -799,7 +983,7 @@ export const Sidebar: React.FC = () => {
                                 />
                                 <div
                                   onClick={(e) => e.stopPropagation()}
-                                  className="absolute right-0 top-full mt-1 z-50 w-36 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-xl"
+                                  className="absolute right-0 top-full mt-1 z-50 w-40 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-xl"
                                 >
                                   <button
                                     type="button"
@@ -825,6 +1009,29 @@ export const Sidebar: React.FC = () => {
                                   >
                                     <FolderPlus className="h-3.5 w-3.5 text-amber-400" />
                                     <span>New Folder</span>
+                                  </button>
+                                  <div className="my-1 border-t border-zinc-800/80" />
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveAddMenuColId(null);
+                                      handleExpandAllInCollection(col);
+                                    }}
+                                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 transition"
+                                  >
+                                    <ChevronsUpDown className="h-3.5 w-3.5 text-zinc-400" />
+                                    <span>Expand All</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveAddMenuColId(null);
+                                      handleCollapseAllInCollection(col);
+                                    }}
+                                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 transition"
+                                  >
+                                    <ChevronsDownUp className="h-3.5 w-3.5 text-zinc-400" />
+                                    <span>Collapse All</span>
                                   </button>
                                 </div>
                               </>
@@ -918,6 +1125,12 @@ export const Sidebar: React.FC = () => {
                                 key={item.id}
                                 item={item}
                                 collectionId={col.id}
+                                openFolders={openFolders}
+                                onToggleFolder={handleToggleFolder}
+                                onOpenFolder={handleOpenFolder}
+                                onExpandAllInFolder={handleExpandAllInFolder}
+                                onCollapseAllInFolder={handleCollapseAllInFolder}
+                                isSearching={!!trimmedQuery}
                                 onSelectRequest={openRequestInTab}
                                 onRequestDelete={(targetItem) =>
                                   setItemToDelete({

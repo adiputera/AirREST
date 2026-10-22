@@ -284,8 +284,7 @@ In addition to enums, the Frontend relies on specific primitive types and relati
   - Payload: `{ "user_id": UUID, "role": "admin" | "maintainer" | "contributor" | "reader" }`
 - `DELETE /api/v1/projects/{id}/members/{userId}` *(Auth, Project Admin)* — Unassign member.
 
-### 7. Collections & Items
-- `GET /api/v1/collections?workspace_id={id}&project_id={id}` *(Auth)* — List collections (filtered by `min_role`).
+- `GET /api/v1/collections?workspace_id={id}&project_id={id}&include_items={bool}` *(Auth)* — List collections (filtered by `min_role`). Defaults to lightweight collection metadata (`include_items=false`) without items to prevent serverless payload overflows (`FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE`). Clients fetch each collection's items 1-by-1 via `GET /api/v1/collections/{id}`.
 - `POST /api/v1/collections` *(Auth)* — Create collection.
   - Payload: `{ "workspace_id"?: UUID, "project_id"?: UUID, "name": string, "description"?: string, "min_role"?: ProjectRole }`
 - `GET /api/v1/collections/{id}` *(Auth)* — Get collection with hierarchical nested items.
@@ -331,6 +330,7 @@ In addition to enums, the Frontend relies on specific primitive types and relati
   - Payload: `{ "email": string, "password": string, "name": string, "role": SystemRole }`
 - `PUT /api/v1/admin/users/{userId}/password` *(Auth, Superadmin)* — Reset user password directly.
   - Payload: `{ "password": string }`
+- `DELETE /api/v1/admin/users/{userId}` *(Auth, Superadmin)* — Permanently remove user account, delete private workspaces, and safely reassign shared teams/projects to executing superadmin.
 
 ---
 

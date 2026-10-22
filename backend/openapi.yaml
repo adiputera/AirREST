@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: AirREST Backend API Contract
-  version: 1.1.0
+  version: 1.1.1
   description: |
     # AirREST Cloud Backend API Specification & Contract
 
@@ -860,6 +860,12 @@ paths:
             type: string
             format: uuid
           description: Filter by project ID
+        - in: query
+          name: include_items
+          schema:
+            type: boolean
+            default: false
+          description: Whether to attach active collection items to each collection in the list. Defaults to false to prevent payload overflow on serverless platforms. Detailed items should be fetched 1-by-1 via GET /api/v1/collections/{id}.
       responses:
         '200':
           description: Collections list retrieved.
@@ -1434,6 +1440,53 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MessageEnvelope'
+
+  /api/v1/admin/users/{userId}:
+    delete:
+      tags:
+        - Admin Management
+      summary: Permanently delete a user account (Superadmin only)
+      description: Permanently removes a user account, their private workspaces, and cascades memberships while safely reassigning created teams and projects to the executing superadmin.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: User deleted successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageEnvelope'
+        '400':
+          description: Cannot delete own account or last superadmin.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Unauthenticated or deactivated session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden (Superadmin required).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: User not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
 
 components:
   securitySchemes:

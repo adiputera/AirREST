@@ -31,6 +31,7 @@ import {
   apiRemoveProjectMember,
   apiListTeamMembers,
   apiListProjectCollections,
+  apiGetCollection,
   apiListProjectEnvironments,
   apiUpdateCollectionPermission,
   apiUpdateEnvironmentPermission,
@@ -195,11 +196,19 @@ export const ProjectsView: React.FC = () => {
       setIsLoadingCollections(true);
       setIsLoadingEnvironments(true);
       try {
-        const [colData, envData] = await Promise.all([
+        const [colList, envData] = await Promise.all([
           apiListProjectCollections(apiUrl, token, selectedProjectId, refreshToken || undefined),
           apiListProjectEnvironments(apiUrl, token, selectedProjectId, refreshToken || undefined),
         ]);
-        setCollections(colData);
+        const colDetails = await Promise.all(
+          colList.map((c) =>
+            apiGetCollection(apiUrl, token, c.id, refreshToken || undefined).catch(() => ({
+              ...c,
+              items: [],
+            }))
+          )
+        );
+        setCollections(colDetails);
         setEnvironments(envData);
       } catch (err) {
         console.error('Failed to load project collections/environments:', err);
@@ -240,8 +249,16 @@ export const ProjectsView: React.FC = () => {
       await apiMoveCollection(apiUrl, token, moveColItem.id, targetMoveProjectId, undefined, refreshToken || undefined);
       setMoveColItem(null);
       if (selectedProjectId) {
-        const data = await apiListProjectCollections(apiUrl, token, selectedProjectId, refreshToken || undefined);
-        setCollections(data);
+        const colList = await apiListProjectCollections(apiUrl, token, selectedProjectId, refreshToken || undefined);
+        const colDetails = await Promise.all(
+          colList.map((c) =>
+            apiGetCollection(apiUrl, token, c.id, refreshToken || undefined).catch(() => ({
+              ...c,
+              items: [],
+            }))
+          )
+        );
+        setCollections(colDetails);
       }
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to move collection');

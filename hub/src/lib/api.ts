@@ -5,11 +5,15 @@ export interface TokenRefreshCallback {
 }
 
 let onTokenRefreshed: TokenRefreshCallback | null = null;
+let onAuthEvicted: (() => void) | null = null;
 let isRefreshing = false;
-let refreshPromise: Promise<string | null> | null = null;
 
 export function registerHubTokenRefresh(cb: TokenRefreshCallback | null) {
   onTokenRefreshed = cb;
+}
+
+export function registerHubAuthEvicted(cb: (() => void) | null) {
+  onAuthEvicted = cb;
 }
 
 export interface ApiFetchOptions extends RequestInit {
@@ -50,24 +54,35 @@ export async function fetchWithAuth(endpoint: string, options: ApiFetchOptions):
 
   if (response.status === 401 && refreshToken) {
     try {
-      const newToken = await handleSilentRefresh(baseUrl, refreshToken);
-      if (newToken) {
-        headers.set('Authorization', `Bearer ${newToken}`);
+      const result = await handleSilentRefresh(baseUrl, refreshToken);
+      if (result.token) {
+        headers.set('Authorization', `Bearer ${result.token}`);
         response = await fetch(url, { ...fetchInit, headers });
+      } else if (result.evicted) {
+        if (onAuthEvicted) onAuthEvicted();
       }
     } catch {
-      // Return original response
+      // Network or transient error during refresh attempt - do not evict session
     }
+  } else if (response.status === 401 && !refreshToken) {
+    if (onAuthEvicted) onAuthEvicted();
   }
 
   return response;
 }
 
-async function handleSilentRefresh(apiUrl: string, refreshTokenStr: string): Promise<string | null> {
+interface SilentRefreshResult {
+  token: string | null;
+  evicted: boolean;
+}
+
+let refreshPromise: Promise<SilentRefreshResult> | null = null;
+
+async function handleSilentRefresh(apiUrl: string, refreshTokenStr: string): Promise<SilentRefreshResult> {
   if (isRefreshing && refreshPromise) return refreshPromise;
 
   isRefreshing = true;
-  refreshPromise = (async () => {
+  refreshPromise = (async (): Promise<SilentRefreshResult> => {
     try {
       const res = await fetch(`${apiUrl}/api/v1/auth/refresh`, {
         method: 'POST',
@@ -75,7 +90,13 @@ async function handleSilentRefresh(apiUrl: string, refreshTokenStr: string): Pro
         body: JSON.stringify({ refresh_token: refreshTokenStr }),
       });
 
-      if (!res.ok) return null;
+      if (res.status === 401 || res.status === 403) {
+        return { token: null, evicted: true };
+      }
+
+      if (!res.ok) {
+        return { token: null, evicted: false };
+      }
 
       const json = await res.json();
       const data = unwrapData<any>(json);
@@ -87,11 +108,11 @@ async function handleSilentRefresh(apiUrl: string, refreshTokenStr: string): Pro
             expiresAt: data.expires_at,
           });
         }
-        return data.token as string;
+        return { token: data.token as string, evicted: false };
       }
-      return null;
+      return { token: null, evicted: false };
     } catch {
-      return null;
+      return { token: null, evicted: false };
     } finally {
       isRefreshing = false;
       refreshPromise = null;
@@ -395,6 +416,23 @@ export async function apiResetUserPassword(
   return unwrapData<any>(json);
 }
 
+export async function apiDeleteUser(
+  apiUrl: string,
+  token: string,
+  userId: string,
+  refreshToken?: string
+) {
+  const res = await fetchWithAuth(`/api/v1/admin/users/${userId}`, {
+    method: 'DELETE',
+    apiUrl,
+    token,
+    refreshToken,
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(extractError(json, 'Failed to delete user'));
+  return unwrapData<any>(json);
+}
+
 // ----------------- Project Collections & Environments Endpoints -----------------
 
 export async function apiListProjectCollections(
@@ -412,6 +450,22 @@ export async function apiListProjectCollections(
   if (!res.ok) throw new Error(extractError(json, 'Failed to list collections'));
   const data = unwrapData<any>(json);
   return (Array.isArray(data) ? data : []) as Collection[];
+}
+
+export async function apiGetCollection(
+  apiUrl: string,
+  token: string,
+  collectionId: string,
+  refreshToken?: string
+): Promise<Collection> {
+  const res = await fetchWithAuth(`/api/v1/collections/${collectionId}`, {
+    apiUrl,
+    token,
+    refreshToken,
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error(extractError(json, 'Failed to fetch collection'));
+  return unwrapData<Collection>(json);
 }
 
 export async function apiUpdateCollectionPermission(

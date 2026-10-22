@@ -59,7 +59,8 @@ SUPPORT
 For questions, bug reports, or feature suggestions, visit the project repository on GitHub:
 https://github.com/adiputera/AirREST
 
-Version 1.1.0 — Added interactive Move Request modal, drag-and-drop tree reordering with safety guards, 12-hour offline workspace caching, and concurrency deadlock resilience.
+Version 1.1.1 — Refined dropdown & action button UI, optimized cloud sync payload streaming for serverless backends, and added resilient session eviction handling.
+Version 1.1.0 — Added interactive Move Request modal, drag-and-drop tree reordering with safety guards, and 12-hour offline workspace caching.
 Version 1.0.0 — Initial release with full Postman v2.1 compatibility, multi-tab workspace, direct in-browser dispatching, and sandboxed test scripts.
 ```
 
@@ -138,6 +139,7 @@ SUPPORT
 For questions, bug reports, or feature suggestions, visit the project repository on GitHub:
 https://github.com/adiputera/AirREST
 
+Version 1.1.1 — Refined dropdown & action button UI, improved header controls, and enhanced offline workspace switching.
 Version 1.1.0 — Added interactive Move Request modal, drag-and-drop tree reordering with safety guards, and 12-hour offline workspace caching.
 Version 1.0.0 — Initial offline release with 100% local storage, full Postman v2.1 compatibility, multi-tab workspace, direct in-browser dispatching, and sandboxed test scripts.
 ```

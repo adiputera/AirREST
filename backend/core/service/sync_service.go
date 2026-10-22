@@ -405,17 +405,34 @@ func (s *SyncService) ImportBatch(ctx context.Context, user *domain.User, worksp
 		colID, err := uuid.Parse(colReq.ID)
 		if err != nil {
 			colID = uuid.New()
+		} else {
+			// Check if this collection ID already exists under a different workspace or project
+			var existingWsID, existingProjID *uuid.UUID
+			if err := tx.QueryRow(ctx, "SELECT workspace_id, project_id FROM collections WHERE id = $1", colID).Scan(&existingWsID, &existingProjID); err == nil {
+				scopeMismatch := false
+				if workspaceID != nil && (existingWsID == nil || *existingWsID != *workspaceID) {
+					scopeMismatch = true
+				}
+				if projectID != nil && (existingProjID == nil || *existingProjID != *projectID) {
+					scopeMismatch = true
+				}
+				if scopeMismatch {
+					colID = uuid.New()
+				}
+			}
 		}
 
 		insertColQuery := `
-			INSERT INTO collections (id, workspace_id, project_id, name, description, version, created_by, last_modified_by, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, 1, $6, $6, $7, $7)
+			INSERT INTO collections (id, workspace_id, project_id, name, description, min_role, version, created_by, last_modified_by, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, 'reader', 1, $6, $6, $7, $7)
 			ON CONFLICT (id) DO UPDATE SET
 				name = EXCLUDED.name,
 				description = EXCLUDED.description,
 				version = collections.version + 1,
 				last_modified_by = EXCLUDED.last_modified_by,
 				updated_at = EXCLUDED.updated_at
+			WHERE (collections.workspace_id IS NOT DISTINCT FROM EXCLUDED.workspace_id 
+			   AND collections.project_id IS NOT DISTINCT FROM EXCLUDED.project_id)
 		`
 		if _, err := tx.Exec(ctx, insertColQuery, colID, workspaceID, projectID, colReq.Name, colReq.Description, user.ID, now); err != nil {
 			return fmt.Errorf("failed to insert imported collection: %w", err)
@@ -442,6 +459,14 @@ func (s *SyncService) insertImportItems(
 		itemID, err := uuid.Parse(itemReq.ID)
 		if err != nil {
 			itemID = uuid.New()
+		} else {
+			// Check if item exists in a different collection
+			var existingColID uuid.UUID
+			if err := tx.QueryRow(ctx, "SELECT collection_id FROM collection_items WHERE id = $1", itemID).Scan(&existingColID); err == nil {
+				if existingColID != colID {
+					itemID = uuid.New()
+				}
+			}
 		}
 
 		itemType := itemReq.Type
@@ -484,6 +509,7 @@ func (s *SyncService) insertImportItems(
 				version = collection_items.version + 1,
 				last_modified_by = EXCLUDED.last_modified_by,
 				updated_at = EXCLUDED.updated_at
+			WHERE collection_items.collection_id = EXCLUDED.collection_id
 		`
 
 		_, err = tx.Exec(ctx, insertItemQuery,

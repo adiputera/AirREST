@@ -91,11 +91,15 @@ export interface CollectionItem {
   items?: CollectionItem[];
 }
 
+export type ProjectRole = 'admin' | 'maintainer' | 'contributor' | 'reader';
+
 export interface Collection {
   id: string;
   name: string;
   description?: string;
   items: CollectionItem[];
+  version?: number;
+  minRole?: ProjectRole;
   createdAt: number;
   updatedAt: number;
   _origin?: 'offline' | 'cloud';
@@ -189,6 +193,8 @@ export interface CloudConfig {
 
 export interface ScopesCacheData {
   workspaces: CloudWorkspace[];
+  teams?: CloudTeam[];
+  teamProjects?: Record<string, CloudProject[]>;
   teamsWithProjects: { team: CloudTeam; projects: CloudProject[] }[];
   lastFetchedAt: number;
 }

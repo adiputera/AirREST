@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   ChevronDown,
+  ChevronRight,
   User,
   Users,
   FolderGit2,
@@ -21,7 +22,7 @@ import {
   X,
 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
-import { ActiveScope, OfflineWorkspace } from '@/types/api';
+import { ActiveScope, OfflineWorkspace, CloudProject } from '@/types/api';
 import { getRoleFromJwt } from '@/lib/jwt';
 import { isOfflineOnly } from '@/lib/edition';
 import { ConfirmModal } from './ConfirmModal';
@@ -78,10 +79,28 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
   const setActiveScope = useApiStore((state) => state.setActiveScope);
   const pullCloudDelta = useApiStore((state) => state.pullCloudDelta);
   const fetchScopes = useApiStore((state) => state.fetchScopes);
+  const fetchProjectsForTeam = useApiStore((state) => state.fetchProjectsForTeam);
   const logoutCloud = useApiStore((state) => state.logoutCloud);
 
+  const [expandedTeams, setExpandedTeams] = useState<Record<string, boolean>>({});
+  const [loadingTeams, setLoadingTeams] = useState<Record<string, boolean>>({});
+
   const workspaces = scopesCache?.workspaces || [];
-  const teamsWithProjects = scopesCache?.teamsWithProjects || [];
+  const teams = scopesCache?.teams || scopesCache?.teamsWithProjects?.map((tp) => tp.team) || [];
+  const teamProjects: Record<string, CloudProject[]> = React.useMemo(() => {
+    if (scopesCache?.teamProjects && Object.keys(scopesCache.teamProjects).length > 0) {
+      return scopesCache.teamProjects;
+    }
+    const map: Record<string, CloudProject[]> = {};
+    if (scopesCache?.teamsWithProjects) {
+      for (const tp of scopesCache.teamsWithProjects) {
+        if (tp.team?.id) {
+          map[tp.team.id] = tp.projects || [];
+        }
+      }
+    }
+    return map;
+  }, [scopesCache?.teamProjects, scopesCache?.teamsWithProjects]);
 
   const isOffline = workspaceMode === 'offline';
   const activeOfflineWs = offlineWorkspaces.find((w) => w.id === activeOfflineWorkspaceId);
@@ -117,6 +136,16 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
       loadScopes(false);
     }
   }, [cloudConfig.token]);
+
+  // Auto-expand the currently active team project accordion
+  useEffect(() => {
+    if (activeScope?.type === 'project' && activeScope.teamId) {
+      setExpandedTeams((prev) => ({
+        ...prev,
+        [activeScope.teamId!]: true,
+      }));
+    }
+  }, [activeScope?.teamId, activeScope?.id]);
 
   const handleSelectScope = async (scope: ActiveScope) => {
     setIsOpen(false);
@@ -192,16 +221,47 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
     w.name.toLowerCase().includes(searchLower)
   );
 
-  const filteredTeams = teamsWithProjects
-    .map((tp) => ({
-      team: tp.team,
-      projects: tp.projects.filter(
-        (p) =>
-          p.name.toLowerCase().includes(searchLower) ||
-          tp.team.name.toLowerCase().includes(searchLower)
-      ),
-    }))
-    .filter((tp) => tp.projects.length > 0 || tp.team.name.toLowerCase().includes(searchLower));
+  const isTeamExpanded = (teamId: string) => {
+    if (searchLower) {
+      const projs = teamProjects[teamId] || [];
+      if (projs.some((p) => p.name.toLowerCase().includes(searchLower))) {
+        return true;
+      }
+    }
+    return !!expandedTeams[teamId];
+  };
+
+  const filteredTeams = teams.filter((team) => {
+    if (!searchLower) return true;
+    if (team.name.toLowerCase().includes(searchLower)) return true;
+    const projs = teamProjects[team.id] || [];
+    return projs.some((p) => p.name.toLowerCase().includes(searchLower));
+  });
+
+  const handleToggleTeam = async (teamId: string) => {
+    const isCurrentlyOpen = isTeamExpanded(teamId);
+    const next = !isCurrentlyOpen;
+    setExpandedTeams((prev) => ({ ...prev, [teamId]: next }));
+
+    if (next && !teamProjects[teamId]) {
+      setLoadingTeams((prev) => ({ ...prev, [teamId]: true }));
+      try {
+        await fetchProjectsForTeam(teamId);
+      } finally {
+        setLoadingTeams((prev) => ({ ...prev, [teamId]: false }));
+      }
+    }
+  };
+
+  const handleRefreshTeamProjects = async (teamId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setLoadingTeams((prev) => ({ ...prev, [teamId]: true }));
+    try {
+      await fetchProjectsForTeam(teamId, true);
+    } finally {
+      setLoadingTeams((prev) => ({ ...prev, [teamId]: false }));
+    }
+  };
 
   return (
     <>
@@ -501,20 +561,18 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                   <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-sky-400 flex items-center justify-between border-t border-zinc-850 pt-2">
                     <span>Online Workspaces</span>
                     {cloudConfig.token && (
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            loadScopes(true);
-                          }}
-                          disabled={isLoadingScopes}
-                          title="Sync online workspaces & projects list (force refresh)"
-                          className="p-0.5 rounded text-sky-400/80 hover:text-sky-300 hover:bg-sky-500/10 transition"
-                        >
-                          <RefreshCw className={`h-3 w-3 ${isLoadingScopes ? 'animate-spin' : ''}`} />
-                        </button>
-                        <span className="text-[9px] font-medium text-sky-400/80 uppercase">Cloud Sync</span>
-                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          loadScopes(true);
+                        }}
+                        disabled={isLoadingScopes}
+                        title="Refresh teams and personal workspaces list"
+                        className="flex items-center gap-1 px-1.5 py-0.5 rounded text-sky-400/80 hover:text-sky-300 hover:bg-sky-500/10 transition"
+                      >
+                        <RefreshCw className={`h-3 w-3 ${isLoadingScopes ? 'animate-spin' : ''}`} />
+                        <span className="text-[9px] font-semibold uppercase tracking-wider">Refresh Teams</span>
+                      </button>
                     )}
                   </div>
 
@@ -570,65 +628,153 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                           </div>
                         )}
 
-                        {/* Team Projects */}
+                        {/* Team Projects 2-Level Accordion */}
                         {filteredTeams.length > 0 && (
-                          <div className="space-y-2">
-                            <div className="px-2 py-0.5 text-[10px] font-semibold text-zinc-400">
-                              Team Projects
+                          <div className="space-y-1.5">
+                            <div className="px-2 py-0.5 text-[10px] font-semibold text-zinc-400 flex items-center justify-between">
+                              <span>Team Projects</span>
+                              <span className="text-[9px] text-zinc-500 font-normal">
+                                Click team to expand
+                              </span>
                             </div>
-                            {filteredTeams.map(({ team, projects }) => (
-                              <div key={team.id} className="rounded-lg border border-zinc-800/60 bg-zinc-900/30 p-1.5">
-                                <div className="flex items-center gap-1.5 px-1 py-0.5 text-[11px] font-semibold text-zinc-300">
-                                  <Users className="h-3 w-3 text-indigo-400 shrink-0" />
-                                  <span className="truncate">{team.name}</span>
-                                </div>
+                            {filteredTeams.map((team) => {
+                              const isExpanded = isTeamExpanded(team.id);
+                              const projs = teamProjects[team.id];
+                              const isLoadingThisTeam = loadingTeams[team.id];
+                              const isTeamActive =
+                                !isOffline &&
+                                activeScope?.type === 'project' &&
+                                activeScope.teamId === team.id;
 
-                                <div className="mt-1 space-y-0.5">
-                                  {projects.map((proj) => {
-                                    const isSelected =
-                                      !isOffline &&
-                                      activeScope?.type === 'project' &&
-                                      activeScope.id === proj.id;
-                                    return (
-                                      <button
-                                        key={proj.id}
-                                        onClick={() =>
-                                          handleSelectScope({
-                                            type: 'project',
-                                            id: proj.id,
-                                            name: proj.name,
-                                            teamId: team.id,
-                                            teamName: team.name,
-                                            role: proj.user_role || 'reader',
-                                          })
-                                        }
-                                        className={`w-full flex items-center justify-between rounded-lg px-2 py-1.5 text-left text-xs transition ${
-                                          isSelected
-                                            ? 'bg-indigo-500/20 text-indigo-300 font-semibold border border-indigo-500/30'
-                                            : 'text-zinc-300 hover:bg-zinc-800 hover:text-white border border-transparent'
+                              return (
+                                <div
+                                  key={team.id}
+                                  className="rounded-lg border border-zinc-800/70 bg-zinc-900/30 overflow-hidden transition"
+                                >
+                                  {/* Team Accordion Header */}
+                                  <div
+                                    role="button"
+                                    tabIndex={0}
+                                    onClick={() => handleToggleTeam(team.id)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter' || e.key === ' ') {
+                                        e.preventDefault();
+                                        handleToggleTeam(team.id);
+                                      }
+                                    }}
+                                    className="w-full flex items-center justify-between px-2.5 py-1.5 text-left text-xs font-semibold text-zinc-200 hover:bg-zinc-850 hover:text-white transition group select-none cursor-pointer"
+                                  >
+                                    <div className="flex items-center gap-2 min-w-0 flex-1 mr-1">
+                                      <ChevronRight
+                                        className={`h-3.5 w-3.5 text-zinc-400 transition-transform duration-150 shrink-0 ${
+                                          isExpanded ? 'rotate-90 text-indigo-400' : 'group-hover:text-zinc-200'
                                         }`}
-                                      >
-                                        <div className="flex items-center gap-2 truncate">
-                                          <FolderGit2 className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
-                                          <span className="truncate">{proj.name}</span>
-                                        </div>
-                                        <div className="flex items-center gap-1.5 shrink-0">
-                                          <span className="rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-1 py-0.2 text-[9px] uppercase font-bold">
-                                            Online
+                                      />
+                                      <Users className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
+                                      <span className="truncate">{team.name}</span>
+                                    </div>
+
+                                    <div className="flex items-center gap-1.5 shrink-0">
+                                      {isTeamActive && (
+                                        <span
+                                          className="h-1.5 w-1.5 rounded-full bg-indigo-400 shrink-0"
+                                          title="Active team scope"
+                                        />
+                                      )}
+                                      {isLoadingThisTeam ? (
+                                        <Loader2 className="h-3 w-3 animate-spin text-indigo-400" />
+                                      ) : projs !== undefined ? (
+                                        <div className="flex items-center gap-1">
+                                          <button
+                                            type="button"
+                                            onClick={(e) => handleRefreshTeamProjects(team.id, e)}
+                                            className="p-1 rounded text-zinc-500 hover:text-indigo-400 hover:bg-zinc-800 transition"
+                                            title={`Refresh ${team.name} projects`}
+                                          >
+                                            <RefreshCw className="h-2.5 w-2.5" />
+                                          </button>
+                                          <span className="rounded-full bg-zinc-800/80 px-1.5 py-0.2 text-[9px] font-mono text-zinc-400">
+                                            {projs.length}
                                           </span>
-                                          {proj.user_role && (
-                                            <span className="rounded bg-zinc-800 px-1 py-0.2 text-[9px] text-zinc-400 uppercase font-medium">
-                                              {proj.user_role}
-                                            </span>
-                                          )}
-                                          {isSelected && <Check className="h-3.5 w-3.5 text-indigo-400" />}
                                         </div>
-                                      </button>
-                                    );
-                                  })}
+                                      ) : (
+                                        <span className="rounded bg-zinc-800/60 px-1.5 py-0.5 text-[9px] text-zinc-400 font-medium">
+                                          Load
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {/* Accordion Content: Projects */}
+                                  {isExpanded && (
+                                    <div className="border-t border-zinc-800/60 bg-zinc-950/40 p-1 space-y-0.5 animate-in fade-in duration-100">
+                                      {isLoadingThisTeam && !projs ? (
+                                        <div className="flex items-center justify-center py-2.5 text-xs text-zinc-500 gap-1.5">
+                                          <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-400" />
+                                          <span>Loading projects...</span>
+                                        </div>
+                                      ) : projs && projs.length === 0 ? (
+                                        <div className="py-2 text-center text-[11px] text-zinc-500 italic">
+                                          No projects in this team.
+                                        </div>
+                                      ) : projs ? (
+                                        projs
+                                          .filter(
+                                            (proj) =>
+                                              !searchLower ||
+                                              team.name.toLowerCase().includes(searchLower) ||
+                                              proj.name.toLowerCase().includes(searchLower)
+                                          )
+                                          .map((proj) => {
+                                            const isSelected =
+                                              !isOffline &&
+                                              activeScope?.type === 'project' &&
+                                              activeScope.id === proj.id;
+                                            return (
+                                              <button
+                                                key={proj.id}
+                                                onClick={() =>
+                                                  handleSelectScope({
+                                                    type: 'project',
+                                                    id: proj.id,
+                                                    name: proj.name,
+                                                    teamId: team.id,
+                                                    teamName: team.name,
+                                                    role: proj.user_role || 'reader',
+                                                  })
+                                                }
+                                                className={`w-full flex items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-xs transition ${
+                                                  isSelected
+                                                    ? 'bg-indigo-500/20 text-indigo-300 font-semibold border border-indigo-500/30'
+                                                    : 'text-zinc-300 hover:bg-zinc-850 hover:text-white border border-transparent'
+                                                }`}
+                                              >
+                                                <div className="flex items-center gap-2 truncate">
+                                                  <FolderGit2 className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+                                                  <span className="truncate">{proj.name}</span>
+                                                </div>
+                                                <div className="flex items-center gap-1.5 shrink-0">
+                                                  <span className="rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-1 py-0.2 text-[9px] uppercase font-bold">
+                                                    Online
+                                                  </span>
+                                                  {proj.user_role && (
+                                                    <span className="rounded bg-zinc-800 px-1 py-0.2 text-[9px] text-zinc-400 uppercase font-medium">
+                                                      {proj.user_role}
+                                                    </span>
+                                                  )}
+                                                  {isSelected && (
+                                                    <Check className="h-3.5 w-3.5 text-indigo-400" />
+                                                  )}
+                                                </div>
+                                              </button>
+                                            );
+                                          })
+                                      ) : null}
+                                    </div>
+                                  )}
                                 </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         )}
 
@@ -667,29 +813,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
 
             {/* Footer Controls */}
             {!isOfflineOnly && cloudConfig.token && (
-              <div className="mt-2 border-t border-zinc-800 pt-2 space-y-1">
-                <button
-                  onClick={async () => {
-                    setIsOpen(false);
-                    await Promise.all([loadScopes(true), pullCloudDelta()]);
-                  }}
-                  disabled={syncStatus === 'syncing'}
-                  className="w-full flex items-center justify-between rounded-lg bg-sky-500/10 border border-sky-500/20 px-2.5 py-2 text-xs font-medium text-sky-300 hover:bg-sky-500/20 hover:text-white transition group"
-                  title="Bypass 12-hour cache and synchronize active workspace with cloud"
-                >
-                  <div className="flex items-center gap-2">
-                    <RefreshCw
-                      className={`h-3.5 w-3.5 text-sky-400 group-hover:rotate-180 transition-transform duration-500 ${
-                        syncStatus === 'syncing' ? 'animate-spin' : ''
-                      }`}
-                    />
-                    <span>Sync Workspace Online</span>
-                  </div>
-                  <span className="text-[10px] text-sky-400/70 font-mono">
-                    {lastSyncedAt ? formatTimeAgo(lastSyncedAt) : '1h cache'}
-                  </span>
-                </button>
-
+              <div className="mt-2 border-t border-zinc-800 pt-1.5">
                 <button
                   onClick={() => {
                     setIsOpen(false);

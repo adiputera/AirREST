@@ -148,3 +148,24 @@ func TestEnvironmentAccessRules(t *testing.T) {
 	}
 }
 
+func TestCollectionMinRoleAccessRules(t *testing.T) {
+	// 1. CanAccessCollection role hierarchy verification
+	roles := []domain.ProjectRole{
+		domain.ProjectRoleReader,
+		domain.ProjectRoleContributor,
+		domain.ProjectRoleMaintainer,
+		domain.ProjectRoleAdmin,
+	}
+
+	for i, userRole := range roles {
+		for j, minRole := range roles {
+			expected := i >= j
+			actual := CanAccessCollection(userRole, minRole)
+			if actual != expected {
+				t.Fatalf("CanAccessCollection(%s, %s): expected %v, got %v", userRole, minRole, expected, actual)
+			}
+		}
+	}
+}
+
+

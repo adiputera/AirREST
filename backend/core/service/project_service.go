@@ -73,33 +73,21 @@ func (s *ProjectService) CreateProject(ctx context.Context, user *domain.User, t
 // If the user is Superadmin or Team Admin: returns all projects in the team.
 // If regular member: returns ONLY projects explicitly assigned in project_members.
 func (s *ProjectService) ListProjects(ctx context.Context, user *domain.User, teamID uuid.UUID) ([]*domain.Project, error) {
+	if !user.IsSuperadmin() {
+		if _, err := s.teamRepo.GetMember(ctx, teamID, user.ID); err != nil {
+			return nil, ErrForbidden
+		}
+	}
 	isTeamAdmin, _ := s.teamService.CheckIfTeamAdmin(ctx, user, teamID)
 	return s.projectRepo.ListForUser(ctx, teamID, user.ID, user.IsSuperadmin(), isTeamAdmin)
 }
 
 // GetProject returns project details if the user has visibility
 func (s *ProjectService) GetProject(ctx context.Context, user *domain.User, projectID uuid.UUID) (*domain.Project, error) {
-	project, err := s.projectRepo.GetByID(ctx, projectID)
+	project, _, err := s.getProjectAndEffectiveRole(ctx, user, projectID)
 	if err != nil {
 		return nil, err
 	}
-
-	if user.IsSuperadmin() {
-		return project, nil
-	}
-
-	// Check if team admin
-	isTeamAdmin, _ := s.teamService.CheckIfTeamAdmin(ctx, user, project.TeamID)
-	if isTeamAdmin {
-		return project, nil
-	}
-
-	// Check if assigned in project_members
-	_, err = s.projectRepo.GetMember(ctx, projectID, user.ID)
-	if err != nil {
-		return nil, ErrForbidden // Invisible to non-assigned user
-	}
-
 	return project, nil
 }
 
@@ -210,9 +198,14 @@ func (s *ProjectService) getProjectAndEffectiveRole(ctx context.Context, user *d
 		return project, domain.ProjectRoleAdmin, nil
 	}
 
-	// Check if team admin
-	isTeamAdmin, _ := s.teamService.CheckIfTeamAdmin(ctx, user, project.TeamID)
-	if isTeamAdmin {
+	// Verify user is an active member of the parent team
+	teamMember, err := s.teamRepo.GetMember(ctx, project.TeamID, user.ID)
+	if err != nil {
+		return nil, "", ErrForbidden
+	}
+
+	// If team admin, automatically project admin
+	if teamMember.Role == domain.TeamRoleAdmin {
 		return project, domain.ProjectRoleAdmin, nil
 	}
 

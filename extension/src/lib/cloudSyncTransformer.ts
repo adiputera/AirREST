@@ -30,6 +30,8 @@ export function buildCollectionsFromDelta(backendCollections: any[], backendItem
       name: bc.name,
       description: bc.description || '',
       items: nestedItems,
+      version: typeof bc.version === 'number' ? bc.version : undefined,
+      minRole: bc.min_role || 'reader',
       createdAt: new Date(bc.created_at || Date.now()).getTime(),
       updatedAt: new Date(bc.updated_at || Date.now()).getTime(),
       _origin: 'cloud',
@@ -37,6 +39,26 @@ export function buildCollectionsFromDelta(backendCollections: any[], backendItem
   }
 
   return result;
+}
+
+/**
+ * Builds a single frontend Collection from a detailed backend collection object (with its items).
+ */
+export function buildCollectionFromDetails(bc: any): Collection {
+  const colItems = (bc.items || []).filter((item: any) => !item.deleted_at);
+  const nestedItems = buildItemTree(colItems, null);
+
+  return {
+    id: bc.id,
+    name: bc.name,
+    description: bc.description || '',
+    items: nestedItems,
+    version: typeof bc.version === 'number' ? bc.version : undefined,
+    minRole: bc.min_role || 'reader',
+    createdAt: new Date(bc.created_at || Date.now()).getTime(),
+    updatedAt: new Date(bc.updated_at || Date.now()).getTime(),
+    _origin: 'cloud',
+  };
 }
 
 function buildItemTree(items: any[], parentId: string | null): CollectionItem[] {

@@ -60,7 +60,9 @@ func (h *CollectionHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	collections, err := h.collectionService.ListCollections(r.Context(), user, wsID, projID)
+	includeItems := r.URL.Query().Get("include_items") == "true"
+
+	collections, err := h.collectionService.ListCollections(r.Context(), user, wsID, projID, includeItems)
 	if err != nil {
 		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
 		return
