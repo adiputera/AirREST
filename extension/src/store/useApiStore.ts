@@ -222,9 +222,11 @@ interface ApiStoreState {
 
   // Collections & History
   createCollection: (name: string, description?: string) => string;
+  renameCollection: (id: string, name: string) => void;
   createFolder: (collectionId: string, parentFolderId: string | null, name?: string) => string;
   createRequestInCollection: (collectionId: string, folderId: string | null, name?: string) => ApiRequest;
   deleteCollectionItem: (collectionId: string, itemId: string) => void;
+  renameCollectionItem: (collectionId: string, itemId: string, name: string) => void;
   saveRequestToCollection: (collectionId: string, folderId: string | null, request: ApiRequest) => void;
   saveActiveRequest: () => { success: boolean; isDirectSaved: boolean };
   addCollection: (collection: Collection) => Promise<void> | void;
@@ -2257,6 +2259,38 @@ export const useApiStore = create<ApiStoreState>()(
         return newCol.id;
       },
 
+      renameCollection: (id, name) => {
+        const trimmed = name.trim();
+        if (!trimmed) return;
+
+        set((state) => ({
+          collections: state.collections.map((col) => {
+            if (col.id !== id) return col;
+            return {
+              ...col,
+              name: trimmed,
+              updatedAt: Date.now(),
+            };
+          }),
+        }));
+
+        const { workspaceMode, cloudConfig, collections } = get();
+        if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
+          const updatedCol = collections.find((c) => c.id === id);
+          if (updatedCol) {
+            batchImportToScope(
+              cloudConfig.apiUrl,
+              cloudConfig.token,
+              cloudConfig.activeScope,
+              [updatedCol],
+              cloudConfig.refreshToken
+            ).catch((err) => {
+              console.error('Failed to sync renamed collection to cloud:', err);
+            });
+          }
+        }
+      },
+
       createFolder: (collectionId, parentFolderId, name) => {
         const newFolderId = generateId();
         const folderName = name?.trim() || 'New Folder';
@@ -2455,6 +2489,77 @@ export const useApiStore = create<ApiStoreState>()(
               [updatedCol],
               cloudConfig.refreshToken
             ).catch((err) => console.error('Failed to sync item deletion to cloud:', err));
+          }
+        }
+      },
+
+      renameCollectionItem: (collectionId, itemId, name) => {
+        const trimmed = name.trim();
+        if (!trimmed) return;
+
+        set((state) => {
+          const updateItems = (items: CollectionItem[]): CollectionItem[] => {
+            return items.map((item) => {
+              if (item.id === itemId) {
+                const updated: CollectionItem = {
+                  ...item,
+                  name: trimmed,
+                };
+                if (item.type === 'request' && item.request) {
+                  updated.request = {
+                    ...item.request,
+                    name: trimmed,
+                  };
+                }
+                return updated;
+              }
+              if (item.type === 'folder' && item.items) {
+                return {
+                  ...item,
+                  items: updateItems(item.items),
+                };
+              }
+              return item;
+            });
+          };
+
+          const collections = state.collections.map((col) => {
+            if (col.id !== collectionId) return col;
+            return {
+              ...col,
+              items: updateItems(col.items),
+              updatedAt: Date.now(),
+            };
+          });
+
+          // Synchronize any open tabs with this item
+          const tabs = state.tabs.map((tab) => {
+            if (tab.id === itemId) {
+              return {
+                ...tab,
+                name: trimmed,
+              };
+            }
+            return tab;
+          });
+
+          return {
+            collections,
+            tabs,
+          };
+        });
+
+        const { workspaceMode, cloudConfig, collections } = get();
+        if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
+          const updatedCol = collections.find((c) => c.id === collectionId);
+          if (updatedCol) {
+            batchImportToScope(
+              cloudConfig.apiUrl,
+              cloudConfig.token,
+              cloudConfig.activeScope,
+              [updatedCol],
+              cloudConfig.refreshToken
+            ).catch((err) => console.error('Failed to sync renamed item to cloud:', err));
           }
         }
       },

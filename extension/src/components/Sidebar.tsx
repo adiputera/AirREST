@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Folder,
   FolderOpen,
@@ -19,6 +19,10 @@ import {
   Upload,
   ChevronsUpDown,
   ChevronsDownUp,
+  MoreVertical,
+  Pencil,
+  Check,
+  X,
 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
 import { CollectionItem, ApiRequest, Collection } from '@/types/api';
@@ -128,6 +132,8 @@ const FolderItem: React.FC<FolderItemProps> = ({
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isCreatingSubfolder, setIsCreatingSubfolder] = useState(false);
   const [subfolderName, setSubfolderName] = useState('');
+  const [isEditing, setIsEditing] = useState(false);
+  const [editingName, setEditingName] = useState(item.name);
 
   const [dropPosition, setDropPosition] = useState<'before' | 'after' | 'inside' | null>(null);
   const [isForbidden, setIsForbidden] = useState(false);
@@ -138,6 +144,23 @@ const FolderItem: React.FC<FolderItemProps> = ({
 
   const createFolder = useApiStore((state) => state.createFolder);
   const createRequestInCollection = useApiStore((state) => state.createRequestInCollection);
+  const renameCollectionItem = useApiStore((state) => state.renameCollectionItem);
+
+  useEffect(() => {
+    if (!isEditing) {
+      setEditingName(item.name);
+    }
+  }, [item.name, isEditing]);
+
+  const handleConfirmRename = () => {
+    const trimmed = editingName.trim();
+    if (trimmed && trimmed !== item.name) {
+      renameCollectionItem(collectionId, item.id, trimmed);
+    } else {
+      setEditingName(item.name);
+    }
+    setIsEditing(false);
+  };
 
   const isBeingDragged = draggedItem?.id === item.id;
 
@@ -281,142 +304,212 @@ const FolderItem: React.FC<FolderItemProps> = ({
   if (item.type === 'folder') {
     return (
       <div className="select-none">
-        <div
-          draggable={!isCreatingSubfolder}
-          onDragStart={handleDragStart}
-          onDragEnd={handleDragEnd}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-          onClick={() => onToggleFolder(item.id, item)}
-          className={`group relative flex items-center gap-1.5 py-1 px-2 rounded-md transition text-xs font-medium ${
-            isForbidden
-              ? 'cursor-not-allowed bg-rose-500/10 text-rose-300'
-              : isBeingDragged
-              ? 'opacity-40 bg-zinc-900/60 cursor-grabbing'
-              : dropPosition === 'inside'
-              ? 'bg-sky-500/20 ring-1 ring-sky-400/60 text-white cursor-pointer'
-              : 'hover:bg-zinc-900/80 text-zinc-300 hover:text-white cursor-pointer'
-          }`}
-          style={{ paddingLeft: `${Math.max(level * 12, 8)}px` }}
-        >
-          {dropPosition === 'before' && !isForbidden && (
-            <div className="absolute top-0 left-0 right-0 h-0.5 bg-sky-400 z-30 shadow-[0_0_8px_rgba(56,189,248,0.9)] pointer-events-none flex items-center">
-              <div className="w-1.5 h-1.5 rounded-full bg-sky-400 -ml-0.5" />
-            </div>
-          )}
-          {dropPosition === 'after' && !isForbidden && (
-            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-sky-400 z-30 shadow-[0_0_8px_rgba(56,189,248,0.9)] pointer-events-none flex items-center">
-              <div className="w-1.5 h-1.5 rounded-full bg-sky-400 -ml-0.5" />
-            </div>
-          )}
-          {isOpen ? (
-            <ChevronDown className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
-          ) : (
-            <ChevronRight className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
-          )}
-          {isOpen ? (
-            <FolderOpen className="h-3.5 w-3.5 text-sky-400 shrink-0" />
-          ) : (
-            <Folder className="h-3.5 w-3.5 text-sky-400 shrink-0" />
-          )}
-          <span className="truncate flex-1">{item.name}</span>
-          <span className="text-[10px] text-zinc-500 font-mono mr-1">
-            {item.items?.length || 0}
-          </span>
-
+        {isEditing ? (
           <div
-            className={`items-center gap-0.5 shrink-0 transition ${
-              isMenuOpen ? 'flex' : 'hidden group-hover:flex group-focus-within:flex'
-            }`}
+            className="flex items-center gap-1.5 py-1 px-2 rounded-md bg-zinc-900 border border-sky-500/40 text-xs font-medium my-0.5"
+            style={{ paddingLeft: `${Math.max(level * 12, 8)}px` }}
+            onClick={(e) => e.stopPropagation()}
           >
-            {/* Options Button */}
-            <div className="relative">
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setIsMenuOpen(!isMenuOpen);
-                }}
-                className="rounded p-0.5 text-zinc-400 hover:text-sky-400 hover:bg-zinc-800 transition"
-                title="Folder options"
-              >
-                <Plus className="h-3.5 w-3.5" />
-              </button>
-
-              {isMenuOpen && (
-                <>
-                  <div
-                    className="fixed inset-0 z-40"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setIsMenuOpen(false);
-                    }}
-                  />
-                  <div
-                    onClick={(e) => e.stopPropagation()}
-                    className="absolute right-0 top-full mt-1 z-50 w-40 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-xl"
-                  >
-                    <button
-                      type="button"
-                      onClick={handleCreateRequest}
-                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition"
-                    >
-                      <FileCode className="h-3.5 w-3.5 text-sky-400" />
-                      <span>New Request</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleStartCreateSubfolder}
-                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-amber-400 transition"
-                    >
-                      <FolderPlus className="h-3.5 w-3.5 text-amber-400" />
-                      <span>New Subfolder</span>
-                    </button>
-                    <div className="my-1 border-t border-zinc-800/80" />
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setIsMenuOpen(false);
-                        onExpandAllInFolder(item);
-                      }}
-                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 transition"
-                    >
-                      <ChevronsUpDown className="h-3.5 w-3.5 text-zinc-400" />
-                      <span>Expand All</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setIsMenuOpen(false);
-                        onCollapseAllInFolder(item);
-                      }}
-                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 transition"
-                    >
-                      <ChevronsDownUp className="h-3.5 w-3.5 text-zinc-400" />
-                      <span>Collapse All</span>
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-
-            {/* Delete Folder Button */}
+            {isOpen ? (
+              <FolderOpen className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+            ) : (
+              <Folder className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+            )}
+            <input
+              type="text"
+              autoFocus
+              value={editingName}
+              onChange={(e) => setEditingName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleConfirmRename();
+                else if (e.key === 'Escape') {
+                  setEditingName(item.name);
+                  setIsEditing(false);
+                }
+              }}
+              className="flex-1 min-w-0 rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-100 focus:outline-none focus:ring-1 focus:ring-sky-400"
+            />
             <button
               type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onRequestDelete(item);
-              }}
-              className="rounded p-0.5 text-zinc-400 hover:text-rose-400 hover:bg-zinc-800 transition"
-              title="Delete folder"
+              onClick={handleConfirmRename}
+              className="p-1 text-emerald-400 hover:text-emerald-300 transition"
+              title="Save name"
             >
-              <Trash2 className="h-3 w-3" />
+              <Check className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setEditingName(item.name);
+                setIsEditing(false);
+              }}
+              className="p-1 text-zinc-400 hover:text-zinc-200 transition"
+              title="Cancel"
+            >
+              <X className="h-3.5 w-3.5" />
             </button>
           </div>
-        </div>
+        ) : (
+          <div
+            draggable={!isCreatingSubfolder}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            onClick={() => onToggleFolder(item.id, item)}
+            className={`group relative flex items-center gap-1.5 py-1 px-2 rounded-md transition text-xs font-medium ${
+              isForbidden
+                ? 'cursor-not-allowed bg-rose-500/10 text-rose-300'
+                : isBeingDragged
+                ? 'opacity-40 bg-zinc-900/60 cursor-grabbing'
+                : dropPosition === 'inside'
+                ? 'bg-sky-500/20 ring-1 ring-sky-400/60 text-white cursor-pointer'
+                : 'hover:bg-zinc-900/80 text-zinc-300 hover:text-white cursor-pointer'
+            }`}
+            style={{ paddingLeft: `${Math.max(level * 12, 8)}px` }}
+          >
+            {dropPosition === 'before' && !isForbidden && (
+              <div className="absolute top-0 left-0 right-0 h-0.5 bg-sky-400 z-30 shadow-[0_0_8px_rgba(56,189,248,0.9)] pointer-events-none flex items-center">
+                <div className="w-1.5 h-1.5 rounded-full bg-sky-400 -ml-0.5" />
+              </div>
+            )}
+            {dropPosition === 'after' && !isForbidden && (
+              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-sky-400 z-30 shadow-[0_0_8px_rgba(56,189,248,0.9)] pointer-events-none flex items-center">
+                <div className="w-1.5 h-1.5 rounded-full bg-sky-400 -ml-0.5" />
+              </div>
+            )}
+            {isOpen ? (
+              <ChevronDown className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
+            )}
+            {isOpen ? (
+              <FolderOpen className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+            ) : (
+              <Folder className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+            )}
+            <span
+              className="truncate flex-1"
+              title={`${item.name} (Double-click to rename)`}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                setIsEditing(true);
+                setEditingName(item.name);
+              }}
+            >
+              {item.name}
+            </span>
+            <span className="text-[10px] text-zinc-500 font-mono mr-1">
+              {item.items?.length || 0}
+            </span>
+
+            <div
+              className={`items-center gap-0.5 shrink-0 transition ${
+                isMenuOpen ? 'flex' : 'hidden group-hover:flex group-focus-within:flex'
+              }`}
+            >
+              {/* Folder Options 3-Dots Button */}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsMenuOpen(!isMenuOpen);
+                  }}
+                  className="rounded p-0.5 text-zinc-400 hover:text-sky-400 hover:bg-zinc-800 transition"
+                  title="Folder options"
+                >
+                  <MoreVertical className="h-3.5 w-3.5" />
+                </button>
+
+                {isMenuOpen && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-40"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsMenuOpen(false);
+                      }}
+                    />
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      className="absolute right-0 top-full mt-1 z-50 w-44 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-xl animate-in fade-in zoom-in-95 duration-100"
+                    >
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsMenuOpen(false);
+                          setIsEditing(true);
+                          setEditingName(item.name);
+                        }}
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition"
+                      >
+                        <Pencil className="h-3.5 w-3.5 text-sky-400" />
+                        <span>Rename Folder</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleCreateRequest}
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition"
+                      >
+                        <FileCode className="h-3.5 w-3.5 text-sky-400" />
+                        <span>New Request</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleStartCreateSubfolder}
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-amber-400 transition"
+                      >
+                        <FolderPlus className="h-3.5 w-3.5 text-amber-400" />
+                        <span>New Subfolder</span>
+                      </button>
+                      <div className="my-1 border-t border-zinc-800/80" />
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsMenuOpen(false);
+                          onExpandAllInFolder(item);
+                        }}
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 transition"
+                      >
+                        <ChevronsUpDown className="h-3.5 w-3.5 text-zinc-400" />
+                        <span>Expand All</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsMenuOpen(false);
+                          onCollapseAllInFolder(item);
+                        }}
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 transition"
+                      >
+                        <ChevronsDownUp className="h-3.5 w-3.5 text-zinc-400" />
+                        <span>Collapse All</span>
+                      </button>
+                      <div className="my-1 border-t border-zinc-800/80" />
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsMenuOpen(false);
+                          onRequestDelete(item);
+                        }}
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-rose-400 hover:bg-rose-500/10 transition"
+                      >
+                        <Trash2 className="h-3.5 w-3.5 text-rose-400" />
+                        <span>Delete Folder</span>
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Inline Subfolder creation */}
         {isOpen && isCreatingSubfolder && (
@@ -519,6 +612,51 @@ const FolderItem: React.FC<FolderItemProps> = ({
   // Request item
   if (!item.request) return null;
 
+  if (isEditing) {
+    return (
+      <div
+        className="flex items-center gap-1.5 py-1 px-2 rounded-md bg-zinc-900 border border-sky-500/40 text-xs font-medium my-0.5"
+        style={{ paddingLeft: `${Math.max(level * 12, 8)}px` }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <MethodBadge method={item.request.method} size="sm" />
+        <input
+          type="text"
+          autoFocus
+          value={editingName}
+          onChange={(e) => setEditingName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') handleConfirmRename();
+            else if (e.key === 'Escape') {
+              setEditingName(item.name);
+              setIsEditing(false);
+            }
+          }}
+          className="flex-1 min-w-0 rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-100 focus:outline-none focus:ring-1 focus:ring-sky-400"
+        />
+        <button
+          type="button"
+          onClick={handleConfirmRename}
+          className="p-1 text-emerald-400 hover:text-emerald-300 transition"
+          title="Save name"
+        >
+          <Check className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setEditingName(item.name);
+            setIsEditing(false);
+          }}
+          className="p-1 text-zinc-400 hover:text-zinc-200 transition"
+          title="Cancel"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div
       draggable={true}
@@ -548,32 +686,90 @@ const FolderItem: React.FC<FolderItemProps> = ({
         </div>
       )}
       <MethodBadge method={item.request.method} size="sm" />
-      <span className="truncate flex-1 group-hover:text-zinc-100" title={item.name}>
+      <span
+        className="truncate flex-1 group-hover:text-zinc-100"
+        title={`${item.name} (Double-click to rename)`}
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          setIsEditing(true);
+          setEditingName(item.name);
+        }}
+      >
         {item.name}
       </span>
-      <div className="hidden group-hover:flex group-focus-within:flex items-center gap-1 transition shrink-0">
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onRequestMove(item, collectionId);
-          }}
-          className="rounded p-0.5 text-zinc-500 hover:text-sky-400 hover:bg-zinc-800 transition"
-          title="Move request to folder or collection"
-        >
-          <FolderInput className="h-3 w-3" />
-        </button>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onRequestDelete(item);
-          }}
-          className="rounded p-0.5 text-zinc-500 hover:text-rose-400 hover:bg-zinc-800 transition"
-          title="Remove from collection"
-        >
-          <Trash2 className="h-3 w-3" />
-        </button>
+      <div
+        className={`items-center gap-0.5 transition shrink-0 ${
+          isMenuOpen ? 'flex' : 'hidden group-hover:flex group-focus-within:flex'
+        }`}
+      >
+        <div className="relative">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsMenuOpen(!isMenuOpen);
+            }}
+            className="rounded p-0.5 text-zinc-500 hover:text-sky-400 hover:bg-zinc-800 transition"
+            title="Request options"
+          >
+            <MoreVertical className="h-3 w-3" />
+          </button>
+
+          {isMenuOpen && (
+            <>
+              <div
+                className="fixed inset-0 z-40"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsMenuOpen(false);
+                }}
+              />
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="absolute right-0 top-full mt-1 z-50 w-40 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-xl animate-in fade-in zoom-in-95 duration-100"
+              >
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsMenuOpen(false);
+                    setIsEditing(true);
+                    setEditingName(item.name);
+                  }}
+                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition"
+                >
+                  <Pencil className="h-3.5 w-3.5 text-sky-400" />
+                  <span>Rename Request</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsMenuOpen(false);
+                    onRequestMove(item, collectionId);
+                  }}
+                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-amber-400 transition"
+                >
+                  <FolderInput className="h-3.5 w-3.5 text-amber-400" />
+                  <span>Move Request</span>
+                </button>
+                <div className="my-1 border-t border-zinc-800/80" />
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsMenuOpen(false);
+                    onRequestDelete(item);
+                  }}
+                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-rose-400 hover:bg-rose-500/10 transition"
+                >
+                  <Trash2 className="h-3.5 w-3.5 text-rose-400" />
+                  <span>Delete Request</span>
+                </button>
+              </div>
+            </>
+          )}
+        </div>
         <ArrowUpRight className="h-3 w-3 text-zinc-600 group-hover:text-zinc-400 transition" />
       </div>
     </div>
@@ -586,6 +782,7 @@ export const Sidebar: React.FC = () => {
   const collections = useApiStore((state) => state.collections);
   const history = useApiStore((state) => state.history);
   const deleteCollection = useApiStore((state) => state.deleteCollection);
+  const renameCollection = useApiStore((state) => state.renameCollection);
   const createCollection = useApiStore((state) => state.createCollection);
   const createFolder = useApiStore((state) => state.createFolder);
   const createRequestInCollection = useApiStore((state) => state.createRequestInCollection);
@@ -596,12 +793,22 @@ export const Sidebar: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [isCreatingCol, setIsCreatingCol] = useState(false);
   const [newColTitle, setNewColTitle] = useState('');
+  const [editingColId, setEditingColId] = useState<string | null>(null);
+  const [editingColName, setEditingColName] = useState('');
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [collectionToDelete, setCollectionToDelete] = useState<Collection | null>(null);
   const [collectionToMove, setCollectionToMove] = useState<Collection | null>(null);
   const [showClearHistoryConfirm, setShowClearHistoryConfirm] = useState(false);
   const [collapsedCollections, setCollapsedCollections] = useState<Record<string, boolean>>({});
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({});
+
+  const handleConfirmRenameCol = (colId: string) => {
+    const trimmed = editingColName.trim();
+    if (trimmed) {
+      renameCollection(colId, trimmed);
+    }
+    setEditingColId(null);
+  };
 
   const [activeAddMenuColId, setActiveAddMenuColId] = useState<string | null>(null);
   const [creatingFolderInCol, setCreatingFolderInCol] = useState<string | null>(null);
@@ -927,146 +1134,208 @@ export const Sidebar: React.FC = () => {
 
                   return (
                     <div key={col.id} className="rounded-lg border border-zinc-850 bg-zinc-900/40 p-1.5 transition">
-                      <div
-                        onClick={() => toggleCollectionCollapse(col)}
-                        className="flex items-center justify-between px-2 py-1 rounded-md hover:bg-zinc-850/60 cursor-pointer transition select-none group"
-                      >
-                        <div className="flex items-center gap-1.5 min-w-0 flex-1 mr-1">
-                          <div className="text-zinc-500 group-hover:text-zinc-300 transition shrink-0">
-                            {isCollapsed ? (
-                              <ChevronRight className="h-3.5 w-3.5" />
-                            ) : (
-                              <ChevronDown className="h-3.5 w-3.5" />
-                            )}
-                          </div>
-                          {isCollapsed ? (
-                            <Folder className="h-4 w-4 text-amber-400 shrink-0" />
-                          ) : (
-                            <FolderOpen className="h-4 w-4 text-amber-400 shrink-0" />
-                          )}
-                          <span className="text-xs font-bold text-zinc-200 group-hover:text-white truncate" title={col.name}>
-                            {col.name}
-                          </span>
-                          <span className="text-[10px] text-zinc-500 shrink-0 font-mono">
-                            {col.items.length}
-                          </span>
-                        </div>
+                      {editingColId === col.id ? (
                         <div
-                          className={`items-center gap-0.5 shrink-0 ml-1 ${
-                            activeAddMenuColId === col.id
-                              ? 'flex'
-                              : 'hidden group-hover:flex group-focus-within:flex'
-                          }`}
+                          className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-zinc-850/90 border border-sky-500/40 my-0.5"
+                          onClick={(e) => e.stopPropagation()}
                         >
-                          {/* Options button with menu */}
-                          <div className="relative">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setActiveAddMenuColId(activeAddMenuColId === col.id ? null : col.id);
-                              }}
-                              className="rounded p-1 text-zinc-500 hover:text-sky-400 hover:bg-zinc-800 transition"
-                              title="Collection options"
-                            >
-                              <Plus className="h-3.5 w-3.5" />
-                            </button>
-
-                            {activeAddMenuColId === col.id && (
-                              <>
-                                <div
-                                  className="fixed inset-0 z-40"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setActiveAddMenuColId(null);
-                                  }}
-                                />
-                                <div
-                                  onClick={(e) => e.stopPropagation()}
-                                  className="absolute right-0 top-full mt-1 z-50 w-40 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-xl"
-                                >
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveAddMenuColId(null);
-                                      setCollapsedCollections((prev) => ({ ...prev, [col.id]: false }));
-                                      createRequestInCollection(col.id, null, 'New Request');
-                                    }}
-                                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition"
-                                  >
-                                    <FileCode className="h-3.5 w-3.5 text-sky-400" />
-                                    <span>New Request</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveAddMenuColId(null);
-                                      setCollapsedCollections((prev) => ({ ...prev, [col.id]: false }));
-                                      setCreatingFolderInCol(col.id);
-                                      setNewFolderName('');
-                                    }}
-                                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-amber-400 transition"
-                                  >
-                                    <FolderPlus className="h-3.5 w-3.5 text-amber-400" />
-                                    <span>New Folder</span>
-                                  </button>
-                                  <div className="my-1 border-t border-zinc-800/80" />
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveAddMenuColId(null);
-                                      handleExpandAllInCollection(col);
-                                    }}
-                                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 transition"
-                                  >
-                                    <ChevronsUpDown className="h-3.5 w-3.5 text-zinc-400" />
-                                    <span>Expand All</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveAddMenuColId(null);
-                                      handleCollapseAllInCollection(col);
-                                    }}
-                                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 transition"
-                                  >
-                                    <ChevronsDownUp className="h-3.5 w-3.5 text-zinc-400" />
-                                    <span>Collapse All</span>
-                                  </button>
-                                </div>
-                              </>
-                            )}
-                          </div>
-
+                          <Folder className="h-4 w-4 text-amber-400 shrink-0" />
+                          <input
+                            type="text"
+                            autoFocus
+                            value={editingColName}
+                            onChange={(e) => setEditingColName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleConfirmRenameCol(col.id);
+                              else if (e.key === 'Escape') setEditingColId(null);
+                            }}
+                            className="flex-1 min-w-0 rounded bg-zinc-900 border border-sky-500/50 px-1.5 py-0.5 text-xs text-zinc-100 focus:outline-none focus:ring-1 focus:ring-sky-400"
+                          />
                           <button
-                            onClick={(e) => handleExportCollection(e, col)}
-                            className="rounded p-1 text-zinc-500 hover:text-sky-400 hover:bg-zinc-800 transition"
-                            title="Export collection as Postman v2.1 JSON"
+                            type="button"
+                            onClick={() => handleConfirmRenameCol(col.id)}
+                            className="p-1 text-emerald-400 hover:text-emerald-300 transition"
+                            title="Save name"
                           >
-                            <Download className="h-3.5 w-3.5" />
+                            <Check className="h-3.5 w-3.5" />
                           </button>
                           <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setCollectionToMove(col);
-                            }}
-                            className="rounded p-1 text-zinc-500 hover:text-amber-400 hover:bg-zinc-800 transition"
-                            title="Move collection to another workspace or project"
+                            type="button"
+                            onClick={() => setEditingColId(null)}
+                            className="p-1 text-zinc-400 hover:text-zinc-200 transition"
+                            title="Cancel"
                           >
-                            <FolderInput className="h-3.5 w-3.5" />
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setCollectionToDelete(col);
-                            }}
-                            className="rounded p-1 text-zinc-500 hover:text-rose-400 hover:bg-zinc-800 transition"
-                            title="Delete collection"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
+                            <X className="h-3.5 w-3.5" />
                           </button>
                         </div>
-                      </div>
+                      ) : (
+                        <div
+                          onClick={() => toggleCollectionCollapse(col)}
+                          className="flex items-center justify-between px-2 py-1 rounded-md hover:bg-zinc-850/60 cursor-pointer transition select-none group"
+                        >
+                          <div className="flex items-center gap-1.5 min-w-0 flex-1 mr-1">
+                            <div className="text-zinc-500 group-hover:text-zinc-300 transition shrink-0">
+                              {isCollapsed ? (
+                                <ChevronRight className="h-3.5 w-3.5" />
+                              ) : (
+                                <ChevronDown className="h-3.5 w-3.5" />
+                              )}
+                            </div>
+                            {isCollapsed ? (
+                              <Folder className="h-4 w-4 text-amber-400 shrink-0" />
+                            ) : (
+                              <FolderOpen className="h-4 w-4 text-amber-400 shrink-0" />
+                            )}
+                            <span
+                              className="text-xs font-bold text-zinc-200 group-hover:text-white truncate"
+                              title={`${col.name} (Double-click to rename)`}
+                              onDoubleClick={(e) => {
+                                e.stopPropagation();
+                                setEditingColId(col.id);
+                                setEditingColName(col.name);
+                              }}
+                            >
+                              {col.name}
+                            </span>
+                            <span className="text-[10px] text-zinc-500 shrink-0 font-mono">
+                              {col.items.length}
+                            </span>
+                          </div>
+                          <div
+                            className={`items-center gap-0.5 shrink-0 ml-1 ${
+                              activeAddMenuColId === col.id
+                                ? 'flex'
+                                : 'hidden group-hover:flex group-focus-within:flex'
+                            }`}
+                          >
+                            {/* Collection Options 3-Dots Button */}
+                            <div className="relative">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveAddMenuColId(activeAddMenuColId === col.id ? null : col.id);
+                                }}
+                                className="rounded p-1 text-zinc-500 hover:text-sky-400 hover:bg-zinc-800 transition"
+                                title="Collection options"
+                              >
+                                <MoreVertical className="h-3.5 w-3.5" />
+                              </button>
+
+                              {activeAddMenuColId === col.id && (
+                                <>
+                                  <div
+                                    className="fixed inset-0 z-40"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setActiveAddMenuColId(null);
+                                    }}
+                                  />
+                                  <div
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="absolute right-0 top-full mt-1 z-50 w-48 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-xl animate-in fade-in zoom-in-95 duration-100"
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setActiveAddMenuColId(null);
+                                        setEditingColId(col.id);
+                                        setEditingColName(col.name);
+                                      }}
+                                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition"
+                                    >
+                                      <Pencil className="h-3.5 w-3.5 text-sky-400" />
+                                      <span>Rename Collection</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setActiveAddMenuColId(null);
+                                        setCollapsedCollections((prev) => ({ ...prev, [col.id]: false }));
+                                        createRequestInCollection(col.id, null, 'New Request');
+                                      }}
+                                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition"
+                                    >
+                                      <FileCode className="h-3.5 w-3.5 text-sky-400" />
+                                      <span>New Request</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setActiveAddMenuColId(null);
+                                        setCollapsedCollections((prev) => ({ ...prev, [col.id]: false }));
+                                        setCreatingFolderInCol(col.id);
+                                        setNewFolderName('');
+                                      }}
+                                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-amber-400 transition"
+                                    >
+                                      <FolderPlus className="h-3.5 w-3.5 text-amber-400" />
+                                      <span>New Folder</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setActiveAddMenuColId(null);
+                                        setCollectionToMove(col);
+                                      }}
+                                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-amber-400 transition"
+                                    >
+                                      <FolderInput className="h-3.5 w-3.5 text-amber-400" />
+                                      <span>Move Collection</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        setActiveAddMenuColId(null);
+                                        handleExportCollection(e, col);
+                                      }}
+                                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition"
+                                    >
+                                      <Download className="h-3.5 w-3.5 text-sky-400" />
+                                      <span>Export Collection</span>
+                                    </button>
+                                    <div className="my-1 border-t border-zinc-800/80" />
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setActiveAddMenuColId(null);
+                                        handleExpandAllInCollection(col);
+                                      }}
+                                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 transition"
+                                    >
+                                      <ChevronsUpDown className="h-3.5 w-3.5 text-zinc-400" />
+                                      <span>Expand All</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setActiveAddMenuColId(null);
+                                        handleCollapseAllInCollection(col);
+                                      }}
+                                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 transition"
+                                    >
+                                      <ChevronsDownUp className="h-3.5 w-3.5 text-zinc-400" />
+                                      <span>Collapse All</span>
+                                    </button>
+                                    <div className="my-1 border-t border-zinc-800/80" />
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setActiveAddMenuColId(null);
+                                        setCollectionToDelete(col);
+                                      }}
+                                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-rose-400 hover:bg-rose-500/10 transition"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5 text-rose-400" />
+                                      <span>Delete Collection</span>
+                                    </button>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
 
                       {!isCollapsed && (
                         <div className="mt-1 space-y-0.5 border-t border-zinc-850/50 pt-1">

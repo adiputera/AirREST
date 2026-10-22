@@ -73,6 +73,11 @@ AirREST is an API testing client that runs directly inside Google Chrome as a Ma
 - **Hierarchical Tree Navigation**:
   - **1-Level Default Expansion**: Expanding any collection or folder defaults to 1 level only—child subfolders remain collapsed until explicitly opened, preventing tree clutter.
   - **Expand All & Collapse All**: Quick actions in each collection and folder dropdown menu to recursively expand all nested items or fold them back to a tidy 1-level view.
+- **Consolidated 3-Dots Action Menu & In-Place Renaming**:
+  - Replaced cluttered action icon buttons with a clean, unified 3-dots (`MoreVertical`) dropdown menu on collections, folders, and requests.
+  - In-place inline renaming for collections, folders, and requests with keyboard shortcuts (`Enter` to save, `Escape` to cancel) and `<Check>`/`<X>` action buttons.
+  - Double-click on any collection, folder, or request name directly in the sidebar tree to instantly initiate inline renaming.
+  - Automatically synchronizes active open tabs when a request is renamed from the sidebar.
 - **Confirmation Modals**: Dialog prompts require explicit confirmation before deleting collections.
 
 ### 4. 🌍 Environment Variables & Dynamic Templating

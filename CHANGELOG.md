@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added interactive user menu in the top navigation bar. When unauthenticated, it persistently displays a **Sign In** action to open cloud login; when authenticated, it displays the user profile avatar, name, email, and role badge.
   - Added **Change Password** modal (`ChangePasswordModal.tsx`) communicating with `PUT /api/v1/auth/password` with validation (minimum 8 characters, password matching, and current password verification).
   - Added **Sign Out** action with confirmation dialog to safely disconnect credentials and clear cached cloud session data.
+- **Collection, Folder & Request In-Place Renaming & 3-Dots Menu**:
+  - Replaced crowded collection action buttons with a consolidated 3-dots (`MoreVertical`) options menu.
+  - Added in-place inline renaming for collections, folders, and requests in the sidebar with keyboard shortcuts (`Enter` to save, `Escape` to cancel) and confirmation buttons.
+  - Added double-click shortcut directly on collection, folder, and request labels to quickly initiate renaming.
+  - Automatically synchronizes tab headers and open request titles when renamed from the sidebar.
 
 ### Changed
 - **UI Customization & Component Polish**:
