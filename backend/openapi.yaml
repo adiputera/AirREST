@@ -1,0 +1,2842 @@
+openapi: 3.1.0
+info:
+  title: AirREST Backend API Contract
+  version: 1.1.0
+  description: |
+    # AirREST Cloud Backend API Specification & Contract
+
+    This document defines the formal API Contract for the AirREST backend synchronization and collaboration service.
+    Any backend implementation (written in Go, Node.js/TypeScript, Python, Java, Rust, C#, PHP, etc.) that complies
+    with this specification will work as an immediate drop-in replacement for:
+    - **AirREST Chrome Extension** (DevTools / Popup REST client)
+    - **AirREST Hub** (Web-based workspace and team collaboration dashboard)
+
+    ---
+
+    ## Key Architectural Principles
+
+    ### 1. Standard Response Envelope
+    All HTTP endpoints return responses wrapped in a consistent Envelope structure:
+    ```json
+    {
+      "success": true,
+      "data": { ... }
+    }
+    ```
+    On errors:
+    ```json
+    {
+      "success": false,
+      "error": "Human-readable error description",
+      "code": "ERROR_CODE_STRING"
+    }
+    ```
+
+    ### 2. Authentication & Silent Rolling Refresh
+    - Authenticated endpoints require `Authorization: Bearer <access_token>`.
+    - Access tokens are JWTs (HS256) valid for 72 hours.
+    - Refresh tokens are rolling 30-day tokens.
+    - When the client receives HTTP `401 Unauthorized`, it transparently calls `POST /api/v1/auth/refresh`
+      with `{ "refresh_token": "..." }` and retries the original request upon renewal.
+
+    ### 3. Optimistic Concurrency Control (OCC)
+    - Mutable entities (`collections`, `collection_items`, `environments`) include a numeric `version` (int64).
+    - When updating, clients send `base_version`.
+    - If `base_version != current_server_version`, the server aborts the write and returns HTTP `409 Conflict`:
+      ```json
+      {
+        "success": false,
+        "error": "conflict: item has been modified by another user",
+        "code": "CONFLICT",
+        "data": { ...latest_server_object... }
+      }
+      ```
+
+    ### 4. Soft-Deletes & Tombstone Deltas
+    - Deletions are soft-deletes setting `deleted_at = NOW()`.
+    - `GET /api/v1/sync/pull?since=<timestamp>` returns active items AND deleted items (`deleted_at != null`)
+      so that distributed clients purge deleted entities locally and never re-upload them as zombies.
+
+    ### 5. Hierarchical RBAC & Project Isolation
+    - **System Roles**: `superadmin`, `user`
+    - **Team Roles**: `admin`, `member`
+    - **Project Roles**: `admin`, `maintainer`, `contributor`, `reader`
+    - **Project Isolation**: Non-superadmin users can only view or query projects to which they are explicitly assigned.
+    - **Granular Permissions**: Collections and Environments support `min_role` (`admin`, `maintainer`, `contributor`, `reader`).
+      Users with a project role below `min_role` are prohibited from reading or writing that resource.
+
+    ### 6. CORS Requirements
+    The backend MUST support CORS with:
+    - Allowed Origins: `*` or user-configured hosts, including `chrome-extension://*`
+    - Allowed Methods: `GET, POST, PUT, PATCH, DELETE, OPTIONS`
+    - Allowed Headers: `Accept, Authorization, Content-Type, X-CSRF-Token`
+    - Exposed Headers: `Link`
+    - Allow Credentials: `true`
+servers:
+  - url: http://localhost:8080
+    description: Local development backend server
+  - url: https://api.example.com
+    description: Production Cloud API instance
+
+tags:
+  - name: Health & System
+    description: Health monitoring and service status pings
+  - name: Authentication & Profile
+    description: User authentication, JWT token refresh, and user profile management
+  - name: User Directory
+    description: User search and directory lookup for team/project assignments
+  - name: Workspaces
+    description: Private workspaces management
+  - name: Teams & Members
+    description: Organization teams and team member management
+  - name: Projects & Isolation
+    description: Scoped projects within teams and project access control
+  - name: Collections
+    description: Request collection management, tree hierarchy, and reordering
+  - name: Collection Items
+    description: Individual folder and request items within collections
+  - name: Environments
+    description: Key-value environment variables and scoped configuration
+  - name: Stateless Delta Sync
+    description: Offline-to-cloud synchronization, delta pulls, batch pushes, and imports
+  - name: Admin Management
+    description: Superadmin user provisioning and password resets
+
+paths:
+  /:
+    get:
+      tags:
+        - Health & System
+      summary: Root Service Ping
+      description: Returns service metadata and status.
+      responses:
+        '200':
+          description: Service is online and operational.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemStatusResponse'
+
+  /health:
+    get:
+      tags:
+        - Health & System
+      summary: System Healthcheck
+      description: Returns health status for server monitoring.
+      responses:
+        '200':
+          description: System is healthy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /api/v1/health:
+    get:
+      tags:
+        - Health & System
+      summary: API v1 Healthcheck
+      description: Returns API v1 health status.
+      responses:
+        '200':
+          description: API is healthy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /api/v1/auth/register:
+    post:
+      tags:
+        - Authentication & Profile
+      summary: Register a new user
+      description: |
+        Registers a new user account. In default enterprise/secure mode, public registration may return
+        HTTP 403 Forbidden with `code: "REGISTRATION_DISABLED"` when provisioning is restricted to Superadmins.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: User registered successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthEnvelope'
+        '400':
+          description: Validation error or invalid request payload.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Public registration disabled.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /api/v1/auth/login:
+    post:
+      tags:
+        - Authentication & Profile
+      summary: Authenticate user
+      description: Authenticates user credentials and returns signed access token and 30-day rolling refresh token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Authentication successful.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthEnvelope'
+        '401':
+          description: Invalid email or password.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /api/v1/auth/refresh:
+    post:
+      tags:
+        - Authentication & Profile
+      summary: Refresh access token
+      description: Exchanges a valid rolling refresh token for a fresh access token and renewed refresh token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequest'
+      responses:
+        '200':
+          description: Tokens refreshed successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthEnvelope'
+        '401':
+          description: Invalid or expired refresh token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /api/v1/auth/me:
+    get:
+      tags:
+        - Authentication & Profile
+      summary: Get current authenticated user
+      description: Returns the user profile associated with the Bearer JWT token.
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Profile retrieved successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserEnvelope'
+        '401':
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /api/v1/auth/profile:
+    put:
+      tags:
+        - Authentication & Profile
+      summary: Update user profile
+      description: Updates display name and optional avatar URL for current authenticated user.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProfileRequest'
+      responses:
+        '200':
+          description: Profile updated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserEnvelope'
+        '400':
+          description: Validation error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /api/v1/auth/password:
+    put:
+      tags:
+        - Authentication & Profile
+      summary: Change password
+      description: Changes user password after verifying the existing current password.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '200':
+          description: Password updated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageEnvelope'
+        '400':
+          description: Incorrect current password or password too short.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /api/v1/users/search:
+    get:
+      tags:
+        - User Directory
+      summary: Search registered users
+      description: Search registered users by email or name (minimum 2 characters). Used for team/project assignments.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: email
+          schema:
+            type: string
+          description: Email search query
+        - in: query
+          name: q
+          schema:
+            type: string
+          description: General search query (alias for email query)
+      responses:
+        '200':
+          description: Matching users list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserListEnvelope'
+
+  /api/v1/workspaces:
+    get:
+      tags:
+        - Workspaces
+      summary: List user's private workspaces
+      description: Retrieves all private workspaces owned by the authenticated user.
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Workspaces list retrieved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceListEnvelope'
+    post:
+      tags:
+        - Workspaces
+      summary: Create a private workspace
+      description: Creates a new private workspace for the authenticated user.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceRequest'
+      responses:
+        '201':
+          description: Workspace created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceEnvelope'
+
+  /api/v1/workspaces/{id}:
+    get:
+      tags:
+        - Workspaces
+      summary: Get workspace details
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Workspace details retrieved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceEnvelope'
+        '404':
+          description: Workspace not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    put:
+      tags:
+        - Workspaces
+      summary: Update workspace details
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceRequest'
+      responses:
+        '200':
+          description: Workspace updated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceEnvelope'
+    delete:
+      tags:
+        - Workspaces
+      summary: Delete workspace
+      description: Deletes private workspace. The initial default workspace cannot be deleted.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Workspace deleted successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageEnvelope'
+
+  /api/v1/teams:
+    get:
+      tags:
+        - Teams & Members
+      summary: List accessible teams
+      description: Lists teams of which the user is a member (or all teams if caller is Superadmin).
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Teams list retrieved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamListEnvelope'
+    post:
+      tags:
+        - Teams & Members
+      summary: Create team
+      description: Creates a new organization team. Restricted to Superadmin.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TeamRequest'
+      responses:
+        '201':
+          description: Team created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamEnvelope'
+        '403':
+          description: Superadmin privileges required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /api/v1/teams/{id}:
+    get:
+      tags:
+        - Teams & Members
+      summary: Get team details
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Team details retrieved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamEnvelope'
+    put:
+      tags:
+        - Teams & Members
+      summary: Update team details
+      description: Updates team name and description. Restricted to Superadmin.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TeamRequest'
+      responses:
+        '200':
+          description: Team updated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamEnvelope'
+    delete:
+      tags:
+        - Teams & Members
+      summary: Delete team
+      description: Permanently deletes team and related projects. Restricted to Superadmin.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Team deleted successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageEnvelope'
+
+  /api/v1/teams/{id}/members:
+    get:
+      tags:
+        - Teams & Members
+      summary: List team members
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Team members list retrieved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamMemberListEnvelope'
+    post:
+      tags:
+        - Teams & Members
+      summary: Add or update team member
+      description: Adds a user to the team or updates their role (`admin` or `member`). Requires Team Admin or Superadmin.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TeamMemberRequest'
+      responses:
+        '200':
+          description: Member added or updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageEnvelope'
+
+  /api/v1/teams/{id}/members/{userId}:
+    delete:
+      tags:
+        - Teams & Members
+      summary: Remove member from team
+      description: Removes user from team and unassigns them from projects inside the team. Requires Team Admin or Superadmin.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: path
+          name: userId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Member removed successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageEnvelope'
+
+  /api/v1/teams/{teamId}/projects:
+    get:
+      tags:
+        - Projects & Isolation
+      summary: List team projects
+      description: |
+        Lists projects in team that are visible to the authenticated user.
+        **Project Isolation rule**: Unassigned projects are completely hidden unless the caller is Superadmin or Team Admin.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: teamId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Projects list retrieved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectListEnvelope'
+    post:
+      tags:
+        - Projects & Isolation
+      summary: Create project in team
+      description: Creates a new project in the team. Requires Team Admin or Superadmin.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: teamId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectRequest'
+      responses:
+        '201':
+          description: Project created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectEnvelope'
+
+  /api/v1/projects/{id}:
+    get:
+      tags:
+        - Projects & Isolation
+      summary: Get project details
+      description: Retrieves project details and the caller's effective `user_role`.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Project details retrieved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectEnvelope'
+    put:
+      tags:
+        - Projects & Isolation
+      summary: Update project details
+      description: Requires Project Admin, Team Admin, or Superadmin.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectRequest'
+      responses:
+        '200':
+          description: Project updated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectEnvelope'
+    delete:
+      tags:
+        - Projects & Isolation
+      summary: Delete project
+      description: Deletes project and its collections. Requires Project Admin, Team Admin, or Superadmin.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Project deleted successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageEnvelope'
+
+  /api/v1/projects/{id}/members:
+    get:
+      tags:
+        - Projects & Isolation
+      summary: List project members
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Members list retrieved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectMemberListEnvelope'
+    post:
+      tags:
+        - Projects & Isolation
+      summary: Assign member to project
+      description: Assigns a user to the project with an RBAC role (`admin`, `maintainer`, `contributor`, `reader`).
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectMemberRequest'
+      responses:
+        '200':
+          description: Member assigned successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageEnvelope'
+
+  /api/v1/projects/{id}/members/{userId}:
+    delete:
+      tags:
+        - Projects & Isolation
+      summary: Unassign member from project
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: path
+          name: userId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Member unassigned successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageEnvelope'
+
+  /api/v1/collections:
+    get:
+      tags:
+        - Collections
+      summary: List collections
+      description: |
+        Retrieves collections in a workspace or project. Automatically filters out collections
+        whose `min_role` exceeds the caller's role in the project.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: workspace_id
+          schema:
+            type: string
+            format: uuid
+          description: Filter by workspace ID
+        - in: query
+          name: project_id
+          schema:
+            type: string
+            format: uuid
+          description: Filter by project ID
+      responses:
+        '200':
+          description: Collections list retrieved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectionListEnvelope'
+    post:
+      tags:
+        - Collections
+      summary: Create collection
+      description: Creates a new collection in a workspace or project.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCollectionRequest'
+      responses:
+        '201':
+          description: Collection created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectionEnvelope'
+
+  /api/v1/collections/{id}:
+    get:
+      tags:
+        - Collections
+      summary: Get collection details with nested items
+      description: Retrieves collection and all non-deleted folder and request items in hierarchical order.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Collection details retrieved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectionEnvelope'
+    put:
+      tags:
+        - Collections
+      summary: Update collection (OCC)
+      description: |
+        Updates collection name, description, or `min_role`. Enforces Optimistic Concurrency Control
+        via `base_version`. Returns HTTP 409 Conflict if `base_version` does not match current version.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCollectionRequest'
+      responses:
+        '200':
+          description: Collection updated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectionEnvelope'
+        '409':
+          description: Optimistic concurrency conflict.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConflictEnvelope'
+    delete:
+      tags:
+        - Collections
+      summary: Soft delete collection (Tombstone)
+      description: Soft deletes the collection by setting `deleted_at`.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Collection deleted successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageEnvelope'
+
+  /api/v1/collections/{id}/move:
+    post:
+      tags:
+        - Collections
+      summary: Move collection between scopes
+      description: Moves collection between workspace and project, or across projects in the same team.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MoveCollectionRequest'
+      responses:
+        '200':
+          description: Collection moved successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageEnvelope'
+
+  /api/v1/collections/{id}/reorder:
+    put:
+      tags:
+        - Collections
+      summary: Batch reorder items and hierarchy
+      description: Updates `parent_id` and `sort_order` for folders and requests within the collection.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReorderItemsRequest'
+      responses:
+        '200':
+          description: Items reordered successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReorderItemsResponseEnvelope'
+
+  /api/v1/collections/{id}/items/reorder:
+    put:
+      tags:
+        - Collections
+      summary: Batch reorder items (alias)
+      description: Alias route for `/api/v1/collections/{id}/reorder`.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReorderItemsRequest'
+      responses:
+        '200':
+          description: Items reordered successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReorderItemsResponseEnvelope'
+
+  /api/v1/items:
+    post:
+      tags:
+        - Collection Items
+      summary: Create request or folder item
+      description: Creates an item inside a collection.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CollectionItem'
+      responses:
+        '201':
+          description: Item created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectionItemEnvelope'
+
+  /api/v1/items/{id}:
+    get:
+      tags:
+        - Collection Items
+      summary: Get item details
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Item details retrieved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectionItemEnvelope'
+    put:
+      tags:
+        - Collection Items
+      summary: Update item (OCC)
+      description: |
+        Updates request or folder details. Validates `base_version` against current database version.
+        Returns HTTP 409 Conflict with latest server object if stale.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateItemRequest'
+      responses:
+        '200':
+          description: Item updated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectionItemEnvelope'
+        '409':
+          description: Optimistic concurrency conflict.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConflictEnvelope'
+    delete:
+      tags:
+        - Collection Items
+      summary: Soft delete item (Tombstone)
+      description: Soft deletes the item by setting `deleted_at`.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Item deleted successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageEnvelope'
+
+  /api/v1/environments:
+    get:
+      tags:
+        - Environments
+      summary: List environments
+      description: Lists scoped environments in workspace or project, filtered by project role vs `min_role`.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: workspace_id
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: project_id
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Environments retrieved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnvironmentListEnvelope'
+    post:
+      tags:
+        - Environments
+      summary: Create environment
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateEnvironmentRequest'
+      responses:
+        '201':
+          description: Environment created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnvironmentEnvelope'
+
+  /api/v1/environments/{id}:
+    get:
+      tags:
+        - Environments
+      summary: Get environment details
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Environment details retrieved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnvironmentEnvelope'
+    put:
+      tags:
+        - Environments
+      summary: Update environment (OCC)
+      description: Updates environment name, variables, and `min_role`. Supports `base_version` OCC.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateEnvironmentRequest'
+      responses:
+        '200':
+          description: Environment updated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnvironmentEnvelope'
+        '409':
+          description: Optimistic concurrency conflict.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConflictEnvelope'
+    delete:
+      tags:
+        - Environments
+      summary: Soft delete environment (Tombstone)
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Environment deleted successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageEnvelope'
+
+  /api/v1/sync/pull:
+    get:
+      tags:
+        - Stateless Delta Sync
+      summary: Pull delta updates (Stateless Delta Sync)
+      description: |
+        Fetches all additions, modifications, and tombstones (`deleted_at != null`) since a given timestamp.
+        Used on extension startup and manual sync to reconcile local storage with the cloud backend.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: workspace_id
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: project_id
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: since
+          schema:
+            type: string
+            format: date-time
+          description: RFC3339 timestamp. Defaults to epoch (1970-01-01T00:00:00Z) if omitted.
+      responses:
+        '200':
+          description: Delta sync payload retrieved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncDeltaEnvelope'
+
+  /api/v1/sync/push:
+    post:
+      tags:
+        - Stateless Delta Sync
+      summary: Batch push offline mutations (Stateless Delta Sync)
+      description: |
+        Atomically applies a changeset of mutations (create, update, delete) for collections, items,
+        and environments. Conflicting entities are reported individually without failing non-conflicting mutations.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SyncPushRequest'
+      responses:
+        '200':
+          description: Push changeset processed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncPushResponseEnvelope'
+
+  /api/v1/sync/import-batch:
+    post:
+      tags:
+        - Stateless Delta Sync
+      summary: Claim and import offline LocalStorage collections
+      description: |
+        Imports an entire tree of collections, folders, and requests into a private workspace or project.
+        Uses `ON CONFLICT (id) DO UPDATE` to upsert without throwing duplicate key errors.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchImportRequest'
+      responses:
+        '200':
+          description: Collections imported successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageEnvelope'
+
+  /api/v1/admin/users:
+    get:
+      tags:
+        - Admin Management
+      summary: List all registered users (Superadmin only)
+      description: Lists all users across the entire platform.
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Users retrieved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserListEnvelope'
+        '403':
+          description: Superadmin access required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    post:
+      tags:
+        - Admin Management
+      summary: Provision new user account (Superadmin only)
+      description: Creates a user account with a specified system role (`superadmin` or `user`).
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminCreateUserRequest'
+      responses:
+        '201':
+          description: User provisioned successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserEnvelope'
+        '409':
+          description: User with this email already exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /api/v1/admin/users/{userId}/password:
+    put:
+      tags:
+        - Admin Management
+      summary: Reset user password (Superadmin only)
+      description: Directly resets any user's password without needing their existing password.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminResetPasswordRequest'
+      responses:
+        '200':
+          description: Password reset successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageEnvelope'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Enter JWT access token obtained from `/api/v1/auth/login`.
+
+  schemas:
+    # ------------------ Core Enums ------------------
+    SystemRole:
+      type: string
+      enum: [superadmin, user]
+      example: user
+
+    TeamRole:
+      type: string
+      enum: [admin, member]
+      example: admin
+
+    ProjectRole:
+      type: string
+      enum: [admin, maintainer, contributor, reader]
+      example: contributor
+
+    ItemType:
+      type: string
+      enum: [folder, request]
+      example: request
+
+    HttpMethod:
+      type: string
+      enum: [GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS]
+      example: GET
+
+    BodyType:
+      type: string
+      enum: [none, json, xml, raw, x-www-form-urlencoded, form-data, binary, graphql]
+      example: json
+
+    RawType:
+      type: string
+      enum: [text, json, xml, html]
+      example: json
+
+    # ------------------ Envelopes ------------------
+    SystemStatusResponse:
+      type: object
+      properties:
+        service:
+          type: string
+          example: AirREST Cloud API
+        status:
+          type: string
+          example: running
+        serverless:
+          type: boolean
+          example: false
+        time:
+          type: string
+          format: date-time
+          example: '2026-10-22T09:00:00Z'
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: healthy
+        service:
+          type: string
+          example: AirREST Cloud API
+        serverless:
+          type: boolean
+          example: false
+        time:
+          type: string
+          format: date-time
+          example: '2026-10-22T09:00:00Z'
+
+    MessageEnvelope:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            message:
+              type: string
+              example: Operation completed successfully
+
+    ErrorEnvelope:
+      type: object
+      required:
+        - success
+        - error
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+          example: Invalid credentials or access forbidden
+        code:
+          type: string
+          example: OPERATION_FAILED
+
+    ConflictEnvelope:
+      type: object
+      required:
+        - success
+        - error
+        - code
+        - data
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+          example: "conflict: item has been modified by another user"
+        code:
+          type: string
+          example: CONFLICT
+        data:
+          description: The latest server version of the conflicting object.
+          type: object
+
+    AuthResponseData:
+      type: object
+      required:
+        - user
+        - token
+        - refresh_token
+        - expires_at
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+        token:
+          type: string
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        refresh_token:
+          type: string
+          example: d3b07384d113edec49eaa6238ad5ff00...
+        expires_at:
+          type: string
+          format: date-time
+          example: '2026-10-25T09:00:00Z'
+
+    AuthEnvelope:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/AuthResponseData'
+
+    UserEnvelope:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/User'
+
+    UserListEnvelope:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+
+    WorkspaceEnvelope:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/Workspace'
+
+    WorkspaceListEnvelope:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Workspace'
+
+    TeamEnvelope:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/Team'
+
+    TeamListEnvelope:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Team'
+
+    TeamMemberListEnvelope:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeamMember'
+
+    ProjectEnvelope:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/Project'
+
+    ProjectListEnvelope:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Project'
+
+    ProjectMemberListEnvelope:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectMember'
+
+    CollectionEnvelope:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/Collection'
+
+    CollectionListEnvelope:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Collection'
+
+    CollectionItemEnvelope:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/CollectionItem'
+
+    EnvironmentEnvelope:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/Environment'
+
+    EnvironmentListEnvelope:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Environment'
+
+    SyncDeltaEnvelope:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/SyncDeltaResult'
+
+    SyncPushResponseEnvelope:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/SyncPushResponse'
+
+    ReorderItemsResponseEnvelope:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            message:
+              type: string
+              example: items reordered successfully
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/CollectionItem'
+
+    # ------------------ Domain Entities ------------------
+    User:
+      type: object
+      required:
+        - id
+        - email
+        - name
+        - role
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 'c1f7a4e2-63b9-4a92-8db3-982827170123'
+        email:
+          type: string
+          format: email
+          example: 'developer@example.com'
+        name:
+          type: string
+          example: 'Alice Developer'
+        avatar_url:
+          type: string
+          nullable: true
+          example: 'https://example.com/avatar.png'
+        role:
+          $ref: '#/components/schemas/SystemRole'
+        created_at:
+          type: string
+          format: date-time
+          example: '2026-10-20T08:00:00Z'
+        updated_at:
+          type: string
+          format: date-time
+          example: '2026-10-20T08:00:00Z'
+
+    Workspace:
+      type: object
+      required:
+        - id
+        - owner_id
+        - name
+        - is_default
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: '11111111-1111-1111-1111-111111111111'
+        owner_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: 'Personal Workspace'
+        description:
+          type: string
+          nullable: true
+          example: 'Default private workspace'
+        is_default:
+          type: boolean
+          example: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Team:
+      type: object
+      required:
+        - id
+        - name
+        - created_by
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: 'Platform Engineering'
+        description:
+          type: string
+          nullable: true
+        created_by:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        user_role:
+          $ref: '#/components/schemas/TeamRole'
+
+    TeamMember:
+      type: object
+      required:
+        - id
+        - team_id
+        - user_id
+        - role
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        team_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        role:
+          $ref: '#/components/schemas/TeamRole'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        user:
+          $ref: '#/components/schemas/User'
+
+    Project:
+      type: object
+      required:
+        - id
+        - team_id
+        - name
+        - created_by
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        team_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: 'User Service API'
+        description:
+          type: string
+          nullable: true
+        created_by:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        user_role:
+          $ref: '#/components/schemas/ProjectRole'
+
+    ProjectMember:
+      type: object
+      required:
+        - id
+        - project_id
+        - user_id
+        - role
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        role:
+          $ref: '#/components/schemas/ProjectRole'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        user:
+          $ref: '#/components/schemas/User'
+
+    Collection:
+      type: object
+      required:
+        - id
+        - name
+        - min_role
+        - version
+        - created_by
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: '77777777-7777-7777-7777-777777777777'
+        workspace_id:
+          type: string
+          format: uuid
+          nullable: true
+        project_id:
+          type: string
+          format: uuid
+          nullable: true
+        name:
+          type: string
+          example: 'Authentication Endpoints'
+        description:
+          type: string
+          nullable: true
+          example: 'User authentication and tokens'
+        min_role:
+          $ref: '#/components/schemas/ProjectRole'
+        version:
+          type: integer
+          format: int64
+          example: 1
+        created_by:
+          type: string
+          format: uuid
+        last_modified_by:
+          type: string
+          format: uuid
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        deleted_at:
+          type: string
+          format: date-time
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CollectionItem'
+
+    KeyValuePair:
+      type: object
+      required:
+        - id
+        - key
+        - value
+        - enabled
+      properties:
+        id:
+          type: string
+          example: 'p1'
+        key:
+          type: string
+          example: 'limit'
+        value:
+          type: string
+          example: '10'
+        enabled:
+          type: boolean
+          example: true
+        description:
+          type: string
+          nullable: true
+
+    AuthConfig:
+      type: object
+      required:
+        - type
+      properties:
+        type:
+          type: string
+          enum: [none, bearer, basic, apikey]
+          example: bearer
+        bearerToken:
+          type: string
+          example: '{{token}}'
+        basicUsername:
+          type: string
+        basicPassword:
+          type: string
+        apiKeyKey:
+          type: string
+        apiKeyValue:
+          type: string
+        apiKeyIn:
+          type: string
+          enum: [header, query]
+
+    CollectionItem:
+      type: object
+      required:
+        - id
+        - collection_id
+        - type
+        - name
+        - sort_order
+        - version
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: '88888888-8888-8888-8888-888888888888'
+        collection_id:
+          type: string
+          format: uuid
+        parent_id:
+          type: string
+          format: uuid
+          nullable: true
+        type:
+          $ref: '#/components/schemas/ItemType'
+        name:
+          type: string
+          example: 'Login API'
+        sort_order:
+          type: integer
+          example: 0
+        method:
+          type: string
+          example: 'POST'
+        url:
+          type: string
+          example: '{{baseUrl}}/api/v1/auth/login'
+        params:
+          type: array
+          items:
+            $ref: '#/components/schemas/KeyValuePair'
+        headers:
+          type: array
+          items:
+            $ref: '#/components/schemas/KeyValuePair'
+        auth:
+          $ref: '#/components/schemas/AuthConfig'
+        body_type:
+          $ref: '#/components/schemas/BodyType'
+        raw_type:
+          $ref: '#/components/schemas/RawType'
+        body_content:
+          type: string
+          example: '{"email": "user@example.com", "password": "SecretPassword123!"}'
+        graphql_query:
+          type: string
+          nullable: true
+        graphql_variables:
+          type: string
+          nullable: true
+        body_form_data:
+          type: array
+          items:
+            type: object
+        pre_request_script:
+          type: string
+          nullable: true
+        post_response_script:
+          type: string
+          nullable: true
+        version:
+          type: integer
+          format: int64
+          example: 1
+        last_modified_by:
+          type: string
+          format: uuid
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        deleted_at:
+          type: string
+          format: date-time
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CollectionItem'
+
+    EnvironmentVariable:
+      type: object
+      required:
+        - id
+        - key
+        - value
+        - enabled
+      properties:
+        id:
+          type: string
+          example: 'v1'
+        key:
+          type: string
+          example: 'baseUrl'
+        value:
+          type: string
+          example: 'http://localhost:8080'
+        enabled:
+          type: boolean
+          example: true
+
+    Environment:
+      type: object
+      required:
+        - id
+        - name
+        - variables
+        - min_role
+        - version
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: '99999999-9999-9999-9999-999999999999'
+        workspace_id:
+          type: string
+          format: uuid
+          nullable: true
+        project_id:
+          type: string
+          format: uuid
+          nullable: true
+        name:
+          type: string
+          example: 'Development Local'
+        variables:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnvironmentVariable'
+        min_role:
+          $ref: '#/components/schemas/ProjectRole'
+        version:
+          type: integer
+          format: int64
+          example: 1
+        last_modified_by:
+          type: string
+          format: uuid
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        deleted_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    # ------------------ Sync & Delta Models ------------------
+    SyncDeltaResult:
+      type: object
+      required:
+        - collections
+        - items
+        - environments
+        - server_time
+      properties:
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Collection'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CollectionItem'
+        environments:
+          type: array
+          items:
+            $ref: '#/components/schemas/Environment'
+        server_time:
+          type: string
+          format: date-time
+          example: '2026-10-22T09:00:00Z'
+
+    SyncCollectionMutation:
+      type: object
+      required:
+        - action
+        - collection
+        - base_version
+      properties:
+        action:
+          type: string
+          enum: [create, update, delete]
+        collection:
+          $ref: '#/components/schemas/Collection'
+        base_version:
+          type: integer
+          format: int64
+
+    SyncItemMutation:
+      type: object
+      required:
+        - action
+        - item
+        - base_version
+      properties:
+        action:
+          type: string
+          enum: [create, update, delete]
+        item:
+          $ref: '#/components/schemas/CollectionItem'
+        base_version:
+          type: integer
+          format: int64
+
+    SyncEnvironmentMutation:
+      type: object
+      required:
+        - action
+        - environment
+        - base_version
+      properties:
+        action:
+          type: string
+          enum: [create, update, delete]
+        environment:
+          $ref: '#/components/schemas/Environment'
+        base_version:
+          type: integer
+          format: int64
+
+    SyncPushRequest:
+      type: object
+      properties:
+        workspace_id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncCollectionMutation'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncItemMutation'
+        environments:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncEnvironmentMutation'
+
+    SyncConflictReport:
+      type: object
+      required:
+        - id
+        - type
+        - message
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [collection, item, environment]
+        message:
+          type: string
+          example: 'version conflict: local base_version 1 does not match server version 2'
+        server_data:
+          type: object
+          nullable: true
+
+    SyncPushResponse:
+      type: object
+      required:
+        - applied_ids
+        - conflicts
+        - server_time
+      properties:
+        applied_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        conflicts:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncConflictReport'
+        server_time:
+          type: string
+          format: date-time
+
+    ImportItemRequest:
+      type: object
+      required:
+        - id
+        - name
+      properties:
+        id:
+          type: string
+          example: 'req-1'
+        parent_id:
+          type: string
+          nullable: true
+        type:
+          type: string
+          example: 'request'
+        name:
+          type: string
+          example: 'Get Users List'
+        sort_order:
+          type: integer
+          example: 0
+        method:
+          type: string
+          example: 'GET'
+        url:
+          type: string
+          example: 'https://httpbin.org/get'
+        params:
+          type: array
+          items:
+            $ref: '#/components/schemas/KeyValuePair'
+        headers:
+          type: array
+          items:
+            $ref: '#/components/schemas/KeyValuePair'
+        auth:
+          $ref: '#/components/schemas/AuthConfig'
+        body_type:
+          type: string
+          example: 'none'
+        raw_type:
+          type: string
+          example: 'text'
+        body_content:
+          type: string
+        graphql_query:
+          type: string
+        graphql_variables:
+          type: string
+        body_form_data:
+          type: array
+          items:
+            type: object
+        pre_request_script:
+          type: string
+        post_response_script:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ImportItemRequest'
+
+    ImportCollectionRequest:
+      type: object
+      required:
+        - id
+        - name
+      properties:
+        id:
+          type: string
+          example: 'col-1'
+        name:
+          type: string
+          example: 'Demo API'
+        description:
+          type: string
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ImportItemRequest'
+
+    BatchImportRequest:
+      type: object
+      required:
+        - collections
+      properties:
+        workspace_id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/ImportCollectionRequest'
+
+    # ------------------ Request Payloads ------------------
+    RegisterRequest:
+      type: object
+      required:
+        - email
+        - password
+        - name
+      properties:
+        email:
+          type: string
+          format: email
+          example: 'developer@example.com'
+        password:
+          type: string
+          format: password
+          example: 'DeveloperPass123!'
+        name:
+          type: string
+          example: 'Alice Developer'
+
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+          example: 'admin@example.com'
+        password:
+          type: string
+          format: password
+          example: 'SuperadminSecurePassword123!'
+
+    RefreshTokenRequest:
+      type: object
+      required:
+        - refresh_token
+      properties:
+        refresh_token:
+          type: string
+          example: 'd3b07384d113edec49eaa6238ad5ff00...'
+
+    UpdateProfileRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          example: 'Alice Updated'
+        avatar_url:
+          type: string
+          nullable: true
+          example: 'https://example.com/avatar.png'
+
+    ChangePasswordRequest:
+      type: object
+      required:
+        - current_password
+        - new_password
+      properties:
+        current_password:
+          type: string
+          format: password
+          example: 'OldPassword123!'
+        new_password:
+          type: string
+          format: password
+          example: 'NewSuperPassword456!'
+
+    WorkspaceRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          example: 'Microservices Workspace'
+        description:
+          type: string
+          example: 'Workspace for microservices API testing'
+
+    TeamRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          example: 'Core Platform Team'
+        description:
+          type: string
+          example: 'Engineering squad'
+
+    TeamMemberRequest:
+      type: object
+      required:
+        - user_id
+        - role
+      properties:
+        user_id:
+          type: string
+          format: uuid
+          example: 'c1f7a4e2-63b9-4a92-8db3-982827170123'
+        role:
+          type: string
+          enum: [admin, member]
+          example: member
+
+    ProjectRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          example: 'Billing Service'
+        description:
+          type: string
+          example: 'Billing and invoicing service endpoints'
+
+    ProjectMemberRequest:
+      type: object
+      required:
+        - user_id
+        - role
+      properties:
+        user_id:
+          type: string
+          format: uuid
+          example: 'c1f7a4e2-63b9-4a92-8db3-982827170123'
+        role:
+          type: string
+          enum: [admin, maintainer, contributor, reader]
+          example: contributor
+
+    CreateCollectionRequest:
+      type: object
+      required:
+        - name
+      properties:
+        workspace_id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: 'Orders API'
+        description:
+          type: string
+          example: 'Order placement endpoints'
+        min_role:
+          $ref: '#/components/schemas/ProjectRole'
+
+    UpdateCollectionRequest:
+      type: object
+      required:
+        - name
+        - base_version
+      properties:
+        name:
+          type: string
+          example: 'Orders API v2'
+        description:
+          type: string
+          example: 'Updated description'
+        min_role:
+          $ref: '#/components/schemas/ProjectRole'
+        base_version:
+          type: integer
+          format: int64
+          example: 1
+
+    MoveCollectionRequest:
+      type: object
+      properties:
+        target_workspace_id:
+          type: string
+          format: uuid
+        target_project_id:
+          type: string
+          format: uuid
+
+    ReorderItemPosition:
+      type: object
+      required:
+        - id
+        - sort_order
+      properties:
+        id:
+          type: string
+          format: uuid
+        parent_id:
+          type: string
+          format: uuid
+          nullable: true
+        sort_order:
+          type: integer
+          example: 1
+
+    ReorderItemsRequest:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReorderItemPosition'
+
+    UpdateItemRequest:
+      type: object
+      required:
+        - item
+        - base_version
+      properties:
+        item:
+          $ref: '#/components/schemas/CollectionItem'
+        base_version:
+          type: integer
+          format: int64
+          example: 1
+
+    CreateEnvironmentRequest:
+      type: object
+      required:
+        - name
+        - variables
+      properties:
+        workspace_id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: 'Staging'
+        variables:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnvironmentVariable'
+        min_role:
+          $ref: '#/components/schemas/ProjectRole'
+
+    UpdateEnvironmentRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          example: 'Staging Updated'
+        variables:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnvironmentVariable'
+        min_role:
+          $ref: '#/components/schemas/ProjectRole'
+        base_version:
+          type: integer
+          format: int64
+          example: 1
+
+    AdminCreateUserRequest:
+      type: object
+      required:
+        - email
+        - password
+        - name
+        - role
+      properties:
+        email:
+          type: string
+          format: email
+          example: 'developer@example.com'
+        password:
+          type: string
+          format: password
+          example: 'DeveloperSecurePassword123!'
+        name:
+          type: string
+          example: 'Alice Developer'
+        role:
+          type: string
+          enum: [superadmin, user]
+          example: user
+
+    AdminResetPasswordRequest:
+      type: object
+      required:
+        - password
+      properties:
+        password:
+          type: string
+          format: password
+          example: 'BrandNewSecurePassword123!'

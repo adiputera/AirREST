@@ -325,6 +325,12 @@ go run cmd/server/main.go
 ```
 The server listens at `http://localhost:8080`, automatically applies database migrations, and provisions the initial Superadmin account (`admin@example.com`).
 
+#### 📜 Re-implementing the Backend in Other Languages
+AirREST is completely backend-agnostic! If you prefer implementing the backend in Python, Node.js/TypeScript, Java, C#, or Rust, refer to the formal API contract:
+- **OpenAPI 3.1.0 Contract**: [`backend/openapi.yaml`](backend/openapi.yaml) & [`backend/openapi.json`](backend/openapi.json)
+- **Re-Implementation Guide**: [`backend/API_CONTRACT.md`](backend/API_CONTRACT.md)
+- **Test Collection**: [`backend/airrest_api_collection.json`](backend/airrest_api_collection.json)
+
 ---
 
 ## ⚙️ Configuration
@@ -430,6 +436,10 @@ The server listens at `http://localhost:8080`, automatically applies database mi
     ├── docker-compose.yml        # PostgreSQL container setup
     ├── Dockerfile                # Production container build
     ├── vercel.json               # Vercel serverless rewrite configuration
+    ├── openapi.yaml              # Complete OpenAPI 3.1.0 API contract (YAML)
+    ├── openapi.json              # Complete OpenAPI 3.1.0 API contract (JSON)
+    ├── API_CONTRACT.md           # Backend re-implementation & protocol specification
+    ├── airrest_api_collection.json # Ready-to-use Postman/AirREST test collection
     └── README.md                 # Backend documentation & API reference
 ```
 

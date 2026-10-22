@@ -15,6 +15,17 @@ The AirREST Go backend provides cloud persistence and synchronization for AirRES
 
 ---
 
+## 📜 API Contract & Multi-Language Re-Implementation
+
+AirREST defines an explicit, technology-agnostic **API Contract** so anyone can re-implement the backend service in any programming language or framework (e.g. Node.js/TypeScript, Python, Java, C#, Rust, PHP) with 100% plug-and-play compatibility with both the Chrome Extension and Web Hub:
+
+- **OpenAPI 3.1.0 Contract**: [`openapi.yaml`](openapi.yaml) and [`openapi.json`](openapi.json)
+- **Detailed Re-Implementation Guide**: [`API_CONTRACT.md`](API_CONTRACT.md) (Complete guide on Envelope pattern, OCC, Tombstones, Silent Rolling Refresh, RBAC, and CORS)
+- **Test Collection**: [`airrest_api_collection.json`](airrest_api_collection.json) (Postman / AirREST importable collection)
+- **Code Generation**: Easily scaffold server interfaces via `@openapitools/openapi-generator-cli` for Spring Boot, FastAPI, NestJS, ASP.NET Core, Axum, etc.
+
+---
+
 ## 🛠️ Tech Stack
 
 - **Language**: Go 1.26
