@@ -87,7 +87,7 @@ export const RequestEditor: React.FC = () => {
   const [justSaved, setJustSaved] = useState(false);
 
   const currentTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
-  const isDirty = isRequestModified(currentTab, collections);
+  const isDirty = currentTab ? isRequestModified(currentTab, collections) : false;
 
   const handleSave = () => {
     const res = saveActiveRequest();
@@ -112,7 +112,7 @@ export const RequestEditor: React.FC = () => {
 
   useEffect(() => {
     setIsUrlEncodedBulkEdit(false);
-  }, [activeTabId, currentTab.bodyType]);
+  }, [activeTabId, currentTab?.bodyType]);
 
   const handleToggleBulkEdit = () => {
     if (!isUrlEncodedBulkEdit) {

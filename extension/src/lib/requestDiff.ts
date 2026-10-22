@@ -105,7 +105,8 @@ export function normalizeRequestForDiff(req: ApiRequest) {
 /**
  * Checks if a request represents a pristine/empty tab (e.g. newly created via `+` button).
  */
-export function isBlankRequest(req: ApiRequest): boolean {
+export function isBlankRequest(req?: ApiRequest | null): boolean {
+  if (!req) return true;
   const norm = normalizeRequestForDiff(req);
   const isDefaultName =
     norm.name === '' ||
@@ -171,8 +172,10 @@ export function findSavedRequestInCollections(
  * 1. If it belongs to a saved collection item, compares with that saved item.
  * 2. If it is not in any collection, checks whether it has non-empty content compared to a blank request.
  */
-export function isRequestModified(tab: ApiRequest, collections: Collection[]): boolean {
-  const saved = findSavedRequestInCollections(collections, tab.id);
+export function isRequestModified(tab?: ApiRequest | null, collections: Collection[] = []): boolean {
+  if (!tab || !tab.id) return false;
+
+  const saved = findSavedRequestInCollections(collections || [], tab.id);
 
   if (saved) {
     const normTab = JSON.stringify(normalizeRequestForDiff(tab));

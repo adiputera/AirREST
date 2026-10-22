@@ -3303,6 +3303,15 @@ export const useApiStore = create<ApiStoreState>()(
             state.history = currentEntry.history || [];
           }
         }
+
+        // 5. Ensure state always has at least one valid tab and a valid activeTabId
+        if (!state.tabs || !Array.isArray(state.tabs) || state.tabs.length === 0) {
+          const initialTab = createInitialTab();
+          state.tabs = [initialTab];
+          state.activeTabId = initialTab.id;
+        } else if (!state.activeTabId || !state.tabs.some((t) => t.id === state.activeTabId)) {
+          state.activeTabId = state.tabs[0].id;
+        }
       },
     }
   )

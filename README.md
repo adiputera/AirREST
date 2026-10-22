@@ -255,6 +255,7 @@ pm.environment.set("lastRequestTimestamp", now);
 - **Manual Sync**: Dedicated sync button to trigger immediate synchronization with the cloud backend.
 - **Rolling Refresh Tokens**: 30-day token rotation with background refresh keeps active sessions connected.
 - **Optimistic Concurrency Control (OCC)**: Version-checked updates handle concurrent modifications cleanly.
+- **User Menu & Account Controls**: An interactive user menu is displayed on the right of the top navigation bar. When unauthenticated, it serves as a direct **Sign In** action to connect your cloud account; when logged in, it displays user details, role badge, an in-app **Change Password** modal (`PUT /api/v1/auth/password`), and a secure **Sign Out** option that clears cloud session tokens and cached workspaces.
 
 ### 11. 🏢 AirREST Hub Management Portal
 - **Dedicated Dashboard**: Independent web application (`hub/`) for team and project management.

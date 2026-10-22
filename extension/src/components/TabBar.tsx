@@ -99,7 +99,7 @@ export const TabBar: React.FC = () => {
         className="flex h-10 w-full items-center border-b border-zinc-800 bg-zinc-950 px-2 overflow-x-auto scrollbar-none"
       >
         <div className="flex items-center gap-1.5 flex-1 min-w-0">
-          {tabs.map((tab) => {
+          {tabs.filter(Boolean).map((tab) => {
             const isActive = tab.id === activeTabId;
             const displayName = tab.name || tab.url || 'Untitled Request';
             const isDirty = isRequestModified(tab, collections);

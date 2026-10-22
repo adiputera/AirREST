@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Implemented client-side auth eviction callbacks (`registerAuthEvictedCallback` in Extension, `registerHubAuthEvicted` in Hub).
   - When an account is deleted or refresh token is rejected with HTTP 401/403, the client automatically evicts stale credentials, safely switches to the local offline workspace, and displays an informative notification.
   - Network-resilience guard: Transient network disconnects, offline state, or 5xx server errors do NOT evict user sessions, allowing automatic sync retry once reconnected.
+- **User Profile Menu & In-App Change Password**:
+  - Added interactive user menu in the top navigation bar. When unauthenticated, it persistently displays a **Sign In** action to open cloud login; when authenticated, it displays the user profile avatar, name, email, and role badge.
+  - Added **Change Password** modal (`ChangePasswordModal.tsx`) communicating with `PUT /api/v1/auth/password` with validation (minimum 8 characters, password matching, and current password verification).
+  - Added **Sign Out** action with confirmation dialog to safely disconnect credentials and clear cached cloud session data.
 
 ### Changed
 - **UI Customization & Component Polish**:

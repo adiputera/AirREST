@@ -8,6 +8,7 @@ import { EnvironmentModal } from './EnvironmentModal';
 import { ModeSelectorModal } from './ModeSelectorModal';
 import { CloudAuthModal } from './CloudAuthModal';
 import { ScopeSwitcher } from './ScopeSwitcher';
+import { UserMenu } from './UserMenu';
 import { isOfflineOnly } from '@/lib/edition';
 
 export const Header: React.FC = () => {
@@ -94,6 +95,9 @@ export const Header: React.FC = () => {
             <Upload className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">Import</span>
           </button>
+
+          {/* User Profile Menu / Sign In Button */}
+          <UserMenu onOpenLogin={() => setIsCloudAuthOpen(true)} />
         </div>
       </header>
 

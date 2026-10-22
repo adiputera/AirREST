@@ -194,6 +194,31 @@ export async function getCurrentUser(apiUrl: string, token: string, refreshToken
   return unwrapData<CloudUser>(json);
 }
 
+export async function changeUserPassword(
+  apiUrl: string,
+  currentPassword: string,
+  newPassword: string,
+  token?: string,
+  refreshToken?: string
+): Promise<{ message: string }> {
+  const res = await fetchWithAuth('/api/v1/auth/password', {
+    method: 'PUT',
+    apiUrl,
+    token,
+    refreshToken,
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  });
+
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(extractError(json, 'Failed to update password'));
+  }
+  return unwrapData<{ message: string }>(json);
+}
+
 // ----------------- Workspaces & Teams -----------------
 
 export async function fetchUserWorkspaces(apiUrl: string, token: string, refreshToken?: string) {

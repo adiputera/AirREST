@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { AlertTriangle, Trash2, X, Loader2 } from 'lucide-react';
 
 export interface ConfirmModalProps {
@@ -38,11 +39,12 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
   }, [isOpen, isLoading, onClose]);
 
   if (!isOpen) return null;
+  if (typeof document === 'undefined') return null;
 
   const isDanger = variant === 'danger';
   const isWarning = variant === 'warning';
 
-  return (
+  return createPortal(
     <div
       onClick={(e) => {
         if (e.target === e.currentTarget && !isLoading) {
@@ -51,7 +53,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
       }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
     >
-      <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+      <div className="w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
         <div className="flex items-start gap-3.5">
           <div
             className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${
@@ -113,6 +115,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
