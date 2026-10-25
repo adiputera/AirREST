@@ -15,6 +15,8 @@ import {
   FileCode,
   Shield,
   Lock,
+  RotateCcw,
+  UploadCloud,
 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
 import { exportPostmanEnvironment, importPostmanEnvironment } from '@/lib/postman';
@@ -45,6 +47,8 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
   const addEnvironmentVariable = useApiStore((state) => state.addEnvironmentVariable);
   const updateEnvironmentVariable = useApiStore((state) => state.updateEnvironmentVariable);
   const removeEnvironmentVariable = useApiStore((state) => state.removeEnvironmentVariable);
+  const resetEnvironmentCurrentValues = useApiStore((state) => state.resetEnvironmentCurrentValues);
+  const persistEnvironmentCurrentValues = useApiStore((state) => state.persistEnvironmentCurrentValues);
   const addEnvironment = useApiStore((state) => state.addEnvironment);
   const replaceEnvironment = useApiStore((state) => state.replaceEnvironment);
   const importEnvironmentFromJson = useApiStore((state) => state.importEnvironmentFromJson);
@@ -234,7 +238,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-      <div className="flex h-[580px] w-full max-w-4xl overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950 shadow-2xl">
+      <div className="flex h-[580px] w-full max-w-5xl overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950 shadow-2xl">
         {/* Hidden File Picker for Import */}
         <input
           type="file"
@@ -566,78 +570,168 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
             </div>
           ) : currentEnv ? (
             <div className="flex flex-1 flex-col overflow-hidden mt-4">
-              <p className="text-[11px] text-zinc-500 mb-2">
-                Reference variables in requests with double curly braces (e.g.,{' '}
-                <code className="text-sky-400">{'{{baseUrl}}'}</code> or{' '}
-                <code className="text-sky-400">{'{{token}}'}</code>).
-              </p>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-[11px] text-zinc-400">
+                  <span className="text-sky-300 font-semibold">Initial Value</span> syncs to cloud. <span className="text-amber-300 font-semibold">Current Value</span> is local to this session (used in requests &amp; scripts, never pushed upstream).
+                </p>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      resetEnvironmentCurrentValues(currentEnv.id);
+                      setSuccessMsg('Reset all current values to initial values');
+                      setTimeout(() => setSuccessMsg(null), 2500);
+                    }}
+                    className="flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900/80 px-2 py-1 text-[11px] font-medium text-zinc-400 hover:bg-zinc-850 hover:text-white transition"
+                    title="Reset all current values in this environment to their initial values"
+                  >
+                    <RotateCcw className="h-3 w-3 text-sky-400" />
+                    <span>Reset All</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isEnvReadOnly}
+                    onClick={() => {
+                      persistEnvironmentCurrentValues(currentEnv.id);
+                      setSuccessMsg('Persisted all current values to initial values and synced to cloud');
+                      setTimeout(() => setSuccessMsg(null), 2500);
+                    }}
+                    className="flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900/80 px-2 py-1 text-[11px] font-medium text-zinc-400 hover:bg-zinc-850 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition"
+                    title={isEnvReadOnly ? 'Read only in cloud scope' : 'Copy all current values to initial values and sync to cloud'}
+                  >
+                    <UploadCloud className="h-3 w-3 text-emerald-400" />
+                    <span>Persist All</span>
+                  </button>
+                </div>
+              </div>
 
               <div className="flex-1 overflow-y-auto rounded-xl border border-zinc-850 bg-zinc-900/30">
                 <table className="w-full text-left text-xs">
                   <thead className="border-b border-zinc-800 bg-zinc-900/70 text-zinc-400">
                     <tr>
                       <th className="w-10 px-3 py-2 text-center">Use</th>
-                      <th className="px-3 py-2 font-medium">Variable Name</th>
-                      <th className="px-3 py-2 font-medium">Value</th>
-                      <th className="w-10 px-3 py-2 text-center"></th>
+                      <th className="w-40 px-3 py-2 font-medium">Variable Name</th>
+                      <th className="px-3 py-2 font-medium">
+                        <div className="flex items-center gap-1.5">
+                          <span>Initial Value</span>
+                          <span className="rounded bg-sky-500/10 px-1 py-0.5 text-[9px] font-normal text-sky-400 border border-sky-500/20">Synced to Cloud</span>
+                        </div>
+                      </th>
+                      <th className="px-3 py-2 font-medium">
+                        <div className="flex items-center gap-1.5">
+                          <span>Current Value</span>
+                          <span className="rounded bg-amber-500/10 px-1 py-0.5 text-[9px] font-normal text-amber-300 border border-amber-500/20">Local Session</span>
+                        </div>
+                      </th>
+                      <th className="w-20 px-2 py-2 text-center font-medium">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-850">
-                    {currentEnv.variables.map((v) => (
-                      <tr key={v.id} className="group hover:bg-zinc-900/50 transition">
-                        <td className="px-3 py-1.5 text-center">
-                          <input
-                            type="checkbox"
-                            checked={v.enabled}
-                            disabled={isEnvReadOnly}
-                            onChange={(e) =>
-                              updateEnvironmentVariable(currentEnv.id, v.id, {
-                                enabled: e.target.checked,
-                              })
-                            }
-                            className="h-3.5 w-3.5 rounded border-zinc-700 bg-zinc-900 text-sky-500 accent-sky-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
-                          />
-                        </td>
-                        <td className="px-2 py-1.5">
-                          <input
-                            type="text"
-                            value={v.key}
-                            disabled={isEnvReadOnly}
-                            onChange={(e) =>
-                              updateEnvironmentVariable(currentEnv.id, v.id, {
-                                key: e.target.value,
-                              })
-                            }
-                            placeholder="e.g. baseUrl"
-                            className="w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-sky-400 placeholder-zinc-600 focus:bg-zinc-900 focus:outline-none focus:ring-1 focus:ring-sky-500/50 disabled:opacity-60 disabled:cursor-not-allowed"
-                          />
-                        </td>
-                        <td className="px-2 py-1.5">
-                          <input
-                            type="text"
-                            value={v.value}
-                            disabled={isEnvReadOnly}
-                            onChange={(e) =>
-                              updateEnvironmentVariable(currentEnv.id, v.id, {
-                                value: e.target.value,
-                              })
-                            }
-                            placeholder="e.g. https://api.example.com"
-                            className="w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-zinc-200 placeholder-zinc-600 focus:bg-zinc-900 focus:outline-none focus:ring-1 focus:ring-sky-500/50 disabled:opacity-60 disabled:cursor-not-allowed"
-                          />
-                        </td>
-                        <td className="px-2 py-1.5 text-center">
-                          <button
-                            onClick={() => removeEnvironmentVariable(currentEnv.id, v.id)}
-                            disabled={isEnvReadOnly}
-                            className="rounded p-1 text-zinc-600 opacity-60 hover:bg-zinc-800 hover:text-rose-400 group-hover:opacity-100 disabled:opacity-20 disabled:cursor-not-allowed transition"
-                            title={isEnvReadOnly ? 'Read only' : 'Delete variable'}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                    {currentEnv.variables.map((v) => {
+                      const initialVal = v.initialValue ?? v.value ?? '';
+                      const currentVal = v.currentValue !== undefined ? v.currentValue : initialVal;
+                      return (
+                        <tr key={v.id} className="group hover:bg-zinc-900/50 transition">
+                          <td className="px-3 py-1.5 text-center">
+                            <input
+                              type="checkbox"
+                              checked={v.enabled}
+                              disabled={isEnvReadOnly}
+                              onChange={(e) =>
+                                updateEnvironmentVariable(currentEnv.id, v.id, {
+                                  enabled: e.target.checked,
+                                })
+                              }
+                              className="h-3.5 w-3.5 rounded border-zinc-700 bg-zinc-900 text-sky-500 accent-sky-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+                            />
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <input
+                              type="text"
+                              value={v.key}
+                              disabled={isEnvReadOnly}
+                              onChange={(e) =>
+                                updateEnvironmentVariable(currentEnv.id, v.id, {
+                                  key: e.target.value,
+                                })
+                              }
+                              placeholder="e.g. baseUrl"
+                              className="w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-sky-400 placeholder-zinc-600 focus:bg-zinc-900 focus:outline-none focus:ring-1 focus:ring-sky-500/50 disabled:opacity-60 disabled:cursor-not-allowed"
+                            />
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <input
+                              type="text"
+                              value={initialVal}
+                              disabled={isEnvReadOnly}
+                              onChange={(e) => {
+                                const nextInit = e.target.value;
+                                const shouldSyncCurrent = currentVal === '' || currentVal === initialVal;
+                                updateEnvironmentVariable(currentEnv.id, v.id, {
+                                  initialValue: nextInit,
+                                  value: nextInit,
+                                  ...(shouldSyncCurrent ? { currentValue: nextInit } : {}),
+                                });
+                              }}
+                              placeholder="e.g. https://api.example.com"
+                              className="w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-zinc-200 placeholder-zinc-600 focus:bg-zinc-900 focus:outline-none focus:ring-1 focus:ring-sky-500/50 disabled:opacity-60 disabled:cursor-not-allowed"
+                            />
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <input
+                              type="text"
+                              value={currentVal}
+                              onChange={(e) =>
+                                updateEnvironmentVariable(currentEnv.id, v.id, {
+                                  currentValue: e.target.value,
+                                })
+                              }
+                              placeholder="Local value..."
+                              className="w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-amber-300 placeholder-zinc-600 focus:bg-zinc-900 focus:outline-none focus:ring-1 focus:ring-amber-500/50"
+                            />
+                          </td>
+                          <td className="px-2 py-1.5 text-center">
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  updateEnvironmentVariable(currentEnv.id, v.id, {
+                                    currentValue: initialVal,
+                                  })
+                                }
+                                className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-sky-300 transition"
+                                title="Reset Current Value to Initial Value"
+                              >
+                                <RotateCcw className="h-3 w-3" />
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isEnvReadOnly}
+                                onClick={() =>
+                                  updateEnvironmentVariable(currentEnv.id, v.id, {
+                                    initialValue: currentVal,
+                                    value: currentVal,
+                                  })
+                                }
+                                className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-emerald-400 disabled:opacity-20 disabled:cursor-not-allowed transition"
+                                title={isEnvReadOnly ? 'Read only in cloud scope' : 'Persist Current Value to Initial Value (syncs to cloud)'}
+                              >
+                                <UploadCloud className="h-3 w-3" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => removeEnvironmentVariable(currentEnv.id, v.id)}
+                                disabled={isEnvReadOnly}
+                                className="rounded p-1 text-zinc-600 opacity-60 hover:bg-zinc-800 hover:text-rose-400 group-hover:opacity-100 disabled:opacity-20 disabled:cursor-not-allowed transition"
+                                title={isEnvReadOnly ? 'Read only' : 'Delete variable'}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

@@ -115,7 +115,9 @@ export interface HistoryItem {
 export interface EnvironmentVariable {
   id: string;
   key: string;
-  value: string;
+  value?: string;
+  initialValue: string;
+  currentValue: string;
   enabled: boolean;
 }
 

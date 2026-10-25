@@ -470,7 +470,7 @@ export function compareEnvironments(
     .map((v) => ({
       id: v.id,
       key: String(v.key ?? '').trim(),
-      value: String(v.value ?? ''),
+      value: String(v.initialValue ?? v.value ?? ''),
       enabled: v.enabled !== false,
     }));
 
@@ -479,7 +479,7 @@ export function compareEnvironments(
     .map((v) => ({
       id: v.id,
       key: String(v.key ?? '').trim(),
-      value: String(v.value ?? ''),
+      value: String(v.initialValue ?? v.value ?? ''),
       enabled: v.enabled !== false,
     }));
 
@@ -580,10 +580,17 @@ export function cloneEnvironmentWithNewIds(env: Environment, newName: string): E
     ...JSON.parse(JSON.stringify(env)),
     id: makeUUID(),
     name: newName,
-    variables: (env.variables || []).map((v) => ({
-      ...v,
-      id: makeUUID(),
-    })),
+    variables: (env.variables || []).map((v) => {
+      const initialVal = String(v.initialValue ?? v.value ?? '');
+      const currentVal = String(v.currentValue ?? v.value ?? initialVal);
+      return {
+        ...v,
+        id: makeUUID(),
+        value: initialVal,
+        initialValue: initialVal,
+        currentValue: currentVal,
+      };
+    }),
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -609,9 +616,15 @@ export function alignEnvironmentVariableIds(
       inc.id &&
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(inc.id);
 
+    const initialVal = String(inc.initialValue ?? inc.value ?? '');
+    const currentVal = String(inc.currentValue ?? inc.value ?? initialVal);
+
     return {
       ...inc,
       id: matchedId || (isValidUUID ? inc.id : makeUUID()),
+      initialValue: initialVal,
+      currentValue: currentVal,
+      value: initialVal,
     };
   });
 }

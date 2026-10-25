@@ -2316,6 +2316,11 @@ components:
           example: 'baseUrl'
         value:
           type: string
+          description: Initial value shared and synced with cloud workspace
+          example: 'http://localhost:8080'
+        initial_value:
+          type: string
+          description: Optional initial value alias for compatibility
           example: 'http://localhost:8080'
         enabled:
           type: boolean

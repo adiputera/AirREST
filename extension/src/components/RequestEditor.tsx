@@ -179,7 +179,10 @@ export const RequestEditor: React.FC = () => {
   if (activeEnv) {
     activeEnv.variables.forEach((v) => {
       if (v.enabled && v.key.trim()) {
-        envVarsMap[v.key.trim()] = v.value;
+        const effVal = v.currentValue !== undefined && v.currentValue !== ''
+          ? v.currentValue
+          : (v.initialValue ?? v.value ?? '');
+        envVarsMap[v.key.trim()] = effVal;
       }
     });
   }

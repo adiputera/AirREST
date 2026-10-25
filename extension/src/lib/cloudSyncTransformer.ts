@@ -1,4 +1,4 @@
-import { Collection, CollectionItem, Environment, ApiRequest } from '@/types/api';
+import { Collection, CollectionItem, Environment, EnvironmentVariable, ApiRequest } from '@/types/api';
 
 /**
  * Transforms flat backend collection and item delta into nested frontend Collection structures.
@@ -121,10 +121,22 @@ export function buildEnvironmentsFromDelta(backendEnvs: any[]): Environment[] {
     .filter((e) => !e.deleted_at)
     .map((e) => {
       const parsedVars = safeJsonParse(e.variables, []);
+      const variables: EnvironmentVariable[] = (Array.isArray(parsedVars) ? parsedVars : []).map((v: any) => {
+        const initialVal = String(v?.initialValue ?? v?.initial_value ?? v?.value ?? '');
+        const currentVal = String(v?.currentValue ?? v?.current_value ?? v?.value ?? initialVal);
+        return {
+          id: String(v?.id || Math.random().toString(36).substring(2, 9)),
+          key: String(v?.key ?? ''),
+          value: initialVal,
+          initialValue: initialVal,
+          currentValue: currentVal,
+          enabled: v?.enabled !== false,
+        };
+      });
       return {
         id: e.id,
         name: e.name,
-        variables: Array.isArray(parsedVars) ? parsedVars : [],
+        variables,
         minRole: e.min_role || 'reader',
         version: typeof e.version === 'number' ? e.version : 1,
         createdAt: new Date(e.created_at || Date.now()).getTime(),

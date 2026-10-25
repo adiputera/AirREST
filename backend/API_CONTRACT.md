@@ -326,6 +326,10 @@ In addition to enums, the Frontend relies on specific primitive types and relati
 - `PUT /api/v1/environments/{id}` *(Auth)* — Update environment (enforces `base_version` OCC).
   - Payload: `{ "name"?: string, "variables"?: EnvironmentVariable[], "min_role"?: ProjectRole, "base_version"?: int64 }`
 - `DELETE /api/v1/environments/{id}` *(Auth)* — Soft delete environment (tombstone).
+- **Initial Value vs. Current Value Protocol**:
+  - The `variables` stored in backend environments represent the shared **Initial Value** (`value` / `initial_value`).
+  - The client extension tracks a session-local **Current Value** (`currentValue`). Variable interpolation prioritizes `currentValue`. Dynamic script execution (`pm.environment.set()`) and token extractions mutate `currentValue` locally and do NOT push to the upstream backend.
+  - Changes to upstream only occur when the user manually modifies an Initial Value or performs "Persist All" via the Environment Modal.
 
 ### 9. Stateless Delta Sync & Batch Operations
 - `GET /api/v1/sync/pull?workspace_id={id}&project_id={id}&since={timestamp}` *(Auth)*
