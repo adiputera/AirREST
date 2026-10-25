@@ -1,6 +1,6 @@
 # Chrome Web Store Listings — AirREST
 
-> Last Updated: 2026-10-21
+> Last Updated: 2026-10-26
 
 This document provides complete, copy-paste ready store listing metadata and privacy disclosures for both editions of AirREST:
 1. **Full Edition** (`npm run build:full` → `dist/`) — Online & Offline with optional cloud workspace sync.
@@ -54,6 +54,7 @@ The optional cloud synchronization backend (Go backend and AirREST Hub portal) i
 PERMISSIONS
 • Access all websites ("host_permissions"): Needed to send API requests to any endpoint you configure (including localhost and private network servers) and connect to your chosen self-hosted sync server without CORS restrictions.
 • Storage ("storage", "unlimitedStorage"): Needed to store your collections, environments, settings, and request history locally without quota limitation errors.
+• Network diagnostics ("webRequest"): Needed strictly as an observational listener to capture low-level network failure codes (e.g., ERR_CONNECTION_REFUSED, ERR_NAME_NOT_RESOLVED, ERR_CERT_AUTHORITY_INVALID) for accurate diagnostic feedback when local servers are offline or certificates fail. It does not block or modify requests.
 
 SUPPORT
 For questions, bug reports, or feature suggestions, visit the project repository on GitHub:
@@ -135,6 +136,7 @@ AirREST Offline operates entirely on your device. It contains no external analyt
 PERMISSIONS
 • Access all websites ("host_permissions"): Needed solely to send API requests to any endpoint you configure (including localhost and private network servers) directly from the browser without CORS restrictions. The extension never contacts any developer servers.
 • Storage ("storage", "unlimitedStorage"): Needed to store your collections, environments, settings, and request history locally on your machine without quota limitation errors.
+• Network diagnostics ("webRequest"): Needed strictly as an observational listener to capture low-level network failure codes (e.g., ERR_CONNECTION_REFUSED, ERR_NAME_NOT_RESOLVED, ERR_CERT_AUTHORITY_INVALID) for accurate diagnostic feedback when local servers are offline or certificates fail. It does not block or modify requests.
 
 SUPPORT
 For questions, bug reports, or feature suggestions, visit the project repository on GitHub:
