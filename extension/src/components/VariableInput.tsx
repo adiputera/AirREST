@@ -132,7 +132,10 @@ export const VariableInput: React.FC<VariableInputProps> = ({
     if (activeEnv) {
       for (const v of (activeEnv.variables || [])) {
         if (v && v.enabled && String(v.key || '').trim()) {
-          map[String(v.key).trim()] = String(v.value ?? '');
+          const effVal = v.currentValue !== undefined && v.currentValue !== ''
+            ? v.currentValue
+            : String(v.initialValue ?? v.value ?? '');
+          map[String(v.key).trim()] = effVal;
         }
       }
     }
@@ -381,6 +384,21 @@ export const VariableInput: React.FC<VariableInputProps> = ({
             </div>
 
             <div className="space-y-1 font-mono text-[11px]">
+              {(() => {
+                const matchedVar = activeEnv?.variables?.find((v) => v.key.trim() === hoveredVar.varName);
+                const initialVal = matchedVar?.initialValue ?? matchedVar?.value;
+                if (initialVal !== undefined) {
+                  return (
+                    <div className="flex items-start gap-1.5">
+                      <span className="text-zinc-500 shrink-0">Initial Value:</span>
+                      <span className="break-all font-medium text-zinc-300">
+                        {initialVal || '(empty string)'}
+                      </span>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
               <div className="flex items-start gap-1.5">
                 <span className="text-zinc-500 shrink-0">Current Value:</span>
                 <span

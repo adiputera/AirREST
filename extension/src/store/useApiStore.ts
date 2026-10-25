@@ -167,6 +167,8 @@ interface ApiStoreState {
   addEnvironmentVariable: (envId: string) => void;
   updateEnvironmentVariable: (envId: string, varId: string, updates: Partial<EnvironmentVariable>) => void;
   removeEnvironmentVariable: (envId: string, varId: string) => void;
+  resetEnvironmentCurrentValues: (envId: string) => void;
+  persistEnvironmentCurrentValues: (envId: string) => void;
   addEnvironment: (env: Environment) => Promise<string>;
   replaceEnvironment: (existingId: string, incomingEnv: Environment) => Promise<void>;
   importEnvironmentFromJson: (jsonStr: string) => { success: boolean; error?: string; environment?: Environment };
@@ -284,6 +286,16 @@ interface ApiStoreState {
   importLocalToCloud: () => Promise<{ success: boolean; message: string }>;
 }
 
+export function sanitizeVariablesForUpstream(vars: EnvironmentVariable[]) {
+  return (vars || []).map((v) => ({
+    id: v.id,
+    key: v.key,
+    value: v.initialValue ?? v.value ?? '',
+    initialValue: v.initialValue ?? v.value ?? '',
+    enabled: v.enabled !== false,
+  }));
+}
+
 const envSyncDebounceTimers: Record<string, ReturnType<typeof setTimeout>> = {};
 
 function scheduleEnvironmentCloudSync(
@@ -313,7 +325,7 @@ function scheduleEnvironmentCloudSync(
         envId,
         {
           name: currentEnv.name,
-          variables: currentEnv.variables,
+          variables: sanitizeVariablesForUpstream(currentEnv.variables),
           min_role: currentEnv.minRole,
           base_version: currentEnv.version || 1,
         },
@@ -345,7 +357,7 @@ function scheduleEnvironmentCloudSync(
               envId,
               {
                 name: retryEnv.name,
-                variables: retryEnv.variables,
+                variables: sanitizeVariablesForUpstream(retryEnv.variables),
                 min_role: retryEnv.minRole,
                 base_version: err.data.version,
               },
@@ -787,9 +799,26 @@ export const useApiStore = create<ApiStoreState>()(
           );
           const pulledEnvs = buildEnvironmentsFromDelta(envList);
 
-          const targetActiveId = pulledEnvs.some((e) => e.id === get().activeEnvironmentId)
+          // Preserve local currentValues if they already exist in current store
+          const currentEnvs = get().environments || [];
+          const preservedEnvs = pulledEnvs.map((pe) => {
+            const localEnv = currentEnvs.find((ce) => ce.id === pe.id);
+            if (!localEnv) return pe;
+            return {
+              ...pe,
+              variables: pe.variables.map((pv) => {
+                const localVar = localEnv.variables.find((lv) => lv.id === pv.id || lv.key === pv.key);
+                return {
+                  ...pv,
+                  currentValue: localVar?.currentValue !== undefined ? localVar.currentValue : pv.initialValue,
+                };
+              }),
+            };
+          });
+
+          const targetActiveId = preservedEnvs.some((e) => e.id === get().activeEnvironmentId)
             ? get().activeEnvironmentId
-            : (pulledEnvs[0]?.id || null);
+            : (preservedEnvs[0]?.id || null);
 
           const scopeKey = getScopeKey(cloudConfig.activeScope);
           const currentScopeCache = get().scopeCache?.[scopeKey];
@@ -798,7 +827,7 @@ export const useApiStore = create<ApiStoreState>()(
             [scopeKey]: {
               ...currentScopeCache,
               collections: pulledCols,
-              environments: pulledEnvs,
+              environments: preservedEnvs,
               activeEnvironmentId: targetActiveId,
               lastSyncedAt: Date.now(),
               tabs: get().tabs,
@@ -809,7 +838,7 @@ export const useApiStore = create<ApiStoreState>()(
 
           set({
             collections: pulledCols,
-            environments: pulledEnvs,
+            environments: preservedEnvs,
             activeEnvironmentId: targetActiveId,
             scopeCache: updatedScopeCache,
             syncStatus: 'synced',
@@ -1378,7 +1407,7 @@ export const useApiStore = create<ApiStoreState>()(
         const newEnv: Environment = {
           id: generateId(),
           name: name.trim() || 'New Environment',
-          variables: [{ id: generateId(), key: '', value: '', enabled: true }],
+          variables: [{ id: generateId(), key: '', value: '', initialValue: '', currentValue: '', enabled: true }],
           minRole,
           version: 1,
           createdAt: Date.now(),
@@ -1396,7 +1425,7 @@ export const useApiStore = create<ApiStoreState>()(
             cloudConfig.activeScope,
             {
               name: newEnv.name,
-              variables: newEnv.variables,
+              variables: sanitizeVariablesForUpstream(newEnv.variables),
               min_role: newEnv.minRole,
             },
             cloudConfig.refreshToken
@@ -1482,7 +1511,10 @@ export const useApiStore = create<ApiStoreState>()(
             if (e.id !== envId) return e;
             return {
               ...e,
-              variables: [...e.variables, { id: generateId(), key: '', value: '', enabled: true }],
+              variables: [
+                ...e.variables,
+                { id: generateId(), key: '', value: '', initialValue: '', currentValue: '', enabled: true },
+              ],
               updatedAt: Date.now(),
             };
           }),
@@ -1492,11 +1524,16 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       updateEnvironmentVariable: (envId, varId, updates) => {
-        const { workspaceMode, cloudConfig } = get();
-        if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
-          if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
-            console.warn('User lacks permission to modify environments in this scope');
-            return;
+        const updateKeys = Object.keys(updates);
+        const isOnlyCurrentValue = updateKeys.length === 1 && updateKeys[0] === 'currentValue';
+
+        if (!isOnlyCurrentValue) {
+          const { workspaceMode, cloudConfig } = get();
+          if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
+            if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
+              console.warn('User lacks permission to modify environments in this scope');
+              return;
+            }
           }
         }
 
@@ -1505,13 +1542,22 @@ export const useApiStore = create<ApiStoreState>()(
             if (e.id !== envId) return e;
             return {
               ...e,
-              variables: e.variables.map((v) => (v.id === varId ? { ...v, ...updates } : v)),
+              variables: e.variables.map((v) => {
+                if (v.id !== varId) return v;
+                const next = { ...v, ...updates };
+                if (updates.initialValue !== undefined) {
+                  next.value = updates.initialValue;
+                }
+                return next;
+              }),
               updatedAt: Date.now(),
             };
           }),
         }));
 
-        scheduleEnvironmentCloudSync(envId, get, set);
+        if (!isOnlyCurrentValue) {
+          scheduleEnvironmentCloudSync(envId, get, set);
+        }
       },
 
       removeEnvironmentVariable: (envId, varId) => {
@@ -1529,6 +1575,52 @@ export const useApiStore = create<ApiStoreState>()(
             return {
               ...e,
               variables: e.variables.filter((v) => v.id !== varId),
+              updatedAt: Date.now(),
+            };
+          }),
+        }));
+
+        scheduleEnvironmentCloudSync(envId, get, set);
+      },
+
+      resetEnvironmentCurrentValues: (envId) => {
+        set((state) => ({
+          environments: state.environments.map((e) => {
+            if (e.id !== envId) return e;
+            return {
+              ...e,
+              variables: e.variables.map((v) => ({
+                ...v,
+                currentValue: v.initialValue ?? v.value ?? '',
+              })),
+              updatedAt: Date.now(),
+            };
+          }),
+        }));
+      },
+
+      persistEnvironmentCurrentValues: (envId) => {
+        const { workspaceMode, cloudConfig } = get();
+        if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
+          if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
+            console.warn('User lacks permission to modify environments in this scope');
+            return;
+          }
+        }
+
+        set((state) => ({
+          environments: state.environments.map((e) => {
+            if (e.id !== envId) return e;
+            return {
+              ...e,
+              variables: e.variables.map((v) => {
+                const effective = v.currentValue ?? v.initialValue ?? v.value ?? '';
+                return {
+                  ...v,
+                  initialValue: effective,
+                  value: effective,
+                };
+              }),
               updatedAt: Date.now(),
             };
           }),
@@ -1559,7 +1651,7 @@ export const useApiStore = create<ApiStoreState>()(
               cloudConfig.activeScope,
               {
                 name: env.name,
-                variables: env.variables,
+                variables: sanitizeVariablesForUpstream(env.variables),
                 min_role: env.minRole || 'reader',
               },
               cloudConfig.refreshToken
@@ -1624,7 +1716,7 @@ export const useApiStore = create<ApiStoreState>()(
               existingId,
               {
                 name: replacedEnv.name,
-                variables: replacedEnv.variables,
+                variables: sanitizeVariablesForUpstream(replacedEnv.variables),
                 min_role: replacedEnv.minRole,
                 base_version: replacedEnv.version || 1,
               },
@@ -2153,7 +2245,10 @@ export const useApiStore = create<ApiStoreState>()(
           if (activeEnv) {
             activeEnv.variables.forEach((v) => {
               if (v.enabled && v.key.trim() !== '') {
-                envVarsMap[v.key.trim()] = v.value;
+                const effVal = v.currentValue !== undefined && v.currentValue !== ''
+                  ? v.currentValue
+                  : (v.initialValue ?? v.value ?? '');
+                envVarsMap[v.key.trim()] = effVal;
               }
             });
           }
@@ -2165,19 +2260,37 @@ export const useApiStore = create<ApiStoreState>()(
             {}
           );
 
-          // Update environment with any modifications made by pm.environment.set()
+          // Update environment with any modifications made by pm.environment.set() (updates currentValue ONLY without upstream sync)
           if (scriptResult.success && activeEnv) {
-            const updatedVariables = [...activeEnv.variables];
-            Object.entries(scriptResult.environment).forEach(([key, val]) => {
-              const existingIdx = updatedVariables.findIndex((v) => v.key.trim() === key);
-              if (existingIdx >= 0) {
-                updatedVariables[existingIdx].value = val;
-              } else {
-                updatedVariables.push({ id: generateId(), key, value: val, enabled: true });
-              }
-            });
-
-            state.updateEnvironment(activeEnv.id, { variables: updatedVariables });
+            set((s) => ({
+              environments: s.environments.map((e) => {
+                if (e.id !== activeEnv.id) return e;
+                const updatedVariables = [...e.variables];
+                Object.entries(scriptResult.environment).forEach(([key, val]) => {
+                  const existingIdx = updatedVariables.findIndex((v) => v.key.trim() === key);
+                  if (existingIdx >= 0) {
+                    updatedVariables[existingIdx] = {
+                      ...updatedVariables[existingIdx],
+                      currentValue: val,
+                    };
+                  } else {
+                    updatedVariables.push({
+                      id: generateId(),
+                      key,
+                      value: '',
+                      initialValue: '',
+                      currentValue: val,
+                      enabled: true,
+                    });
+                  }
+                });
+                return {
+                  ...e,
+                  variables: updatedVariables,
+                  updatedAt: Date.now(),
+                };
+              }),
+            }));
           }
 
           // Merge environment variables and script runtime variables
@@ -2202,29 +2315,39 @@ export const useApiStore = create<ApiStoreState>()(
             );
 
             if (postScriptResult.success && activeEnv) {
-              const updatedVariables = [...activeEnv.variables];
-              Object.entries(postScriptResult.environment).forEach(([key, val]) => {
-                const existingIdx = updatedVariables.findIndex((v) => v.key.trim() === key);
-                if (existingIdx >= 0) {
-                  if (updatedVariables[existingIdx].value !== val) {
-                    updatedKeys.push(key);
-                  }
-                  updatedVariables[existingIdx] = {
-                    ...updatedVariables[existingIdx],
-                    value: val,
-                  };
-                } else {
-                  updatedKeys.push(key);
-                  updatedVariables.push({
-                    id: generateId(),
-                    key,
-                    value: val,
-                    enabled: true,
+              set((s) => ({
+                environments: s.environments.map((e) => {
+                  if (e.id !== activeEnv.id) return e;
+                  const updatedVariables = [...e.variables];
+                  Object.entries(postScriptResult.environment).forEach(([key, val]) => {
+                    const existingIdx = updatedVariables.findIndex((v) => v.key.trim() === key);
+                    if (existingIdx >= 0) {
+                      if (updatedVariables[existingIdx].currentValue !== val) {
+                        updatedKeys.push(key);
+                      }
+                      updatedVariables[existingIdx] = {
+                        ...updatedVariables[existingIdx],
+                        currentValue: val,
+                      };
+                    } else {
+                      updatedKeys.push(key);
+                      updatedVariables.push({
+                        id: generateId(),
+                        key,
+                        value: '',
+                        initialValue: '',
+                        currentValue: val,
+                        enabled: true,
+                      });
+                    }
                   });
-                }
-              });
-
-              state.updateEnvironment(activeEnv.id, { variables: updatedVariables });
+                  return {
+                    ...e,
+                    variables: updatedVariables,
+                    updatedAt: Date.now(),
+                  };
+                }),
+              }));
             } else if (!postScriptResult.success && postScriptResult.error) {
               scriptError = postScriptResult.error;
             }
@@ -2927,7 +3050,7 @@ export const useApiStore = create<ApiStoreState>()(
               cloudConfig.activeScope,
               {
                 name: imported.name,
-                variables: imported.variables,
+                variables: sanitizeVariablesForUpstream(imported.variables),
                 min_role: imported.minRole || 'reader',
               },
               cloudConfig.refreshToken

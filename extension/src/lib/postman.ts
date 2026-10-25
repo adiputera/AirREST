@@ -1106,16 +1106,22 @@ export function importPostmanEnvironment(jsonString: string): Environment {
   }
 
   const variables: EnvironmentVariable[] = rawValues
-    .map((v) => ({
-      id: generateId(),
-      key: String(v.key ?? '').trim(),
-      value: String(v.value ?? ''),
-      enabled: v.enabled !== false,
-    }))
+    .map((v: any) => {
+      const initialVal = String(v.initialValue ?? v.initial_value ?? v.value ?? '');
+      const currentVal = String(v.currentValue ?? v.current_value ?? v.value ?? initialVal);
+      return {
+        id: generateId(),
+        key: String(v.key ?? '').trim(),
+        value: initialVal,
+        initialValue: initialVal,
+        currentValue: currentVal,
+        enabled: v.enabled !== false,
+      };
+    })
     .filter((v) => v.key !== '');
 
   if (variables.length === 0) {
-    variables.push({ id: generateId(), key: '', value: '', enabled: true });
+    variables.push({ id: generateId(), key: '', value: '', initialValue: '', currentValue: '', enabled: true });
   }
 
   return {
@@ -1138,7 +1144,7 @@ export function exportPostmanEnvironment(env: Environment): string {
       .filter((v) => v && v.key?.trim())
       .map((v) => ({
         key: v.key,
-        value: v.value,
+        value: v.initialValue ?? v.value ?? '',
         type: 'default',
         enabled: v.enabled,
       })),
