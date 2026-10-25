@@ -20,7 +20,7 @@ import {
   fetchUserTeams,
   fetchTeamProjects,
 } from '@/lib/cloudApi';
-import { getRoleFromJwt } from '@/lib/jwt';
+import { getRoleFromJwt, canModifyCollection, hasScopePermission } from '@/lib/jwt';
 import { isOfflineOnly } from '@/lib/edition';
 
 interface MoveCollectionModalProps {
@@ -57,6 +57,10 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
   const activeScope = cloudConfig.activeScope;
   const isSourceProject = workspaceMode === 'cloud' && activeScope?.type === 'project';
   const sourceTeamId = isSourceProject ? activeScope.teamId : undefined;
+
+  const canMove =
+    hasScopePermission(activeScope, 'collection:move', workspaceMode, cloudConfig.user?.role) &&
+    canModifyCollection(collection?.minRole, activeScope, workspaceMode, cloudConfig.user?.role);
 
   // Load eligible target workspaces / projects
   useEffect(() => {
@@ -154,9 +158,12 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
               const isEligible =
                 isSuperadmin ||
                 isTeamAdmin ||
-                effectiveRole === 'admin' ||
-                effectiveRole === 'maintainer' ||
-                effectiveRole === 'contributor';
+                hasScopePermission(
+                  { type: 'project', role: effectiveRole, permissions: proj.permissions },
+                  'collection:write',
+                  'cloud',
+                  cloudConfig.user?.role
+                );
 
               if (isEligible) {
                 options.push({
@@ -167,6 +174,7 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
                     teamId: tp.team.id,
                     teamName: tp.team.name,
                     role: effectiveRole,
+                    permissions: proj.permissions,
                   },
                   label: `${tp.team.name} / ${proj.name}`,
                   subLabel: `Team: ${tp.team.name}`,
@@ -201,6 +209,10 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
   if (!isOpen || !collection) return null;
 
   const handleConfirmMove = async () => {
+    if (!canMove) {
+      setErrorMsg('You do not have permission to move this collection (insufficient role in current scope).');
+      return;
+    }
     if (!selectedTargetScope) return;
     setIsSubmitting(true);
     setErrorMsg(null);
@@ -366,6 +378,13 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
         </div>
 
         {/* Error notice */}
+        {!canMove && (
+          <div className="mt-3.5 flex items-center gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-400">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            <span>You have read-only access to this collection and cannot move it to another workspace.</span>
+          </div>
+        )}
+
         {errorMsg && (
           <div className="mt-3.5 flex items-center gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-400">
             <AlertCircle className="h-4 w-4 shrink-0" />
@@ -386,7 +405,7 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
           <button
             type="button"
             onClick={handleConfirmMove}
-            disabled={isSubmitting || !selectedTargetScope || targetOptions.length === 0}
+            disabled={isSubmitting || !canMove || !selectedTargetScope || targetOptions.length === 0}
             className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 px-4 py-2 text-xs font-semibold text-zinc-950 shadow-lg shadow-amber-500/20 hover:from-amber-400 hover:to-amber-500 active:scale-95 disabled:opacity-40 disabled:pointer-events-none transition"
           >
             {isSubmitting ? (

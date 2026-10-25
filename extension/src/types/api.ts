@@ -161,6 +161,16 @@ export interface CloudTeam {
   role?: string; // 'admin' | 'member'
 }
 
+export type ScopePermission =
+  | 'collection:read'
+  | 'collection:write'
+  | 'collection:delete'
+  | 'collection:move'
+  | 'env:read'
+  | 'env:write'
+  | 'env:delete'
+  | '*';
+
 export interface CloudProject {
   id: string;
   team_id: string;
@@ -168,6 +178,7 @@ export interface CloudProject {
   name: string;
   description?: string;
   user_role?: 'admin' | 'maintainer' | 'contributor' | 'reader';
+  permissions?: string[];
 }
 
 export interface ActiveScope {
@@ -177,6 +188,7 @@ export interface ActiveScope {
   teamId?: string;
   teamName?: string;
   role?: 'admin' | 'maintainer' | 'contributor' | 'reader' | 'owner';
+  permissions?: string[];
 }
 
 export type SyncStatus = 'idle' | 'syncing' | 'synced' | 'error' | 'offline';

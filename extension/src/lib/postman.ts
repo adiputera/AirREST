@@ -689,10 +689,10 @@ function itemToPostmanJson(item: CollectionItem): PostmanRawItem {
   }
 
   const headers: PostmanHeader[] = (req.headers || [])
-    .filter((h) => h.key.trim() !== '' || h.value.trim() !== '')
+    .filter((h) => h && (String(h.key ?? '').trim() !== '' || String(h.value ?? '').trim() !== ''))
     .map((h) => ({
-      key: h.key,
-      value: h.value,
+      key: String(h?.key ?? ''),
+      value: String(h?.value ?? ''),
       ...(h.enabled === false ? { disabled: true } : {}),
       ...(h.description ? { description: h.description } : {}),
     }));
@@ -750,10 +750,10 @@ function itemToPostmanJson(item: CollectionItem): PostmanRawItem {
     body = {
       mode: 'urlencoded',
       urlencoded: (req.bodyUrlEncoded || [])
-        .filter((item) => item.key.trim() !== '' || item.value.trim() !== '')
+        .filter((item) => item && (String(item.key ?? '').trim() !== '' || String(item.value ?? '').trim() !== ''))
         .map((item) => ({
-          key: item.key,
-          value: item.value,
+          key: String(item?.key ?? ''),
+          value: String(item?.value ?? ''),
           type: 'text',
           ...(item.enabled === false ? { disabled: true } : {}),
           ...(item.description ? { description: item.description } : {}),
@@ -763,12 +763,12 @@ function itemToPostmanJson(item: CollectionItem): PostmanRawItem {
     body = {
       mode: 'formdata',
       formdata: (req.bodyFormData || [])
-        .filter((item) => item.key.trim() !== '' || (item.value && item.value.trim() !== '') || item.file)
+        .filter((item) => item && (String(item.key ?? '').trim() !== '' || (item.value && String(item.value).trim() !== '') || item.file))
         .map((item) => ({
-          key: item.key,
-          value: item.value,
+          key: String(item?.key ?? ''),
+          value: String(item?.value ?? ''),
           type: item.type,
-          src: item.file?.name || (item.type === 'file' ? item.value : undefined),
+          src: item.file?.name || (item.type === 'file' ? String(item?.value ?? '') : undefined),
           ...(item.enabled === false ? { disabled: true } : {}),
         })),
     };
@@ -808,7 +808,7 @@ function itemToPostmanJson(item: CollectionItem): PostmanRawItem {
 
   // Export authorization
   let auth: PostmanAuth | undefined = undefined;
-  if (req.auth.type === 'bearer' && req.auth.bearerToken) {
+  if (req.auth?.type === 'bearer' && req.auth.bearerToken) {
     auth = {
       type: 'bearer',
       bearer: [
@@ -819,7 +819,7 @@ function itemToPostmanJson(item: CollectionItem): PostmanRawItem {
         },
       ],
     };
-  } else if (req.auth.type === 'basic') {
+  } else if (req.auth?.type === 'basic') {
     auth = {
       type: 'basic',
       basic: [
@@ -835,7 +835,7 @@ function itemToPostmanJson(item: CollectionItem): PostmanRawItem {
         },
       ],
     };
-  } else if (req.auth.type === 'apikey') {
+  } else if (req.auth?.type === 'apikey') {
     auth = {
       type: 'apikey',
       apikey: [
@@ -882,10 +882,10 @@ export function buildPostmanUrl(rawUrl: string, params: KeyValuePair[] = []): Po
 
   // 1. Filter out completely empty placeholder rows from params
   const validParams: PostmanQueryParam[] = (params || [])
-    .filter((p) => p.key.trim() !== '' || p.value.trim() !== '')
+    .filter((p) => p && (String(p.key ?? '').trim() !== '' || String(p.value ?? '').trim() !== ''))
     .map((p) => ({
-      key: p.key,
-      value: p.value,
+      key: String(p?.key ?? ''),
+      value: String(p?.value ?? ''),
       ...(p.enabled === false ? { disabled: true } : {}),
       ...(p.description ? { description: p.description } : {}),
     }));
@@ -1017,7 +1017,7 @@ export function exportPostmanCollection(collection: Collection): string {
       description: collection.description || '',
       schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json',
     },
-    item: collection.items.map(itemToPostmanJson),
+    item: (collection.items || []).map(itemToPostmanJson),
   };
 
   return JSON.stringify(postmanFormat, null, 2);
@@ -1134,8 +1134,8 @@ export function exportPostmanEnvironment(env: Environment): string {
   const postmanFormat: PostmanEnvironmentSchema = {
     id: env.id,
     name: env.name,
-    values: env.variables
-      .filter((v) => v.key.trim())
+    values: (env.variables || [])
+      .filter((v) => v && v.key?.trim())
       .map((v) => ({
         key: v.key,
         value: v.value,
@@ -1144,7 +1144,7 @@ export function exportPostmanEnvironment(env: Environment): string {
       })),
     _postman_variable_scope: 'environment',
     _postman_exported_at: new Date().toISOString(),
-    _postman_exported_using: 'AirREST/1.1.1',
+    _postman_exported_using: 'AirREST/1.1.2',
   };
 
   return JSON.stringify(postmanFormat, null, 2);

@@ -54,9 +54,9 @@ export const EnvironmentConflictModal: React.FC<EnvironmentConflictModalProps> =
 
   if (!isOpen) return null;
 
-  const existingNames = environments.map((e) => e.name);
-  const copyCandidateName = generateCopyEnvironmentName(incomingEnv.name, existingNames);
-  const totalChanges = diff.added.length + diff.modified.length + diff.removed.length;
+  const existingNames = (environments || []).map((e) => e?.name || '');
+  const copyCandidateName = generateCopyEnvironmentName(incomingEnv?.name || 'Environment', existingNames);
+  const totalChanges = (diff?.added?.length || 0) + (diff?.modified?.length || 0) + (diff?.removed?.length || 0);
 
   return (
     <div

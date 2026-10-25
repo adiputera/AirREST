@@ -62,6 +62,7 @@ import {
   flattenCollectionRequests,
   alignEnvironmentVariableIds,
 } from '@/lib/requestDiff';
+import { canModifyCollection, hasScopePermission } from '@/lib/jwt';
 
 function generateId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -224,7 +225,7 @@ interface ApiStoreState {
   createCollection: (name: string, description?: string) => string;
   renameCollection: (id: string, name: string) => void;
   createFolder: (collectionId: string, parentFolderId: string | null, name?: string) => string;
-  createRequestInCollection: (collectionId: string, folderId: string | null, name?: string) => ApiRequest;
+  createRequestInCollection: (collectionId: string, folderId: string | null, name?: string) => ApiRequest | null;
   deleteCollectionItem: (collectionId: string, itemId: string) => void;
   renameCollectionItem: (collectionId: string, itemId: string, name: string) => void;
   saveRequestToCollection: (collectionId: string, folderId: string | null, request: ApiRequest) => void;
@@ -938,14 +939,19 @@ export const useApiStore = create<ApiStoreState>()(
               const match = projectsForActiveTeam.find((p) => p.id === currentScope.id);
               if (!match && projectsForActiveTeam.length > 0) {
                 accessRevoked = true;
-              } else if (match && match.user_role && match.user_role !== currentScope.role) {
-                // Reconcile active project scope's role if updated on backend
+              } else if (
+                match &&
+                (match.user_role !== currentScope.role ||
+                  JSON.stringify(match.permissions) !== JSON.stringify(currentScope.permissions))
+              ) {
+                // Reconcile active project scope's role and permissions if updated on backend
                 set((state) => ({
                   cloudConfig: {
                     ...state.cloudConfig,
                     activeScope: {
                       ...state.cloudConfig.activeScope!,
                       role: match.user_role,
+                      permissions: match.permissions,
                     },
                   },
                 }));
@@ -1361,6 +1367,14 @@ export const useApiStore = create<ApiStoreState>()(
         set({ activeEnvironmentId }),
 
       createEnvironment: (name, minRole = 'reader') => {
+        const { workspaceMode, cloudConfig } = get();
+        if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
+          if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
+            console.warn('User lacks permission to create environment in this scope');
+            return '';
+          }
+        }
+
         const newEnv: Environment = {
           id: generateId(),
           name: name.trim() || 'New Environment',
@@ -1375,7 +1389,6 @@ export const useApiStore = create<ApiStoreState>()(
           activeEnvironmentId: newEnv.id,
         }));
 
-        const { workspaceMode, cloudConfig } = get();
         if (workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
           createScopeEnvironment(
             cloudConfig.apiUrl,
@@ -1407,6 +1420,15 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       deleteEnvironment: (id) => {
+        const { workspaceMode, cloudConfig, environments } = get();
+        const env = environments.find((e) => e.id === id);
+        if (env && workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
+          if (!hasScopePermission(cloudConfig.activeScope, 'env:delete', workspaceMode, cloudConfig.user?.role)) {
+            console.warn(`User lacks permission to delete environment "${env.name}"`);
+            return;
+          }
+        }
+
         if (envSyncDebounceTimers[id]) {
           clearTimeout(envSyncDebounceTimers[id]);
           delete envSyncDebounceTimers[id];
@@ -1417,7 +1439,6 @@ export const useApiStore = create<ApiStoreState>()(
           activeEnvironmentId: state.activeEnvironmentId === id ? null : state.activeEnvironmentId,
         }));
 
-        const { workspaceMode, cloudConfig } = get();
         if (workspaceMode === 'cloud' && cloudConfig.token) {
           deleteScopeEnvironment(cloudConfig.apiUrl, cloudConfig.token, id, cloudConfig.refreshToken).catch((err) => {
             console.error('Failed to delete environment from cloud:', err);
@@ -1426,6 +1447,15 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       updateEnvironment: (id, updates) => {
+        const { workspaceMode, cloudConfig, environments } = get();
+        const env = environments.find((e) => e.id === id);
+        if (env && workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
+          if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
+            console.warn(`User lacks permission to update environment "${env.name}"`);
+            return;
+          }
+        }
+
         set((state) => ({
           environments: state.environments.map((e) => {
             if (e.id === id) {
@@ -1439,6 +1469,14 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       addEnvironmentVariable: (envId) => {
+        const { workspaceMode, cloudConfig } = get();
+        if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
+          if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
+            console.warn('User lacks permission to modify environments in this scope');
+            return;
+          }
+        }
+
         set((state) => ({
           environments: state.environments.map((e) => {
             if (e.id !== envId) return e;
@@ -1454,6 +1492,14 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       updateEnvironmentVariable: (envId, varId, updates) => {
+        const { workspaceMode, cloudConfig } = get();
+        if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
+          if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
+            console.warn('User lacks permission to modify environments in this scope');
+            return;
+          }
+        }
+
         set((state) => ({
           environments: state.environments.map((e) => {
             if (e.id !== envId) return e;
@@ -1469,6 +1515,14 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       removeEnvironmentVariable: (envId, varId) => {
+        const { workspaceMode, cloudConfig } = get();
+        if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
+          if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
+            console.warn('User lacks permission to modify environments in this scope');
+            return;
+          }
+        }
+
         set((state) => ({
           environments: state.environments.map((e) => {
             if (e.id !== envId) return e;
@@ -1484,12 +1538,19 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       addEnvironment: async (env: Environment) => {
+        const { workspaceMode, cloudConfig } = get();
+        if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
+          if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
+            console.warn('User lacks permission to add environment in this scope');
+            return env.id;
+          }
+        }
+
         set((state) => ({
           environments: [...state.environments, env],
           activeEnvironmentId: env.id,
         }));
 
-        const { workspaceMode, cloudConfig } = get();
         if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
           try {
             const created = await createScopeEnvironment(
@@ -1520,6 +1581,13 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       replaceEnvironment: async (existingId: string, incomingEnv: Environment) => {
+        const { workspaceMode, cloudConfig } = get();
+        if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
+          if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
+            throw new Error('Insufficient permission to modify environments in this scope (requires env:write)');
+          }
+        }
+
         if (envSyncDebounceTimers[existingId]) {
           clearTimeout(envSyncDebounceTimers[existingId]);
           delete envSyncDebounceTimers[existingId];
@@ -1548,7 +1616,6 @@ export const useApiStore = create<ApiStoreState>()(
           activeEnvironmentId: existingId,
         }));
 
-        const { workspaceMode, cloudConfig } = get();
         if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
           try {
             const res = await updateScopeEnvironment(
@@ -2230,6 +2297,14 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       createCollection: (name, description = '') => {
+        const { workspaceMode, cloudConfig } = get();
+        if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
+          if (!hasScopePermission(cloudConfig.activeScope, 'collection:write', workspaceMode, cloudConfig.user?.role)) {
+            console.warn('Insufficient permissions to create collection in project scope');
+            return '';
+          }
+        }
+
         const newCol: Collection = {
           id: generateId(),
           name: name.trim() || 'New Collection',
@@ -2237,13 +2312,12 @@ export const useApiStore = create<ApiStoreState>()(
           items: [],
           createdAt: Date.now(),
           updatedAt: Date.now(),
-          _origin: get().workspaceMode === 'offline' ? 'offline' : 'cloud',
+          _origin: workspaceMode === 'offline' ? 'offline' : 'cloud',
         };
         set((state) => ({
           collections: [newCol, ...state.collections],
         }));
 
-        const { workspaceMode, cloudConfig } = get();
         if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
           batchImportToScope(
             cloudConfig.apiUrl,
@@ -2263,6 +2337,15 @@ export const useApiStore = create<ApiStoreState>()(
         const trimmed = name.trim();
         if (!trimmed) return;
 
+        const { workspaceMode, cloudConfig, collections } = get();
+        const col = collections.find((c) => c.id === id);
+        if (col) {
+          if (!canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+            console.warn(`User lacks permission to rename collection "${col.name}"`);
+            return;
+          }
+        }
+
         set((state) => ({
           collections: state.collections.map((col) => {
             if (col.id !== id) return col;
@@ -2274,9 +2357,9 @@ export const useApiStore = create<ApiStoreState>()(
           }),
         }));
 
-        const { workspaceMode, cloudConfig, collections } = get();
+        const updatedCols = get().collections;
         if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
-          const updatedCol = collections.find((c) => c.id === id);
+          const updatedCol = updatedCols.find((c) => c.id === id);
           if (updatedCol) {
             batchImportToScope(
               cloudConfig.apiUrl,
@@ -2292,6 +2375,15 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       createFolder: (collectionId, parentFolderId, name) => {
+        const { workspaceMode, cloudConfig, collections } = get();
+        const col = collections.find((c) => c.id === collectionId);
+        if (col) {
+          if (!canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+            console.warn(`User lacks permission to add folder to collection "${col.name}"`);
+            return '';
+          }
+        }
+
         const newFolderId = generateId();
         const folderName = name?.trim() || 'New Folder';
         const newFolder: CollectionItem = {
@@ -2337,9 +2429,9 @@ export const useApiStore = create<ApiStoreState>()(
           };
         });
 
-        const { workspaceMode, cloudConfig, collections } = get();
+        const updatedCols = get().collections;
         if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
-          const updatedCol = collections.find((c) => c.id === collectionId);
+          const updatedCol = updatedCols.find((c) => c.id === collectionId);
           if (updatedCol) {
             batchImportToScope(
               cloudConfig.apiUrl,
@@ -2355,6 +2447,15 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       createRequestInCollection: (collectionId, folderId, name) => {
+        const { workspaceMode, cloudConfig, collections } = get();
+        const col = collections.find((c) => c.id === collectionId);
+        if (col) {
+          if (!canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+            console.warn(`User lacks permission to add request to collection "${col.name}"`);
+            return null;
+          }
+        }
+
         const reqId = generateId();
         const reqName = name?.trim() || 'New Request';
         const newReq: ApiRequest = {
@@ -2424,9 +2525,9 @@ export const useApiStore = create<ApiStoreState>()(
           };
         });
 
-        const { workspaceMode, cloudConfig, collections } = get();
+        const updatedCols = get().collections;
         if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
-          const updatedCol = collections.find((c) => c.id === collectionId);
+          const updatedCol = updatedCols.find((c) => c.id === collectionId);
           if (updatedCol) {
             batchImportToScope(
               cloudConfig.apiUrl,
@@ -2442,6 +2543,15 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       deleteCollectionItem: (collectionId, itemId) => {
+        const { workspaceMode, cloudConfig, collections } = get();
+        const col = collections.find((c) => c.id === collectionId);
+        if (col) {
+          if (!canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+            console.warn(`User lacks permission to delete item from collection "${col.name}"`);
+            return;
+          }
+        }
+
         set((state) => {
           const filterItems = (items: CollectionItem[]): CollectionItem[] => {
             return items
@@ -2471,7 +2581,7 @@ export const useApiStore = create<ApiStoreState>()(
           };
         });
 
-        const { workspaceMode, cloudConfig, collections } = get();
+        const updatedCols = get().collections;
         if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
           deleteScopeItem(
             cloudConfig.apiUrl,
@@ -2480,7 +2590,7 @@ export const useApiStore = create<ApiStoreState>()(
             cloudConfig.refreshToken
           ).catch((err) => console.error('Failed to delete item from cloud:', err));
 
-          const updatedCol = collections.find((c) => c.id === collectionId);
+          const updatedCol = updatedCols.find((c) => c.id === collectionId);
           if (updatedCol) {
             batchImportToScope(
               cloudConfig.apiUrl,
@@ -2496,6 +2606,15 @@ export const useApiStore = create<ApiStoreState>()(
       renameCollectionItem: (collectionId, itemId, name) => {
         const trimmed = name.trim();
         if (!trimmed) return;
+
+        const { workspaceMode, cloudConfig, collections } = get();
+        const col = collections.find((c) => c.id === collectionId);
+        if (col) {
+          if (!canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+            console.warn(`User lacks permission to rename item in collection "${col.name}"`);
+            return;
+          }
+        }
 
         set((state) => {
           const updateItems = (items: CollectionItem[]): CollectionItem[] => {
@@ -2549,9 +2668,9 @@ export const useApiStore = create<ApiStoreState>()(
           };
         });
 
-        const { workspaceMode, cloudConfig, collections } = get();
+        const updatedCols = get().collections;
         if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
-          const updatedCol = collections.find((c) => c.id === collectionId);
+          const updatedCol = updatedCols.find((c) => c.id === collectionId);
           if (updatedCol) {
             batchImportToScope(
               cloudConfig.apiUrl,
@@ -2565,6 +2684,15 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       saveRequestToCollection: (collectionId, folderId, request) => {
+        const { workspaceMode, cloudConfig, collections } = get();
+        const col = collections.find((c) => c.id === collectionId);
+        if (col) {
+          if (!canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+            console.warn(`User lacks permission to modify collection "${col.name}"`);
+            return;
+          }
+        }
+
         let assignedReqId = request.id;
 
         set((state) => {
@@ -2651,9 +2779,9 @@ export const useApiStore = create<ApiStoreState>()(
           };
         });
 
-        const { workspaceMode, cloudConfig, collections } = get();
+        const updatedCols = get().collections;
         if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
-          const updatedCol = collections.find((c) => c.id === collectionId);
+          const updatedCol = updatedCols.find((c) => c.id === collectionId);
           if (updatedCol) {
             batchImportToScope(
               cloudConfig.apiUrl,
@@ -2667,12 +2795,15 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       saveActiveRequest: () => {
-        const { tabs, activeTabId, collections, saveRequestToCollection } = get();
+        const { tabs, activeTabId, collections, saveRequestToCollection, workspaceMode, cloudConfig } = get();
         const currentTab = tabs.find((t) => t.id === activeTabId);
         if (!currentTab) return { success: false, isDirectSaved: false };
 
         const saved = findSavedRequestInCollections(collections, currentTab.id);
         if (saved) {
+          if (!canModifyCollection(saved.collection.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+            return { success: false, isDirectSaved: false };
+          }
           saveRequestToCollection(saved.collection.id, saved.folderId, currentTab);
           return { success: true, isDirectSaved: true };
         }
@@ -2681,6 +2812,14 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       addCollection: async (collection) => {
+        const { workspaceMode, cloudConfig } = get();
+        if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
+          if (!hasScopePermission(cloudConfig.activeScope, 'collection:write', workspaceMode, cloudConfig.user?.role)) {
+            console.warn('Insufficient permissions to add collections in project scope');
+            return;
+          }
+        }
+
         const taggedCol: Collection = {
           ...collection,
           _origin: get().workspaceMode === 'offline' ? 'offline' : 'cloud',
@@ -2689,7 +2828,6 @@ export const useApiStore = create<ApiStoreState>()(
           collections: [taggedCol, ...state.collections],
         }));
 
-        const { workspaceMode, cloudConfig } = get();
         if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
           try {
             set({ syncStatus: 'syncing', syncError: null });
@@ -2712,6 +2850,10 @@ export const useApiStore = create<ApiStoreState>()(
         const existingCol = state.collections.find((c) => c.id === existingId);
         if (!existingCol) {
           throw new Error('Existing collection not found');
+        }
+
+        if (!canModifyCollection(existingCol.minRole, state.cloudConfig.activeScope, state.workspaceMode, state.cloudConfig.user?.role)) {
+          throw new Error(`Insufficient permissions to replace collection "${existingCol.name}"`);
         }
 
         const alignedItems = alignCollectionItemIds(existingCol.items || [], newCollection.items || []);
@@ -2765,13 +2907,19 @@ export const useApiStore = create<ApiStoreState>()(
 
       importEnvironmentFromJson: (jsonStr) => {
         try {
+          const { workspaceMode, cloudConfig } = get();
+          if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
+            if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
+              return { success: false, error: 'Insufficient permission to import environments into this scope (requires env:write)' };
+            }
+          }
+
           const imported = importPostmanEnvironment(jsonStr);
           set((state) => ({
             environments: [...state.environments, imported],
             activeEnvironmentId: imported.id,
           }));
 
-          const { workspaceMode, cloudConfig } = get();
           if (workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
             createScopeEnvironment(
               cloudConfig.apiUrl,
@@ -2808,14 +2956,25 @@ export const useApiStore = create<ApiStoreState>()(
 
       importAnyPostmanJson: async (jsonStr) => {
         try {
+          const { workspaceMode, cloudConfig } = get();
           const detected = detectPostmanJsonType(jsonStr);
           if (detected === 'environment') {
+            if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
+              if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
+                return { success: false, error: 'Insufficient permission to import environments into this scope (requires env:write)' };
+              }
+            }
             const res = get().importEnvironmentFromJson(jsonStr);
             if (res.success && res.environment) {
               return { success: true, type: 'environment', name: res.environment.name };
             }
             return { success: false, error: res.error };
           } else {
+            if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
+              if (!hasScopePermission(cloudConfig.activeScope, 'collection:write', workspaceMode, cloudConfig.user?.role)) {
+                return { success: false, error: 'Insufficient permission to import collections into this scope (requires collection:write)' };
+              }
+            }
             const col = importPostmanCollection(jsonStr);
             await get().addCollection(col);
             return { success: true, type: 'collection', name: col.name };
@@ -2830,12 +2989,19 @@ export const useApiStore = create<ApiStoreState>()(
 
       importCollectionFromJson: async (jsonStr) => {
         try {
+          const { workspaceMode, cloudConfig } = get();
           if (detectPostmanJsonType(jsonStr) === 'environment') {
             const envRes = get().importEnvironmentFromJson(jsonStr);
             if (envRes.success) {
               return { success: true };
             }
             return { success: false, error: envRes.error };
+          }
+
+          if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
+            if (!hasScopePermission(cloudConfig.activeScope, 'collection:write', workspaceMode, cloudConfig.user?.role)) {
+              return { success: false, error: 'Insufficient permission to import collections into this scope (requires collection:write)' };
+            }
           }
 
           const imported = importPostmanCollection(jsonStr);
@@ -2850,11 +3016,23 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       deleteCollection: (id) => {
+        const { workspaceMode, cloudConfig, collections } = get();
+        const col = collections.find((c) => c.id === id);
+        if (col) {
+          if (!hasScopePermission(cloudConfig.activeScope, 'collection:delete', workspaceMode, cloudConfig.user?.role)) {
+            console.warn(`User lacks permission to delete collection "${col.name}"`);
+            return;
+          }
+          if (!canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+            console.warn(`User lacks permission to delete collection "${col.name}"`);
+            return;
+          }
+        }
+
         set((state) => ({
           collections: state.collections.filter((c) => c.id !== id),
         }));
 
-        const { workspaceMode, cloudConfig } = get();
         if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token) {
           deleteScopeCollection(cloudConfig.apiUrl, cloudConfig.token, id, cloudConfig.refreshToken).catch((err) => {
             console.error('Failed to delete collection from cloud:', err);
@@ -2863,7 +3041,7 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       moveRequest: async (sourceCollectionId, requestId, targetCollectionId, targetFolderId) => {
-        const { collections } = get();
+        const { collections, workspaceMode, cloudConfig } = get();
         const sourceCol = collections.find((c) => c.id === sourceCollectionId);
         const targetCol = collections.find((c) => c.id === targetCollectionId);
 
@@ -2872,6 +3050,13 @@ export const useApiStore = create<ApiStoreState>()(
         }
         if (!targetCol) {
           return { success: false, error: 'Target collection not found' };
+        }
+
+        if (!canModifyCollection(sourceCol.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+          return { success: false, error: 'Cannot move request: source collection is read-only' };
+        }
+        if (!canModifyCollection(targetCol.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+          return { success: false, error: 'Cannot move request: target collection is read-only' };
         }
 
         // 1. Locate and extract the item from source collection
@@ -2963,7 +3148,7 @@ export const useApiStore = create<ApiStoreState>()(
         });
 
         // 3. Sync to Cloud if active
-        const { workspaceMode, cloudConfig, collections: currentCols } = get();
+        const currentCols = get().collections;
         if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
           const colsToSync = currentCols.filter(
             (c) => c.id === sourceCollectionId || c.id === targetCollectionId
@@ -2992,9 +3177,13 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       reorderItem: async (collectionId, activeId, targetId, position) => {
-        const { collections } = get();
+        const { collections, workspaceMode, cloudConfig } = get();
         const col = collections.find((c) => c.id === collectionId);
         if (!col) return { success: false, error: 'Collection not found' };
+
+        if (!canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+          return { success: false, error: 'User lacks permission to reorder items in this collection' };
+        }
 
         const result = reorderItemInTree(col.items, activeId, targetId, position);
         if (!result) return { success: false, error: 'Invalid reorder operation' };
@@ -3012,7 +3201,6 @@ export const useApiStore = create<ApiStoreState>()(
           }),
         }));
 
-        const { workspaceMode, cloudConfig } = get();
         const token = cloudConfig.token;
         if (!isOfflineOnly && workspaceMode === 'cloud' && token) {
           const sendReorder = async () => {
@@ -3074,6 +3262,12 @@ export const useApiStore = create<ApiStoreState>()(
             return { success: false, error: 'Cannot move to the current active workspace' };
           }
 
+          if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
+            if (!hasScopePermission(cloudConfig.activeScope, 'collection:move', workspaceMode, cloudConfig.user?.role)) {
+              return { success: false, error: 'Insufficient permission to move collection from this project' };
+            }
+          }
+
           const remainingActive = collections.filter((c) => c.id !== collectionId);
           const updatedOfflineCache = { ...(offlineScopeCache || {}) };
 
@@ -3105,6 +3299,12 @@ export const useApiStore = create<ApiStoreState>()(
             collections: remainingActive,
             offlineScopeCache: updatedOfflineCache,
           });
+
+          if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token) {
+            deleteScopeCollection(cloudConfig.apiUrl, cloudConfig.token, collectionId, cloudConfig.refreshToken).catch((err) => {
+              console.error('Failed to delete moved collection from cloud project:', err);
+            });
+          }
 
           return { success: true };
         }
@@ -3175,6 +3375,11 @@ export const useApiStore = create<ApiStoreState>()(
           }
           if (!cloudConfig.token || !cloudConfig.activeScope) {
             return { success: false, error: 'Not connected to cloud' };
+          }
+          if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
+            if (!hasScopePermission(cloudConfig.activeScope, 'collection:move', workspaceMode, cloudConfig.user?.role)) {
+              return { success: false, error: 'Insufficient permission to move collection from this project' };
+            }
           }
 
           try {

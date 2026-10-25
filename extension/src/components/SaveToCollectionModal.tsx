@@ -1,10 +1,11 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Bookmark, X, Check } from 'lucide-react';
+import { Bookmark, X, Check, AlertCircle } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
 import { ApiRequest, CollectionItem } from '@/types/api';
 import { findSavedRequestInCollections } from '@/lib/requestDiff';
+import { canModifyCollection, hasScopePermission } from '@/lib/jwt';
 
 interface SaveToCollectionModalProps {
   isOpen: boolean;
@@ -22,6 +23,8 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
   const saveRequestToCollection = useApiStore((state) => state.saveRequestToCollection);
   const moveRequest = useApiStore((state) => state.moveRequest);
   const updateActiveRequest = useApiStore((state) => state.updateActiveRequest);
+  const workspaceMode = useApiStore((state) => state.workspaceMode);
+  const cloudConfig = useApiStore((state) => state.cloudConfig);
 
   const savedInfo = findSavedRequestInCollections(collections, request.id);
 
@@ -33,6 +36,7 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
   const [isCreatingCollection, setIsCreatingCollection] = useState(collections.length === 0);
   const [newCollectionName, setNewCollectionName] = useState('');
   const [isSaved, setIsSaved] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
@@ -53,18 +57,31 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
   };
 
   if (currentCollection) {
-    extractFolders(currentCollection.items);
+    extractFolders(currentCollection.items || []);
   }
 
   const handleSave = () => {
+    setErrorMsg(null);
     let targetCollectionId = selectedCollectionId;
 
     if (isCreatingCollection) {
+      if (!hasScopePermission(cloudConfig.activeScope, 'collection:write', workspaceMode, cloudConfig.user?.role)) {
+        setErrorMsg('Insufficient permission to create collection in this scope (requires collection:write).');
+        return;
+      }
       const trimmedName = newCollectionName.trim() || 'New Collection';
       targetCollectionId = createCollection(trimmedName);
+    } else {
+      if (currentCollection && !canModifyCollection(currentCollection.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+        setErrorMsg(`Cannot save request: collection "${currentCollection.name}" is read-only for your role.`);
+        return;
+      }
     }
 
-    if (!targetCollectionId) return;
+    if (!targetCollectionId) {
+      setErrorMsg('Failed to select or create a valid target collection.');
+      return;
+    }
 
     const finalName = requestName.trim() || 'Untitled Request';
     const targetFolder = selectedFolderId ? selectedFolderId : null;
@@ -177,7 +194,7 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
               >
                 {collections.map((col) => (
                   <option key={col.id} value={col.id} className="bg-zinc-900 text-zinc-200">
-                    {col.name} ({col.items.length} items)
+                    {col.name} ({(col.items || []).length} items)
                   </option>
                 ))}
               </select>
@@ -202,6 +219,13 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
                   </option>
                 ))}
               </select>
+            </div>
+          )}
+
+          {errorMsg && (
+            <div className="flex items-center gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-400">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              <span>{errorMsg}</span>
             </div>
           )}
         </div>

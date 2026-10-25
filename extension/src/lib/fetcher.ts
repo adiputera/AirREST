@@ -47,7 +47,7 @@ export function prepareRequest(
   finalHeaders: Record<string, string>;
   finalBody?: BodyInit;
 } {
-  let rawUrl = interpolateVariables(request.url.trim(), variables);
+  let rawUrl = interpolateVariables((request?.url || '').trim(), variables);
 
   // If no scheme provided, default to http:// for localhost/private network IPs or https:// for others
   if (!/^https?:\/\//i.test(rawUrl)) {
@@ -58,10 +58,10 @@ export function prepareRequest(
   // Append query params
   try {
     const parsedUrl = new URL(rawUrl);
-    const activeParams = request.params.filter((p) => p.enabled && p.key.trim() !== '');
+    const activeParams = (request.params || []).filter((p) => p && p.enabled && String(p.key || '').trim() !== '');
     for (const p of activeParams) {
-      const paramKey = interpolateVariables(p.key.trim(), variables);
-      const paramVal = interpolateVariables(p.value, variables);
+      const paramKey = interpolateVariables(String(p.key).trim(), variables);
+      const paramVal = interpolateVariables(String(p.value ?? ''), variables);
       parsedUrl.searchParams.set(paramKey, paramVal);
     }
     rawUrl = parsedUrl.toString();
@@ -71,27 +71,32 @@ export function prepareRequest(
 
   // Construct headers
   const headers: Record<string, string> = {};
-  for (const h of request.headers) {
-    if (h.enabled && h.key.trim() !== '') {
-      const headerKey = interpolateVariables(h.key.trim(), variables);
-      const headerVal = interpolateVariables(h.value, variables);
+  for (const h of (request.headers || [])) {
+    if (h && h.enabled && String(h.key || '').trim() !== '') {
+      const headerKey = interpolateVariables(String(h.key).trim(), variables);
+      const headerVal = interpolateVariables(String(h.value ?? ''), variables);
       headers[headerKey] = headerVal;
     }
   }
 
   // Add Auth headers or query params if configured
-  if (request.auth.type === 'bearer' && request.auth.bearerToken) {
+  if (request.auth?.type === 'bearer' && request.auth?.bearerToken) {
     const token = interpolateVariables(request.auth.bearerToken.trim(), variables);
     headers['Authorization'] = `Bearer ${token}`;
-  } else if (request.auth.type === 'basic' && (request.auth.basicUsername || request.auth.basicPassword)) {
-    const user = interpolateVariables(request.auth.basicUsername || '', variables);
-    const pass = interpolateVariables(request.auth.basicPassword || '', variables);
-    const credentials = btoa(`${user}:${pass}`);
+  } else if (request.auth?.type === 'basic' && (request.auth?.basicUsername || request.auth?.basicPassword)) {
+    const user = interpolateVariables(request.auth?.basicUsername || '', variables);
+    const pass = interpolateVariables(request.auth?.basicPassword || '', variables);
+    let credentials = '';
+    try {
+      credentials = btoa(unescape(encodeURIComponent(`${user}:${pass}`)));
+    } catch {
+      credentials = btoa(`${user}:${pass}`);
+    }
     headers['Authorization'] = `Basic ${credentials}`;
-  } else if (request.auth.type === 'apikey' && request.auth.apiKeyKey && request.auth.apiKeyValue) {
+  } else if (request.auth?.type === 'apikey' && request.auth?.apiKeyKey && request.auth?.apiKeyValue) {
     const key = interpolateVariables(request.auth.apiKeyKey.trim(), variables);
     const val = interpolateVariables(request.auth.apiKeyValue.trim(), variables);
-    if (request.auth.apiKeyIn === 'query') {
+    if (request.auth?.apiKeyIn === 'query') {
       try {
         const parsedUrl = new URL(rawUrl);
         parsedUrl.searchParams.set(key, val);
@@ -175,9 +180,9 @@ export function prepareRequest(
 
       for (const item of activeFormItems) {
         const itemKey = interpolateVariables(String(item.key).trim(), variables);
-        if (item.type === 'file' && item.file) {
-          formData.append(itemKey, item.file, item.file.name);
-        } else {
+        if (item.type === 'file' && item.file instanceof Blob) {
+          formData.append(itemKey, item.file, item.file.name || 'file.bin');
+        } else if (item.type !== 'file') {
           formData.append(itemKey, interpolateVariables(String(item.value ?? ''), variables));
         }
       }
@@ -364,10 +369,13 @@ export async function executeApiRequest(
   request: ApiRequest,
   variables: Record<string, string> = {}
 ): Promise<ApiResponse> {
-  const { finalUrl, finalHeaders, finalBody } = prepareRequest(request, variables);
   const startTime = performance.now();
+  let finalUrl = request?.url || '';
 
   try {
+    const { finalUrl: preparedUrl, finalHeaders, finalBody } = prepareRequest(request, variables);
+    finalUrl = preparedUrl;
+
     const fetchOptions: RequestInit = {
       method: request.method,
       headers: finalHeaders,

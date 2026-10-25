@@ -41,11 +41,20 @@ function unwrapData<T>(json: any): T {
   return json as T;
 }
 
-function extractError(json: any, fallback: string): string {
+function extractError(json: any, fallback: string, status?: number): string {
   if (typeof json?.error === 'string') return json.error;
   if (json?.error?.message) return json.error.message;
   if (json?.message) return json.message;
+  if (status) return `${fallback} (HTTP ${status})`;
   return fallback;
+}
+
+async function safeJson(res: Response): Promise<any> {
+  try {
+    return await res.json();
+  } catch {
+    return {};
+  }
 }
 
 /**
@@ -121,7 +130,7 @@ async function handleSilentRefresh(apiUrl: string, refreshTokenStr: string): Pro
         return { token: null, evicted: false };
       }
 
-      const json = await res.json();
+      const json = await safeJson(res);
       const data = unwrapData<any>(json);
       if (data && data.token && data.refresh_token) {
         if (onTokenRefreshed) {
@@ -154,9 +163,9 @@ export async function loginUser(apiUrl: string, email: string, password: string)
     body: JSON.stringify({ email, password }),
   });
 
-  const json = await res.json();
+  const json = await safeJson(res);
   if (!res.ok) {
-    throw new Error(extractError(json, 'Login failed'));
+    throw new Error(extractError(json, 'Login failed', res.status));
   }
   return unwrapData<{
     user: CloudUser;
@@ -173,9 +182,9 @@ export async function registerUser(apiUrl: string, email: string, password: stri
     body: JSON.stringify({ email, password, name }),
   });
 
-  const json = await res.json();
+  const json = await safeJson(res);
   if (!res.ok) {
-    throw new Error(extractError(json, 'Registration failed'));
+    throw new Error(extractError(json, 'Registration failed', res.status));
   }
   return unwrapData<{
     user: CloudUser;
@@ -187,9 +196,9 @@ export async function registerUser(apiUrl: string, email: string, password: stri
 
 export async function getCurrentUser(apiUrl: string, token: string, refreshToken?: string) {
   const res = await fetchWithAuth('/api/v1/auth/me', { apiUrl, token, refreshToken });
-  const json = await res.json();
+  const json = await safeJson(res);
   if (!res.ok) {
-    throw new Error(extractError(json, 'Failed to fetch current user'));
+    throw new Error(extractError(json, 'Failed to fetch current user', res.status));
   }
   return unwrapData<CloudUser>(json);
 }
@@ -212,9 +221,9 @@ export async function changeUserPassword(
     }),
   });
 
-  const json = await res.json();
+  const json = await safeJson(res);
   if (!res.ok) {
-    throw new Error(extractError(json, 'Failed to update password'));
+    throw new Error(extractError(json, 'Failed to update password', res.status));
   }
   return unwrapData<{ message: string }>(json);
 }
@@ -223,9 +232,9 @@ export async function changeUserPassword(
 
 export async function fetchUserWorkspaces(apiUrl: string, token: string, refreshToken?: string) {
   const res = await fetchWithAuth('/api/v1/workspaces', { apiUrl, token, refreshToken });
-  const json = await res.json();
+  const json = await safeJson(res);
   if (!res.ok) {
-    throw new Error(extractError(json, 'Failed to fetch workspaces'));
+    throw new Error(extractError(json, 'Failed to fetch workspaces', res.status));
   }
   const data = unwrapData<any>(json);
   return (Array.isArray(data) ? data : []) as CloudWorkspace[];
@@ -233,9 +242,9 @@ export async function fetchUserWorkspaces(apiUrl: string, token: string, refresh
 
 export async function fetchUserTeams(apiUrl: string, token: string, refreshToken?: string) {
   const res = await fetchWithAuth('/api/v1/teams', { apiUrl, token, refreshToken });
-  const json = await res.json();
+  const json = await safeJson(res);
   if (!res.ok) {
-    throw new Error(extractError(json, 'Failed to fetch teams'));
+    throw new Error(extractError(json, 'Failed to fetch teams', res.status));
   }
   const data = unwrapData<any>(json);
   return (Array.isArray(data) ? data : []) as CloudTeam[];
@@ -243,9 +252,9 @@ export async function fetchUserTeams(apiUrl: string, token: string, refreshToken
 
 export async function fetchTeamProjects(apiUrl: string, teamId: string, token: string, refreshToken?: string) {
   const res = await fetchWithAuth(`/api/v1/teams/${teamId}/projects`, { apiUrl, token, refreshToken });
-  const json = await res.json();
+  const json = await safeJson(res);
   if (!res.ok) {
-    throw new Error(extractError(json, 'Failed to fetch team projects'));
+    throw new Error(extractError(json, 'Failed to fetch team projects', res.status));
   }
   const data = unwrapData<any>(json);
   return (Array.isArray(data) ? data : []) as CloudProject[];
@@ -277,9 +286,9 @@ export async function pullScopeDelta(
     refreshToken,
   });
 
-  const json = await res.json();
+  const json = await safeJson(res);
   if (!res.ok) {
-    throw new Error(extractError(json, 'Failed to pull cloud sync delta'));
+    throw new Error(extractError(json, 'Failed to pull cloud sync delta', res.status));
   }
 
   return unwrapData<{
@@ -324,9 +333,9 @@ export async function batchImportToScope(
     body: JSON.stringify(payload),
   });
 
-  const json = await res.json();
+  const json = await safeJson(res);
   if (!res.ok) {
-    throw new Error(extractError(json, 'Batch import failed'));
+    throw new Error(extractError(json, 'Batch import failed', res.status));
   }
   return unwrapData<any>(json);
 }
@@ -363,9 +372,9 @@ export async function moveScopeCollection(
     body: JSON.stringify(payload),
   });
 
-  const json = await res.json();
+  const json = await safeJson(res);
   if (!res.ok) {
-    throw new Error(extractError(json, 'Failed to move collection'));
+    throw new Error(extractError(json, 'Failed to move collection', res.status));
   }
   return unwrapData<any>(json);
 }
@@ -391,9 +400,9 @@ export async function reorderCollectionItems(
     body: JSON.stringify({ items }),
   });
 
-  const json = await res.json();
+  const json = await safeJson(res);
   if (!res.ok) {
-    throw new Error(extractError(json, 'Failed to reorder collection items'));
+    throw new Error(extractError(json, 'Failed to reorder collection items', res.status));
   }
   return unwrapData<any>(json);
 }
@@ -451,9 +460,9 @@ export async function createScopeEnvironment(
     body: JSON.stringify(payload),
   });
 
-  const json = await res.json();
+  const json = await safeJson(res);
   if (!res.ok) {
-    throw new Error(extractError(json, 'Failed to create environment'));
+    throw new Error(extractError(json, 'Failed to create environment', res.status));
   }
   return unwrapData<any>(json);
 }
@@ -482,9 +491,9 @@ export async function updateScopeEnvironment(
     body: JSON.stringify(payload),
   });
 
-  const json = await res.json();
+  const json = await safeJson(res);
   if (!res.ok) {
-    const errorMsg = extractError(json, 'Failed to update environment');
+    const errorMsg = extractError(json, 'Failed to update environment', res.status);
     const err: any = new Error(errorMsg);
     err.status = res.status;
     err.data = json?.data;
@@ -506,9 +515,9 @@ export async function deleteScopeEnvironment(
     refreshToken,
   });
 
-  const json = await res.json();
+  const json = await safeJson(res);
   if (!res.ok) {
-    throw new Error(extractError(json, 'Failed to delete environment'));
+    throw new Error(extractError(json, 'Failed to delete environment', res.status));
   }
   return unwrapData<any>(json);
 }
@@ -576,9 +585,9 @@ export async function fetchScopeCollections(
     refreshToken,
   });
 
-  const json = await res.json();
+  const json = await safeJson(res);
   if (!res.ok) {
-    throw new Error(extractError(json, 'Failed to fetch collections'));
+    throw new Error(extractError(json, 'Failed to fetch collections', res.status));
   }
   const data = unwrapData<any>(json);
   return (Array.isArray(data) ? data : []) as any[];
@@ -600,9 +609,9 @@ export async function fetchCollectionById(
     refreshToken,
   });
 
-  const json = await res.json();
+  const json = await safeJson(res);
   if (!res.ok) {
-    throw new Error(extractError(json, 'Failed to fetch collection'));
+    throw new Error(extractError(json, 'Failed to fetch collection', res.status));
   }
   return unwrapData<any>(json);
 }
@@ -629,9 +638,9 @@ export async function fetchScopeEnvironments(
     refreshToken,
   });
 
-  const json = await res.json();
+  const json = await safeJson(res);
   if (!res.ok) {
-    throw new Error(extractError(json, 'Failed to fetch environments'));
+    throw new Error(extractError(json, 'Failed to fetch environments', res.status));
   }
   const data = unwrapData<any>(json);
   return (Array.isArray(data) ? data : []) as any[];

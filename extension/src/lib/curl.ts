@@ -355,11 +355,11 @@ export function generateCurlCommand(
   request: ApiRequest,
   variables: Record<string, string> = {}
 ): string {
-  let url = interpolateVariables(request.url, variables);
+  let url = interpolateVariables(request?.url || '', variables);
 
   // Append query parameters
   if (request.params && request.params.length > 0) {
-    const activeParams = request.params.filter((p) => p.enabled && String(p?.key ?? '').trim());
+    const activeParams = request.params.filter((p) => p && p.enabled && String(p?.key ?? '').trim());
     if (activeParams.length > 0) {
       try {
         const dummyBase = !/^https?:\/\//i.test(url) ? 'http://placeholder' : undefined;
@@ -382,7 +382,7 @@ export function generateCurlCommand(
   }
 
   // If API Key is configured in query parameters, attach it
-  if (request.auth.type === 'apikey' && request.auth.apiKeyIn === 'query' && request.auth.apiKeyKey && request.auth.apiKeyValue) {
+  if (request.auth?.type === 'apikey' && request.auth?.apiKeyIn === 'query' && request.auth?.apiKeyKey && request.auth?.apiKeyValue) {
     const k = interpolateVariables(request.auth.apiKeyKey.trim(), variables);
     const v = interpolateVariables(request.auth.apiKeyValue.trim(), variables);
     try {
@@ -398,10 +398,10 @@ export function generateCurlCommand(
 
   // Headers
   let hasContentType = false;
-  for (const h of request.headers) {
-    if (h.enabled && h.key.trim()) {
+  for (const h of (request.headers || [])) {
+    if (h && h.enabled && h.key?.trim()) {
       const key = interpolateVariables(h.key.trim(), variables);
-      const val = interpolateVariables(h.value, variables);
+      const val = interpolateVariables(h.value || '', variables);
       if (key.toLowerCase() === 'content-type') hasContentType = true;
       parts.push(`-H "${key}: ${val}"`);
     }
@@ -412,17 +412,17 @@ export function generateCurlCommand(
   }
 
   // Auth
-  if (request.auth.type === 'bearer' && request.auth.bearerToken) {
+  if (request.auth?.type === 'bearer' && request.auth?.bearerToken) {
     const token = interpolateVariables(request.auth.bearerToken.trim(), variables);
     parts.push(`-H "Authorization: Bearer ${token}"`);
-  } else if (request.auth.type === 'basic') {
-    const u = interpolateVariables(request.auth.basicUsername || '', variables);
-    const p = interpolateVariables(request.auth.basicPassword || '', variables);
+  } else if (request.auth?.type === 'basic') {
+    const u = interpolateVariables(request.auth?.basicUsername || '', variables);
+    const p = interpolateVariables(request.auth?.basicPassword || '', variables);
     parts.push(`-u "${u}:${p}"`);
-  } else if (request.auth.type === 'apikey' && request.auth.apiKeyKey && request.auth.apiKeyValue) {
+  } else if (request.auth?.type === 'apikey' && request.auth?.apiKeyKey && request.auth?.apiKeyValue) {
     const k = interpolateVariables(request.auth.apiKeyKey.trim(), variables);
     const v = interpolateVariables(request.auth.apiKeyValue.trim(), variables);
-    if (request.auth.apiKeyIn !== 'query') {
+    if (request.auth?.apiKeyIn !== 'query') {
       parts.push(`-H "${k}: ${v}"`);
     }
   }

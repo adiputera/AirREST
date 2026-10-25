@@ -168,4 +168,32 @@ func TestCollectionMinRoleAccessRules(t *testing.T) {
 	}
 }
 
+func TestRolePermissionsMapping(t *testing.T) {
+	adminPerms := domain.GetPermissionsForRole(domain.ProjectRoleAdmin)
+	if !domain.HasPermission(adminPerms, "collection:write") || !domain.HasPermission(adminPerms, "env:delete") {
+		t.Fatalf("admin wildcard should allow all permissions, got %v", adminPerms)
+	}
+
+	maintainerPerms := domain.GetPermissionsForRole(domain.ProjectRoleMaintainer)
+	if !domain.HasPermission(maintainerPerms, "collection:delete") || !domain.HasPermission(maintainerPerms, "env:delete") {
+		t.Fatalf("maintainer should have collection:delete and env:delete, got %v", maintainerPerms)
+	}
+
+	contributorPerms := domain.GetPermissionsForRole(domain.ProjectRoleContributor)
+	if !domain.HasPermission(contributorPerms, "collection:write") || !domain.HasPermission(contributorPerms, "env:write") {
+		t.Fatalf("contributor should have collection:write and env:write, got %v", contributorPerms)
+	}
+	if domain.HasPermission(contributorPerms, "collection:delete") || domain.HasPermission(contributorPerms, "env:delete") {
+		t.Fatalf("contributor should NOT have delete permissions, got %v", contributorPerms)
+	}
+
+	readerPerms := domain.GetPermissionsForRole(domain.ProjectRoleReader)
+	if !domain.HasPermission(readerPerms, "collection:read") || !domain.HasPermission(readerPerms, "env:read") {
+		t.Fatalf("reader should have read permissions, got %v", readerPerms)
+	}
+	if domain.HasPermission(readerPerms, "collection:write") || domain.HasPermission(readerPerms, "env:write") {
+		t.Fatalf("reader should NOT have write permissions, got %v", readerPerms)
+	}
+}
+
 

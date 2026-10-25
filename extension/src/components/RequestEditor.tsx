@@ -1,6 +1,4 @@
-'use client';
-
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Send,
   Loader2,
@@ -31,8 +29,9 @@ import { generateCurlCommand } from '@/lib/curl';
 import { VariableInput } from './VariableInput';
 import { interpolateVariables } from '@/lib/fetcher';
 import { beautifyXml, beautifyGraphQL, beautifyJson } from '@/lib/formatters';
-import { isRequestModified } from '@/lib/requestDiff';
+import { isRequestModified, findSavedRequestInCollections } from '@/lib/requestDiff';
 import { handleCodeEditorKeyDown } from '@/lib/editorHelper';
+import { canModifyCollection } from '@/lib/jwt';
 
 function formatFileSize(bytes: number): string {
   if (!bytes || bytes <= 0) return '0 B';
@@ -89,7 +88,16 @@ export const RequestEditor: React.FC = () => {
   const currentTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
   const isDirty = currentTab ? isRequestModified(currentTab, collections) : false;
 
-  const handleSave = () => {
+  const workspaceMode = useApiStore((state) => state.workspaceMode);
+  const cloudConfig = useApiStore((state) => state.cloudConfig);
+  const savedRequestInfo = currentTab ? findSavedRequestInCollections(collections, currentTab.id) : null;
+  const isReadOnly = savedRequestInfo ? !canModifyCollection(savedRequestInfo.collection.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role) : false;
+
+  const handleSave = useCallback(() => {
+    if (isReadOnly) {
+      setIsSaveModalOpen(true);
+      return;
+    }
     const res = saveActiveRequest();
     if (res.isDirectSaved) {
       setJustSaved(true);
@@ -97,7 +105,7 @@ export const RequestEditor: React.FC = () => {
     } else {
       setIsSaveModalOpen(true);
     }
-  };
+  }, [isReadOnly, saveActiveRequest]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -116,7 +124,7 @@ export const RequestEditor: React.FC = () => {
 
   const handleToggleBulkEdit = () => {
     if (!isUrlEncodedBulkEdit) {
-      const list = currentTab.bodyUrlEncoded || [];
+      const list = currentTab?.bodyUrlEncoded || [];
       const text = list
         .filter((item) => item.key || item.value)
         .map((item) => `${item.key}: ${item.value}`)
@@ -189,7 +197,7 @@ export const RequestEditor: React.FC = () => {
 
   const handleBeautifyJson = () => {
     try {
-      if (!currentTab.bodyContent.trim()) return;
+      if (!currentTab?.bodyContent?.trim()) return;
       const parsed = JSON.parse(currentTab.bodyContent);
       setBodyContent(JSON.stringify(parsed, null, 2));
       setJsonFormatError(null);
@@ -199,7 +207,7 @@ export const RequestEditor: React.FC = () => {
   };
 
   const handleBeautifyXml = () => {
-    if (!currentTab.bodyContent.trim()) return;
+    if (!currentTab?.bodyContent?.trim()) return;
     const res = beautifyXml(currentTab.bodyContent);
     if (res.error) {
       setXmlFormatError(res.error);
@@ -272,30 +280,40 @@ export const RequestEditor: React.FC = () => {
             </div>
 
             <div className="flex items-center rounded-lg border border-zinc-800 bg-zinc-900 overflow-hidden shadow-sm">
-              <button
-                onClick={handleSave}
-                className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium transition ${
-                  isDirty
-                    ? 'text-amber-300 hover:bg-amber-500/10'
-                    : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'
-                }`}
-                title="Save request (Ctrl+S / ⌘+S)"
-              >
-                {justSaved ? (
-                  <>
-                    <Check className="h-3.5 w-3.5 text-emerald-400" />
-                    <span className="text-emerald-400 font-semibold">Saved!</span>
-                  </>
-                ) : (
-                  <>
-                    <Bookmark className={`h-3.5 w-3.5 ${isDirty ? 'text-amber-400' : 'text-zinc-400'}`} />
-                    <span>Save</span>
-                    {isDirty && (
-                      <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
-                    )}
-                  </>
-                )}
-              </button>
+              {isReadOnly ? (
+                <div
+                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-zinc-500 bg-zinc-800/40 cursor-not-allowed select-none"
+                  title="This request belongs to a read-only collection. Use 'Save As' to save a copy."
+                >
+                  <Lock className="h-3.5 w-3.5 text-zinc-500" />
+                  <span>Read-only</span>
+                </div>
+              ) : (
+                <button
+                  onClick={handleSave}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium transition ${
+                    isDirty
+                      ? 'text-amber-300 hover:bg-amber-500/10'
+                      : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'
+                  }`}
+                  title="Save request (Ctrl+S / ⌘+S)"
+                >
+                  {justSaved ? (
+                    <>
+                      <Check className="h-3.5 w-3.5 text-emerald-400" />
+                      <span className="text-emerald-400 font-semibold">Saved!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Bookmark className={`h-3.5 w-3.5 ${isDirty ? 'text-amber-400' : 'text-zinc-400'}`} />
+                      <span>Save</span>
+                      {isDirty && (
+                        <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+                      )}
+                    </>
+                  )}
+                </button>
+              )}
               <button
                 onClick={() => setIsSaveModalOpen(true)}
                 className="border-l border-zinc-800 px-1.5 py-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition text-[10px] font-medium"
@@ -405,9 +423,9 @@ export const RequestEditor: React.FC = () => {
           >
             <Sliders className="h-3.5 w-3.5" />
             <span>Params</span>
-            {currentTab.params.filter((p) => p.enabled && p.key.trim()).length > 0 && (
+            {(currentTab?.params || []).filter((p) => p && p.enabled && p.key?.trim()).length > 0 && (
               <span className="rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/20 px-1.5 text-[10px]">
-                {currentTab.params.filter((p) => p.enabled && p.key.trim()).length}
+                {(currentTab?.params || []).filter((p) => p && p.enabled && p.key?.trim()).length}
               </span>
             )}
           </button>
@@ -422,9 +440,9 @@ export const RequestEditor: React.FC = () => {
           >
             <Code2 className="h-3.5 w-3.5" />
             <span>Headers</span>
-            {currentTab.headers.filter((h) => h.enabled && h.key.trim()).length > 0 && (
+            {(currentTab?.headers || []).filter((h) => h && h.enabled && h.key?.trim()).length > 0 && (
               <span className="rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/20 px-1.5 text-[10px]">
-                {currentTab.headers.filter((h) => h.enabled && h.key.trim()).length}
+                {(currentTab?.headers || []).filter((h) => h && h.enabled && h.key?.trim()).length}
               </span>
             )}
           </button>
@@ -439,9 +457,9 @@ export const RequestEditor: React.FC = () => {
           >
             <Lock className="h-3.5 w-3.5" />
             <span>Auth</span>
-            {currentTab.auth.type !== 'none' && (
+            {(currentTab?.auth?.type || 'none') !== 'none' && (
               <span className="rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 text-[10px]">
-                {currentTab.auth.type}
+                {currentTab?.auth?.type}
               </span>
             )}
           </button>
@@ -500,7 +518,7 @@ export const RequestEditor: React.FC = () => {
         <div className="mt-3">
           {activeTab === 'params' && (
             <KeyValueEditor
-              items={currentTab.params}
+              items={currentTab?.params || []}
               onUpdate={updateParam}
               onAdd={addParam}
               onRemove={removeParam}
@@ -511,7 +529,7 @@ export const RequestEditor: React.FC = () => {
 
           {activeTab === 'headers' && (
             <KeyValueEditor
-              items={currentTab.headers}
+              items={currentTab?.headers || []}
               onUpdate={updateHeader}
               onAdd={addHeader}
               onRemove={removeHeader}
@@ -531,7 +549,7 @@ export const RequestEditor: React.FC = () => {
                       type="button"
                       onClick={() => updateAuth({ type })}
                       className={`rounded-lg px-3 py-1 text-xs font-medium capitalize transition ${
-                        currentTab.auth.type === type
+                        (currentTab?.auth?.type || 'none') === type
                           ? 'bg-sky-500/20 text-sky-400 border border-sky-500/30'
                           : 'border border-zinc-800 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
                       }`}
@@ -542,20 +560,20 @@ export const RequestEditor: React.FC = () => {
                 </div>
               </div>
 
-              {currentTab.auth.type === 'none' && (
+              {(currentTab?.auth?.type || 'none') === 'none' && (
                 <div className="pt-2 text-xs text-zinc-500">
                   This request does not use authorization. Select Bearer, Basic, or API Key above to configure auth credentials.
                 </div>
               )}
 
-              {currentTab.auth.type === 'bearer' && (
+              {currentTab?.auth?.type === 'bearer' && (
                 <div className="space-y-1.5 pt-2 border-t border-zinc-800">
                   <label className="flex items-center gap-1.5 text-xs font-medium text-zinc-300">
                     <KeyRound className="h-3.5 w-3.5 text-sky-400" />
                     <span>Bearer Token</span>
                   </label>
                   <VariableInput
-                    value={currentTab.auth.bearerToken || ''}
+                    value={currentTab?.auth?.bearerToken || ''}
                     onChange={(bearerToken) => updateAuth({ bearerToken })}
                     placeholder="Bearer token or {{token}}..."
                     showPreview={true}
@@ -563,12 +581,12 @@ export const RequestEditor: React.FC = () => {
                 </div>
               )}
 
-              {currentTab.auth.type === 'basic' && (
+              {currentTab?.auth?.type === 'basic' && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-zinc-800">
                   <div className="space-y-1.5">
                     <label className="text-xs font-medium text-zinc-300">Username</label>
                     <VariableInput
-                      value={currentTab.auth.basicUsername || ''}
+                      value={currentTab?.auth?.basicUsername || ''}
                       onChange={(basicUsername) => updateAuth({ basicUsername })}
                       placeholder="Username or {{username}}"
                       showPreview={true}
@@ -578,7 +596,7 @@ export const RequestEditor: React.FC = () => {
                     <label className="text-xs font-medium text-zinc-300">Password</label>
                     <VariableInput
                       type="password"
-                      value={currentTab.auth.basicPassword || ''}
+                      value={currentTab?.auth?.basicPassword || ''}
                       onChange={(basicPassword) => updateAuth({ basicPassword })}
                       placeholder="Password or {{password}}"
                       showPreview={true}
@@ -587,13 +605,13 @@ export const RequestEditor: React.FC = () => {
                 </div>
               )}
 
-              {currentTab.auth.type === 'apikey' && (
+              {currentTab?.auth?.type === 'apikey' && (
                 <div className="space-y-3 pt-2 border-t border-zinc-800">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-1.5">
                       <label className="text-xs font-medium text-zinc-300">Key Name</label>
                       <VariableInput
-                        value={currentTab.auth.apiKeyKey || ''}
+                        value={currentTab?.auth?.apiKeyKey || ''}
                         onChange={(apiKeyKey) => updateAuth({ apiKeyKey })}
                         placeholder="e.g. X-API-Key or api_key"
                       />
@@ -601,7 +619,7 @@ export const RequestEditor: React.FC = () => {
                     <div className="space-y-1.5">
                       <label className="text-xs font-medium text-zinc-300">Key Value</label>
                       <VariableInput
-                        value={currentTab.auth.apiKeyValue || ''}
+                        value={currentTab?.auth?.apiKeyValue || ''}
                         onChange={(apiKeyValue) => updateAuth({ apiKeyValue })}
                         placeholder="e.g. secret_value or {{apiKey}}"
                         showPreview={true}
@@ -616,7 +634,7 @@ export const RequestEditor: React.FC = () => {
                         type="button"
                         onClick={() => updateAuth({ apiKeyIn: 'header' })}
                         className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
-                          currentTab.auth.apiKeyIn !== 'query'
+                          currentTab?.auth?.apiKeyIn !== 'query'
                             ? 'bg-sky-500/20 text-sky-400 border border-sky-500/30'
                             : 'border border-zinc-800 text-zinc-400 hover:text-zinc-200'
                         }`}
@@ -627,7 +645,7 @@ export const RequestEditor: React.FC = () => {
                         type="button"
                         onClick={() => updateAuth({ apiKeyIn: 'query' })}
                         className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
-                          currentTab.auth.apiKeyIn === 'query'
+                          currentTab?.auth?.apiKeyIn === 'query'
                             ? 'bg-sky-500/20 text-sky-400 border border-sky-500/30'
                             : 'border border-zinc-800 text-zinc-400 hover:text-zinc-200'
                         }`}

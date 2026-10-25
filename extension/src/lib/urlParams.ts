@@ -9,11 +9,12 @@ function generateId(): string {
  * preserving existing row IDs, enabled flags, and descriptions.
  */
 export function parseQueryParamsFromUrl(
-  url: string,
+  url?: string | null,
   existingParams: KeyValuePair[] = []
 ): KeyValuePair[] {
-  const qIndex = url.indexOf('?');
-  const disabledParams = existingParams.filter((p) => !p.enabled);
+  const safeUrl = typeof url === 'string' ? url : '';
+  const qIndex = safeUrl.indexOf('?');
+  const disabledParams = (existingParams || []).filter((p) => !p.enabled);
 
   if (qIndex === -1) {
     if (disabledParams.length > 0) {
@@ -22,7 +23,7 @@ export function parseQueryParamsFromUrl(
     return [{ id: generateId(), key: '', value: '', enabled: true }];
   }
 
-  const queryString = url.substring(qIndex + 1);
+  const queryString = safeUrl.substring(qIndex + 1);
   if (!queryString.trim()) {
     if (disabledParams.length > 0) {
       return [...disabledParams, { id: generateId(), key: '', value: '', enabled: true }];
@@ -105,13 +106,16 @@ export function parseQueryParamsFromUrl(
  * and appending active enabled query parameters.
  */
 export function buildUrlWithParams(
-  currentUrl: string,
-  params: KeyValuePair[]
+  currentUrl?: string | null,
+  params: KeyValuePair[] = []
 ): string {
-  const qIndex = currentUrl.indexOf('?');
-  const baseUrl = qIndex >= 0 ? currentUrl.substring(0, qIndex) : currentUrl;
+  const safeUrl = typeof currentUrl === 'string' ? currentUrl : '';
+  const qIndex = safeUrl.indexOf('?');
+  const baseUrl = qIndex >= 0 ? safeUrl.substring(0, qIndex) : safeUrl;
 
-  const activeParams = params.filter((p) => p.enabled && p.key.trim() !== '');
+  const activeParams = (params || []).filter(
+    (p) => p && p.enabled && String(p.key ?? '').trim() !== ''
+  );
 
   if (activeParams.length === 0) {
     return baseUrl;

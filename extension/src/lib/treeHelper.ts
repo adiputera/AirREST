@@ -6,13 +6,13 @@ import { ReorderItemPayload } from './cloudApi';
  * Used to prevent circular dependency (e.g. moving a parent folder into its child).
  */
 export function isDescendantOf(
-  items: CollectionItem[],
+  items: CollectionItem[] = [],
   ancestorId: string,
   targetId: string
 ): boolean {
   if (ancestorId === targetId) return true;
 
-  for (const it of items) {
+  for (const it of items || []) {
     if (it.id === ancestorId) {
       const searchChildren = (children: CollectionItem[]): boolean => {
         for (const child of children) {

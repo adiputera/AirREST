@@ -10,6 +10,7 @@ import { CloudAuthModal } from './CloudAuthModal';
 import { ScopeSwitcher } from './ScopeSwitcher';
 import { UserMenu } from './UserMenu';
 import { isOfflineOnly } from '@/lib/edition';
+import { hasScopePermission } from '@/lib/jwt';
 
 export const Header: React.FC = () => {
   const [isImportOpen, setIsImportOpen] = useState(false);
@@ -21,6 +22,13 @@ export const Header: React.FC = () => {
   const activeEnvironmentId = useApiStore((state) => state.activeEnvironmentId);
   const setActiveEnvironmentId = useApiStore((state) => state.setActiveEnvironmentId);
   const hasConfiguredMode = useApiStore((state) => state.hasConfiguredMode);
+  const workspaceMode = useApiStore((state) => state.workspaceMode);
+  const cloudConfig = useApiStore((state) => state.cloudConfig);
+
+  const isProjectReadOnly =
+    workspaceMode === 'cloud' &&
+    cloudConfig?.activeScope?.type === 'project' &&
+    !hasScopePermission(cloudConfig?.activeScope, 'collection:write', workspaceMode, cloudConfig?.user?.role);
 
   // Automatically prompt on first launch if storage mode is not yet configured (Full edition only)
   useEffect(() => {
@@ -73,7 +81,7 @@ export const Header: React.FC = () => {
               <option value="" className="bg-zinc-900 text-zinc-400">
                 No Environment
               </option>
-              {environments.map((env) => (
+              {(environments || []).map((env) => (
                 <option key={env.id} value={env.id} className="bg-zinc-900 text-zinc-200">
                   {env.name}
                 </option>
@@ -88,13 +96,15 @@ export const Header: React.FC = () => {
             </button>
           </div>
 
-          <button
-            onClick={() => setIsImportOpen(true)}
-            className="flex items-center gap-1.5 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-xs font-medium text-sky-300 hover:bg-sky-500/20 transition shadow-sm"
-          >
-            <Upload className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Import</span>
-          </button>
+          {!isProjectReadOnly && (
+            <button
+              onClick={() => setIsImportOpen(true)}
+              className="flex items-center gap-1.5 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-xs font-medium text-sky-300 hover:bg-sky-500/20 transition shadow-sm"
+            >
+              <Upload className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Import</span>
+            </button>
+          )}
 
           {/* User Profile Menu / Sign In Button */}
           <UserMenu onOpenLogin={() => setIsCloudAuthOpen(true)} />

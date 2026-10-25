@@ -143,10 +143,11 @@ export function findSavedRequestInCollections(
 
   for (const col of collections) {
     const searchItems = (
-      items: CollectionItem[],
+      items: CollectionItem[] = [],
       folderId: string | null
     ): { collection: Collection; folderId: string | null; savedRequest: ApiRequest } | null => {
-      for (const item of items) {
+      for (const item of items || []) {
+        if (!item) continue;
         if (item.type === 'request' && item.request) {
           if (item.id === requestId || item.request.id === requestId) {
             return { collection: col, folderId, savedRequest: item.request };
@@ -160,7 +161,7 @@ export function findSavedRequestInCollections(
       return null;
     };
 
-    const result = searchItems(col.items, null);
+    const result = searchItems(col?.items || [], null);
     if (result) return result;
   }
 
@@ -345,7 +346,7 @@ export function compareCollections(
 }
 
 export function generateCopyCollectionName(baseName: string, existingNames: string[]): string {
-  const lowerNames = existingNames.map((n) => n.toLowerCase().trim());
+  const lowerNames = (existingNames || []).map((n) => String(n ?? '').toLowerCase().trim());
   let candidate = `${baseName} (Copy)`;
   let counter = 2;
 
@@ -559,7 +560,7 @@ export function compareEnvironments(
  * Generates an unused copy name for duplicate environments (e.g., "Dev (Copy)", "Dev (Copy 2)").
  */
 export function generateCopyEnvironmentName(baseName: string, existingNames: string[]): string {
-  const lowerNames = existingNames.map((n) => n.toLowerCase().trim());
+  const lowerNames = (existingNames || []).map((n) => String(n ?? '').toLowerCase().trim());
   let candidate = `${baseName} (Copy)`;
   let counter = 2;
 

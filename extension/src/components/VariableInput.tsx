@@ -130,16 +130,18 @@ export const VariableInput: React.FC<VariableInputProps> = ({
   const envVarsMap = useMemo(() => {
     const map: Record<string, string> = {};
     if (activeEnv) {
-      for (const v of activeEnv.variables) {
-        if (v.enabled && v.key.trim()) {
-          map[v.key.trim()] = v.value;
+      for (const v of (activeEnv.variables || [])) {
+        if (v && v.enabled && String(v.key || '').trim()) {
+          map[String(v.key).trim()] = String(v.value ?? '');
         }
       }
     }
     return map;
   }, [activeEnv]);
 
-  const tokens = useMemo(() => tokenizeVariables(value, envVarsMap), [value, envVarsMap]);
+  const safeValue = typeof value === 'string' ? value : '';
+
+  const tokens = useMemo(() => tokenizeVariables(safeValue, envVarsMap), [safeValue, envVarsMap]);
 
   // Keep mirror scroll position synchronized with input scroll
   const syncScroll = () => {
@@ -150,7 +152,7 @@ export const VariableInput: React.FC<VariableInputProps> = ({
 
   useLayoutEffect(() => {
     syncScroll();
-  }, [value]);
+  }, [safeValue]);
 
   // Clear tooltip when window scrolls or resizes
   useEffect(() => {
@@ -260,7 +262,7 @@ export const VariableInput: React.FC<VariableInputProps> = ({
         }`}
       >
         {/* Syntax Highlighting Mirror Layer */}
-        {!isPasswordMasked && value.length > 0 && (
+        {!isPasswordMasked && safeValue.length > 0 && (
           <div
             ref={mirrorRef}
             aria-hidden="true"
@@ -298,7 +300,7 @@ export const VariableInput: React.FC<VariableInputProps> = ({
           ref={inputRef}
           id={id}
           type={isPasswordMasked ? 'password' : 'text'}
-          value={value}
+          value={safeValue}
           disabled={disabled}
           onChange={(e) => onChange(e.target.value)}
           onMouseMove={handleMouseMove}

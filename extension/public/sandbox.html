@@ -14,17 +14,27 @@
         const currentEnv = Object.assign({}, environment);
         const currentVars = Object.assign({}, variables);
 
+        function isForbiddenKey(k) {
+          return k === '__proto__' || k === 'constructor' || k === 'prototype';
+        }
+
         const pm = {
           environment: {
             get: function (k) { return currentEnv[k]; },
-            set: function (k, v) { currentEnv[k] = String(v); },
+            set: function (k, v) {
+              if (isForbiddenKey(k)) return;
+              currentEnv[k] = String(v);
+            },
             unset: function (k) { delete currentEnv[k]; },
             has: function (k) { return Object.prototype.hasOwnProperty.call(currentEnv, k); },
             toObject: function () { return Object.assign({}, currentEnv); }
           },
           variables: {
             get: function (k) { return currentVars[k] !== undefined ? currentVars[k] : currentEnv[k]; },
-            set: function (k, v) { currentVars[k] = String(v); },
+            set: function (k, v) {
+              if (isForbiddenKey(k)) return;
+              currentVars[k] = String(v);
+            },
             toObject: function () { return Object.assign({}, currentVars); }
           },
           response: response ? {
@@ -72,10 +82,16 @@
 
         // Legacy Postman API compatibility (postman.*, response, responseBody, responseCode, tests)
         const postman = {
-          setEnvironmentVariable: function (k, v) { currentEnv[k] = String(v); },
+          setEnvironmentVariable: function (k, v) {
+            if (isForbiddenKey(k)) return;
+            currentEnv[k] = String(v);
+          },
           getEnvironmentVariable: function (k) { return currentEnv[k]; },
           clearEnvironmentVariable: function (k) { delete currentEnv[k]; },
-          setGlobalVariable: function (k, v) { currentVars[k] = String(v); },
+          setGlobalVariable: function (k, v) {
+            if (isForbiddenKey(k)) return;
+            currentVars[k] = String(v);
+          },
           getGlobalVariable: function (k) { return currentVars[k]; },
           clearGlobalVariable: function (k) { delete currentVars[k]; }
         };
@@ -87,6 +103,7 @@
         const responseTime = response ? (response.timeMs || 0) : 0;
         const responseHeaders = response ? (response.headers || {}) : {};
         const tests = {};
+        const targetOrigin = (event.origin && event.origin !== 'null') ? event.origin : '*';
 
         try {
           const fn = new Function(
@@ -101,20 +118,24 @@
             script
           );
           fn(pm, postman, rawBody, rawBody, responseCode, responseTime, responseHeaders, tests);
-          event.source.postMessage({
-            id: id,
-            success: true,
-            environment: currentEnv,
-            variables: currentVars
-          }, event.origin || '*');
+          if (event.source && typeof event.source.postMessage === 'function') {
+            event.source.postMessage({
+              id: id,
+              success: true,
+              environment: currentEnv,
+              variables: currentVars
+            }, targetOrigin);
+          }
         } catch (err) {
-          event.source.postMessage({
-            id: id,
-            success: false,
-            error: err && err.message ? err.message : String(err),
-            environment: currentEnv,
-            variables: currentVars
-          }, event.origin || '*');
+          if (event.source && typeof event.source.postMessage === 'function') {
+            event.source.postMessage({
+              id: id,
+              success: false,
+              error: err && err.message ? err.message : String(err),
+              environment: currentEnv,
+              variables: currentVars
+            }, targetOrigin);
+          }
         }
       });
     </script>
