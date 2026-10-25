@@ -124,12 +124,18 @@ export const ResponseViewer: React.FC = () => {
   };
 
   const loadSampleAndSend = (url: string, method: 'GET' | 'POST' = 'GET', body = '') => {
+    let path = url;
+    try {
+      path = new URL(url).pathname;
+    } catch {
+      path = url.replace(/^https?:\/\/[^/]+/i, '') || url;
+    }
     updateActiveRequest({
       url,
       method,
       bodyType: body ? 'json' : 'none',
       bodyContent: body,
-      name: `Sample: ${method} ${new URL(url).pathname}`,
+      name: `Sample: ${method} ${path}`,
     });
     setTimeout(() => {
       sendRequest();
@@ -284,7 +290,7 @@ export const ResponseViewer: React.FC = () => {
               <FileText className="h-3.5 w-3.5" />
               <span>Headers</span>
               <span className="rounded-full bg-zinc-800 px-1.5 text-[10px] text-zinc-400">
-                {Object.keys(activeResponse.headers).length}
+                {Object.keys(activeResponse.headers || {}).length}
               </span>
             </button>
           </div>
@@ -747,7 +753,7 @@ export const ResponseViewer: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-850">
-                {Object.entries(activeResponse.headers).map(([key, value]) => (
+                {Object.entries(activeResponse.headers || {}).map(([key, value]) => (
                   <tr key={key} className="hover:bg-zinc-850/50 transition">
                     <td className="px-4 py-2 text-sky-400 font-medium">{key}</td>
                     <td className="px-4 py-2 text-zinc-300 break-all">{value}</td>

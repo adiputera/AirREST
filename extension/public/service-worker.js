@@ -25,23 +25,26 @@ if (typeof chrome !== 'undefined' && chrome.webRequest?.onErrorOccurred) {
     if (message?.type === 'GET_RECENT_NETWORK_ERROR') {
       const entry = recentNetworkErrors.get(message.url);
       sendResponse({ error: entry ? entry.error : null });
-      return true;
     }
   });
 }
 
 chrome.action.onClicked.addListener(async () => {
-  const extensionUrl = chrome.runtime.getURL('index.html');
-  const tabs = await chrome.tabs.query({ url: extensionUrl });
+  try {
+    const extensionUrl = chrome.runtime.getURL('index.html');
+    const tabs = await chrome.tabs.query({ url: extensionUrl });
 
-  if (tabs.length > 0 && tabs[0].id) {
-    // Focus existing tab
-    await chrome.tabs.update(tabs[0].id, { active: true });
-    if (tabs[0].windowId) {
-      await chrome.windows.update(tabs[0].windowId, { focused: true });
+    if (tabs.length > 0 && tabs[0]?.id) {
+      // Focus existing tab
+      await chrome.tabs.update(tabs[0].id, { active: true });
+      if (tabs[0].windowId) {
+        await chrome.windows.update(tabs[0].windowId, { focused: true });
+      }
+    } else {
+      // Open new tab
+      await chrome.tabs.create({ url: extensionUrl });
     }
-  } else {
-    // Open new tab
-    await chrome.tabs.create({ url: extensionUrl });
+  } catch (err) {
+    console.error('Failed to open or focus extension tab:', err);
   }
 });

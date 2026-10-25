@@ -64,7 +64,7 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
 
       try {
         const workspaces = await fetchUserWorkspaces(cleanUrl, token, refresh_token);
-        if (workspaces.length > 0) {
+        if (Array.isArray(workspaces) && workspaces.length > 0) {
           const defaultWs = workspaces.find((w) => w.is_default) || workspaces[0];
           initialScope = {
             type: 'workspace',
@@ -75,9 +75,9 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
         } else {
           // Check teams
           const teams = await fetchUserTeams(cleanUrl, token, refresh_token);
-          if (teams.length > 0) {
+          if (Array.isArray(teams) && teams.length > 0) {
             const projects = await fetchTeamProjects(cleanUrl, teams[0].id, token, refresh_token);
-            if (projects.length > 0) {
+            if (Array.isArray(projects) && projects.length > 0) {
               initialScope = {
                 type: 'project',
                 id: projects[0].id,
@@ -85,6 +85,7 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
                 teamId: teams[0].id,
                 teamName: teams[0].name,
                 role: projects[0].user_role || (user.role === 'superadmin' ? 'admin' : 'contributor'),
+                permissions: projects[0].permissions,
               };
             }
           }

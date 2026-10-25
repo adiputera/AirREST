@@ -86,6 +86,7 @@ func (r *ProjectRepository) ListForUser(ctx context.Context, teamID, userID uuid
 		}
 		role := domain.ProjectRole(roleStr)
 		p.UserRole = &role
+		p.Permissions = domain.GetPermissionsForRole(role)
 		projects = append(projects, &p)
 	}
 	return projects, nil
@@ -189,6 +190,7 @@ func (r *ProjectRepository) GetMember(ctx context.Context, projectID, userID uui
 		return nil, fmt.Errorf("failed to get project member: %w", err)
 	}
 	m.Role = domain.ProjectRole(roleStr)
+	m.Permissions = domain.GetPermissionsForRole(m.Role)
 	return &m, nil
 }
 
@@ -220,6 +222,7 @@ func (r *ProjectRepository) ListMembers(ctx context.Context, projectID uuid.UUID
 			return nil, fmt.Errorf("failed to scan project member: %w", err)
 		}
 		m.Role = domain.ProjectRole(roleStr)
+		m.Permissions = domain.GetPermissionsForRole(m.Role)
 		u.Role = domain.SystemRole(userRoleStr)
 		m.User = &u
 		members = append(members, &m)

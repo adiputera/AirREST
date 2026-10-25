@@ -170,6 +170,22 @@ Hierarchy: `admin` > `maintainer` > `contributor` > `reader`
 | View / Execute Resources (`min_role: reader`) | ✅ | ✅ | ✅ | ✅ |
 | Move Collections Between Projects | ✅ | ✅ | ✅ | ❌ |
 
+#### Granular Capability-Based Permissions (`permissions: string[]`)
+Starting in API v1.1.2+, `Project` and `ProjectMember` objects include a computed `permissions` string array. This decouples client capability checks from hardcoded integer rank comparisons while remaining 100% backward-compatible with database schemas and older client caches.
+
+| Role | Computed Capabilities (`permissions`) | Description |
+|---|---|---|
+| **`admin`** | `["*"]` | Wildcard grant: unrestricted access to all collection and environment operations within the project. |
+| **`maintainer`** | `["collection:read", "collection:write", "collection:delete", "collection:move", "env:read", "env:write", "env:delete"]` | Full operational control over collections, requests, folders, and environments including deletion and moving. |
+| **`contributor`** | `["collection:read", "collection:write", "env:read", "env:write"]` | Standard authoring capabilities: create and edit collections/requests/environments, but cannot delete or move containers. |
+| **`reader`** | `["collection:read", "env:read"]` | Read-only access: view requests and environments, execute API calls, but all save/mutation operations are blocked. |
+
+##### Client Evaluation Protocol & Backward Compatibility Fallback
+1. **Offline & Workspace Modes**: Offline workspaces and personal cloud workspaces always evaluate all capability checks as `true`.
+2. **Superadmin Universal Bypass**: Authenticated superadmins always evaluate all permissions as `true`.
+3. **Array Evaluation**: If `scope.permissions` is populated, access is granted if `scope.permissions.includes('*') || scope.permissions.includes(requiredPermission)`.
+4. **Fallback Mechanism**: If `scope.permissions` is absent (e.g. from a stale cached scope or offline store), the client seamlessly computes capabilities from `DEFAULT_ROLE_PERMISSIONS[scope.role || 'reader']`.
+
 #### Strict Project Isolation
 - When a user calls `GET /api/v1/teams/{teamId}/projects`:
   - Superadmin sees all projects.

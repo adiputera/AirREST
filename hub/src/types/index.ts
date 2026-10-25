@@ -45,6 +45,7 @@ export interface Project {
   created_at?: string;
   updated_at?: string;
   user_role?: ProjectRole;
+  permissions?: string[];
 }
 
 export interface ProjectMember {
@@ -53,6 +54,7 @@ export interface ProjectMember {
   email?: string;
   name?: string;
   role: ProjectRole;
+  permissions?: string[];
   assigned_at?: string;
   user?: {
     id: string;

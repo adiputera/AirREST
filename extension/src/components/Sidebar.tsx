@@ -23,6 +23,7 @@ import {
   Pencil,
   Check,
   X,
+  Lock,
 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
 import { CollectionItem, ApiRequest, Collection } from '@/types/api';
@@ -33,13 +34,16 @@ import { MoveCollectionModal } from './MoveCollectionModal';
 import { MoveRequestModal } from './MoveRequestModal';
 import { ImportModal } from './ImportModal';
 import { isDescendantOf } from '@/lib/treeHelper';
+import { canModifyCollection, hasScopePermission } from '@/lib/jwt';
 
 function filterCollectionItems(items: CollectionItem[], query: string): CollectionItem[] {
-  return items
+  return (items || [])
     .map((item) => {
+      if (!item) return null;
+      const itemName = String(item.name || '').toLowerCase();
       if (item.type === 'folder') {
         const matchingChildren = item.items ? filterCollectionItems(item.items, query) : [];
-        if (matchingChildren.length > 0 || item.name.toLowerCase().includes(query)) {
+        if (matchingChildren.length > 0 || itemName.includes(query)) {
           return {
             ...item,
             items: matchingChildren.length > 0 ? matchingChildren : item.items,
@@ -48,11 +52,12 @@ function filterCollectionItems(items: CollectionItem[], query: string): Collecti
         return null;
       }
       if (item.type === 'request') {
+        const reqUrl = String(item.request?.url || '').toLowerCase();
+        const reqMethod = String(item.request?.method || '').toLowerCase();
         const matches =
-          item.name.toLowerCase().includes(query) ||
-          (item.request &&
-            (item.request.url.toLowerCase().includes(query) ||
-              item.request.method.toLowerCase().includes(query)));
+          itemName.includes(query) ||
+          reqUrl.includes(query) ||
+          reqMethod.includes(query);
         return matches ? item : null;
       }
       return null;
@@ -82,7 +87,7 @@ function getAllFolderIds(item: CollectionItem): string[] {
 
 function getAllFolderIdsInCollection(collection: Collection): string[] {
   const ids: string[] = [];
-  for (const item of collection.items) {
+  for (const item of (collection.items || [])) {
     ids.push(...getAllFolderIds(item));
   }
   return ids;
@@ -109,6 +114,7 @@ interface FolderItemProps {
     targetId: string,
     position: 'before' | 'after' | 'inside'
   ) => void;
+  canEdit?: boolean;
 }
 
 const FolderItem: React.FC<FolderItemProps> = ({
@@ -127,6 +133,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
   draggedItem,
   setDraggedItem,
   onReorderItem,
+  canEdit = true,
 }) => {
   const isOpen = isSearching ? true : !!openFolders[item.id];
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -165,6 +172,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
   const isBeingDragged = draggedItem?.id === item.id;
 
   const handleDragStart = (e: React.DragEvent) => {
+    if (!canEdit) return;
     e.stopPropagation();
     setDraggedItem({
       id: item.id,
@@ -183,7 +191,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
   };
 
   const handleDragOver = (e: React.DragEvent) => {
-    if (!draggedItem) return;
+    if (!canEdit || !draggedItem) return;
     e.stopPropagation();
 
     // 1. Cross-collection move via drag-and-drop is forbidden: pointer not allowed!
@@ -257,6 +265,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    if (!canEdit) return;
 
     const currentPos = dropPosition;
     const forbidden = isForbidden;
@@ -351,7 +360,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
           </div>
         ) : (
           <div
-            draggable={!isCreatingSubfolder}
+            draggable={canEdit && !isCreatingSubfolder}
             onDragStart={handleDragStart}
             onDragEnd={handleDragEnd}
             onDragOver={handleDragOver}
@@ -391,9 +400,10 @@ const FolderItem: React.FC<FolderItemProps> = ({
             )}
             <span
               className="truncate flex-1"
-              title={`${item.name} (Double-click to rename)`}
+              title={canEdit ? `${item.name} (Double-click to rename)` : item.name}
               onDoubleClick={(e) => {
                 e.stopPropagation();
+                if (!canEdit) return;
                 setIsEditing(true);
                 setEditingName(item.name);
               }}
@@ -436,36 +446,40 @@ const FolderItem: React.FC<FolderItemProps> = ({
                       onClick={(e) => e.stopPropagation()}
                       className="absolute right-0 top-full mt-1 z-50 w-44 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-xl animate-in fade-in zoom-in-95 duration-100"
                     >
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setIsMenuOpen(false);
-                          setIsEditing(true);
-                          setEditingName(item.name);
-                        }}
-                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition"
-                      >
-                        <Pencil className="h-3.5 w-3.5 text-sky-400" />
-                        <span>Rename Folder</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleCreateRequest}
-                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition"
-                      >
-                        <FileCode className="h-3.5 w-3.5 text-sky-400" />
-                        <span>New Request</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleStartCreateSubfolder}
-                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-amber-400 transition"
-                      >
-                        <FolderPlus className="h-3.5 w-3.5 text-amber-400" />
-                        <span>New Subfolder</span>
-                      </button>
-                      <div className="my-1 border-t border-zinc-800/80" />
+                      {canEdit && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setIsMenuOpen(false);
+                              setIsEditing(true);
+                              setEditingName(item.name);
+                            }}
+                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition"
+                          >
+                            <Pencil className="h-3.5 w-3.5 text-sky-400" />
+                            <span>Rename Folder</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleCreateRequest}
+                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition"
+                          >
+                            <FileCode className="h-3.5 w-3.5 text-sky-400" />
+                            <span>New Request</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleStartCreateSubfolder}
+                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-amber-400 transition"
+                          >
+                            <FolderPlus className="h-3.5 w-3.5 text-amber-400" />
+                            <span>New Subfolder</span>
+                          </button>
+                          <div className="my-1 border-t border-zinc-800/80" />
+                        </>
+                      )}
                       <button
                         type="button"
                         onClick={(e) => {
@@ -490,19 +504,23 @@ const FolderItem: React.FC<FolderItemProps> = ({
                         <ChevronsDownUp className="h-3.5 w-3.5 text-zinc-400" />
                         <span>Collapse All</span>
                       </button>
-                      <div className="my-1 border-t border-zinc-800/80" />
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setIsMenuOpen(false);
-                          onRequestDelete(item);
-                        }}
-                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-rose-400 hover:bg-rose-500/10 transition"
-                      >
-                        <Trash2 className="h-3.5 w-3.5 text-rose-400" />
-                        <span>Delete Folder</span>
-                      </button>
+                      {canEdit && (
+                        <>
+                          <div className="my-1 border-t border-zinc-800/80" />
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setIsMenuOpen(false);
+                              onRequestDelete(item);
+                            }}
+                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-rose-400 hover:bg-rose-500/10 transition"
+                          >
+                            <Trash2 className="h-3.5 w-3.5 text-rose-400" />
+                            <span>Delete Folder</span>
+                          </button>
+                        </>
+                      )}
                     </div>
                   </>
                 )}
@@ -601,6 +619,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
                 draggedItem={draggedItem}
                 setDraggedItem={setDraggedItem}
                 onReorderItem={onReorderItem}
+                canEdit={canEdit}
               />
             ))}
           </div>
@@ -659,7 +678,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
 
   return (
     <div
-      draggable={true}
+      draggable={canEdit}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
       onDragOver={handleDragOver}
@@ -688,20 +707,22 @@ const FolderItem: React.FC<FolderItemProps> = ({
       <MethodBadge method={item.request.method} size="sm" />
       <span
         className="truncate flex-1 group-hover:text-zinc-100"
-        title={`${item.name} (Double-click to rename)`}
+        title={canEdit ? `${item.name} (Double-click to rename)` : item.name}
         onDoubleClick={(e) => {
           e.stopPropagation();
+          if (!canEdit) return;
           setIsEditing(true);
           setEditingName(item.name);
         }}
       >
         {item.name}
       </span>
-      <div
-        className={`items-center gap-0.5 transition shrink-0 ${
-          isMenuOpen ? 'flex' : 'hidden group-hover:flex group-focus-within:flex'
-        }`}
-      >
+      {canEdit && (
+        <div
+          className={`items-center gap-0.5 transition shrink-0 ${
+            isMenuOpen ? 'flex' : 'hidden group-hover:flex group-focus-within:flex'
+          }`}
+        >
         <div className="relative">
           <button
             type="button"
@@ -772,6 +793,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
         </div>
         <ArrowUpRight className="h-3 w-3 text-zinc-600 group-hover:text-zinc-400 transition" />
       </div>
+      )}
     </div>
   );
 };
@@ -789,6 +811,13 @@ export const Sidebar: React.FC = () => {
   const deleteCollectionItem = useApiStore((state) => state.deleteCollectionItem);
   const clearHistory = useApiStore((state) => state.clearHistory);
   const openRequestInTab = useApiStore((state) => state.openRequestInTab);
+  const workspaceMode = useApiStore((state) => state.workspaceMode);
+  const cloudConfig = useApiStore((state) => state.cloudConfig);
+
+  const canWriteScope = hasScopePermission(cloudConfig.activeScope, 'collection:write', workspaceMode, cloudConfig.user?.role);
+  const canMoveScope = hasScopePermission(cloudConfig.activeScope, 'collection:move', workspaceMode, cloudConfig.user?.role);
+  const canDeleteScope = hasScopePermission(cloudConfig.activeScope, 'collection:delete', workspaceMode, cloudConfig.user?.role);
+  const isProjectReadOnly = workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project' && !canWriteScope;
 
   const [searchQuery, setSearchQuery] = useState('');
   const [isCreatingCol, setIsCreatingCol] = useState(false);
@@ -943,11 +972,12 @@ export const Sidebar: React.FC = () => {
   };
 
   const filteredCollections = !trimmedQuery
-    ? collections
-    : collections
+    ? (collections || [])
+    : (collections || [])
         .map((col) => {
-          const nameMatches = col.name.toLowerCase().includes(trimmedQuery);
-          const matchedItems = filterCollectionItems(col.items, trimmedQuery);
+          if (!col) return null;
+          const nameMatches = String(col.name || '').toLowerCase().includes(trimmedQuery);
+          const matchedItems = filterCollectionItems(col.items || [], trimmedQuery);
           if (nameMatches || matchedItems.length > 0) {
             return {
               ...col,
@@ -958,12 +988,17 @@ export const Sidebar: React.FC = () => {
         })
         .filter((col): col is Collection => col !== null);
 
-  const filteredHistory = history.filter(
-    (h) =>
-      h.request.url.toLowerCase().includes(trimmedQuery) ||
-      h.request.name.toLowerCase().includes(trimmedQuery) ||
-      h.request.method.toLowerCase().includes(trimmedQuery)
-  );
+  const filteredHistory = (history || []).filter((h) => {
+    if (!h || !h.request) return false;
+    const url = String(h.request.url || '').toLowerCase();
+    const name = String(h.request.name || '').toLowerCase();
+    const method = String(h.request.method || '').toLowerCase();
+    return (
+      url.includes(trimmedQuery) ||
+      name.includes(trimmedQuery) ||
+      method.includes(trimmedQuery)
+    );
+  });
 
   const handleExportCollection = (e: React.MouseEvent, col: Collection) => {
     e.stopPropagation();
@@ -1033,66 +1068,75 @@ export const Sidebar: React.FC = () => {
 
         {sidebarTab === 'collections' && (
           <div className="space-y-1.5">
-            {isCreatingCol ? (
-              <div className="flex items-center gap-1.5 pt-0.5">
-                <input
-                  type="text"
-                  value={newColTitle}
-                  onChange={(e) => setNewColTitle(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && newColTitle.trim()) {
-                      createCollection(newColTitle.trim());
-                      setNewColTitle('');
-                      setIsCreatingCol(false);
-                    } else if (e.key === 'Escape') {
-                      setIsCreatingCol(false);
-                    }
-                  }}
-                  placeholder="Collection name (Enter)"
-                  autoFocus
-                  className="flex-1 rounded-md border border-sky-500/50 bg-zinc-900 px-2 py-1 text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (newColTitle.trim()) {
-                      createCollection(newColTitle.trim());
-                      setNewColTitle('');
-                    }
-                    setIsCreatingCol(false);
-                  }}
-                  className="rounded-md bg-sky-500/20 px-2 py-1 text-[11px] font-medium text-sky-400 hover:bg-sky-500/30"
-                >
-                  Add
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsCreatingCol(false)}
-                  className="rounded-md px-1.5 py-1 text-[11px] text-zinc-400 hover:text-white"
-                >
-                  ✕
-                </button>
+            {isProjectReadOnly ? (
+              <div className="flex items-center justify-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/50 py-1.5 px-2 text-[11px] text-zinc-500 select-none">
+                <Lock className="h-3 w-3 text-zinc-500 shrink-0" />
+                <span>Project Scope (Read-only)</span>
               </div>
             ) : (
-              <button
-                type="button"
-                onClick={() => setIsCreatingCol(true)}
-                className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-zinc-800 py-1 text-[11px] text-zinc-400 hover:border-zinc-700 hover:text-zinc-200 transition"
-              >
-                <FolderPlus className="h-3 w-3 text-sky-400" />
-                <span>New Collection</span>
-              </button>
-            )}
+              <>
+                {isCreatingCol ? (
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <input
+                      type="text"
+                      value={newColTitle}
+                      onChange={(e) => setNewColTitle(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && newColTitle.trim()) {
+                          createCollection(newColTitle.trim());
+                          setNewColTitle('');
+                          setIsCreatingCol(false);
+                        } else if (e.key === 'Escape') {
+                          setIsCreatingCol(false);
+                        }
+                      }}
+                      placeholder="Collection name (Enter)"
+                      autoFocus
+                      className="flex-1 rounded-md border border-sky-500/50 bg-zinc-900 px-2 py-1 text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (newColTitle.trim()) {
+                          createCollection(newColTitle.trim());
+                          setNewColTitle('');
+                        }
+                        setIsCreatingCol(false);
+                      }}
+                      className="rounded-md bg-sky-500/20 px-2 py-1 text-[11px] font-medium text-sky-400 hover:bg-sky-500/30"
+                    >
+                      Add
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsCreatingCol(false)}
+                      className="rounded-md px-1.5 py-1 text-[11px] text-zinc-400 hover:text-white"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setIsCreatingCol(true)}
+                    className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-zinc-800 py-1 text-[11px] text-zinc-400 hover:border-zinc-700 hover:text-zinc-200 transition"
+                  >
+                    <FolderPlus className="h-3 w-3 text-sky-400" />
+                    <span>New Collection</span>
+                  </button>
+                )}
 
-            <button
-              type="button"
-              onClick={() => setIsImportOpen(true)}
-              className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-zinc-800 py-1 text-[11px] text-zinc-400 hover:border-zinc-700 hover:text-zinc-200 transition"
-              title="Import Postman Collection or Environment"
-            >
-              <Upload className="h-3 w-3 text-emerald-400" />
-              <span>Import</span>
-            </button>
+                <button
+                  type="button"
+                  onClick={() => setIsImportOpen(true)}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-zinc-800 py-1 text-[11px] text-zinc-400 hover:border-zinc-700 hover:text-zinc-200 transition"
+                  title="Import Postman Collection or Environment"
+                >
+                  <Upload className="h-3 w-3 text-emerald-400" />
+                  <span>Import</span>
+                </button>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -1131,6 +1175,7 @@ export const Sidebar: React.FC = () => {
               <div className="space-y-2">
                 {filteredCollections.map((col) => {
                   const isCollapsed = !trimmedQuery && !!collapsedCollections[col.id];
+                  const canEditCol = canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role);
 
                   return (
                     <div key={col.id} className="rounded-lg border border-zinc-850 bg-zinc-900/40 p-1.5 transition">
@@ -1188,17 +1233,23 @@ export const Sidebar: React.FC = () => {
                             )}
                             <span
                               className="text-xs font-bold text-zinc-200 group-hover:text-white truncate"
-                              title={`${col.name} (Double-click to rename)`}
+                              title={canEditCol ? `${col.name} (Double-click to rename)` : col.name}
                               onDoubleClick={(e) => {
                                 e.stopPropagation();
+                                if (!canEditCol) return;
                                 setEditingColId(col.id);
                                 setEditingColName(col.name);
                               }}
                             >
                               {col.name}
                             </span>
+                            {!canEditCol && (
+                              <span title="Read-only collection">
+                                <Lock className="h-3 w-3 text-zinc-500 shrink-0" />
+                              </span>
+                            )}
                             <span className="text-[10px] text-zinc-500 shrink-0 font-mono">
-                              {col.items.length}
+                              {(col.items || []).length}
                             </span>
                           </div>
                           <div
@@ -1235,54 +1286,60 @@ export const Sidebar: React.FC = () => {
                                     onClick={(e) => e.stopPropagation()}
                                     className="absolute right-0 top-full mt-1 z-50 w-48 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-xl animate-in fade-in zoom-in-95 duration-100"
                                   >
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActiveAddMenuColId(null);
-                                        setEditingColId(col.id);
-                                        setEditingColName(col.name);
-                                      }}
-                                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition"
-                                    >
-                                      <Pencil className="h-3.5 w-3.5 text-sky-400" />
-                                      <span>Rename Collection</span>
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActiveAddMenuColId(null);
-                                        setCollapsedCollections((prev) => ({ ...prev, [col.id]: false }));
-                                        createRequestInCollection(col.id, null, 'New Request');
-                                      }}
-                                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition"
-                                    >
-                                      <FileCode className="h-3.5 w-3.5 text-sky-400" />
-                                      <span>New Request</span>
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActiveAddMenuColId(null);
-                                        setCollapsedCollections((prev) => ({ ...prev, [col.id]: false }));
-                                        setCreatingFolderInCol(col.id);
-                                        setNewFolderName('');
-                                      }}
-                                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-amber-400 transition"
-                                    >
-                                      <FolderPlus className="h-3.5 w-3.5 text-amber-400" />
-                                      <span>New Folder</span>
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActiveAddMenuColId(null);
-                                        setCollectionToMove(col);
-                                      }}
-                                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-amber-400 transition"
-                                    >
-                                      <FolderInput className="h-3.5 w-3.5 text-amber-400" />
-                                      <span>Move Collection</span>
-                                    </button>
+                                    {canEditCol && (
+                                      <>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setActiveAddMenuColId(null);
+                                            setEditingColId(col.id);
+                                            setEditingColName(col.name);
+                                          }}
+                                          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition"
+                                        >
+                                          <Pencil className="h-3.5 w-3.5 text-sky-400" />
+                                          <span>Rename Collection</span>
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setActiveAddMenuColId(null);
+                                            setCollapsedCollections((prev) => ({ ...prev, [col.id]: false }));
+                                            createRequestInCollection(col.id, null, 'New Request');
+                                          }}
+                                          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition"
+                                        >
+                                          <FileCode className="h-3.5 w-3.5 text-sky-400" />
+                                          <span>New Request</span>
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setActiveAddMenuColId(null);
+                                            setCollapsedCollections((prev) => ({ ...prev, [col.id]: false }));
+                                            setCreatingFolderInCol(col.id);
+                                            setNewFolderName('');
+                                          }}
+                                          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-amber-400 transition"
+                                        >
+                                          <FolderPlus className="h-3.5 w-3.5 text-amber-400" />
+                                          <span>New Folder</span>
+                                        </button>
+                                        {canMoveScope && (
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setActiveAddMenuColId(null);
+                                              setCollectionToMove(col);
+                                            }}
+                                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-amber-400 transition"
+                                          >
+                                            <FolderInput className="h-3.5 w-3.5 text-amber-400" />
+                                            <span>Move Collection</span>
+                                          </button>
+                                        )}
+                                      </>
+                                    )}
                                     <button
                                       type="button"
                                       onClick={(e) => {
@@ -1317,18 +1374,22 @@ export const Sidebar: React.FC = () => {
                                       <ChevronsDownUp className="h-3.5 w-3.5 text-zinc-400" />
                                       <span>Collapse All</span>
                                     </button>
-                                    <div className="my-1 border-t border-zinc-800/80" />
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActiveAddMenuColId(null);
-                                        setCollectionToDelete(col);
-                                      }}
-                                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-rose-400 hover:bg-rose-500/10 transition"
-                                    >
-                                      <Trash2 className="h-3.5 w-3.5 text-rose-400" />
-                                      <span>Delete Collection</span>
-                                    </button>
+                                    {canEditCol && canDeleteScope && (
+                                      <>
+                                        <div className="my-1 border-t border-zinc-800/80" />
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setActiveAddMenuColId(null);
+                                            setCollectionToDelete(col);
+                                          }}
+                                          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-rose-400 hover:bg-rose-500/10 transition"
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5 text-rose-400" />
+                                          <span>Delete Collection</span>
+                                        </button>
+                                      </>
+                                    )}
                                   </div>
                                 </>
                               )}
@@ -1386,10 +1447,10 @@ export const Sidebar: React.FC = () => {
                             </div>
                           )}
 
-                          {col.items.length === 0 && creatingFolderInCol !== col.id ? (
+                          {(col.items || []).length === 0 && creatingFolderInCol !== col.id ? (
                             <div className="px-2 py-1 text-[11px] text-zinc-500 italic">Empty collection</div>
                           ) : (
-                            col.items.map((item) => (
+                            (col.items || []).map((item) => (
                               <FolderItem
                                 key={item.id}
                                 item={item}
@@ -1418,6 +1479,7 @@ export const Sidebar: React.FC = () => {
                                 draggedItem={draggedItem}
                                 setDraggedItem={setDraggedItem}
                                 onReorderItem={reorderItem}
+                                canEdit={canEditCol}
                               />
                             ))
                           )}

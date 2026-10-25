@@ -10,9 +10,10 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
-import { CollectionItem, Collection } from '@/types/api';
+import { CollectionItem } from '@/types/api';
 import { findSavedRequestInCollections } from '@/lib/requestDiff';
 import { MethodBadge } from './MethodBadge';
+import { canModifyCollection } from '@/lib/jwt';
 
 interface MoveRequestModalProps {
   isOpen: boolean;
@@ -29,6 +30,8 @@ export const MoveRequestModal: React.FC<MoveRequestModalProps> = ({
 }) => {
   const collections = useApiStore((state) => state.collections);
   const moveRequest = useApiStore((state) => state.moveRequest);
+  const workspaceMode = useApiStore((state) => state.workspaceMode);
+  const cloudConfig = useApiStore((state) => state.cloudConfig);
 
   const [selectedCollectionId, setSelectedCollectionId] = useState<string>(sourceCollectionId);
   const [selectedFolderId, setSelectedFolderId] = useState<string>('');
@@ -85,6 +88,9 @@ export const MoveRequestModal: React.FC<MoveRequestModalProps> = ({
     [collections, selectedCollectionId]
   );
 
+  const canEditSource = canModifyCollection(sourceCollection?.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role);
+  const canEditTarget = canModifyCollection(targetCollection?.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role);
+
   const availableFolders = useMemo(() => {
     if (!targetCollection) return [];
     const list: { id: string; name: string }[] = [];
@@ -112,6 +118,14 @@ export const MoveRequestModal: React.FC<MoveRequestModalProps> = ({
     (selectedFolderId || '') === (currentFolderId || '');
 
   const handleMove = async () => {
+    if (!canEditSource) {
+      setErrorMsg('Cannot move request: source collection is read-only for your role.');
+      return;
+    }
+    if (!canEditTarget) {
+      setErrorMsg('Cannot move request: target collection is read-only for your role.');
+      return;
+    }
     if (isSameLocation || isSubmitting) return;
     setIsSubmitting(true);
     setErrorMsg(null);
@@ -190,11 +204,14 @@ export const MoveRequestModal: React.FC<MoveRequestModalProps> = ({
               disabled={isSubmitting}
               className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 p-2.5 text-xs text-zinc-200 focus:border-sky-500 focus:outline-none cursor-pointer"
             >
-              {collections.map((col) => (
-                <option key={col.id} value={col.id}>
-                  {col.name} {col.id === sourceCollectionId ? '(Current Collection)' : ''}
-                </option>
-              ))}
+              {collections.map((col) => {
+                const isTargetEditable = canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role);
+                return (
+                  <option key={col.id} value={col.id} disabled={!isTargetEditable}>
+                    {col.name} {col.id === sourceCollectionId ? '(Current Collection)' : ''} {!isTargetEditable ? '(Read-only)' : ''}
+                  </option>
+                );
+              })}
             </select>
           </div>
 
@@ -222,6 +239,14 @@ export const MoveRequestModal: React.FC<MoveRequestModalProps> = ({
             </select>
           </div>
 
+          {/* Read-Only Notice */}
+          {!canEditSource && (
+            <div className="flex items-center gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-300 animate-in fade-in">
+              <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />
+              <span>Source collection is read-only for your role. Requests cannot be moved out of it.</span>
+            </div>
+          )}
+
           {/* Error Message */}
           {errorMsg && (
             <div className="flex items-center gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-300 animate-in fade-in">
@@ -244,7 +269,7 @@ export const MoveRequestModal: React.FC<MoveRequestModalProps> = ({
           <button
             type="button"
             onClick={handleMove}
-            disabled={isSubmitting || isSameLocation}
+            disabled={isSubmitting || isSameLocation || !canEditSource || !canEditTarget}
             className="flex items-center gap-1.5 rounded-xl bg-sky-500 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-sky-500/20 hover:bg-sky-400 transition disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {isSubmitting ? (

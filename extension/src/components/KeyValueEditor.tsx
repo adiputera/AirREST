@@ -35,7 +35,7 @@ export const KeyValueEditor: React.FC<KeyValueEditorProps> = ({
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-850">
-            {items.map((item) => (
+            {(items || []).map((item) => (
               <tr key={item.id} className="group hover:bg-zinc-900/40 transition">
                 <td className="px-3 py-1.5 text-center">
                   <input

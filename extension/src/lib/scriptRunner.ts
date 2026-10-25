@@ -4,7 +4,12 @@ let sandboxIframe: HTMLIFrameElement | null = null;
 let isIframeReady = false;
 
 function getSandboxIframe(): Promise<HTMLIFrameElement> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    if (typeof document === 'undefined') {
+      reject(new Error('Document is not available in current execution environment'));
+      return;
+    }
+
     if (sandboxIframe && isIframeReady) {
       resolve(sandboxIframe);
       return;
@@ -18,12 +23,20 @@ function getSandboxIframe(): Promise<HTMLIFrameElement> {
         isIframeReady = true;
         resolve(sandboxIframe!);
       };
+      sandboxIframe.onerror = (err) => {
+        reject(new Error('Failed to load sandbox iframe: ' + String(err)));
+      };
       document.body.appendChild(sandboxIframe);
     } else {
+      let attempts = 0;
       const checkInterval = setInterval(() => {
+        attempts++;
         if (isIframeReady) {
           clearInterval(checkInterval);
           resolve(sandboxIframe!);
+        } else if (attempts > 60) {
+          clearInterval(checkInterval);
+          reject(new Error('Timed out waiting for sandbox iframe readiness'));
         }
       }, 50);
     }

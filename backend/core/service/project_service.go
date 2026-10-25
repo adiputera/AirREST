@@ -59,11 +59,16 @@ func (s *ProjectService) CreateProject(ctx context.Context, user *domain.User, t
 	}
 
 	// Add creator as Project Admin
+	role := domain.ProjectRoleAdmin
+	project.UserRole = &role
+	project.Permissions = domain.GetPermissionsForRole(role)
+
 	_ = s.projectRepo.AddMember(ctx, &domain.ProjectMember{
-		ID:        uuid.New(),
-		ProjectID: project.ID,
-		UserID:    user.ID,
-		Role:      domain.ProjectRoleAdmin,
+		ID:          uuid.New(),
+		ProjectID:   project.ID,
+		UserID:      user.ID,
+		Role:        domain.ProjectRoleAdmin,
+		Permissions: domain.GetPermissionsForRole(domain.ProjectRoleAdmin),
 	})
 
 	return project, nil
@@ -84,10 +89,12 @@ func (s *ProjectService) ListProjects(ctx context.Context, user *domain.User, te
 
 // GetProject returns project details if the user has visibility
 func (s *ProjectService) GetProject(ctx context.Context, user *domain.User, projectID uuid.UUID) (*domain.Project, error) {
-	project, _, err := s.getProjectAndEffectiveRole(ctx, user, projectID)
+	project, role, err := s.getProjectAndEffectiveRole(ctx, user, projectID)
 	if err != nil {
 		return nil, err
 	}
+	project.UserRole = &role
+	project.Permissions = domain.GetPermissionsForRole(role)
 	return project, nil
 }
 
@@ -118,6 +125,8 @@ func (s *ProjectService) UpdateProject(ctx context.Context, user *domain.User, p
 	if err := s.projectRepo.Update(ctx, project); err != nil {
 		return nil, err
 	}
+	project.UserRole = &role
+	project.Permissions = domain.GetPermissionsForRole(role)
 	return project, nil
 }
 
@@ -179,7 +188,14 @@ func (s *ProjectService) ListProjectMembers(ctx context.Context, user *domain.Us
 	if err != nil {
 		return nil, err
 	}
-	return s.projectRepo.ListMembers(ctx, projectID)
+	members, err := s.projectRepo.ListMembers(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range members {
+		m.Permissions = domain.GetPermissionsForRole(m.Role)
+	}
+	return members, nil
 }
 
 // GetEffectiveRole returns the user's role on the project (admin, contributor, reader)

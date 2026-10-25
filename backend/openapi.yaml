@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: AirREST Backend API Contract
-  version: 1.1.1
+  version: 1.1.2
   description: |
     # AirREST Cloud Backend API Specification & Contract
 
@@ -2058,6 +2058,12 @@ components:
           format: date-time
         user_role:
           $ref: '#/components/schemas/ProjectRole'
+        permissions:
+          type: array
+          description: Granular capability-based permissions computed from user role
+          items:
+            type: string
+          example: ['collection:read', 'collection:write']
 
     ProjectMember:
       type: object
@@ -2080,6 +2086,12 @@ components:
           format: uuid
         role:
           $ref: '#/components/schemas/ProjectRole'
+        permissions:
+          type: array
+          description: Granular capability-based permissions computed from member role
+          items:
+            type: string
+          example: ['collection:read', 'collection:write']
         created_at:
           type: string
           format: date-time

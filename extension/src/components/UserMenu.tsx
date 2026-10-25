@@ -99,14 +99,15 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onOpenLogin }) => {
 
   // Get user initials for avatar fallback
   const initials = displayName
-    .split(' ')
-    .map((n) => n[0])
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((n) => n[0] || '')
     .join('')
     .substring(0, 2)
-    .toUpperCase();
+    .toUpperCase() || 'U';
 
-  const getRoleBadgeStyle = (role: string) => {
-    switch (role.toLowerCase()) {
+  const getRoleBadgeStyle = (role?: string | null) => {
+    switch (String(role || 'member').toLowerCase()) {
       case 'superadmin':
         return 'border-purple-500/30 bg-purple-500/10 text-purple-400';
       case 'admin':

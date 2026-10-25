@@ -34,13 +34,12 @@ import {
 import { Collection, Environment, HttpMethod } from '@/types/api';
 import { MethodBadge } from './MethodBadge';
 import { handleCodeEditorKeyDown } from '@/lib/editorHelper';
+import { canModifyCollection, hasScopePermission } from '@/lib/jwt';
 
 interface ImportModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
-
-
 
 export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => {
   const [activeImportTab, setActiveImportTab] = useState<'postman' | 'curl'>('postman');
@@ -57,6 +56,8 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
   const addEnvironment = useApiStore((state) => state.addEnvironment);
   const replaceEnvironment = useApiStore((state) => state.replaceEnvironment);
   const createTab = useApiStore((state) => state.createTab);
+  const workspaceMode = useApiStore((state) => state.workspaceMode);
+  const cloudConfig = useApiStore((state) => state.cloudConfig);
 
   const [conflict, setConflict] = useState<
     | {
@@ -105,6 +106,11 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
       const detected = detectPostmanJsonType(jsonText);
 
       if (detected === 'environment') {
+        if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
+          setErrorMsg('Insufficient permission to import environments into this scope (requires env:write).');
+          return;
+        }
+
         const incomingEnv = importPostmanEnvironment(jsonText);
         const existingEnv = environments.find(
           (e) => e.name.trim().toLowerCase() === incomingEnv.name.trim().toLowerCase()
@@ -129,6 +135,11 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
           setSuccessMsg(null);
         }, 900);
       } else {
+        if (!hasScopePermission(cloudConfig.activeScope, 'collection:write', workspaceMode, cloudConfig.user?.role)) {
+          setErrorMsg('Insufficient permission to import collections into this scope (requires collection:write).');
+          return;
+        }
+
         const incomingCol = importPostmanCollection(jsonText);
         const existingCol = collections.find(
           (c) => c.name.trim().toLowerCase() === incomingCol.name.trim().toLowerCase()
@@ -166,6 +177,11 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
     setErrorMsg(null);
     try {
       if (conflict.type === 'collection') {
+        if (!hasScopePermission(cloudConfig.activeScope, 'collection:write', workspaceMode, cloudConfig.user?.role)) {
+          setErrorMsg('Insufficient permission to create collection copies in this scope (requires collection:write).');
+          return;
+        }
+
         const existingNames = collections.map((c) => c.name);
         const copyName = generateCopyCollectionName(conflict.incomingCol.name, existingNames);
         const copyCol = cloneCollectionWithNewIds(conflict.incomingCol, copyName);
@@ -173,6 +189,11 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
         await addCollection(copyCol);
         setSuccessMsg(`Postman Collection "${copyName}" imported as copy!`);
       } else {
+        if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
+          setErrorMsg('Insufficient permission to create environment copies in this scope (requires env:write).');
+          return;
+        }
+
         const existingNames = environments.map((e) => e.name);
         const copyName = generateCopyEnvironmentName(conflict.incomingEnv.name, existingNames);
         const copyEnv = cloneEnvironmentWithNewIds(conflict.incomingEnv, copyName);
@@ -203,9 +224,19 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
     setErrorMsg(null);
     try {
       if (conflict.type === 'collection') {
+        if (!canModifyCollection(conflict.existingCol.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+          setErrorMsg(`Cannot replace collection: read-only for your role or lacking write permissions.`);
+          return;
+        }
+
         await replaceCollection(conflict.existingCol.id, conflict.incomingCol);
         setSuccessMsg(`Collection "${conflict.existingCol.name}" replaced successfully!`);
       } else {
+        if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
+          setErrorMsg('Insufficient permission to replace environment in this scope (requires env:write).');
+          return;
+        }
+
         await replaceEnvironment(conflict.existingEnv.id, conflict.incomingEnv);
         setSuccessMsg(`Environment "${conflict.existingEnv.name}" replaced successfully!`);
       }

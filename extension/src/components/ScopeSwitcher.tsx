@@ -208,34 +208,34 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
   const searchLower = search.toLowerCase();
 
   // Filter offline workspaces
-  const filteredOfflineWorkspaces = offlineWorkspaces.filter(
+  const filteredOfflineWorkspaces = (offlineWorkspaces || []).filter(
     (w) =>
       !search ||
-      w.name.toLowerCase().includes(searchLower) ||
+      String(w?.name || '').toLowerCase().includes(searchLower) ||
       'offline workspace'.includes(searchLower) ||
       'local'.includes(searchLower)
   );
 
   // Filter cloud scopes based on search query
-  const filteredWorkspaces = workspaces.filter((w) =>
-    w.name.toLowerCase().includes(searchLower)
+  const filteredWorkspaces = (workspaces || []).filter((w) =>
+    String(w?.name || '').toLowerCase().includes(searchLower)
   );
 
   const isTeamExpanded = (teamId: string) => {
     if (searchLower) {
       const projs = teamProjects[teamId] || [];
-      if (projs.some((p) => p.name.toLowerCase().includes(searchLower))) {
+      if (projs.some((p) => String(p?.name || '').toLowerCase().includes(searchLower))) {
         return true;
       }
     }
     return !!expandedTeams[teamId];
   };
 
-  const filteredTeams = teams.filter((team) => {
+  const filteredTeams = (teams || []).filter((team) => {
     if (!searchLower) return true;
-    if (team.name.toLowerCase().includes(searchLower)) return true;
+    if (String(team?.name || '').toLowerCase().includes(searchLower)) return true;
     const projs = teamProjects[team.id] || [];
-    return projs.some((p) => p.name.toLowerCase().includes(searchLower));
+    return projs.some((p) => String(p?.name || '').toLowerCase().includes(searchLower));
   });
 
   const handleToggleTeam = async (teamId: string) => {
@@ -722,8 +722,8 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                                           .filter(
                                             (proj) =>
                                               !searchLower ||
-                                              team.name.toLowerCase().includes(searchLower) ||
-                                              proj.name.toLowerCase().includes(searchLower)
+                                              String(team?.name || '').toLowerCase().includes(searchLower) ||
+                                              String(proj?.name || '').toLowerCase().includes(searchLower)
                                           )
                                           .map((proj) => {
                                             const isSelected =
@@ -741,6 +741,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                                                     teamId: team.id,
                                                     teamName: team.name,
                                                     role: proj.user_role || 'reader',
+                                                    permissions: proj.permissions,
                                                   })
                                                 }
                                                 className={`w-full flex items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-xs transition ${

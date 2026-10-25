@@ -2,8 +2,8 @@
  * Beautifies and indents XML strings with 2-space indentation.
  * Validates syntax using DOMParser if in browser environment.
  */
-export function beautifyXml(xml: string): { formatted: string; error?: string } {
-  const trimmed = xml.trim();
+export function beautifyXml(xml?: string | null): { formatted: string; error?: string } {
+  const trimmed = typeof xml === 'string' ? xml.trim() : '';
   if (!trimmed) return { formatted: '' };
 
   // Validate syntax first if DOMParser exists
@@ -13,7 +13,7 @@ export function beautifyXml(xml: string): { formatted: string; error?: string } 
     const parseError = doc.querySelector('parsererror');
     if (parseError) {
       const errText = parseError.textContent?.split('\n')[0] || 'Invalid XML syntax';
-      return { formatted: xml, error: errText };
+      return { formatted: trimmed, error: errText };
     }
   }
 
@@ -72,8 +72,8 @@ export function beautifyXml(xml: string): { formatted: string; error?: string } 
 /**
  * Beautifies and indents JSON strings with 2-space indentation.
  */
-export function beautifyJson(jsonStr: string): { formatted: string; error?: string } {
-  const trimmed = jsonStr.trim();
+export function beautifyJson(jsonStr?: string | null): { formatted: string; error?: string } {
+  const trimmed = typeof jsonStr === 'string' ? jsonStr.trim() : '';
   if (!trimmed) return { formatted: '' };
 
   try {
@@ -81,7 +81,7 @@ export function beautifyJson(jsonStr: string): { formatted: string; error?: stri
     return { formatted: JSON.stringify(parsed, null, 2) };
   } catch (err: unknown) {
     return {
-      formatted: jsonStr,
+      formatted: trimmed,
       error: err instanceof Error ? err.message : 'Invalid JSON format',
     };
   }
@@ -91,8 +91,8 @@ export function beautifyJson(jsonStr: string): { formatted: string; error?: stri
  * Beautifies and indents GraphQL queries and mutations with 2-space indentation.
  * Validates syntax for balanced braces, brackets, and parentheses.
  */
-export function beautifyGraphQL(query: string): { formatted: string; error?: string } {
-  const trimmed = query.trim();
+export function beautifyGraphQL(query?: string | null): { formatted: string; error?: string } {
+  const trimmed = typeof query === 'string' ? query.trim() : '';
   if (!trimmed) return { formatted: '' };
 
   // 1. Syntax check for balanced braces, parens, brackets
@@ -123,23 +123,23 @@ export function beautifyGraphQL(query: string): { formatted: string; error?: str
       braceCount++;
     } else if (char === '}') {
       braceCount--;
-      if (braceCount < 0) return { formatted: query, error: 'Unexpected closing brace "}"' };
+      if (braceCount < 0) return { formatted: trimmed, error: 'Unexpected closing brace "}"' };
     } else if (char === '(') {
       parenCount++;
     } else if (char === ')') {
       parenCount--;
-      if (parenCount < 0) return { formatted: query, error: 'Unexpected closing parenthesis ")"' };
+      if (parenCount < 0) return { formatted: trimmed, error: 'Unexpected closing parenthesis ")"' };
     } else if (char === '[') {
       bracketCount++;
     } else if (char === ']') {
       bracketCount--;
-      if (bracketCount < 0) return { formatted: query, error: 'Unexpected closing bracket "]"' };
+      if (bracketCount < 0) return { formatted: trimmed, error: 'Unexpected closing bracket "]"' };
     }
   }
 
-  if (braceCount !== 0) return { formatted: query, error: 'Unbalanced braces "{" and "}" in GraphQL query' };
-  if (parenCount !== 0) return { formatted: query, error: 'Unbalanced parentheses "(" and ")" in GraphQL query' };
-  if (bracketCount !== 0) return { formatted: query, error: 'Unbalanced brackets "[" and "]" in GraphQL query' };
+  if (braceCount !== 0) return { formatted: trimmed, error: 'Unbalanced braces "{" and "}" in GraphQL query' };
+  if (parenCount !== 0) return { formatted: trimmed, error: 'Unbalanced parentheses "(" and ")" in GraphQL query' };
+  if (bracketCount !== 0) return { formatted: trimmed, error: 'Unbalanced brackets "[" and "]" in GraphQL query' };
 
   // 2. Format with clean 2-space indentation
   const INDENT = '  ';

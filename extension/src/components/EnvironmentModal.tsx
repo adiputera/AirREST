@@ -25,7 +25,7 @@ import {
   EnvironmentDiffSummary,
 } from '@/lib/requestDiff';
 import { Environment } from '@/types/api';
-import { getRoleFromJwt } from '@/lib/jwt';
+import { hasScopePermission, canModifyEnvironment } from '@/lib/jwt';
 import { ConfirmModal } from './ConfirmModal';
 import { EnvironmentConflictModal } from './EnvironmentConflictModal';
 import { handleCodeEditorKeyDown } from '@/lib/editorHelper';
@@ -48,34 +48,17 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
   const addEnvironment = useApiStore((state) => state.addEnvironment);
   const replaceEnvironment = useApiStore((state) => state.replaceEnvironment);
   const importEnvironmentFromJson = useApiStore((state) => state.importEnvironmentFromJson);
+  const workspaceMode = useApiStore((state) => state.workspaceMode);
   const cloudConfig = useApiStore((state) => state.cloudConfig);
-
-  // Decode role directly from JWT token as primary source of authority
-  const jwtRole = getRoleFromJwt(cloudConfig?.token);
-  const isSuperadminOrAdmin =
-    jwtRole === 'superadmin' ||
-    jwtRole === 'admin' ||
-    cloudConfig?.user?.role === 'superadmin' ||
-    cloudConfig?.user?.role === 'admin';
 
   const activeScope = cloudConfig?.activeScope;
   const isProjectScope = activeScope?.type === 'project';
-  const projectRole = activeScope?.role || 'reader';
 
-  const ROLE_RANK: Record<string, number> = {
-    admin: 4,
-    owner: 4,
-    maintainer: 3,
-    contributor: 2,
-    reader: 1,
-  };
-
-  // If JWT token establishes superadmin/admin role, grant full privileges (rank 4).
-  // Otherwise, use project role if in project scope, or JWT role, or full in personal workspace.
-  const userRank = isSuperadminOrAdmin
-    ? 4
-    : (!isProjectScope ? 4 : (ROLE_RANK[projectRole] || (jwtRole ? ROLE_RANK[jwtRole] || 2 : 2)));
-  const isProjectAdmin = userRank >= 4;
+  // Dynamic capability permissions
+  const canWriteEnv = hasScopePermission(activeScope, 'env:write', workspaceMode, cloudConfig?.user?.role);
+  const canDeleteEnv = hasScopePermission(activeScope, 'env:delete', workspaceMode, cloudConfig?.user?.role);
+  const isProjectAdmin = hasScopePermission(activeScope, '*', workspaceMode, cloudConfig?.user?.role);
+  const isCreateDisabled = isProjectScope && !canWriteEnv;
 
   const [selectedEnvId, setSelectedEnvId] = useState<string>(
     activeEnvironmentId || (environments[0]?.id ?? '')
@@ -100,9 +83,9 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
   if (!isOpen) return null;
 
   const currentEnv =
-    environments.find((e) => e.id === selectedEnvId) || environments[0];
+    (environments || []).find((e) => e.id === selectedEnvId) || (environments || [])[0];
   const isEnvReadOnly = currentEnv
-    ? userRank < 2 || userRank < (ROLE_RANK[currentEnv.minRole || 'reader'] || 1)
+    ? !canModifyEnvironment(currentEnv.minRole, activeScope, workspaceMode, cloudConfig?.user?.role)
     : false;
 
   const handleCreateEnv = () => {
@@ -122,7 +105,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${currentEnv.name.toLowerCase().replace(/\s+/g, '-')}.postman_environment.json`;
+      a.download = `${String(currentEnv.name || 'environment').toLowerCase().replace(/\s+/g, '-')}.postman_environment.json`;
       a.click();
       URL.revokeObjectURL(url);
       setSuccessMsg(`Exported "${currentEnv.name}" as Postman environment JSON.`);
@@ -143,8 +126,8 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
       const content = event.target?.result as string;
       try {
         const incoming = importPostmanEnvironment(content);
-        const existing = environments.find(
-          (env) => env.name.trim().toLowerCase() === incoming.name.trim().toLowerCase()
+        const existing = (environments || []).find(
+          (env) => String(env?.name || '').trim().toLowerCase() === String(incoming?.name || '').trim().toLowerCase()
         );
 
         if (existing) {
@@ -160,7 +143,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
         const newId = await addEnvironment(incoming);
         setSelectedEnvId(newId);
         setSuccessMsg(
-          `Environment "${incoming.name}" imported with ${incoming.variables.length} variables!`
+          `Environment "${incoming.name}" imported with ${incoming.variables?.length || 0} variables!`
         );
         setTimeout(() => setSuccessMsg(null), 3000);
       } catch (err: unknown) {
@@ -182,8 +165,8 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
 
     try {
       const incoming = importPostmanEnvironment(pastedJson);
-      const existing = environments.find(
-        (env) => env.name.trim().toLowerCase() === incoming.name.trim().toLowerCase()
+      const existing = (environments || []).find(
+        (env) => String(env?.name || '').trim().toLowerCase() === String(incoming?.name || '').trim().toLowerCase()
       );
 
       if (existing) {
@@ -271,20 +254,24 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
               </h2>
             </div>
             <div className="flex items-center gap-1">
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800 hover:text-sky-300 transition"
-                title="Import Postman Environment (.json)"
-              >
-                <Upload className="h-3.5 w-3.5" />
-              </button>
-              <button
-                onClick={() => setIsAddingEnv(true)}
-                className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800 hover:text-white transition"
-                title="Create Environment"
-              >
-                <Plus className="h-4 w-4" />
-              </button>
+              {!isCreateDisabled && (
+                <>
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800 hover:text-sky-300 transition"
+                    title="Import Postman Environment (.json)"
+                  >
+                    <Upload className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    onClick={() => setIsAddingEnv(true)}
+                    className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800 hover:text-white transition"
+                    title="Create Environment"
+                  >
+                    <Plus className="h-4 w-4" />
+                  </button>
+                </>
+              )}
             </div>
           </div>
 
@@ -308,9 +295,9 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                     className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-0.5 text-[11px] text-zinc-300 focus:outline-none"
                   >
                     <option value="reader">🟢 All Members</option>
-                    {userRank >= 2 && <option value="contributor">🟡 Contributor+</option>}
-                    {userRank >= 3 && <option value="maintainer">🔵 Maintainer+ (Production)</option>}
-                    {userRank >= 4 && <option value="admin">🔴 Admin Only</option>}
+                    {canWriteEnv && <option value="contributor">🟡 Contributor+</option>}
+                    {canDeleteEnv && <option value="maintainer">🔵 Maintainer+ (Production)</option>}
+                    {isProjectAdmin && <option value="admin">🔴 Admin Only</option>}
                   </select>
                 </div>
               )}
@@ -383,22 +370,24 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
           </div>
 
           {/* Quick Import Link on Left Footer */}
-          <div className="pt-3 border-t border-zinc-850 flex items-center justify-between text-[11px] text-zinc-400">
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="flex items-center gap-1.5 text-sky-400 hover:text-sky-300 transition"
-            >
-              <Upload className="h-3 w-3" />
-              <span>Import File</span>
-            </button>
-            <button
-              onClick={() => setIsPasteModalOpen(true)}
-              className="flex items-center gap-1 text-zinc-400 hover:text-zinc-200 transition"
-            >
-              <FileCode className="h-3 w-3" />
-              <span>Paste JSON</span>
-            </button>
-          </div>
+          {!isCreateDisabled && (
+            <div className="pt-3 border-t border-zinc-850 flex items-center justify-between text-[11px] text-zinc-400">
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="flex items-center gap-1.5 text-sky-400 hover:text-sky-300 transition"
+              >
+                <Upload className="h-3 w-3" />
+                <span>Import File</span>
+              </button>
+              <button
+                onClick={() => setIsPasteModalOpen(true)}
+                className="flex items-center gap-1 text-zinc-400 hover:text-zinc-200 transition"
+              >
+                <FileCode className="h-3 w-3" />
+                <span>Paste JSON</span>
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Right Side: Variable Table & Edit */}
@@ -448,27 +437,27 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                       onChange={(e) => updateEnvironment(currentEnv.id, { minRole: e.target.value as any })}
                       className="bg-transparent text-xs text-zinc-200 focus:outline-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 font-medium"
                       title={
-                        userRank < 2
+                        !canWriteEnv
                           ? 'Contributor, Maintainer, or Admin access required to change access restrictions'
-                          : userRank < (ROLE_RANK[currentEnv.minRole || 'reader'] || 1)
-                          ? 'Higher role required to edit this restricted environment'
+                          : isEnvReadOnly
+                          ? 'Higher permission required to edit this restricted environment'
                           : 'Change minimum required role'
                       }
                     >
                       <option value="reader" className="bg-zinc-900 text-zinc-200">
                         🟢 All Members (Reader+)
                       </option>
-                      {userRank >= 2 && (
+                      {canWriteEnv && (
                         <option value="contributor" className="bg-zinc-900 text-zinc-200">
                           🟡 Contributor+
                         </option>
                       )}
-                      {userRank >= 3 && (
+                      {canDeleteEnv && (
                         <option value="maintainer" className="bg-zinc-900 text-zinc-200">
                           🔵 Maintainer+ (Production / Release)
                         </option>
                       )}
-                      {userRank >= 4 && (
+                      {isProjectAdmin && (
                         <option value="admin" className="bg-zinc-900 text-zinc-200">
                           🔴 Admin Only (Restricted)
                         </option>
@@ -500,12 +489,12 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                 </button>
               )}
 
-              {currentEnv && environments.length > 1 && (
+              {currentEnv && (environments || []).length > 1 && (
                 <button
                   onClick={() => setShowDeleteConfirm(true)}
-                  disabled={isEnvReadOnly}
+                  disabled={isEnvReadOnly || !canDeleteEnv}
                   className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-900 hover:text-rose-400 disabled:opacity-40 disabled:cursor-not-allowed transition"
-                  title={isEnvReadOnly ? 'Higher role required to delete this environment' : 'Delete Environment'}
+                  title={!canDeleteEnv ? 'Insufficient permission to delete environment' : isEnvReadOnly ? 'Higher permission required to delete this restricted environment' : 'Delete Environment'}
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
