@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { KeyRound, Lock, Eye, EyeOff, AlertCircle, CheckCircle2, Loader2, X } from 'lucide-react';
+import { KeyRound, Lock, Eye, EyeOff, AlertCircle, Loader2, X } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
 import { changeUserPassword } from '@/lib/cloudApi';
 
@@ -22,9 +22,9 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
 
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   const cloudConfig = useApiStore((state) => state.cloudConfig);
+  const setCloudConfig = useApiStore((state) => state.setCloudConfig);
 
   // Reset form when modal opens or closes
   useEffect(() => {
@@ -36,7 +36,6 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
       setShowNew(false);
       setShowConfirm(false);
       setErrorMsg(null);
-      setSuccessMsg(null);
       setIsLoading(false);
     }
   }, [isOpen]);
@@ -60,7 +59,6 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
-    setSuccessMsg(null);
 
     // Validation
     if (!currentPassword) {
@@ -91,7 +89,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
     setIsLoading(true);
 
     try {
-      const result = await changeUserPassword(
+      const session = await changeUserPassword(
         cloudConfig.apiUrl || 'http://localhost:8080',
         currentPassword,
         newPassword,
@@ -99,15 +97,17 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
         cloudConfig.refreshToken
       );
 
-      setSuccessMsg(result.message || 'Password updated successfully!');
+      setCloudConfig({
+        user: session.user,
+        token: session.token,
+        refreshToken: session.refresh_token,
+        tokenExpiresAt: session.expires_at,
+      });
+
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
-
-      // Auto-close after brief delay so user sees success feedback
-      setTimeout(() => {
-        onClose();
-      }, 1300);
+      onClose();
     } catch (err: any) {
       const msg = err.message || 'Failed to update password. Please try again.';
       if (msg.toLowerCase().includes('current password') || msg.toLowerCase().includes('invalid_current_password')) {
@@ -149,17 +149,9 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
           </div>
           <div>
             <h3 className="text-base font-semibold text-zinc-100">Change Password</h3>
-            <p className="text-xs text-zinc-400">Update your account credentials</p>
+            <p className="text-xs text-zinc-400">Changing your password signs out other devices.</p>
           </div>
         </div>
-
-        {/* Success Alert */}
-        {successMsg && (
-          <div className="mb-4 flex items-center gap-2.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-300 animate-in fade-in">
-            <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
-            <span>{successMsg}</span>
-          </div>
-        )}
 
         {/* Error Alert */}
         {errorMsg && (
@@ -185,7 +177,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
                 value={currentPassword}
                 onChange={(e) => setCurrentPassword(e.target.value)}
                 placeholder="Enter current password"
-                disabled={isLoading || Boolean(successMsg)}
+                disabled={isLoading}
                 className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 pl-9 pr-10 py-2.5 text-xs text-zinc-100 placeholder-zinc-500 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition disabled:opacity-50"
                 required
               />
@@ -215,7 +207,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
                 onChange={(e) => setNewPassword(e.target.value)}
                 placeholder="Minimum 8 characters"
                 minLength={8}
-                disabled={isLoading || Boolean(successMsg)}
+                disabled={isLoading}
                 className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 pl-9 pr-10 py-2.5 text-xs text-zinc-100 placeholder-zinc-500 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition disabled:opacity-50"
                 required
               />
@@ -246,7 +238,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 placeholder="Re-enter new password"
                 minLength={8}
-                disabled={isLoading || Boolean(successMsg)}
+                disabled={isLoading}
                 className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 pl-9 pr-10 py-2.5 text-xs text-zinc-100 placeholder-zinc-500 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition disabled:opacity-50"
                 required
               />
@@ -276,7 +268,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
             </button>
             <button
               type="submit"
-              disabled={isLoading || Boolean(successMsg)}
+              disabled={isLoading}
               className="flex items-center gap-2 rounded-xl bg-sky-500 px-4 py-2 text-xs font-semibold text-white hover:bg-sky-400 transition shadow-lg shadow-sky-500/20 disabled:opacity-50"
             >
               {isLoading ? (

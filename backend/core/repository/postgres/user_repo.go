@@ -13,8 +13,9 @@ import (
 )
 
 var (
-	ErrUserNotFound      = errors.New("user not found")
-	ErrUserAlreadyExists = errors.New("user with this email already exists")
+	ErrCredentialsChanged = errors.New("credentials changed; sign in again")
+	ErrUserNotFound       = errors.New("user not found")
+	ErrUserAlreadyExists  = errors.New("user with this email already exists")
 )
 
 type UserRepository struct {
@@ -49,7 +50,7 @@ func (r *UserRepository) Create(ctx context.Context, u *domain.User) error {
 // GetByEmail retrieves a user by email
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
 	query := `
-		SELECT id, email, password_hash, name, avatar_url, role, created_at, updated_at
+		SELECT id, email, password_hash, name, avatar_url, role, created_at, updated_at, token_version
 		FROM users
 		WHERE email = $1
 	`
@@ -64,6 +65,7 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*domain.
 		&roleStr,
 		&u.CreatedAt,
 		&u.UpdatedAt,
+		&u.TokenVersion,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -78,7 +80,7 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*domain.
 // GetByID retrieves a user by UUID
 func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
 	query := `
-		SELECT id, email, password_hash, name, avatar_url, role, created_at, updated_at
+		SELECT id, email, password_hash, name, avatar_url, role, created_at, updated_at, token_version
 		FROM users
 		WHERE id = $1
 	`
@@ -93,6 +95,7 @@ func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Use
 		&roleStr,
 		&u.CreatedAt,
 		&u.UpdatedAt,
+		&u.TokenVersion,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -118,7 +121,7 @@ func (r *UserRepository) CountSuperadmins(ctx context.Context) (int, error) {
 // ListAll returns all users (ordered by creation date)
 func (r *UserRepository) ListAll(ctx context.Context) ([]*domain.User, error) {
 	query := `
-		SELECT id, email, password_hash, name, avatar_url, role, created_at, updated_at
+		SELECT id, email, password_hash, name, avatar_url, role, created_at, updated_at, token_version
 		FROM users
 		ORDER BY created_at DESC
 	`
@@ -141,6 +144,7 @@ func (r *UserRepository) ListAll(ctx context.Context) ([]*domain.User, error) {
 			&roleStr,
 			&u.CreatedAt,
 			&u.UpdatedAt,
+			&u.TokenVersion,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan user: %w", err)
@@ -183,7 +187,7 @@ func (r *UserRepository) UpdateProfile(ctx context.Context, id uuid.UUID, name s
 		UPDATE users
 		SET name = $1, avatar_url = $2, updated_at = $3
 		WHERE id = $4
-		RETURNING id, email, password_hash, name, avatar_url, role, created_at, updated_at
+		RETURNING id, email, password_hash, name, avatar_url, role, created_at, updated_at, token_version
 	`
 	now := time.Now().UTC()
 	var u domain.User
@@ -197,6 +201,7 @@ func (r *UserRepository) UpdateProfile(ctx context.Context, id uuid.UUID, name s
 		&roleStr,
 		&u.CreatedAt,
 		&u.UpdatedAt,
+		&u.TokenVersion,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -209,19 +214,22 @@ func (r *UserRepository) UpdateProfile(ctx context.Context, id uuid.UUID, name s
 }
 
 // UpdatePassword updates the hashed password of a user
-func (r *UserRepository) UpdatePassword(ctx context.Context, id uuid.UUID, newPasswordHash string) error {
+func (r *UserRepository) UpdatePassword(ctx context.Context, id uuid.UUID, newPasswordHash string, expectedVersion *int64) error {
 	query := `
 		UPDATE users
-		SET password_hash = $1, updated_at = $2
-		WHERE id = $3
+		SET password_hash = $1, updated_at = $2, token_version = token_version + 1
+		WHERE id = $3 AND ($4::bigint IS NULL OR token_version = $4)
 	`
 	now := time.Now().UTC()
-	result, err := r.pool.Exec(ctx, query, newPasswordHash, now, id)
+	result, err := r.pool.Exec(ctx, query, newPasswordHash, now, id, expectedVersion)
 	if err != nil {
 		return fmt.Errorf("failed to update user password: %w", err)
 	}
 	if result.RowsAffected() == 0 {
-		return ErrUserNotFound
+		if expectedVersion == nil {
+			return ErrUserNotFound
+		}
+		return ErrCredentialsChanged
 	}
 	return nil
 }
@@ -232,7 +240,7 @@ func (r *UserRepository) SearchUsers(ctx context.Context, queryStr string, limit
 		limit = 20
 	}
 	query := `
-		SELECT id, email, password_hash, name, avatar_url, role, created_at, updated_at
+		SELECT id, email, password_hash, name, avatar_url, role, created_at, updated_at, token_version
 		FROM users
 		WHERE email ILIKE '%' || $1 || '%' OR name ILIKE '%' || $1 || '%'
 		ORDER BY name ASC, email ASC
@@ -257,6 +265,7 @@ func (r *UserRepository) SearchUsers(ctx context.Context, queryStr string, limit
 			&roleStr,
 			&u.CreatedAt,
 			&u.UpdatedAt,
+			&u.TokenVersion,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan user: %w", err)

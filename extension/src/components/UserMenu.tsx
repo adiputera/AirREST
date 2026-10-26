@@ -26,6 +26,14 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onOpenLogin }) => {
 
   const user = cloudConfig.user;
   const token = cloudConfig.token;
+  useEffect(() => {
+    const requireSignIn = () => {
+      setIsChangePasswordOpen(false);
+      setIsInternalLoginOpen(true);
+    };
+    window.addEventListener('airrest:auth-required', requireSignIn);
+    return () => window.removeEventListener('airrest:auth-required', requireSignIn);
+  }, []);
 
   // Close dropdown on outside click or escape
   useEffect(() => {

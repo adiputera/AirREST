@@ -31,10 +31,10 @@ services:
     environment:
       PORT: 8080
       DATABASE_URL: postgres://airrest:airrest_secret_password@postgres:5432/airrest_db?sslmode=disable
-      JWT_SECRET: super-secret-jwt-key-change-in-production-minimum-32-chars
+      JWT_SECRET: ${JWT_SECRET:?Set a randomly generated JWT_SECRET in .env}
       JWT_EXPIRATION_HOURS: 72
-      SUPERADMIN_EMAIL: admin@example.com
-      SUPERADMIN_PASSWORD: SuperadminSecurePassword123!
+      SUPERADMIN_EMAIL: ${SUPERADMIN_EMAIL:-}
+      SUPERADMIN_PASSWORD: ${SUPERADMIN_PASSWORD:-}
       SUPERADMIN_NAME: Super Administrator
     ports:
       - "8080:8080"

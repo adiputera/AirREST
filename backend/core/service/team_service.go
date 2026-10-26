@@ -142,8 +142,13 @@ func (s *TeamService) AddMember(ctx context.Context, user *domain.User, teamID, 
 	}
 
 	// Verify target user exists
-	if _, err := s.userRepo.GetByID(ctx, targetUserID); err != nil {
+	targetUser, err := s.userRepo.GetByID(ctx, targetUserID)
+	if err != nil {
 		return fmt.Errorf("target user not found: %w", err)
+	}
+
+	if targetUser.IsSuperadmin() {
+		return errors.New("cannot modify superadmin role in team")
 	}
 
 	return s.teamRepo.AddMember(ctx, &domain.TeamMember{
@@ -160,7 +165,17 @@ func (s *TeamService) RemoveMember(ctx context.Context, user *domain.User, teamI
 		return ErrTeamAdminRequired
 	}
 
+	targetUser, err := s.userRepo.GetByID(ctx, targetUserID)
+	if err == nil && targetUser.IsSuperadmin() {
+		return errors.New("cannot remove superadmin from team")
+	}
+
 	return s.teamRepo.RemoveMember(ctx, teamID, targetUserID)
+}
+
+// GetUserByID retrieves a user by ID
+func (s *TeamService) GetUserByID(ctx context.Context, userID uuid.UUID) (*domain.User, error) {
+	return s.userRepo.GetByID(ctx, userID)
 }
 
 // ListMembers lists members in a team

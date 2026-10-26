@@ -3,7 +3,7 @@
 > A fast, lightweight, and modern browser-based REST API testing studio packaged as a **Google Chrome Extension (Manifest V3)** and standalone web client with optional cloud team synchronization. Built with **React 19**, **Vite**, **Tailwind CSS v4**, **Zustand**, and a **Go + PostgreSQL** backend.
 
 [![GitHub Repository](https://img.shields.io/badge/GitHub-adiputera%2FAirREST-181717?logo=github)](https://github.com/adiputera/AirREST)
-[![Version](https://img.shields.io/badge/Version-1.1.2-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.1.3-blue.svg)](CHANGELOG.md)
 [![Manifest V3](https://img.shields.io/badge/Chrome%20Extension-Manifest%20V3-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=white)](https://vitejs.dev/)
@@ -258,14 +258,14 @@ pm.environment.set("lastRequestTimestamp", now);
 - **Scoped Data Isolation**: Separate tabs, history, and active environments per workspace scope.
 - **Smart Client Caching**: 12-hour cache enables instant project switching without redundant network fetches.
 - **Manual Sync**: Dedicated sync button to trigger immediate synchronization with the cloud backend.
-- **Rolling Refresh Tokens**: 30-day token rotation with background refresh keeps active sessions connected.
+- **Rolling Refresh Tokens**: 30-day JWT renewal with background refresh keeps active sessions connected. Password changes revoke existing sessions and return replacement tokens to the device making the change; administrator resets revoke all target-user sessions. Refresh tokens are not single-use.
 - **Optimistic Concurrency Control (OCC)**: Version-checked updates handle concurrent modifications cleanly.
 - **User Menu & Account Controls**: An interactive user menu is displayed on the right of the top navigation bar. When unauthenticated, it serves as a direct **Sign In** action to connect your cloud account; when logged in, it displays user details, role badge, an in-app **Change Password** modal (`PUT /api/v1/auth/password`), and a secure **Sign Out** option that clears cloud session tokens and cached workspaces.
 
 ### 11. 🏢 AirREST Hub Management Portal
 - **Dedicated Dashboard**: Independent web application (`hub/`) for team and project management.
-- **Team Management**: Create and configure teams, invite members, and assign roles.
-- **Project Administration**: Manage projects and assign member permissions (`Admin`, `Maintainer`, `Contributor`, `Reader`).
+- **Team Management**: Create and configure teams, invite members simultaneously with multi-select search checkboxes, and assign roles.
+- **Project Administration**: Manage projects and assign members in batch with granular RBAC permissions (`Admin`, `Maintainer`, `Contributor`, `Reader`).
 - **Resource Permissions**: Configure minimum role requirements per collection and environment.
 - **Superadmin Tools**: User account management, password resets, and system overview.
 
@@ -350,11 +350,11 @@ AirREST is completely backend-agnostic! If you prefer implementing the backend i
 |---|---|---|---|
 | `PORT` | Optional | `8080` | Port for the HTTP server to listen on. |
 | `DATABASE_URL` | **Yes** | `postgres://airrest:airrest_secret_password@localhost:5432/airrest_db?sslmode=disable` | PostgreSQL connection string. |
-| `JWT_SECRET` | **Yes** | `super-secret-jwt-key-change-in-production-minimum-32-chars` | HS256 JWT signing secret (minimum 32 characters). |
+| `JWT_SECRET` | **Yes** | No default; generate with `openssl rand -hex 32` | HS256 JWT signing secret (minimum 32 characters). |
 | `JWT_EXPIRATION_HOURS` | Optional | `72` | Access token lifespan in hours. |
 | `JWT_REFRESH_EXPIRATION_DAYS` | Optional | `30` | Rolling refresh token lifespan in days. |
-| `SUPERADMIN_EMAIL` | Optional | `admin@example.com` | Email for the initial Superadmin account. |
-| `SUPERADMIN_PASSWORD` | Optional | `SuperadminSecurePassword123!` | Password for the initial Superadmin account. |
+| `SUPERADMIN_EMAIL` | First startup | User-supplied email | Email for the initial Superadmin account. |
+| `SUPERADMIN_PASSWORD` | First startup | User-supplied unique password (12–72 bytes) | Password for the initial Superadmin account. |
 | `SUPERADMIN_NAME` | Optional | `Super Administrator` | Display name for the Superadmin account. |
 | `DB_MAX_CONNS` | Optional | `25` (Docker) / `4` (Vercel) | Maximum concurrent connections in `pgxpool`. |
 | `DB_MIN_CONNS` | Optional | `2` (Docker) / `1` (Vercel) | Minimum idle connections in `pgxpool`. |
@@ -384,6 +384,8 @@ AirREST is completely backend-agnostic! If you prefer implementing the backend i
 | `npm run build:all` | Compiles all targets (Extension and Hub) |
 | `npm run preview` | Previews the production extension build locally |
 | `npm run typecheck` | Validates TypeScript types across extension and hub |
+| `npm run test:security-clients` | Runs security client regression tests for extension & hub |
+| `npm run test:hub` | Runs frontend Hub regression test suite |
 | `npm run lint` | Runs ESLint validation across the repository |
 
 ### Backend (Go & Docker)

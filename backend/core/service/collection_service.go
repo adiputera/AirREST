@@ -38,6 +38,9 @@ func NewCollectionService(
 
 // CheckPermission checks if user can read or write in the scope
 func (s *CollectionService) CheckPermission(ctx context.Context, user *domain.User, workspaceID, projectID *uuid.UUID, requireWrite bool) error {
+	if (workspaceID == nil) == (projectID == nil) {
+		return ErrInvalidScope
+	}
 	if user.IsSuperadmin() {
 		return nil
 	}
@@ -58,7 +61,7 @@ func (s *CollectionService) CheckPermission(ctx context.Context, user *domain.Us
 		if err != nil {
 			return ErrForbidden
 		}
-		if requireWrite && role == domain.ProjectRoleReader {
+		if requireWrite && !domain.HasPermission(domain.GetPermissionsForRole(role), domain.PermissionCollectionWrite) {
 			return ErrReaderCannotModify
 		}
 		return nil
@@ -254,16 +257,10 @@ func (s *CollectionService) DeleteCollection(ctx context.Context, user *domain.U
 		return err
 	}
 
-	return s.collectionRepo.SoftDeleteCollection(ctx, id, user.ID)
-}
-
-func isAtLeastContributor(role domain.ProjectRole) bool {
-	switch role {
-	case domain.ProjectRoleAdmin, domain.ProjectRoleMaintainer, domain.ProjectRoleContributor:
-		return true
-	default:
-		return false
+	if err := s.CheckOperationPermission(ctx, user, col.WorkspaceID, col.ProjectID, domain.PermissionCollectionDelete); err != nil {
+		return err
 	}
+	return s.collectionRepo.SoftDeleteCollection(ctx, id, user.ID)
 }
 
 // MoveCollection moves a collection to a target project (within the same team) or target workspace
@@ -294,10 +291,10 @@ func (s *CollectionService) MoveCollection(ctx context.Context, user *domain.Use
 			return fmt.Errorf("target project not found: %w", err)
 		}
 
-		// Check target project role: user must be at least contributor
+		// Check target project role: user must be maintainer or administrator
 		targetRole, err := s.projectService.GetEffectiveRole(ctx, user, *targetProjectID)
-		if err != nil || !isAtLeastContributor(targetRole) {
-			return errors.New("at least contributor role required in target project")
+		if err != nil || !domain.HasPermission(domain.GetPermissionsForRole(targetRole), domain.PermissionCollectionMove) || !CanAccessCollection(targetRole, col.MinRole) {
+			return ErrForbidden
 		}
 
 		// Check source
@@ -316,10 +313,10 @@ func (s *CollectionService) MoveCollection(ctx context.Context, user *domain.Use
 				return errors.New("collections can only be moved between projects within the same team")
 			}
 
-			// Check source project role: user must be at least contributor and meet collection min_role
+			// Check source project role: user must be maintainer or administrator and meet collection min_role
 			sourceRole, err := s.projectService.GetEffectiveRole(ctx, user, *col.ProjectID)
-			if err != nil || !isAtLeastContributor(sourceRole) || !CanAccessCollection(sourceRole, col.MinRole) {
-				return errors.New("insufficient permission to move collection from source project")
+			if err != nil || !domain.HasPermission(domain.GetPermissionsForRole(sourceRole), domain.PermissionCollectionMove) || !CanAccessCollection(sourceRole, col.MinRole) {
+				return ErrForbidden
 			}
 		} else if col.WorkspaceID != nil {
 			// Moving from personal workspace to project
@@ -358,8 +355,8 @@ func (s *CollectionService) MoveCollection(ctx context.Context, user *domain.Use
 			}
 		} else if col.ProjectID != nil {
 			sourceRole, err := s.projectService.GetEffectiveRole(ctx, user, *col.ProjectID)
-			if err != nil || !isAtLeastContributor(sourceRole) || !CanAccessCollection(sourceRole, col.MinRole) {
-				return errors.New("insufficient permission to move collection from source project")
+			if err != nil || !domain.HasPermission(domain.GetPermissionsForRole(sourceRole), domain.PermissionCollectionMove) || !CanAccessCollection(sourceRole, col.MinRole) {
+				return ErrForbidden
 			}
 		}
 
@@ -474,3 +471,21 @@ func (s *CollectionService) ReorderItems(ctx context.Context, user *domain.User,
 	return s.collectionRepo.ListActiveItemsByCollection(ctx, collectionID)
 }
 
+// CheckOperationPermission applies the operation map in addition to scope ownership.
+// Item/folder removal is authoring (collection:write); container deletion is collection:delete.
+func (s *CollectionService) CheckOperationPermission(ctx context.Context, user *domain.User, workspaceID, projectID *uuid.UUID, operation string) error {
+	if err := s.CheckPermission(ctx, user, workspaceID, projectID, true); err != nil {
+		return err
+	}
+	if user.IsSuperadmin() || projectID == nil {
+		return nil
+	}
+	role, err := s.projectService.GetEffectiveRole(ctx, user, *projectID)
+	if err != nil {
+		return err
+	}
+	if !domain.HasPermission(domain.GetPermissionsForRole(role), operation) {
+		return ErrForbidden
+	}
+	return nil
+}

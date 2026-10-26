@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/mail"
 	"strings"
 	"time"
 
@@ -42,6 +43,24 @@ type TokenPair struct {
 	AccessToken  string    `json:"token"`
 	RefreshToken string    `json:"refresh_token"`
 	ExpiresAt    time.Time `json:"expires_at"`
+}
+
+func (s *AuthService) issueTokenPair(user *domain.User, tokenVersion int64) (*TokenPair, error) {
+	accessToken, expiresAt, err := s.tokenManager.GenerateToken(user.ID, user.Email, string(user.Role), tokenVersion)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate access token: %w", err)
+	}
+
+	refreshToken, _, err := s.tokenManager.GenerateRefreshToken(user.ID, user.Email, string(user.Role), tokenVersion)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate refresh token: %w", err)
+	}
+
+	return &TokenPair{
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+		ExpiresAt:    expiresAt,
+	}, nil
 }
 
 // Register registers a new regular user, generates their default private workspace and JWT pair
@@ -88,22 +107,12 @@ func (s *AuthService) Register(ctx context.Context, email, password, name string
 		slog.Error("failed to create default workspace for user", "user_id", newUser.ID, "error", err)
 	}
 
-	// Issue JWT pair
-	jwtToken, expiresAt, err := s.tokenManager.GenerateToken(newUser.ID, newUser.Email, string(newUser.Role))
+	tokens, err := s.issueTokenPair(newUser, newUser.TokenVersion)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to generate access token: %w", err)
+		return nil, nil, err
 	}
 
-	refreshToken, _, err := s.tokenManager.GenerateRefreshToken(newUser.ID, newUser.Email, string(newUser.Role))
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to generate refresh token: %w", err)
-	}
-
-	return newUser, &TokenPair{
-		AccessToken:  jwtToken,
-		RefreshToken: refreshToken,
-		ExpiresAt:    expiresAt,
-	}, nil
+	return newUser, tokens, nil
 }
 
 // Login authenticates a user and returns a signed JWT pair
@@ -119,21 +128,12 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*domai
 		return nil, nil, ErrInvalidCredentials
 	}
 
-	jwtToken, expiresAt, err := s.tokenManager.GenerateToken(user.ID, user.Email, string(user.Role))
+	tokens, err := s.issueTokenPair(user, user.TokenVersion)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to generate access token: %w", err)
+		return nil, nil, err
 	}
 
-	refreshToken, _, err := s.tokenManager.GenerateRefreshToken(user.ID, user.Email, string(user.Role))
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to generate refresh token: %w", err)
-	}
-
-	return user, &TokenPair{
-		AccessToken:  jwtToken,
-		RefreshToken: refreshToken,
-		ExpiresAt:    expiresAt,
-	}, nil
+	return user, tokens, nil
 }
 
 // RefreshToken validates a refresh token and generates a new access token and renewed refresh token
@@ -148,21 +148,16 @@ func (s *AuthService) RefreshToken(ctx context.Context, refreshTokenStr string) 
 		return nil, nil, errors.New("user not found or deactivated")
 	}
 
-	jwtToken, expiresAt, err := s.tokenManager.GenerateToken(user.ID, user.Email, string(user.Role))
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to generate access token: %w", err)
+	if claims.TokenVersion == nil || *claims.TokenVersion != user.TokenVersion {
+		return nil, nil, token.ErrInvalidRefreshToken
 	}
 
-	newRefreshToken, _, err := s.tokenManager.GenerateRefreshToken(user.ID, user.Email, string(user.Role))
+	tokens, err := s.issueTokenPair(user, user.TokenVersion)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to generate refresh token: %w", err)
+		return nil, nil, err
 	}
 
-	return user, &TokenPair{
-		AccessToken:  jwtToken,
-		RefreshToken: newRefreshToken,
-		ExpiresAt:    expiresAt,
-	}, nil
+	return user, tokens, nil
 }
 
 // BootstrapSuperadmin creates the initial Superadmin if no superadmin exists yet
@@ -178,6 +173,10 @@ func (s *AuthService) BootstrapSuperadmin(ctx context.Context, email, password, 
 	}
 
 	email = strings.TrimSpace(strings.ToLower(email))
+	address, err := mail.ParseAddress(email)
+	if err != nil || address.Address != email || len(password) < 12 || len(password) > 72 || password == "SuperadminSecurePassword123!" {
+		return errors.New("initial administrator requires explicit valid SUPERADMIN_EMAIL and a unique SUPERADMIN_PASSWORD of 12 to 72 bytes")
+	}
 	slog.Info("bootstrapping initial superadmin account", "email", email)
 
 	pwdHash, err := hasher.HashPassword(password)
@@ -263,27 +262,39 @@ func (s *AuthService) UpdateProfile(ctx context.Context, userID uuid.UUID, name 
 	return s.userRepo.UpdateProfile(ctx, userID, name, avatarURL)
 }
 
-// ChangePassword verifies the current password and hashes/stores the new password
-func (s *AuthService) ChangePassword(ctx context.Context, userID uuid.UUID, currentPassword, newPassword string) error {
+// ChangePassword verifies the current password, revokes other sessions, and returns a replacement token pair.
+func (s *AuthService) ChangePassword(ctx context.Context, userID uuid.UUID, currentPassword, newPassword string) (*domain.User, *TokenPair, error) {
 	if len(newPassword) < 8 {
-		return ErrPasswordTooShort
+		return nil, nil, ErrPasswordTooShort
 	}
 
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
 	if !hasher.CheckPassword(currentPassword, user.PasswordHash) {
-		return ErrIncorrectCurrentPassword
+		return nil, nil, ErrIncorrectCurrentPassword
 	}
 
 	newHash, err := hasher.HashPassword(newPassword)
 	if err != nil {
-		return fmt.Errorf("failed to hash new password: %w", err)
+		return nil, nil, fmt.Errorf("failed to hash new password: %w", err)
 	}
 
-	return s.userRepo.UpdatePassword(ctx, userID, newHash)
+	// Generate tokens for the exact version that the conditional update will install.
+	// If another password change wins first, the update fails and these tokens are never returned.
+	newVersion := user.TokenVersion + 1
+	tokens, err := s.issueTokenPair(user, newVersion)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if err := s.userRepo.UpdatePassword(ctx, userID, newHash, &user.TokenVersion); err != nil {
+		return nil, nil, err
+	}
+	user.TokenVersion = newVersion
+	return user, tokens, nil
 }
 
 // ResetPasswordByAdmin allows superadmin to reset any user's password without requiring current password
@@ -301,7 +312,7 @@ func (s *AuthService) ResetPasswordByAdmin(ctx context.Context, userID uuid.UUID
 		return fmt.Errorf("failed to hash new password: %w", err)
 	}
 
-	return s.userRepo.UpdatePassword(ctx, userID, newHash)
+	return s.userRepo.UpdatePassword(ctx, userID, newHash, nil)
 }
 
 // SearchUsers searches users by email or name (minimum 2 characters query)
@@ -336,4 +347,3 @@ func (s *AuthService) DeleteUserByAdmin(ctx context.Context, adminID, targetUser
 
 	return s.userRepo.Delete(ctx, targetUserID, adminID)
 }
-

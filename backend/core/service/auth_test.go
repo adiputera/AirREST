@@ -19,7 +19,7 @@ func TestAuthServiceValidationRules(t *testing.T) {
 	})
 
 	t.Run("ChangePassword requires minimum 8 characters", func(t *testing.T) {
-		err := authService.ChangePassword(ctx, uuid.New(), "oldpassword123", "short")
+		_, _, err := authService.ChangePassword(ctx, uuid.New(), "oldpassword123", "short")
 		if err != ErrPasswordTooShort {
 			t.Fatalf("expected ErrPasswordTooShort, got: %v", err)
 		}

@@ -90,7 +90,7 @@ export const Navbar: React.FC = () => {
           <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
             <h3 className="text-base font-bold text-zinc-100 mb-1">Server Configuration</h3>
             <p className="text-xs text-zinc-400 mb-4">
-              Specify the API server endpoint that Hub connects to.
+              Specify the API server endpoint that Hub connects to. Changing servers signs you out.
             </p>
 
             <form onSubmit={handleSaveUrl} className="space-y-4">

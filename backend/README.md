@@ -46,7 +46,10 @@ To configure local development, copy `.env.example` to `.env`:
 
 ```bash
 cp .env.example .env
+openssl rand -hex 32
 ```
+
+Set `JWT_SECRET` to the generated value and supply your own bootstrap email/password before starting. Missing, obvious weak, and example signing keys are rejected. If a superadministrator already exists, bootstrap credentials may be omitted; startup does not reset existing accounts.
 
 ### Configuration Reference
 
@@ -54,11 +57,11 @@ cp .env.example .env
 |---|---|---|---|
 | `PORT` | Optional | `8080` | Port for the HTTP server to listen on. |
 | `DATABASE_URL` | **Yes** | `postgres://airrest:airrest_secret_password@localhost:5432/airrest_db?sslmode=disable` | PostgreSQL connection string. For Vercel Serverless, use a pooled connection string with `?sslmode=require`. |
-| `JWT_SECRET` | **Yes** | `super-secret-jwt-key-change-in-production-minimum-32-chars` | High-entropy signing key (minimum 32 characters) for HS256 JWT tokens. |
+| `JWT_SECRET` | **Yes** | No default; generate with `openssl rand -hex 32` | High-entropy signing key (minimum 32 characters) for HS256 JWT tokens. |
 | `JWT_EXPIRATION_HOURS` | Optional | `72` | Access token lifespan in hours. |
 | `JWT_REFRESH_EXPIRATION_DAYS` | Optional | `30` | Rolling refresh token lifespan in days. |
-| `SUPERADMIN_EMAIL` | Optional | `admin@example.com` | Email for bootstrap Superadmin account created on first launch. |
-| `SUPERADMIN_PASSWORD` | Optional | `SuperadminSecurePassword123!` | Password for bootstrap Superadmin account. |
+| `SUPERADMIN_EMAIL` | First startup | User-supplied email | Email for bootstrap Superadmin account created on first launch. |
+| `SUPERADMIN_PASSWORD` | First startup | User-supplied unique password (12–72 bytes) | Password for bootstrap Superadmin account. |
 | `SUPERADMIN_NAME` | Optional | `Super Administrator` | Display name for bootstrap Superadmin account. |
 | `DB_MAX_CONNS` | Optional | `25` (Docker) / `4` (Vercel) | Maximum connections in `pgxpool`. |
 | `DB_MIN_CONNS` | Optional | `2` (Docker) / `1` (Vercel) | Minimum idle connections in `pgxpool`. |
@@ -104,7 +107,7 @@ The AirREST backend natively supports Vercel Serverless Functions via the `@verc
 - **Entrypoint**: `api/index.go` exports `func Handler(w http.ResponseWriter, r *http.Request)`.
 - **Routing**: `vercel.json` rewrites all incoming traffic `/(.*)` to `/api/index.go`.
 - **Serverless-Tuned Pooling**: When running on Vercel (`VERCEL=1`), `pgxpool` automatically switches to serverless-optimized bounds (`MaxConns: 4`, `MinConns: 1`) to maintain efficient PostgreSQL connection usage.
-- **Cold-Start Lazy Init**: Database connections and router setup are initialized lazily on the first request via `sync.Once`. Subsequent warm requests process with zero setup overhead (< 5ms dispatch).
+- **Cold-Start Lazy Init**: Database connections and router setup initialize on demand. Successful initialization is reused. Failed attempts retry after exponential backoff (1, 2, 4, 8, 16, then 30 seconds); requests during initialization/backoff receive `503` and `Retry-After: 1`. Attempts have a 20-second deadline.
 
 ### 3. Recommended Cloud PostgreSQL
 Because serverless functions scale dynamically, use a serverless-friendly PostgreSQL provider with transaction connection pooling:
@@ -204,3 +207,24 @@ A pre-configured collection is included: `backend/airrest_api_collection.json`.
 3. Set your environment variable `baseUrl` to `http://localhost:8080`.
 4. Run `Superadmin Login` — the authentication token will be automatically saved to your active environment!
 
+
+## Security upgrade and limits
+
+- Apply `005_user_token_version.sql` before starting the updated backend when `SKIP_MIGRATIONS=true`. Automatic migrations otherwise apply it on startup. Existing sessions must sign in again after deployment.
+- Password updates atomically increment `users.token_version`. Access and refresh tokens with an old or missing version return `401`; self-service password changes return replacement tokens for the current device, while administrator resets revoke every target-user session. Requests authenticated before a reset may finish.
+- If old default credentials were used, rotate both the signing key and administrator password. Startup validation does not repair existing credentials.
+- Requests are limited to 4 MiB, 16 concurrent handlers per instance, and 30 seconds. Oversize requests return `413`; saturation returns `503 SERVER_BUSY` with `Retry-After: 1`; expiration returns `503 REQUEST_TIMEOUT`. Proxy limits may be smaller.
+- Sync push accepts at most 500 total mutations. Import accepts at most 100 collections, 5,000 total items, and 32 item levels. Limit failures return `413 BATCH_LIMIT_EXCEEDED` before any writes. The extension imports multiple selected collections as separate atomic requests and reports partial progress; split or flatten an individual oversized collection before importing it.
+- Contributors may author and remove requests/folders, but cannot delete collections/environments or move collections. Moves require `collection:move` on both project scopes, ownership for private scopes, and the collection's `min_role` in each project.
+
+### Disposable PostgreSQL regression suite
+
+Use a new local database whose name ends in `_test`, never an application database. For example:
+
+```bash
+docker run --rm -d --name airrest-security-tests -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=airrest_audit_test -p 127.0.0.1:55432:5432 postgres:16-alpine
+AIRREST_TEST_DATABASE_URL='postgres://postgres@127.0.0.1:55432/airrest_audit_test?sslmode=disable' go test -race -count=1 ./...
+docker stop airrest-security-tests
+```
+
+The suite creates and removes a unique schema and uses a one-connection application pool. Without `AIRREST_TEST_DATABASE_URL`, integration tests explicitly skip; unit tests still run.

@@ -35,15 +35,17 @@ export const SuperadminView: React.FC = () => {
   const [userToDelete, setUserToDelete] = useState<User | null>(null);
   const [isDeletingUser, setIsDeletingUser] = useState(false);
   const [deleteErrorMsg, setDeleteErrorMsg] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadUsers = async () => {
     if (!token) return;
     setIsLoading(true);
+    setLoadError(null);
     try {
       const data = await apiListAllUsers(apiUrl, token, refreshToken || undefined);
       setUsers(data);
     } catch (err: any) {
-      console.error('Failed to list users:', err);
+      setLoadError(err.message || 'Failed to list users');
     } finally {
       setIsLoading(false);
     }
@@ -96,7 +98,11 @@ export const SuperadminView: React.FC = () => {
     setResetSuccessMsg(null);
     try {
       await apiResetUserPassword(apiUrl, token, resetUser.id, resetPassword, refreshToken || undefined);
-      setResetSuccessMsg(`Password for ${resetUser.email} has been updated successfully.`);
+      if (resetUser.id === currentUser?.id) {
+        useHubStore.getState().logout();
+        return;
+      }
+      setResetSuccessMsg(`Password for ${resetUser.email} has been updated. All of their sessions are signed out.`);
       setTimeout(() => {
         setResetUser(null);
         setResetSuccessMsg(null);
@@ -191,6 +197,15 @@ export const SuperadminView: React.FC = () => {
                   <td colSpan={5} className="py-10 text-center text-zinc-500">
                     <Loader2 className="h-4 w-4 animate-spin inline mr-2 text-amber-400" />
                     Loading registered users...
+                  </td>
+                </tr>
+              ) : loadError ? (
+                <tr>
+                  <td colSpan={5} className="py-10 text-center text-rose-400">
+                    <div className="flex items-center justify-center gap-2">
+                      <AlertCircle className="h-4 w-4 text-rose-400" />
+                      <span>{loadError}</span>
+                    </div>
                   </td>
                 </tr>
               ) : filtered.length === 0 ? (

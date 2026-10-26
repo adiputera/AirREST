@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Users,
   Plus,
@@ -55,8 +55,9 @@ export const TeamsView: React.FC = () => {
 
   const [isAddMemberOpen, setIsAddMemberOpen] = useState(false);
   const [userQuery, setUserQuery] = useState('');
+  const [isSearchingUsers, setIsSearchingUsers] = useState(false);
   const [searchResults, setSearchResults] = useState<User[]>([]);
-  const [selectedUserToInvite, setSelectedUserToInvite] = useState<User | null>(null);
+  const [selectedUsersToInvite, setSelectedUsersToInvite] = useState<User[]>([]);
   const [newMemberRole, setNewMemberRole] = useState<'admin' | 'member'>('member');
   const [isAddingMember, setIsAddingMember] = useState(false);
 
@@ -66,46 +67,53 @@ export const TeamsView: React.FC = () => {
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Load teams on mount
-  const loadTeams = async () => {
-    if (!token) return;
-    setIsLoadingTeams(true);
-    setErrorMsg(null);
-    try {
-      const data = await apiListTeams(apiUrl, token, refreshToken || undefined);
-      setTeams(data);
-      if (data.length > 0 && !selectedTeamId) {
-        setSelectedTeamId(data[0].id);
-      }
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to load teams');
-    } finally {
-      setIsLoadingTeams(false);
-    }
-  };
-
+  // Ignore responses after navigation, session changes, or unmount.
   useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    const loadTeams = async () => {
+      setIsLoadingTeams(true);
+      setErrorMsg(null);
+      try {
+        const data = await apiListTeams(apiUrl, token, refreshToken || undefined);
+        if (cancelled) return;
+        setTeams(data);
+        if (!data.some((team) => team.id === useHubStore.getState().selectedTeamId)) {
+          setSelectedTeamId(data[0]?.id || null);
+        }
+      } catch (err) {
+        if (!cancelled) setErrorMsg(err instanceof Error ? err.message : 'Failed to load teams');
+      } finally {
+        if (!cancelled) setIsLoadingTeams(false);
+      }
+    };
     loadTeams();
+    return () => { cancelled = true; };
   }, [apiUrl, token]);
 
-  // Load members whenever selectedTeamId changes
   useEffect(() => {
+    setMembers([]);
+    setIsLoadingMembers(false);
     if (!selectedTeamId || !token) return;
+    let cancelled = false;
     const loadMembers = async () => {
       setIsLoadingMembers(true);
       try {
         const data = await apiListTeamMembers(apiUrl, token, selectedTeamId, refreshToken || undefined);
+        if (cancelled || useHubStore.getState().selectedTeamId !== selectedTeamId) return;
         setMembers(data);
-      } catch (err: any) {
-        console.error('Failed to load members:', err);
+      } catch (err) {
+        if (!cancelled) setErrorMsg(err instanceof Error ? err.message : 'Failed to load members');
       } finally {
-        setIsLoadingMembers(false);
+        if (!cancelled) setIsLoadingMembers(false);
       }
     };
     loadMembers();
-  }, [selectedTeamId, token]);
+    return () => { cancelled = true; };
+  }, [selectedTeamId, apiUrl, token]);
 
   const activeTeam = teams.find((t) => t.id === selectedTeamId);
+  const isTeamAdmin = user?.role === 'superadmin' || activeTeam?.user_role === 'admin';
 
   // Handle Create Team
   const handleCreateTeam = async (e: React.FormEvent) => {
@@ -121,7 +129,7 @@ export const TeamsView: React.FC = () => {
         newTeamDesc,
         refreshToken || undefined
       );
-      setTeams([newTeam, ...teams]);
+      setTeams((previous) => [newTeam, ...previous]);
       setSelectedTeamId(newTeam.id);
       setIsCreateTeamOpen(false);
       setNewTeamName('');
@@ -156,7 +164,7 @@ export const TeamsView: React.FC = () => {
         editTeamDesc.trim(),
         refreshToken || undefined
       );
-      setTeams(teams.map((t) => (t.id === selectedTeamId ? { ...t, ...updated } : t)));
+      setTeams((previous) => previous.map((t) => (t.id === selectedTeamId ? { ...t, ...updated } : t)));
       setIsEditTeamOpen(false);
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to update team');
@@ -165,43 +173,119 @@ export const TeamsView: React.FC = () => {
     }
   };
 
-  // Search users for invite
+  // Search users for invite with sequence tracking to prevent out-of-order race conditions
+  const searchSeqRef = useRef(0);
   const handleUserSearch = async (query: string) => {
     setUserQuery(query);
     if (!token || query.trim().length < 2) {
       setSearchResults([]);
+      setIsSearchingUsers(false);
       return;
     }
+    const seq = ++searchSeqRef.current;
+    setIsSearchingUsers(true);
     try {
       const results = await apiSearchUsers(apiUrl, token, query.trim(), refreshToken || undefined);
-      setSearchResults(results);
+      if (seq === searchSeqRef.current) {
+        setSearchResults(results);
+      }
     } catch {
-      setSearchResults([]);
+      if (seq === searchSeqRef.current) {
+        setSearchResults([]);
+      }
+    } finally {
+      if (seq === searchSeqRef.current) {
+        setIsSearchingUsers(false);
+      }
     }
   };
 
-  // Handle Add Member
+  // Toggle user in multi-selection
+  const toggleSelectUser = (targetUser: User) => {
+    setSelectedUsersToInvite((prev) => {
+      const exists = prev.some((u) => u.id === targetUser.id);
+      if (exists) {
+        return prev.filter((u) => u.id !== targetUser.id);
+      } else {
+        return [...prev, targetUser];
+      }
+    });
+  };
+
+  // Remove selected user from chips
+  const removeSelectedUser = (userId: string) => {
+    setSelectedUsersToInvite((prev) => prev.filter((u) => u.id !== userId));
+  };
+
+  // Select / Deselect all eligible search results
+  const handleSelectAllResults = (selectableList: User[]) => {
+    setSelectedUsersToInvite((prev) => {
+      const allSelected = selectableList.every((su) => prev.some((u) => u.id === su.id));
+      if (allSelected) {
+        const resultIds = new Set(selectableList.map((su) => su.id));
+        return prev.filter((u) => !resultIds.has(u.id));
+      } else {
+        const prevMap = new Map(prev.map((u) => [u.id, u]));
+        selectableList.forEach((su) => prevMap.set(su.id, su));
+        return Array.from(prevMap.values());
+      }
+    });
+  };
+
+  // Handle Add Member(s)
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!token || !selectedTeamId || !selectedUserToInvite) return;
+    if (!token || !selectedTeamId || selectedUsersToInvite.length === 0) return;
     setIsAddingMember(true);
     try {
-      await apiAddTeamMember(
-        apiUrl,
-        token,
-        selectedTeamId,
-        selectedUserToInvite.id,
-        newMemberRole,
-        refreshToken || undefined
+      const results = await Promise.allSettled(
+        selectedUsersToInvite.map((u) =>
+          apiAddTeamMember(
+            apiUrl,
+            token,
+            selectedTeamId,
+            u.id,
+            newMemberRole,
+            refreshToken || undefined
+          )
+        )
       );
-      const updatedMembers = await apiListTeamMembers(apiUrl, token, selectedTeamId, refreshToken || undefined);
-      setMembers(updatedMembers);
-      setIsAddMemberOpen(false);
-      setSelectedUserToInvite(null);
-      setUserQuery('');
-      setSearchResults([]);
+
+      const successfulIds = new Set<string>();
+      const failedUsers: { user: User; error: string }[] = [];
+
+      results.forEach((res, index) => {
+        const u = selectedUsersToInvite[index];
+        if (res.status === 'fulfilled') {
+          successfulIds.add(u.id);
+        } else {
+          failedUsers.push({
+            user: u,
+            error: res.reason?.message || 'Failed to add member',
+          });
+        }
+      });
+
+      if (useHubStore.getState().selectedTeamId === selectedTeamId) {
+        const updatedMembers = await apiListTeamMembers(apiUrl, token, selectedTeamId, refreshToken || undefined);
+        if (useHubStore.getState().selectedTeamId === selectedTeamId) {
+          setMembers(updatedMembers);
+        }
+      }
+
+      if (failedUsers.length === 0) {
+        setIsAddMemberOpen(false);
+        setSelectedUsersToInvite([]);
+        setUserQuery('');
+        setSearchResults([]);
+      } else {
+        // Keep failed users in selected state for retry
+        setSelectedUsersToInvite((prev) => prev.filter((u) => !successfulIds.has(u.id)));
+        const errorList = failedUsers.map((f) => `${f.user.name || f.user.email}: ${f.error}`).join('\n');
+        alert(`Added ${successfulIds.size} member(s).\nFailed to add ${failedUsers.length} member(s):\n${errorList}`);
+      }
     } catch (err: any) {
-      alert(err.message || 'Failed to add team member');
+      alert(err.message || 'Failed to add team members');
     } finally {
       setIsAddingMember(false);
     }
@@ -219,7 +303,8 @@ export const TeamsView: React.FC = () => {
     setIsRemovingMember(true);
     try {
       await apiRemoveTeamMember(apiUrl, token, selectedTeamId, memberToRemove.user_id, refreshToken || undefined);
-      setMembers(members.filter((m) => m.user_id !== memberToRemove.user_id));
+      if (useHubStore.getState().selectedTeamId !== selectedTeamId) return;
+      setMembers((previous) => previous.filter((m) => m.user_id !== memberToRemove.user_id));
       setMemberToRemove(null);
     } catch (err: any) {
       alert(err.message || 'Failed to remove member');
@@ -236,7 +321,7 @@ export const TeamsView: React.FC = () => {
       await apiDeleteTeam(apiUrl, token, teamToDelete.id, refreshToken || undefined);
       const updatedTeams = teams.filter((t) => t.id !== teamToDelete.id);
       setTeams(updatedTeams);
-      if (selectedTeamId === teamToDelete.id) {
+      if (useHubStore.getState().selectedTeamId === teamToDelete.id) {
         setSelectedTeamId(updatedTeams[0]?.id || null);
       }
       setTeamToDelete(null);
@@ -255,7 +340,9 @@ export const TeamsView: React.FC = () => {
     setErrorMsg(null);
     try {
       await apiAddTeamMember(apiUrl, token, selectedTeamId, editingMember.user_id, editRole, refreshToken || undefined);
+      if (useHubStore.getState().selectedTeamId !== selectedTeamId) return;
       const updatedMembers = await apiListTeamMembers(apiUrl, token, selectedTeamId, refreshToken || undefined);
+      if (useHubStore.getState().selectedTeamId !== selectedTeamId) return;
       setMembers(updatedMembers);
       setEditingMember(null);
     } catch (err: any) {
@@ -347,43 +434,37 @@ export const TeamsView: React.FC = () => {
       {/* Right Column: Selected Team Management */}
       <div className="flex-1 overflow-y-auto p-8 bg-zinc-950">
         {activeTeam ? (
-          <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in duration-150">
+          <div className="max-w-5xl mx-auto space-y-8 animate-in fade-in duration-150">
             {/* Team Banner */}
-            <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <div>
-                <div className="flex items-center gap-2 mb-1">
-                  <h1 className="text-xl font-bold text-zinc-100">{activeTeam.name}</h1>
-                  <span className="rounded-full border border-indigo-500/30 bg-indigo-500/10 px-2.5 py-0.5 text-xs font-semibold text-indigo-400">
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+              <div className="min-w-0 flex-1 space-y-2">
+                <h1 className="text-xl md:text-2xl font-bold text-zinc-100 tracking-tight">
+                  {activeTeam.name}
+                </h1>
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-indigo-500/30 bg-indigo-500/10 px-2.5 py-0.5 text-xs font-semibold text-indigo-400 shrink-0">
+                    <Users className="h-3 w-3" />
                     Team Organization
                   </span>
-                  {user?.role === 'superadmin' && (
-                    <button
-                      onClick={() => handleOpenEditTeam(activeTeam)}
-                      className="rounded-lg p-1 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition"
-                      title="Edit Team"
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </button>
-                  )}
                 </div>
-                <p className="text-xs text-zinc-400 max-w-xl">
+                <p className="text-xs text-zinc-400 leading-relaxed max-w-2xl">
                   {activeTeam.description || 'No description provided for this team.'}
                 </p>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex flex-wrap items-center gap-2.5 shrink-0 self-start lg:self-auto">
                 {user?.role === 'superadmin' && (
                   <>
                     <button
                       onClick={() => handleOpenEditTeam(activeTeam)}
-                      className="flex items-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-800/80 px-3 py-2 text-xs font-semibold text-zinc-200 hover:bg-zinc-700 hover:text-white transition shadow-sm"
+                      className="flex items-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-800/80 px-3.5 py-2 text-xs font-semibold text-zinc-200 hover:bg-zinc-700 hover:text-white transition shadow-sm whitespace-nowrap"
                     >
                       <Pencil className="h-3.5 w-3.5 text-zinc-400" />
                       <span>Edit Team</span>
                     </button>
                     <button
                       onClick={() => setTeamToDelete(activeTeam)}
-                      className="flex items-center gap-1.5 rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs font-semibold text-rose-300 hover:bg-rose-500/20 hover:text-rose-200 transition shadow-sm"
+                      className="flex items-center gap-1.5 rounded-xl border border-rose-500/20 bg-rose-500/10 px-3.5 py-2 text-xs font-semibold text-rose-300 hover:bg-rose-500/20 hover:text-rose-200 transition shadow-sm whitespace-nowrap"
                       title="Delete Team"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -397,7 +478,7 @@ export const TeamsView: React.FC = () => {
                     setSelectedTeamId(activeTeam.id);
                     setActiveTab('projects');
                   }}
-                  className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-sky-600 to-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-md shadow-sky-500/20 hover:from-sky-500 hover:to-indigo-500 transition"
+                  className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-sky-600 to-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-md shadow-sky-500/20 hover:from-sky-500 hover:to-indigo-500 transition whitespace-nowrap"
                 >
                   <FolderGit2 className="h-4 w-4" />
                   <span>Manage Team Projects</span>
@@ -408,21 +489,34 @@ export const TeamsView: React.FC = () => {
 
             {/* Team Members Section */}
             <div>
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h3 className="text-base font-bold text-zinc-100">Team Members</h3>
-                  <p className="text-xs text-zinc-400">
+              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 mb-4">
+                <div className="space-y-1 min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-bold text-zinc-100">Team Members</h3>
+                    <span className="rounded-full bg-zinc-800/80 px-2 py-0.5 text-[10px] font-semibold text-zinc-400 border border-zinc-700/50">
+                      {members.length} {members.length === 1 ? 'member' : 'members'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-zinc-400 leading-relaxed">
                     Members can see projects they are assigned to within this team
                   </p>
                 </div>
 
-                <button
-                  onClick={() => setIsAddMemberOpen(true)}
-                  className="flex items-center gap-1.5 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-400 hover:bg-sky-500/20 transition shadow-sm"
-                >
-                  <UserPlus className="h-3.5 w-3.5" />
-                  <span>Add Member</span>
-                </button>
+                {isTeamAdmin && (
+                  <button
+                    onClick={() => {
+                      setUserQuery('');
+                      setSearchResults([]);
+                      setSelectedUsersToInvite([]);
+                      setNewMemberRole('member');
+                      setIsAddMemberOpen(true);
+                    }}
+                    className="flex items-center gap-1.5 rounded-xl border border-sky-500/30 bg-sky-500/10 px-3.5 py-2 text-xs font-semibold text-sky-400 hover:bg-sky-500/20 transition shadow-sm shrink-0 whitespace-nowrap self-start sm:self-auto"
+                  >
+                    <UserPlus className="h-3.5 w-3.5" />
+                    <span>Add Members</span>
+                  </button>
+                )}
               </div>
 
               {/* Members Table */}
@@ -433,20 +527,20 @@ export const TeamsView: React.FC = () => {
                       <th className="px-4 py-3">Member</th>
                       <th className="px-4 py-3">Email</th>
                       <th className="px-4 py-3">Team Role</th>
-                      <th className="px-4 py-3 text-right">Actions</th>
+                      {isTeamAdmin && <th className="px-4 py-3 text-right">Actions</th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-800/60 text-zinc-200">
                     {isLoadingMembers ? (
                       <tr>
-                        <td colSpan={4} className="py-8 text-center text-zinc-500">
+                        <td colSpan={isTeamAdmin ? 4 : 3} className="py-8 text-center text-zinc-500">
                           <Loader2 className="h-4 w-4 animate-spin inline mr-2 text-sky-400" />
                           Loading members...
                         </td>
                       </tr>
                     ) : members.length === 0 ? (
                       <tr>
-                        <td colSpan={4} className="py-8 text-center text-zinc-500">
+                        <td colSpan={isTeamAdmin ? 4 : 3} className="py-8 text-center text-zinc-500">
                           No members in this team yet.
                         </td>
                       </tr>
@@ -454,6 +548,7 @@ export const TeamsView: React.FC = () => {
                       members.map((member) => {
                         const mName = member.user?.name || member.name || 'Member';
                         const mEmail = member.user?.email || member.email || '';
+                        const isSuper = member.user?.role === 'superadmin';
                         return (
                           <tr key={member.user_id} className="hover:bg-zinc-800/30 transition">
                             <td className="px-4 py-3 font-medium flex items-center gap-2">
@@ -463,43 +558,58 @@ export const TeamsView: React.FC = () => {
                               <span>{mName}</span>
                             </td>
                             <td className="px-4 py-3 text-zinc-400">{mEmail}</td>
-                          <td className="px-4 py-3">
-                            <span
-                              className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
-                                member.role === 'admin'
-                                  ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                                  : 'bg-zinc-800 text-zinc-300'
-                              }`}
-                            >
-                              {member.role}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <div className="flex items-center justify-end gap-1">
-                              <button
-                                onClick={() => {
-                                  setEditingMember(member);
-                                  setEditRole(member.role);
-                                }}
-                                className="rounded p-1 text-zinc-500 hover:bg-sky-500/10 hover:text-sky-400 transition"
-                                title="Edit Role"
-                              >
-                                <Pencil className="h-3.5 w-3.5" />
-                              </button>
-                              {member.user_id !== user?.id && (
-                                <button
-                                  onClick={() => setMemberToRemove(member)}
-                                  className="rounded p-1 text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400 transition"
-                                  title="Remove Member"
+                            <td className="px-4 py-3">
+                              {isSuper ? (
+                                <span className="rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider inline-flex items-center gap-1">
+                                  <Shield className="h-3 w-3" />
+                                  Superadmin
+                                </span>
+                              ) : (
+                                <span
+                                  className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                                    member.role === 'admin'
+                                      ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                                      : 'bg-zinc-800 text-zinc-300'
+                                  }`}
                                 >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </button>
+                                  {member.role}
+                                </span>
                               )}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })
+                            </td>
+                            {isTeamAdmin && (
+                              <td className="px-4 py-3 text-right">
+                                {isSuper ? (
+                                  <span className="text-[10px] text-zinc-500 italic pr-1" title="Superadmin permissions are system-wide and cannot be modified">
+                                    Permanent
+                                  </span>
+                                ) : (
+                                  <div className="flex items-center justify-end gap-1">
+                                    <button
+                                      onClick={() => {
+                                        setEditingMember(member);
+                                        setEditRole(member.role);
+                                      }}
+                                      className="rounded p-1 text-zinc-500 hover:bg-sky-500/10 hover:text-sky-400 transition"
+                                      title="Edit Role"
+                                    >
+                                      <Pencil className="h-3.5 w-3.5" />
+                                    </button>
+                                    {member.user_id !== user?.id && (
+                                      <button
+                                        onClick={() => setMemberToRemove(member)}
+                                        className="rounded p-1 text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400 transition"
+                                        title="Remove Member"
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })
                   )}
                   </tbody>
                 </table>
@@ -585,11 +695,11 @@ export const TeamsView: React.FC = () => {
       {/* Modal: Add Member */}
       {isAddMemberOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
-          <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+          <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl flex flex-col max-h-[90vh]">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
                 <UserPlus className="h-5 w-5 text-sky-400" />
-                <span>Add Team Member</span>
+                <span>Add Team Members</span>
               </h3>
               <button
                 onClick={() => setIsAddMemberOpen(false)}
@@ -599,49 +709,162 @@ export const TeamsView: React.FC = () => {
               </button>
             </div>
 
-            <form onSubmit={handleAddMember} className="space-y-4">
+            <form onSubmit={handleAddMember} className="space-y-4 flex flex-col flex-1 overflow-hidden">
               <div>
                 <label className="block text-xs font-semibold text-zinc-300 mb-1">
-                  Search Registered User
+                  Search Registered Users
                 </label>
-                <input
-                  type="text"
-                  placeholder="Search user by email or name..."
-                  value={userQuery}
-                  onChange={(e) => handleUserSearch(e.target.value)}
-                  className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none"
-                />
+                <div className="relative">
+                  <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-zinc-400" />
+                  <input
+                    type="text"
+                    placeholder="Search user by email or name..."
+                    value={userQuery}
+                    onChange={(e) => handleUserSearch(e.target.value)}
+                    className="w-full rounded-lg border border-zinc-800 bg-zinc-900 pl-9 pr-8 py-2 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none"
+                  />
+                  {isSearchingUsers ? (
+                    <Loader2 className="absolute right-3 top-2.5 h-3.5 w-3.5 animate-spin text-zinc-400" />
+                  ) : userQuery ? (
+                    <button
+                      type="button"
+                      onClick={() => handleUserSearch('')}
+                      className="absolute right-2.5 top-2 text-zinc-500 hover:text-zinc-300 p-0.5"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  ) : null}
+                </div>
+              </div>
 
-                {/* Search Results Dropdown */}
-                {searchResults.length > 0 && (
-                  <div className="mt-2 max-h-40 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-900/90 divide-y divide-zinc-800">
-                    {searchResults.map((u) => (
-                      <button
-                        type="button"
+              {/* Search Results Area */}
+              {userQuery.trim().length >= 2 && (
+                <div className="flex flex-col flex-1 min-h-[140px] max-h-52 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/60">
+                  {searchResults.length === 0 && !isSearchingUsers ? (
+                    <div className="p-4 text-center text-xs text-zinc-500">
+                      No users found matching "{userQuery}"
+                    </div>
+                  ) : (
+                    <>
+                      {/* Select all header */}
+                      {(() => {
+                        const eligibleUsers = searchResults.filter((u) => u.role !== 'superadmin' && !members.some((m) => m.user_id === u.id));
+                        const allEligibleSelected =
+                          eligibleUsers.length > 0 &&
+                          eligibleUsers.every((eu) => selectedUsersToInvite.some((u) => u.id === eu.id));
+
+                        return (
+                          <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800 bg-zinc-900/90 text-[11px] text-zinc-400">
+                            <label className="flex items-center gap-2 cursor-pointer select-none">
+                              <input
+                                type="checkbox"
+                                disabled={eligibleUsers.length === 0}
+                                checked={allEligibleSelected}
+                                onChange={() => handleSelectAllResults(eligibleUsers)}
+                                className="h-3.5 w-3.5 rounded border-zinc-700 bg-zinc-800 text-sky-500 focus:ring-sky-500 focus:ring-offset-zinc-950 cursor-pointer disabled:cursor-not-allowed"
+                              />
+                              <span className="font-medium text-zinc-300">
+                                {allEligibleSelected ? 'Deselect All Results' : 'Select All Results'}
+                              </span>
+                            </label>
+                            <span>
+                              {eligibleUsers.length} available · {searchResults.length - eligibleUsers.length} in team / superadmin
+                            </span>
+                          </div>
+                        );
+                      })()}
+
+                      {/* User Items List */}
+                      <div className="overflow-y-auto divide-y divide-zinc-800/60 p-1">
+                        {searchResults.map((u) => {
+                          const isSuperadmin = u.role === 'superadmin';
+                          const isAlreadyMember = isSuperadmin || members.some((m) => m.user_id === u.id);
+                          const isChecked = selectedUsersToInvite.some((su) => su.id === u.id);
+
+                          return (
+                            <label
+                              key={u.id}
+                              className={`flex items-center justify-between px-3 py-2 rounded-md transition select-none ${
+                                isAlreadyMember
+                                  ? 'opacity-40 cursor-not-allowed bg-zinc-900/30'
+                                  : isChecked
+                                  ? 'bg-sky-500/10 cursor-pointer hover:bg-sky-500/15'
+                                  : 'hover:bg-zinc-800/60 cursor-pointer'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <input
+                                  type="checkbox"
+                                  disabled={isAlreadyMember}
+                                  checked={isChecked}
+                                  onChange={() => !isAlreadyMember && toggleSelectUser(u)}
+                                  className="h-3.5 w-3.5 rounded border-zinc-700 bg-zinc-800 text-sky-500 focus:ring-sky-500 focus:ring-offset-zinc-950 cursor-pointer disabled:cursor-not-allowed"
+                                />
+                                <div className="truncate">
+                                  <div className="text-xs font-semibold text-zinc-200 truncate">{u.name}</div>
+                                  <div className="text-[11px] text-zinc-400 truncate">{u.email}</div>
+                                </div>
+                              </div>
+                              {isSuperadmin ? (
+                                <span className="text-[10px] uppercase font-bold tracking-wider text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded border border-amber-400/20 inline-flex items-center gap-1" title="Superadmin has system-wide administrative access">
+                                  <Shield className="h-2.5 w-2.5" />
+                                  Superadmin
+                                </span>
+                              ) : isAlreadyMember ? (
+                                <span className="text-[10px] uppercase font-semibold tracking-wider text-amber-400/80 bg-amber-400/10 px-1.5 py-0.5 rounded border border-amber-400/20 shrink-0">
+                                  In Team
+                                </span>
+                              ) : null}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Selected Users Chips */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-semibold text-zinc-300">
+                    Selected Members ({selectedUsersToInvite.length})
+                  </label>
+                  {selectedUsersToInvite.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedUsersToInvite([])}
+                      className="text-[11px] text-zinc-400 hover:text-red-400 transition"
+                    >
+                      Clear all
+                    </button>
+                  )}
+                </div>
+
+                {selectedUsersToInvite.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-zinc-800 p-3 text-center text-xs text-zinc-500">
+                    No users selected yet. Search above and check users to add.
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto p-2 rounded-lg border border-zinc-800 bg-zinc-900/50">
+                    {selectedUsersToInvite.map((u) => (
+                      <span
                         key={u.id}
-                        onClick={() => {
-                          setSelectedUserToInvite(u);
-                          setUserQuery(u.email);
-                          setSearchResults([]);
-                        }}
-                        className="w-full text-left px-3 py-2 text-xs hover:bg-zinc-800 flex items-center justify-between transition"
+                        className="inline-flex items-center gap-1.5 rounded-full bg-sky-500/15 border border-sky-500/30 px-2.5 py-0.5 text-[11px] text-sky-200"
                       >
-                        <div>
-                          <div className="font-semibold text-zinc-200">{u.name}</div>
-                          <div className="text-[11px] text-zinc-400">{u.email}</div>
-                        </div>
-                        <span className="text-[10px] text-sky-400 font-medium">Select</span>
-                      </button>
+                        <span className="font-medium truncate max-w-[120px]">{u.name}</span>
+                        <button
+                          type="button"
+                          onClick={() => removeSelectedUser(u.id)}
+                          className="text-sky-400 hover:text-white transition"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
                     ))}
                   </div>
                 )}
               </div>
-
-              {selectedUserToInvite && (
-                <div className="rounded-lg border border-sky-500/20 bg-sky-500/10 p-2.5 text-xs text-sky-300">
-                  Selected User: <strong>{selectedUserToInvite.name}</strong> ({selectedUserToInvite.email})
-                </div>
-              )}
 
               <div>
                 <label className="block text-xs font-semibold text-zinc-300 mb-1">Team Role</label>
@@ -655,7 +878,7 @@ export const TeamsView: React.FC = () => {
                 </select>
               </div>
 
-              <div className="flex justify-end gap-2 pt-2">
+              <div className="flex justify-end gap-2 pt-2 border-t border-zinc-800">
                 <button
                   type="button"
                   onClick={() => setIsAddMemberOpen(false)}
@@ -665,10 +888,16 @@ export const TeamsView: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  disabled={!selectedUserToInvite || isAddingMember}
+                  disabled={selectedUsersToInvite.length === 0 || isAddingMember}
                   className="flex items-center gap-1.5 rounded-lg bg-sky-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-sky-500 transition shadow-md disabled:opacity-50"
                 >
-                  {isAddingMember ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Confirm Add Member'}
+                  {isAddingMember ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    `Confirm Add ${selectedUsersToInvite.length > 0 ? `${selectedUsersToInvite.length} ` : ''}Member${
+                      selectedUsersToInvite.length > 1 ? 's' : ''
+                    }`
+                  )}
                 </button>
               </div>
             </form>

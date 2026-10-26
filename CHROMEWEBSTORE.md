@@ -60,6 +60,7 @@ SUPPORT
 For questions, bug reports, or feature suggestions, visit the project repository on GitHub:
 https://github.com/adiputera/AirREST
 
+Version 1.1.3 — Added seamless password change re-authentication, sequential cloud collection import with real-time progress, and aligned move collection capabilities.
 Version 1.1.2 — Added strict RBAC authority enforcement across project scopes, read-only UI indicators, and hardened client stability against edge-case crashes.
 Version 1.1.1 — Refined dropdown & action button UI, optimized cloud sync payload streaming for serverless backends, and added resilient session eviction handling.
 Version 1.1.0 — Added interactive Move Request modal, drag-and-drop tree reordering with safety guards, and 12-hour offline workspace caching.
@@ -142,6 +143,7 @@ SUPPORT
 For questions, bug reports, or feature suggestions, visit the project repository on GitHub:
 https://github.com/adiputera/AirREST
 
+Version 1.1.3 — Client performance stability improvements, enhanced offline collection safeguards, and hardened memory management.
 Version 1.1.2 — Hardened client stability against edge-case crashes, improved base64 JWT decoding, and safeguarded form-data file handling.
 Version 1.1.1 — Refined dropdown & action button UI, improved header controls, and enhanced offline workspace switching.
 Version 1.1.0 — Added interactive Move Request modal, drag-and-drop tree reordering with safety guards, and 12-hour offline workspace caching.

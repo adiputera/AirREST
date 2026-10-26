@@ -1,5 +1,5 @@
 import React from 'react';
-import { Users, FolderGit2, ShieldAlert, ChevronRight } from 'lucide-react';
+import { Users, FolderGit2, UserCog, ChevronRight } from 'lucide-react';
 import { useHubStore, HubTab } from '../store/useHubStore';
 
 export const Sidebar: React.FC = () => {
@@ -9,9 +9,9 @@ export const Sidebar: React.FC = () => {
 
   const navItems: { id: HubTab; label: string; icon: React.FC<{ className?: string }>; badge?: string }[] = [
     { id: 'teams', label: 'Teams & Organizations', icon: Users },
-    { id: 'projects', label: 'Projects & RBAC', icon: FolderGit2 },
+    { id: 'projects', label: 'Projects', icon: FolderGit2 },
     ...(user?.role === 'superadmin'
-      ? [{ id: 'superadmin' as HubTab, label: 'Superadmin Console', icon: ShieldAlert, badge: 'System' }]
+      ? [{ id: 'superadmin' as HubTab, label: 'Users', icon: UserCog, badge: 'System' }]
       : []),
   ];
 

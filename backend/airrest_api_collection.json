@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "c1f7a4e2-63b9-4a92-8db3-982827170123",
     "name": "AirREST Backend API",
-    "description": "Complete API testing collection for AirREST Go backend synchronization service with Auth, Workspaces, Teams, Projects, RBAC, and Stateless OCC Sync.",
+    "description": "Complete API testing collection for AirREST Go backend synchronization service with Auth, Workspaces, Teams, Projects, RBAC, and Stateless OCC Sync. Security upgrade: supply your own bootstrap credentials; no default signing or administrator secrets. Password changes/resets revoke existing sessions; a self-service change returns replacement tokens for the current device. JWT access/refresh tokens carry a required account session version. Limits: 4 MiB per body, 500 sync mutations, 100 import collections, 5000 import items, 32 levels; oversize returns 413. Busy/timeout/startup failures return 503; retry initialization with bounded backoff. Contributors may remove requests/folders but cannot delete collections/environments or move collections.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -16,8 +16,14 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/health",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "health"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "health"
+              ]
             }
           }
         }
@@ -36,7 +42,9 @@
                 "exec": [
                   "const res = pm.response.json();",
                   "if (res.data && res.data.token) {",
-                  "    pm.environment.set('token', res.data.token);",
+                  "  pm.environment.set('token', res.data.token);",
+                  "  pm.environment.set('refreshToken', res.data.refresh_token);",
+                  "  pm.environment.set('currentUserId', res.data.user.id);",
                   "}"
                 ]
               }
@@ -45,18 +53,70 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"email\": \"admin@example.com\",\n  \"password\": \"SuperadminSecurePassword123!\"\n}"
+              "raw": "{\n  \"email\": \"{{bootstrapEmail}}\",\n  \"password\": \"{{bootstrapPassword}}\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/auth/login",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "auth", "login"]
-            }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Use explicitly configured credentials. Saves both JWTs; tokens from before the security migration must be replaced by login."
           }
+        },
+        {
+          "name": "Refresh session",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "Only current-version refresh JWTs can renew. Invalid/expired/revoked tokens return 401. Renewal is not single-use rotation.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh_token\": \"{{refreshToken}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (pm.response.code === 200) { pm.environment.set('token', res.data.token); pm.environment.set('refreshToken', res.data.refresh_token); }"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "Register New User",
@@ -78,7 +138,10 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -86,8 +149,15 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/auth/register",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "auth", "register"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "register"
+              ]
             }
           }
         },
@@ -96,12 +166,22 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{token}}" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
             ],
             "url": {
               "raw": "{{baseUrl}}/api/v1/auth/me",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "auth", "me"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "me"
+              ]
             }
           }
         },
@@ -110,8 +190,14 @@
           "request": {
             "method": "PUT",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{token}}" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -119,8 +205,15 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/auth/profile",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "auth", "profile"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "profile"
+              ]
             }
           }
         },
@@ -129,19 +222,130 @@
           "request": {
             "method": "PUT",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{token}}" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"current_password\": \"DeveloperPass123!\",\n  \"new_password\": \"NewSuperSecretPass456!\"\n}"
+              "raw": "{\n  \"current_password\": \"{{currentPassword}}\",\n  \"new_password\": \"{{newPassword}}\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/auth/password",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "auth", "password"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "password"
+              ]
+            },
+            "description": "Success revokes prior access and refresh sessions and returns a replacement pair for this device. The test script saves old tokens for revocation checks, then updates the active tokens from the response."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  pm.environment.set('revokedToken', pm.environment.get('token'));",
+                  "  pm.environment.set('revokedRefreshToken', pm.environment.get('refreshToken'));",
+                  "  const res = pm.response.json();",
+                  "  pm.environment.set('token', res.data.token);",
+                  "  pm.environment.set('refreshToken', res.data.refresh_token);",
+                  "}"
+                ]
+              }
             }
-          }
+          ]
+        },
+        {
+          "name": "Verify revoked access token",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{revokedToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "me"
+              ]
+            },
+            "description": "Run after a successful self-service password change. Expect 401."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Old session is rejected', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify revoked refresh token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "Run after a successful self-service password change. Expect 401.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh_token\": \"{{revokedRefreshToken}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Old session is rejected', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
@@ -153,12 +357,21 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{token}}" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
             ],
             "url": {
               "raw": "{{baseUrl}}/api/v1/workspaces",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "workspaces"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "workspaces"
+              ]
             }
           }
         },
@@ -167,8 +380,14 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{token}}" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -176,8 +395,14 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/workspaces",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "workspaces"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "workspaces"
+              ]
             }
           }
         }
@@ -191,8 +416,14 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{token}}" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -200,8 +431,14 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/teams",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "teams"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "teams"
+              ]
             }
           }
         },
@@ -210,12 +447,21 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{token}}" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
             ],
             "url": {
               "raw": "{{baseUrl}}/api/v1/teams",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "teams"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "teams"
+              ]
             }
           }
         }
@@ -229,12 +475,23 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{token}}" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
             ],
             "url": {
               "raw": "{{baseUrl}}/api/v1/teams/{{teamId}}/projects",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "teams", "{{teamId}}", "projects"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "teams",
+                "{{teamId}}",
+                "projects"
+              ]
             }
           }
         },
@@ -243,8 +500,14 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{token}}" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -252,8 +515,16 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/teams/{{teamId}}/projects",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "teams", "{{teamId}}", "projects"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "teams",
+                "{{teamId}}",
+                "projects"
+              ]
             }
           }
         }
@@ -267,14 +538,26 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{token}}" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
             ],
             "url": {
               "raw": "{{baseUrl}}/api/v1/collections?workspace_id={{workspaceId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "collections"],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "collections"
+              ],
               "query": [
-                { "key": "workspace_id", "value": "{{workspaceId}}" }
+                {
+                  "key": "workspace_id",
+                  "value": "{{workspaceId}}"
+                }
               ]
             }
           }
@@ -284,12 +567,22 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{token}}" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
             ],
             "url": {
               "raw": "{{baseUrl}}/api/v1/collections/{{collectionId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "collections", "{{collectionId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "collections",
+                "{{collectionId}}"
+              ]
             }
           }
         },
@@ -298,8 +591,14 @@
           "request": {
             "method": "PUT",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{token}}" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -307,8 +606,16 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/collections/{{collectionId}}/reorder",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "collections", "{{collectionId}}", "reorder"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "collections",
+                "{{collectionId}}",
+                "reorder"
+              ]
             }
           }
         }
@@ -322,15 +629,31 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{token}}" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
             ],
             "url": {
               "raw": "{{baseUrl}}/api/v1/sync/pull?workspace_id={{workspaceId}}&since=1970-01-01T00:00:00Z",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "sync", "pull"],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "sync",
+                "pull"
+              ],
               "query": [
-                { "key": "workspace_id", "value": "{{workspaceId}}" },
-                { "key": "since", "value": "1970-01-01T00:00:00Z" }
+                {
+                  "key": "workspace_id",
+                  "value": "{{workspaceId}}"
+                },
+                {
+                  "key": "since",
+                  "value": "1970-01-01T00:00:00Z"
+                }
               ]
             }
           }
@@ -340,8 +663,14 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{token}}" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -349,8 +678,15 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/sync/push",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "sync", "push"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "sync",
+                "push"
+              ]
             }
           }
         }
@@ -364,14 +700,27 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{token}}" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
             ],
             "url": {
               "raw": "{{baseUrl}}/api/v1/users/search?email=example",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "users", "search"],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "search"
+              ],
               "query": [
-                { "key": "email", "value": "example" }
+                {
+                  "key": "email",
+                  "value": "example"
+                }
               ]
             }
           }
@@ -386,12 +735,22 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{token}}" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
             ],
             "url": {
               "raw": "{{baseUrl}}/api/v1/admin/users",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "admin", "users"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users"
+              ]
             }
           }
         },
@@ -400,8 +759,14 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{token}}" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -409,8 +774,15 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/admin/users",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "admin", "users"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users"
+              ]
             }
           }
         },
@@ -419,8 +791,14 @@
           "request": {
             "method": "PUT",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{token}}" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -428,22 +806,157 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/admin/users/{{targetUserId}}/password",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "admin", "users", "{{targetUserId}}", "password"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users",
+                "{{targetUserId}}",
+                "password"
+              ]
+            },
+            "description": "Revokes all target-user sessions. If resetting yourself, clear your tokens and log in again. Other users remain signed in."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200 && pm.environment.get('targetUserId') === pm.environment.get('currentUserId')) {",
+                  "  pm.environment.unset('token');",
+                  "  pm.environment.unset('refreshToken');",
+                  "}"
+                ]
+              }
             }
-          }
+          ]
         },
         {
           "name": "Delete User",
           "request": {
             "method": "DELETE",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{token}}" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
             ],
             "url": {
               "raw": "{{baseUrl}}/api/v1/admin/users/{{targetUserId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "admin", "users", "{{targetUserId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users",
+                "{{targetUserId}}"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Security: Sync and import",
+      "item": [
+        {
+          "name": "Pull one scope",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/sync/pull?workspace_id={{workspaceId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "sync",
+                "pull?workspace_id={{workspaceId}}"
+              ]
+            },
+            "description": "Exactly one scope. Restricted resources are excluded; failed queries never return a successful partial delta."
+          }
+        },
+        {
+          "name": "Push mutations",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/sync/push",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "sync",
+                "push"
+              ]
+            },
+            "description": "Up to 500 total mutations, applied independently. Contributor collection/environment deletes are denied; inspect applied_ids and conflicts.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"workspace_id\": \"{{workspaceId}}\",\n  \"collections\": [],\n  \"items\": [],\n  \"environments\": []\n}"
+            }
+          }
+        },
+        {
+          "name": "Import collections",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/sync/import-batch",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "sync",
+                "import-batch"
+              ]
+            },
+            "description": "Atomic request; existing collections must satisfy min_role and be active. Limits: 100 collections, 5000 items, 32 levels and 4 MiB. 403 leaves no partial writes; 409 concurrent collisions require retrying the full import.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"workspace_id\": \"{{workspaceId}}\",\n  \"collections\": [\n    {\n      \"id\": \"offline-sample\",\n      \"name\": \"Sample API\",\n      \"items\": [\n        {\n          \"id\": \"request-sample\",\n          \"type\": \"request\",\n          \"name\": \"Get example\",\n          \"method\": \"GET\",\n          \"url\": \"https://httpbin.org/get?user=tester&tag=api\"\n        }\n      ]\n    }\n  ]\n}"
             }
           }
         }
@@ -451,9 +964,53 @@
     }
   ],
   "variable": [
-    { "key": "baseUrl", "value": "http://localhost:8080" },
-    { "key": "token", "value": "" },
-    { "key": "teamId", "value": "" },
-    { "key": "workspaceId", "value": "" }
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "teamId",
+      "value": ""
+    },
+    {
+      "key": "workspaceId",
+      "value": ""
+    },
+    {
+      "key": "bootstrapEmail",
+      "value": ""
+    },
+    {
+      "key": "bootstrapPassword",
+      "value": ""
+    },
+    {
+      "key": "currentPassword",
+      "value": ""
+    },
+    {
+      "key": "newPassword",
+      "value": ""
+    },
+    {
+      "key": "refreshToken",
+      "value": ""
+    },
+    {
+      "key": "currentUserId",
+      "value": ""
+    },
+    {
+      "key": "revokedToken",
+      "value": ""
+    },
+    {
+      "key": "revokedRefreshToken",
+      "value": ""
+    }
   ]
 }

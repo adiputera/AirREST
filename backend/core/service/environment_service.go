@@ -200,7 +200,7 @@ func (s *EnvironmentService) Delete(ctx context.Context, user *domain.User, id u
 		return err
 	}
 
-	if err := s.collectionService.CheckPermission(ctx, user, existing.WorkspaceID, existing.ProjectID, true); err != nil {
+	if err := s.collectionService.CheckOperationPermission(ctx, user, existing.WorkspaceID, existing.ProjectID, domain.PermissionEnvDelete); err != nil {
 		return err
 	}
 
