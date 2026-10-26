@@ -160,7 +160,7 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
                 isTeamAdmin ||
                 hasScopePermission(
                   { type: 'project', role: effectiveRole, permissions: proj.permissions },
-                  'collection:write',
+                  'collection:move',
                   'cloud',
                   cloudConfig.user?.role
                 );

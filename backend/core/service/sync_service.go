@@ -56,6 +56,15 @@ func (s *SyncService) PullDelta(
 		ServerTime:   time.Now().UTC(),
 	}
 
+	var userRole domain.ProjectRole
+	if projectID != nil && !user.IsSuperadmin() {
+		var err error
+		userRole, err = s.collectionService.projectService.GetEffectiveRole(ctx, user, *projectID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	// 1. Fetch Collections
 	var colQuery string
 	var colParam uuid.UUID
@@ -83,11 +92,6 @@ func (s *SyncService) PullDelta(
 	}
 	defer colRows.Close()
 
-	var userRole domain.ProjectRole
-	if projectID != nil && !user.IsSuperadmin() {
-		userRole, _ = s.collectionService.projectService.GetEffectiveRole(ctx, user, *projectID)
-	}
-
 	for colRows.Next() {
 		var c domain.Collection
 		if err := colRows.Scan(
@@ -105,6 +109,11 @@ func (s *SyncService) PullDelta(
 
 		result.Collections = append(result.Collections, &c)
 	}
+
+	if err := colRows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read delta: %w", err)
+	}
+	colRows.Close()
 
 	// 2. Fetch Items
 	var itemQuery string
@@ -162,6 +171,11 @@ func (s *SyncService) PullDelta(
 		result.Items = append(result.Items, &item)
 	}
 
+	if err := itemRows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read delta: %w", err)
+	}
+	itemRows.Close()
+
 	// 3. Fetch Environments
 	var envQuery string
 	if workspaceID != nil {
@@ -202,6 +216,11 @@ func (s *SyncService) PullDelta(
 
 		result.Environments = append(result.Environments, &env)
 	}
+
+	if err := envRows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read delta: %w", err)
+	}
+	envRows.Close()
 
 	return result, nil
 }
@@ -249,6 +268,9 @@ type SyncPushResponse struct {
 // PushChangeset processes a batch of offline mutations, applying non-conflicting mutations
 // and returning detailed conflict reports for any stale updates.
 func (s *SyncService) PushChangeset(ctx context.Context, user *domain.User, req SyncPushRequest) (*SyncPushResponse, error) {
+	if len(req.Collections)+len(req.Items)+len(req.Environments) > MaxSyncMutations {
+		return nil, ErrBatchLimit
+	}
 	if err := s.collectionService.CheckPermission(ctx, user, req.WorkspaceID, req.ProjectID, true); err != nil {
 		return nil, err
 	}
@@ -359,90 +381,98 @@ func (s *SyncService) PushChangeset(ctx context.Context, user *domain.User, req 
 }
 
 type ImportCollectionRequest struct {
-	ID          string                  `json:"id"`
-	Name        string                  `json:"name"`
-	Description *string                 `json:"description,omitempty"`
-	Items       []ImportItemRequest     `json:"items,omitempty"`
+	ID          string              `json:"id"`
+	Name        string              `json:"name"`
+	Description *string             `json:"description,omitempty"`
+	Items       []ImportItemRequest `json:"items,omitempty"`
 }
 
 type ImportItemRequest struct {
-	ID                 string                  `json:"id"`
-	ParentID           *string                 `json:"parent_id,omitempty"`
-	Type               string                  `json:"type"`
-	Name               string                  `json:"name"`
-	SortOrder          int                     `json:"sort_order"`
-	Method             *string                 `json:"method,omitempty"`
-	URL                *string                 `json:"url,omitempty"`
-	Params             *json.RawMessage        `json:"params,omitempty"`
-	Headers            *json.RawMessage        `json:"headers,omitempty"`
-	Auth               *json.RawMessage        `json:"auth,omitempty"`
-	BodyType           *string                 `json:"body_type,omitempty"`
-	RawType            *string                 `json:"raw_type,omitempty"`
-	BodyContent        *string                 `json:"body_content,omitempty"`
-	GraphQLQuery       *string                 `json:"graphql_query,omitempty"`
-	GraphQLVariables   *string                 `json:"graphql_variables,omitempty"`
-	BodyFormData       *json.RawMessage        `json:"body_form_data,omitempty"`
-	PreRequestScript   *string                 `json:"pre_request_script,omitempty"`
-	PostResponseScript *string                 `json:"post_response_script,omitempty"`
-	Items              []ImportItemRequest     `json:"items,omitempty"`
+	ID                 string              `json:"id"`
+	ParentID           *string             `json:"parent_id,omitempty"`
+	Type               string              `json:"type"`
+	Name               string              `json:"name"`
+	SortOrder          int                 `json:"sort_order"`
+	Method             *string             `json:"method,omitempty"`
+	URL                *string             `json:"url,omitempty"`
+	Params             *json.RawMessage    `json:"params,omitempty"`
+	Headers            *json.RawMessage    `json:"headers,omitempty"`
+	Auth               *json.RawMessage    `json:"auth,omitempty"`
+	BodyType           *string             `json:"body_type,omitempty"`
+	RawType            *string             `json:"raw_type,omitempty"`
+	BodyContent        *string             `json:"body_content,omitempty"`
+	GraphQLQuery       *string             `json:"graphql_query,omitempty"`
+	GraphQLVariables   *string             `json:"graphql_variables,omitempty"`
+	BodyFormData       *json.RawMessage    `json:"body_form_data,omitempty"`
+	PreRequestScript   *string             `json:"pre_request_script,omitempty"`
+	PostResponseScript *string             `json:"post_response_script,omitempty"`
+	Items              []ImportItemRequest `json:"items,omitempty"`
 }
 
 // ImportBatch allows claiming and migrating offline LocalStorage collections into user's workspace or project
 func (s *SyncService) ImportBatch(ctx context.Context, user *domain.User, workspaceID *uuid.UUID, projectID *uuid.UUID, collections []ImportCollectionRequest) error {
-	if err := s.collectionService.CheckPermission(ctx, user, workspaceID, projectID, true); err != nil {
+	if (workspaceID == nil) == (projectID == nil) {
+		return ErrInvalidScope
+	}
+	if err := validateImport(collections); err != nil {
 		return err
 	}
-
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to start import transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
-
+	role, err := authorizeImportScope(ctx, tx, user, workspaceID, projectID)
+	if err != nil {
+		return err
+	}
 	now := time.Now().UTC()
-
 	for _, colReq := range collections {
 		colID, err := uuid.Parse(colReq.ID)
+		exists := false
 		if err != nil {
 			colID = uuid.New()
 		} else {
-			// Check if this collection ID already exists under a different workspace or project
 			var existingWsID, existingProjID *uuid.UUID
-			if err := tx.QueryRow(ctx, "SELECT workspace_id, project_id FROM collections WHERE id = $1", colID).Scan(&existingWsID, &existingProjID); err == nil {
-				scopeMismatch := false
-				if workspaceID != nil && (existingWsID == nil || *existingWsID != *workspaceID) {
-					scopeMismatch = true
-				}
-				if projectID != nil && (existingProjID == nil || *existingProjID != *projectID) {
-					scopeMismatch = true
-				}
-				if scopeMismatch {
+			var minRole domain.ProjectRole
+			var deletedAt *time.Time
+			err := tx.QueryRow(ctx, "SELECT workspace_id, project_id, min_role, deleted_at FROM collections WHERE id = $1 FOR UPDATE", colID).Scan(&existingWsID, &existingProjID, &minRole, &deletedAt)
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("failed to inspect import collection: %w", err)
+			}
+			if err == nil {
+				sameScope := (workspaceID != nil && existingWsID != nil && *workspaceID == *existingWsID) || (projectID != nil && existingProjID != nil && *projectID == *existingProjID)
+				if !sameScope {
 					colID = uuid.New()
+				} else {
+					if deletedAt != nil || !CanAccessCollection(role, minRole) {
+						return ErrForbidden
+					}
+					exists = true
 				}
 			}
 		}
-
-		insertColQuery := `
-			INSERT INTO collections (id, workspace_id, project_id, name, description, min_role, version, created_by, last_modified_by, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, 'reader', 1, $6, $6, $7, $7)
-			ON CONFLICT (id) DO UPDATE SET
-				name = EXCLUDED.name,
-				description = EXCLUDED.description,
-				version = collections.version + 1,
-				last_modified_by = EXCLUDED.last_modified_by,
-				updated_at = EXCLUDED.updated_at
-			WHERE (collections.workspace_id IS NOT DISTINCT FROM EXCLUDED.workspace_id 
-			   AND collections.project_id IS NOT DISTINCT FROM EXCLUDED.project_id)
-		`
-		if _, err := tx.Exec(ctx, insertColQuery, colID, workspaceID, projectID, colReq.Name, colReq.Description, user.ID, now); err != nil {
-			return fmt.Errorf("failed to insert imported collection: %w", err)
+		if exists {
+			_, err = tx.Exec(ctx, `UPDATE collections SET name=$2, description=$3, version=version+1, last_modified_by=$4, updated_at=$5 WHERE id=$1`, colID, colReq.Name, colReq.Description, user.ID, now)
+		} else {
+			var affected int64
+			result, insertErr := tx.Exec(ctx, `INSERT INTO collections (id, workspace_id, project_id, name, description, min_role, version, created_by, last_modified_by, created_at, updated_at)
+    VALUES ($1,$2,$3,$4,$5,'reader',1,$6,$6,$7,$7) ON CONFLICT (id) DO NOTHING`, colID, workspaceID, projectID, colReq.Name, colReq.Description, user.ID, now)
+			err = insertErr
+			if err == nil {
+				affected = result.RowsAffected()
+				if affected != 1 {
+					return ErrImportConflict
+				}
+			}
 		}
-
+		if err != nil {
+			return fmt.Errorf("failed to write imported collection: %w", err)
+		}
 		if err := s.insertImportItems(ctx, tx, colID, nil, colReq.Items, user.ID, now); err != nil {
 			return err
 		}
 	}
-
 	return tx.Commit(ctx)
 }
 
@@ -462,10 +492,12 @@ func (s *SyncService) insertImportItems(
 		} else {
 			// Check if item exists in a different collection
 			var existingColID uuid.UUID
-			if err := tx.QueryRow(ctx, "SELECT collection_id FROM collection_items WHERE id = $1", itemID).Scan(&existingColID); err == nil {
+			if err := tx.QueryRow(ctx, "SELECT collection_id FROM collection_items WHERE id = $1 FOR UPDATE", itemID).Scan(&existingColID); err == nil {
 				if existingColID != colID {
 					itemID = uuid.New()
 				}
+			} else if !errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("failed to inspect import item: %w", err)
 			}
 		}
 
@@ -512,7 +544,7 @@ func (s *SyncService) insertImportItems(
 			WHERE collection_items.collection_id = EXCLUDED.collection_id
 		`
 
-		_, err = tx.Exec(ctx, insertItemQuery,
+		result, err := tx.Exec(ctx, insertItemQuery,
 			itemID, colID, parentID, itemType, itemReq.Name, itemReq.SortOrder,
 			itemReq.Method, itemReq.URL, itemReq.Params, itemReq.Headers, itemReq.Auth,
 			itemReq.BodyType, itemReq.RawType, itemReq.BodyContent, itemReq.GraphQLQuery,
@@ -523,6 +555,9 @@ func (s *SyncService) insertImportItems(
 			return fmt.Errorf("failed to import item %s: %w", itemReq.Name, err)
 		}
 
+		if result.RowsAffected() != 1 {
+			return ErrImportConflict
+		}
 		if len(itemReq.Items) > 0 {
 			if err := s.insertImportItems(ctx, tx, colID, &itemID, itemReq.Items, userID, now); err != nil {
 				return err

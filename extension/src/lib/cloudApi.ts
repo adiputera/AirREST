@@ -9,7 +9,7 @@ import {
 } from '@/types/api';
 
 export interface TokenRefreshCallback {
-  (tokens: { token: string; refreshToken: string; expiresAt: string }): void;
+  (tokens: { token: string; refreshToken: string; expiresAt: string; previousRefreshToken: string }): void;
 }
 
 export interface AuthEvictedCallback {
@@ -66,6 +66,9 @@ export async function fetchWithAuth(
   options: ApiFetchOptions
 ): Promise<Response> {
   const { apiUrl, token, refreshToken, ...fetchInit } = options;
+  if (typeof fetchInit.body === 'string' && new TextEncoder().encode(fetchInit.body).byteLength > 4 * 1024 * 1024) {
+    throw new Error('This request exceeds the 4 MiB limit. Reduce its size or import fewer collections.');
+  }
   const url = `${apiUrl.replace(/\/+$/, '')}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`;
 
   const headers = new Headers(fetchInit.headers || {});
@@ -84,9 +87,10 @@ export async function fetchWithAuth(
         headers.set('Authorization', `Bearer ${result.token}`);
         // Retry the original request
         response = await fetch(url, { ...fetchInit, headers });
+        if (response.status === 401) onAuthEvicted?.('Your session has expired or been revoked. Please sign in again.');
       } else if (result.evicted) {
         if (onAuthEvicted) {
-          onAuthEvicted('Your account has been deactivated or removed from the server. Switched to Offline mode.');
+          onAuthEvicted('Your session has expired or been revoked. Please sign in again.');
         }
       }
     } catch {
@@ -94,7 +98,7 @@ export async function fetchWithAuth(
     }
   } else if (response.status === 401 && !refreshToken) {
     if (onAuthEvicted) {
-      onAuthEvicted('Your account has been deactivated or removed from the server. Switched to Offline mode.');
+      onAuthEvicted('Your session has expired or been revoked. Please sign in again.');
     }
   }
 
@@ -138,6 +142,7 @@ async function handleSilentRefresh(apiUrl: string, refreshTokenStr: string): Pro
             token: data.token,
             refreshToken: data.refresh_token,
             expiresAt: data.expires_at,
+            previousRefreshToken: refreshTokenStr,
           });
         }
         return { token: data.token as string, evicted: false };
@@ -209,7 +214,12 @@ export async function changeUserPassword(
   newPassword: string,
   token?: string,
   refreshToken?: string
-): Promise<{ message: string }> {
+): Promise<{
+  user: CloudUser;
+  token: string;
+  refresh_token: string;
+  expires_at: string;
+}> {
   const res = await fetchWithAuth('/api/v1/auth/password', {
     method: 'PUT',
     apiUrl,
@@ -225,7 +235,12 @@ export async function changeUserPassword(
   if (!res.ok) {
     throw new Error(extractError(json, 'Failed to update password', res.status));
   }
-  return unwrapData<{ message: string }>(json);
+  return unwrapData<{
+    user: CloudUser;
+    token: string;
+    refresh_token: string;
+    expires_at: string;
+  }>(json);
 }
 
 // ----------------- Workspaces & Teams -----------------
@@ -306,6 +321,15 @@ export async function batchImportToScope(
   collections: Collection[],
   refreshToken?: string
 ) {
+  if (collections.length > 100) throw new Error('Select at most 100 collections per import.');
+  let itemCount = 0;
+  const checkItems = (items: Collection['items'] | undefined, depth: number): void => {
+    if (!items?.length) return;
+    itemCount += items.length;
+    if (depth > 32 || itemCount > 5000) throw new Error('Imports support up to 5,000 items and 32 folder levels. Split or flatten this import.');
+    for (const item of items) checkItems(item.items, depth + 1);
+  };
+  for (const collection of collections) checkItems(collection.items, 1);
   const formattedCollections = collections.map((c) => ({
     id: c.id,
     name: c.name,

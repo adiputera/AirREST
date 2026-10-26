@@ -1,8 +1,10 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -32,7 +34,10 @@ func Load() (*Config, error) {
 
 	port := getEnv("PORT", "8080")
 	dbURL := getEnv("DATABASE_URL", "postgres://airrest:airrest_secret_password@localhost:5432/airrest_db?sslmode=disable")
-	jwtSecret := getEnv("JWT_SECRET", "super-secret-default-jwt-key-minimum-32-chars")
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if err := ValidateJWTSecret(jwtSecret); err != nil {
+		return nil, err
+	}
 
 	expHoursStr := getEnv("JWT_EXPIRATION_HOURS", "72")
 	expHours, err := strconv.Atoi(expHoursStr)
@@ -46,8 +51,8 @@ func Load() (*Config, error) {
 		expRefreshDays = 30
 	}
 
-	superEmail := getEnv("SUPERADMIN_EMAIL", "admin@example.com")
-	superPassword := getEnv("SUPERADMIN_PASSWORD", "SuperadminSecurePassword123!")
+	superEmail := os.Getenv("SUPERADMIN_EMAIL")
+	superPassword := os.Getenv("SUPERADMIN_PASSWORD")
 	superName := getEnv("SUPERADMIN_NAME", "Super Administrator")
 
 	// Serverless-friendly DB connection pooling
@@ -72,6 +77,9 @@ func Load() (*Config, error) {
 		}
 	}
 
+	if minConns > maxConns {
+		minConns = maxConns
+	}
 	skipMigrations := os.Getenv("SKIP_MIGRATIONS") == "true" || os.Getenv("SKIP_MIGRATIONS") == "1"
 
 	return &Config{
@@ -96,4 +104,28 @@ func getEnv(key, defaultVal string) string {
 		return val
 	}
 	return defaultVal
+}
+
+// ValidateJWTSecret rejects absent, example, and obviously weak signing keys.
+// Generate a random value (for example, openssl rand -hex 32); length alone is not entropy.
+func ValidateJWTSecret(secret string) error {
+	unique := make(map[rune]bool)
+	for _, c := range secret {
+		unique[c] = true
+	}
+	lower := strings.ToLower(secret)
+	if len(secret) < 32 || len(unique) < 12 || strings.TrimSpace(secret) != secret {
+		return errors.New("JWT_SECRET must be a randomly generated key of at least 32 characters")
+	}
+	for size := 1; size <= len(secret)/2; size++ {
+		if len(secret)%size == 0 && strings.Repeat(secret[:size], len(secret)/size) == secret {
+			return errors.New("JWT_SECRET must not be a repeating pattern")
+		}
+	}
+	for _, example := range []string{"default", "example", "change-in-production", "change-me", "changeme", "super-secret"} {
+		if strings.Contains(lower, example) {
+			return errors.New("JWT_SECRET must not be an example key")
+		}
+	}
+	return nil
 }

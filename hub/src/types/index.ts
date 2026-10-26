@@ -31,6 +31,7 @@ export interface TeamMember {
     id: string;
     email: string;
     name: string;
+    role?: 'superadmin' | 'user';
   };
 }
 
@@ -60,6 +61,7 @@ export interface ProjectMember {
     id: string;
     email: string;
     name: string;
+    role?: 'superadmin' | 'user';
   };
 }
 

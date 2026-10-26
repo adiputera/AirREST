@@ -76,14 +76,18 @@ Your server **must** implement CORS with the following settings:
    - Headers: `Authorization: Bearer <access_token>`
    - Algorithm: `HS256`
    - Payload claims must include:
-     - `sub`: User UUID
+     - `user_id`: User UUID
      - `email`: User email string
      - `role`: System role (`superadmin` or `user`)
-     - `exp`: Unix expiration timestamp (default: 72 hours)
+     - `token_type`: `access` for access JWTs, `refresh` for refresh JWTs
+     - `token_version`: Nonnegative int64 matching the user database record; missing claims are invalid
+     - `iss`: `airrest-api`
+     - `iat`: Issued-at timestamp (included in issued tokens)
+     - `exp`: Required Unix expiration timestamp (access default: 72 hours)
 
 2. **Rolling Refresh Token**:
-   - Returned upon login / refresh as `refresh_token` (cryptographically secure random string, 32+ bytes, valid for 30 days).
-   - Stored hashed in the database.
+   - Returned upon login / refresh as `refresh_token`: an HS256 JWT with `token_type: refresh`, issuer `airrest-api`, user identity, session version, and a 30-day expiration.
+   - Refresh tokens are not stored in the database and are not single-use. Renewal issues a new token pair without invalidating the previous refresh JWT.
 
 3. **Silent Refresh Protocol**:
    - When the client encounters an HTTP `401 Unauthorized` response on any authenticated call, it immediately invokes:
@@ -107,7 +111,15 @@ Your server **must** implement CORS with the following settings:
        }
      }
      ```
-   - The client then automatically retries the initial failed request with the new token.
+   - The client then automatically retries the initial failed request with the new token. Rejected refresh (401/403) or a rejected retry clears tokens and returns to sign-in. Temporary network/5xx failures do not sign users out.
+
+4. **Account-wide session revocation**:
+   - Add `users.token_version BIGINT NOT NULL DEFAULT 0`; keep this internal field out of user response JSON.
+   - Include the current version in every issued access/refresh JWT. Authentication already loads the user and compares the version; refresh performs the same check before renewal.
+   - Both self-service changes and administrator resets update the password and increment `token_version` atomically. Old access tokens return `401 SESSION_REVOKED`; old refresh tokens return `401 INVALID_REFRESH_TOKEN`. Missing-version access JWTs return `401 TOKEN_EXPIRED` under the existing invalid-token envelope.
+   - Use the version from the same user snapshot whose password/token was validated. Never reread a newer version to stamp tokens authenticated using old credentials. Self-service password writes compare the validated version to prevent overwriting a concurrent reset (`400 INVALID_CURRENT_PASSWORD`).
+   - A successful self-service password change returns a replacement access/refresh pair for the current device. The frontend atomically replaces its stored tokens. Every previously issued pair, including pairs on other devices, is revoked. Administrator resets do not issue a pair and revoke every target-device session. Profile edits do not revoke sessions. Requests authenticated before a reset may finish.
+   - Legacy sessions require login after deployment. Apply migration `005_user_token_version.sql` explicitly if automatic migrations are disabled. Individual-device logout and refresh replay detection are not provided by account-wide versioning.
 
 ---
 
@@ -164,11 +176,14 @@ Hierarchy: `admin` > `maintainer` > `contributor` > `reader`
 |---|:---:|:---:|:---:|:---:|
 | Manage Project Settings & Delete Project | ✅ | ❌ | ❌ | ❌ |
 | Assign / Remove Project Members | ✅ | ❌ | ❌ | ❌ |
-| Create / Edit / Delete Resources (`min_role: admin`) | ✅ | ❌ | ❌ | ❌ |
-| Create / Edit / Delete Resources (`min_role: maintainer`) | ✅ | ✅ | ❌ | ❌ |
-| Create / Edit / Delete Resources (`min_role: contributor`) | ✅ | ✅ | ✅ | ❌ |
+| Create / Edit Resources (`min_role: admin`) | ✅ | ❌ | ❌ | ❌ |
+| Create / Edit Resources (`min_role: maintainer`) | ✅ | ✅ | ❌ | ❌ |
+| Create / Edit Resources (`min_role: contributor`) | ✅ | ✅ | ✅ | ❌ |
 | View / Execute Resources (`min_role: reader`) | ✅ | ✅ | ✅ | ✅ |
-| Move Collections Between Projects | ✅ | ✅ | ✅ | ❌ |
+| Delete Collection / Environment Containers | ✅ | ✅ | ❌ | ❌ |
+| Move Collections | ✅ | ✅ | ❌ | ❌ |
+
+Every operation also requires scope access and the resource’s `min_role`. Moves require `collection:move` and `min_role` access in both project scopes; private scopes require ownership. Project-to-project moves remain within the same team. Superadministrators retain their universal bypass and have immutable root privileges: their roles cannot be modified, downgraded, or removed from teams and projects. Request/folder deletion uses `collection:write`, so contributors may remove items in accessible collections; it does not grant container deletion.
 
 #### Granular Capability-Based Permissions (`permissions: string[]`)
 Starting in API v1.1.2+, `Project` and `ProjectMember` objects include a computed `permissions` string array. This decouples client capability checks from hardcoded integer rank comparisons while remaining 100% backward-compatible with database schemas and older client caches.
@@ -222,6 +237,7 @@ The Frontend UI, store reducers, and routing logic explicitly switch on the foll
 | **`body_type`** | Request Body Type | `'none'`, `'json'`, `'xml'`, `'raw'`, `'x-www-form-urlencoded'`, `'form-data'`, `'binary'`, `'graphql'` | Switches active editor panel in Request Editor tab. |
 | **`raw_type`** | Raw Body Subtype | `'text'`, `'json'`, `'xml'`, `'html'` | Configures Monaco syntax highlighting mode for raw payload editor. |
 | **`auth.type`** | Auth Configuration | `'none'`, `'bearer'`, `'basic'`, `'apikey'` | Switches authentication configuration form fields. |
+| **`token_version`** | Access and refresh JWTs (internal) | Nonnegative integer (int64), required | Compared to `users.token_version`; never exposed in User JSON. |
 | **`action`** | Sync Push Changeset (`SyncPushRequest`) | `'create'`, `'update'`, `'delete'` | Informs backend whether to insert, update with OCC, or set tombstone. |
 | **`type`** | Sync Conflict (`SyncConflictReport`) | `'collection'`, `'item'`, `'environment'` | Maps conflict report to corresponding entity table for user resolution. |
 | **`version` / `base_version`** | Concurrency Counter | `integer` (int64 >= 1) | Monotonically increasing number used for Optimistic Locking. |
@@ -264,6 +280,7 @@ In addition to enums, the Frontend relies on specific primitive types and relati
   - Payload: `{ "name": string, "avatar_url"?: string }`
 - `PUT /api/v1/auth/password` *(Auth)* — Change password with current password verification.
   - Payload: `{ "current_password": string, "new_password": string }`
+  - Response: `{ "user": User, "token": string, "refresh_token": string, "expires_at": string }`; replace the current device tokens with this pair. Existing tokens are revoked.
 
 ### 3. User Directory
 - `GET /api/v1/users/search?email=...` or `?q=...` *(Auth)* — Query users by email or name (minimum 2 characters). Used for team and project member invitations.
@@ -295,7 +312,7 @@ In addition to enums, the Frontend relies on specific primitive types and relati
 - `GET /api/v1/projects/{id}` *(Auth)* — Get project details and caller's `user_role`.
 - `PUT /api/v1/projects/{id}` *(Auth, Project Admin)* — Update project name/description.
 - `DELETE /api/v1/projects/{id}` *(Auth, Project Admin)* — Delete project.
-- `GET /api/v1/projects/{id}/members` *(Auth)* — List assigned members with populated user profiles.
+- `GET /api/v1/projects/{id}/members` *(Auth)* — List assigned members with populated user profiles (automatically includes parent team superadmin as a permanent project admin).
 - `POST /api/v1/projects/{id}/members` *(Auth, Project Admin)* — Assign member with role.
   - Payload: `{ "user_id": UUID, "role": "admin" | "maintainer" | "contributor" | "reader" }`
 - `DELETE /api/v1/projects/{id}/members/{userId}` *(Auth, Project Admin)* — Unassign member.
@@ -332,17 +349,32 @@ In addition to enums, the Frontend relies on specific primitive types and relati
   - Changes to upstream only occur when the user manually modifies an Initial Value or performs "Persist All" via the Environment Modal.
 
 ### 9. Stateless Delta Sync & Batch Operations
-- `GET /api/v1/sync/pull?workspace_id={id}&project_id={id}&since={timestamp}` *(Auth)*
+- `GET /api/v1/sync/pull?workspace_id={id}&since={timestamp}` (or `project_id`, never both) *(Auth)*
   - Returns all collections, items, and environments updated after `since`. Includes rows with `deleted_at != null` (tombstones).
   - Response: `{ "collections": Collection[], "items": CollectionItem[], "environments": Environment[], "server_time": string }`
 - `POST /api/v1/sync/push` *(Auth)*
-  - Applies a changeset of offline mutations.
+  - Applies up to 500 total offline mutations across all three arrays; exactly one scope is required. This is not an atomic transaction across mutations. Denied create/delete mutations are absent from `applied_ids`; update failures are reported in `conflicts`.
   - Evaluates OCC per mutation and returns conflict reports for stale entities without aborting valid ones.
   - Response: `{ "applied_ids": UUID[], "conflicts": SyncConflictReport[], "server_time": string }`
 - `POST /api/v1/sync/import-batch` *(Auth)*
   - Claims offline LocalStorage collection tree and imports into cloud workspace/project.
-  - Uses `ON CONFLICT (id) DO UPDATE` for safe upserting.
+  - Exactly one scope is required. The full request is atomic. Scope ownership, project/team memberships, and existing collection rows are locked in the same transaction/connection as writes.
+  - Existing same-scope collections must be active and satisfy `min_role`; violations return `403 FORBIDDEN` and roll back all writes. Cross-scope IDs are remapped to fresh IDs without modifying the original resources.
+  - Authorized imports increment existing versions without `base_version` OCC. A concurrent new-ID collision returns `409 CONFLICT`; retry the complete import. Existing item IDs in authorized active collections can be restored; deleted collections cannot be imported into.
+  - Limits: 100 collections, 5,000 total nested items, 32 item levels. Limit failures return `413 BATCH_LIMIT_EXCEEDED` before writes. The extension submits multiple selected collections as separate atomic requests and reports partial progress; split or flatten an individual oversized collection before importing it.
   - Payload: `{ "workspace_id"?: UUID, "project_id"?: UUID, "collections": ImportCollectionRequest[] }`
+
+### Request limits and availability
+
+All routes enforce a 4 MiB (4,194,304-byte) request body limit, including chunked bodies and bodies without `Content-Length`. Oversize bodies return `413 PAYLOAD_TOO_LARGE`. At most 16 handlers run concurrently per instance; excess requests receive `503 SERVER_BUSY` and `Retry-After: 1`. A 30-second request deadline propagates to database work and returns `503 REQUEST_TIMEOUT`. These errors use the standard flat error envelope. Hosting/proxy limits can be smaller.
+
+Sync failures do not return successful partial deltas. Role lookup and row iteration errors are propagated; result sets close before another connection is needed. Invalid scope returns 400; authorization returns 403; concurrent import collision returns 409; batch limits return 413; other sync/database failures return 500.
+
+Serverless initialization permits one attempt at a time, with a 20-second deadline. Failed attempts retry after 1, 2, 4, 8, 16, then 30 seconds; successful initialization is reused. Requests during initialization/backoff receive `503` and `Retry-After: 1`. The existing startup error envelope is preserved as the exception to flat errors:
+
+```json
+{"success":false,"error":{"code":"SERVICE_UNAVAILABLE","message":"Failed to initialize database connection"}}
+```
 
 ### 10. Admin Management (Superadmin Only)
 - `GET /api/v1/admin/users` *(Auth, Superadmin)* — List all registered users.

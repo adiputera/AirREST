@@ -161,6 +161,11 @@ func (s *ProjectService) AddProjectMember(ctx context.Context, user *domain.User
 		return fmt.Errorf("user must be a member of the team before assignment to project: %w", err)
 	}
 
+	targetUser, err := s.teamService.GetUserByID(ctx, targetUserID)
+	if err == nil && targetUser.IsSuperadmin() {
+		return errors.New("cannot modify superadmin role in project")
+	}
+
 	return s.projectRepo.AddMember(ctx, &domain.ProjectMember{
 		ProjectID: projectID,
 		UserID:    targetUserID,
@@ -179,12 +184,17 @@ func (s *ProjectService) RemoveProjectMember(ctx context.Context, user *domain.U
 		return errors.New("admin access required to remove project members")
 	}
 
+	targetUser, err := s.teamService.GetUserByID(ctx, targetUserID)
+	if err == nil && targetUser.IsSuperadmin() {
+		return errors.New("cannot remove superadmin from project")
+	}
+
 	return s.projectRepo.RemoveMember(ctx, projectID, targetUserID)
 }
 
 // ListProjectMembers lists members assigned to project
 func (s *ProjectService) ListProjectMembers(ctx context.Context, user *domain.User, projectID uuid.UUID) ([]*domain.ProjectMember, error) {
-	_, _, err := s.getProjectAndEffectiveRole(ctx, user, projectID)
+	project, _, err := s.getProjectAndEffectiveRole(ctx, user, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -195,6 +205,36 @@ func (s *ProjectService) ListProjectMembers(ctx context.Context, user *domain.Us
 	for _, m := range members {
 		m.Permissions = domain.GetPermissionsForRole(m.Role)
 	}
+
+	// Automatically include any Superadmin members of the parent team as permanent project admins
+	teamMembers, err := s.teamRepo.ListMembers(ctx, project.TeamID)
+	if err == nil {
+		for _, tm := range teamMembers {
+			if tm.User != nil && tm.User.IsSuperadmin() {
+				alreadyIn := false
+				for _, m := range members {
+					if m.UserID == tm.UserID {
+						alreadyIn = true
+						break
+					}
+				}
+				if !alreadyIn {
+					superMember := &domain.ProjectMember{
+						ID:          uuid.New(),
+						ProjectID:   projectID,
+						UserID:      tm.UserID,
+						Role:        domain.ProjectRoleAdmin,
+						Permissions: domain.GetPermissionsForRole(domain.ProjectRoleAdmin),
+						CreatedAt:   project.CreatedAt,
+						UpdatedAt:   project.UpdatedAt,
+						User:        tm.User,
+					}
+					members = append([]*domain.ProjectMember{superMember}, members...)
+				}
+			}
+		}
+	}
+
 	return members, nil
 }
 

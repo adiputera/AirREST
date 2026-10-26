@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.3] - 2026-10-26
+
+### Added
+- **Seamless Password Change Re-authentication**:
+  - Updated `ChangePasswordModal` to consume newly issued session tokens (`token`, `refresh_token`, `expires_at`) from `changeUserPassword`, immediately updating `cloudConfig` to keep the active session valid without abrupt logouts.
+  - Added user-facing guidance clarifying that changing passwords signs out other active devices.
+- **Global Authentication Invalidation & Re-login Event Handling**:
+  - Added `airrest:auth-required` custom window event dispatching in `registerAuthEvictedCallback` upon session revocation or token eviction.
+  - Wired `UserMenu` to listen for `airrest:auth-required` to prompt the login modal cleanly and dismiss any open credential modals.
+  - Hardened background token refresh listener (`registerTokenRefreshCallback`) to prevent token overwrite race conditions by validating `previousRefreshToken`.
+- **Granular Collection Move Permission Verification**:
+  - Aligned `MoveCollectionModal` target project capability checks to strictly evaluate `collection:move` rather than `collection:write`, ensuring full parity with backend RBAC security enforcement.
+- **Client-Side Payload Limits & Import Safeguards**:
+  - Added hard client-side request body threshold check (4 MiB) in `fetchWithAuth` to proactively protect against gateway payload overflows (`HTTP 413 Payload Too Large`).
+  - Added structural validation in `batchImportToScope`: maximum 100 collections per import, maximum 5,000 collection items, and maximum 32 folder nesting depth.
+  - Implemented sequential collection-by-collection cloud import in `importLocalCollectionsToCloud` with real-time progress indicators (`Importing collection X of Y...`) and partial-failure recovery.
+- **Hub Multi-Select Batch Member Addition & Assignment**:
+  - Added multi-select checkbox workflows with live search, select-all/deselect-all, and chips management in AirREST Hub for adding team members and assigning project members.
+  - Enhanced backend `ListProjectMembers` to automatically include parent team superadministrators as permanent project admins, with dedicated UI badges.
+
+---
+
 ## [1.1.2] - 2026-10-25
 
 ### Added

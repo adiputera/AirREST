@@ -56,6 +56,10 @@ func Authenticate(tm *token.TokenManager, authService *service.AuthService) func
 				return
 			}
 
+			if claims.TokenVersion == nil || *claims.TokenVersion != user.TokenVersion {
+				response.Error(w, http.StatusUnauthorized, "session revoked; sign in again", "SESSION_REVOKED")
+				return
+			}
 			// Database role is authoritative - do not overwrite with potentially stale JWT claims
 			ctx := context.WithValue(r.Context(), UserContextKey, user)
 			next.ServeHTTP(w, r.WithContext(ctx))

@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -20,8 +22,8 @@ func NewSyncHandler(syncService *service.SyncService) *SyncHandler {
 }
 
 type BatchImportRequest struct {
-	WorkspaceID *string                          `json:"workspace_id,omitempty"`
-	ProjectID   *string                          `json:"project_id,omitempty"`
+	WorkspaceID *string                           `json:"workspace_id,omitempty"`
+	ProjectID   *string                           `json:"project_id,omitempty"`
 	Collections []service.ImportCollectionRequest `json:"collections"`
 }
 
@@ -56,7 +58,7 @@ func (h *SyncHandler) Pull(w http.ResponseWriter, r *http.Request) {
 
 	delta, err := h.syncService.PullDelta(r.Context(), user, wsID, projID, since)
 	if err != nil {
-		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
+		writeSyncError(w, err)
 		return
 	}
 
@@ -75,7 +77,7 @@ func (h *SyncHandler) Push(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.syncService.PushChangeset(r.Context(), user, req)
 	if err != nil {
-		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
+		writeSyncError(w, err)
 		return
 	}
 
@@ -110,17 +112,34 @@ func (h *SyncHandler) ImportBatch(w http.ResponseWriter, r *http.Request) {
 		projID = &id
 	}
 
-	if wsID == nil && projID == nil {
-		response.Error(w, http.StatusBadRequest, "either workspace_id or project_id must be provided", "BAD_REQUEST")
+	if (wsID == nil) == (projID == nil) {
+		response.Error(w, http.StatusBadRequest, "exactly one of workspace_id or project_id is required", "BAD_REQUEST")
 		return
 	}
 
 	if err := h.syncService.ImportBatch(r.Context(), user, wsID, projID, req.Collections); err != nil {
-		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
+		writeSyncError(w, err)
 		return
 	}
 
 	response.JSON(w, http.StatusOK, map[string]string{
 		"message": "collections successfully imported into cloud scope",
 	})
+}
+
+func writeSyncError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, service.ErrBatchLimit):
+		response.Error(w, http.StatusRequestEntityTooLarge, err.Error(), "BATCH_LIMIT_EXCEEDED")
+	case errors.Is(err, service.ErrInvalidScope):
+		response.Error(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST")
+	case errors.Is(err, service.ErrImportConflict):
+		response.Error(w, http.StatusConflict, err.Error(), "CONFLICT")
+	case errors.Is(err, service.ErrForbidden), errors.Is(err, service.ErrReaderCannotModify):
+		response.Error(w, http.StatusForbidden, err.Error(), "FORBIDDEN")
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+		response.Error(w, http.StatusServiceUnavailable, "request deadline exceeded", "REQUEST_TIMEOUT")
+	default:
+		response.Error(w, http.StatusInternalServerError, "sync operation failed", "SERVER_ERROR")
+	}
 }

@@ -16,6 +16,7 @@ const (
 type User struct {
 	ID           uuid.UUID  `json:"id"`
 	Email        string     `json:"email"`
+	TokenVersion int64      `json:"-"`
 	PasswordHash string     `json:"-"`
 	Name         string     `json:"name"`
 	AvatarURL    *string    `json:"avatar_url,omitempty"`

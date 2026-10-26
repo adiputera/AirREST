@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"time"
 
@@ -66,7 +65,9 @@ func New(ctx context.Context) (*App, error) {
 	// Bootstrap initial Superadmin if not exists
 	bootstrapCtx, bootstrapCancel := context.WithTimeout(ctx, 10*time.Second)
 	if err := authService.BootstrapSuperadmin(bootstrapCtx, cfg.SuperadminEmail, cfg.SuperadminPassword, cfg.SuperadminName); err != nil {
-		slog.Warn("failed to bootstrap superadmin account", "error", err)
+		bootstrapCancel()
+		pool.Close()
+		return nil, fmt.Errorf("failed to bootstrap superadmin account: %w", err)
 	}
 	bootstrapCancel()
 
@@ -95,6 +96,7 @@ func New(ctx context.Context) (*App, error) {
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
+	r.Use(middleware.RequestLimits(middleware.MaxRequestBytes, middleware.MaxConcurrentRequests, middleware.RequestTimeout))
 
 	// Root Status and Health aliases (useful for direct ping / monitoring)
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/adiputera/airrest-backend/core/middleware"
+	"github.com/adiputera/airrest-backend/core/repository/postgres"
 	"github.com/adiputera/airrest-backend/core/service"
 	"github.com/adiputera/airrest-backend/pkg/response"
 )
@@ -161,8 +162,9 @@ func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.authService.ChangePassword(r.Context(), user.ID, req.CurrentPassword, req.NewPassword); err != nil {
-		if errors.Is(err, service.ErrIncorrectCurrentPassword) {
+	updatedUser, tokens, err := h.authService.ChangePassword(r.Context(), user.ID, req.CurrentPassword, req.NewPassword)
+	if err != nil {
+		if errors.Is(err, service.ErrIncorrectCurrentPassword) || errors.Is(err, postgres.ErrCredentialsChanged) {
 			response.Error(w, http.StatusBadRequest, err.Error(), "INVALID_CURRENT_PASSWORD")
 			return
 		}
@@ -174,8 +176,10 @@ func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.JSON(w, http.StatusOK, map[string]string{
-		"message": "password updated successfully",
+	response.JSON(w, http.StatusOK, AuthResponse{
+		User:         updatedUser,
+		Token:        tokens.AccessToken,
+		RefreshToken: tokens.RefreshToken,
+		ExpiresAt:    tokens.ExpiresAt,
 	})
 }
-

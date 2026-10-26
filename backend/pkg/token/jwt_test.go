@@ -1,6 +1,7 @@
 package token
 
 import (
+	"github.com/golang-jwt/jwt/v5"
 	"testing"
 	"time"
 
@@ -15,7 +16,7 @@ func TestTokenManagerGenerateAndValidate(t *testing.T) {
 	email := "test@example.com"
 	role := "superadmin"
 
-	tokenStr, expiresAt, err := tm.GenerateToken(userID, email, role)
+	tokenStr, expiresAt, err := tm.GenerateToken(userID, email, role, 0)
 	if err != nil {
 		t.Fatalf("failed to generate token: %v", err)
 	}
@@ -49,7 +50,7 @@ func TestTokenManagerInvalidToken(t *testing.T) {
 	tmDifferent := NewTokenManager("secret-two-at-least-32-bytes-long", 24)
 
 	userID := uuid.New()
-	tokenStr, _, _ := tm.GenerateToken(userID, "test@example.com", "user")
+	tokenStr, _, _ := tm.GenerateToken(userID, "test@example.com", "user", 0)
 
 	// Validate with different secret
 	_, err := tmDifferent.ValidateToken(tokenStr)
@@ -72,12 +73,12 @@ func TestTokenManagerRefreshTokenLifecycle(t *testing.T) {
 	email := "refresh-user@example.com"
 	role := "admin"
 
-	accessToken, _, err := tm.GenerateToken(userID, email, role)
+	accessToken, _, err := tm.GenerateToken(userID, email, role, 0)
 	if err != nil {
 		t.Fatalf("failed to generate access token: %v", err)
 	}
 
-	refreshToken, refreshExpiresAt, err := tm.GenerateRefreshToken(userID, email, role)
+	refreshToken, refreshExpiresAt, err := tm.GenerateRefreshToken(userID, email, role, 0)
 	if err != nil {
 		t.Fatalf("failed to generate refresh token: %v", err)
 	}
@@ -105,5 +106,35 @@ func TestTokenManagerRefreshTokenLifecycle(t *testing.T) {
 	_, err = tm.ValidateRefreshToken(accessToken)
 	if err == nil {
 		t.Fatal("expected ValidateRefreshToken to reject an access token, got nil")
+	}
+}
+
+func TestRejectsLegacyAndMalformedSessionClaims(t *testing.T) {
+	tm := NewTokenManager("test-session-signing-key", 1)
+	for _, tokenType := range []TokenType{TokenTypeAccess, TokenTypeRefresh} {
+		for _, version := range []*int64{nil, new(int64(-1))} {
+			claims := CustomClaims{UserID: uuid.New(), TokenType: tokenType, TokenVersion: version, RegisteredClaims: jwt.RegisteredClaims{Issuer: "airrest-api", ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour))}}
+			signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(tm.secret)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tm.ValidateToken(signed); err == nil {
+				t.Fatal("accepted legacy/invalid access token")
+			}
+			if _, err := tm.ValidateRefreshToken(signed); err == nil {
+				t.Fatal("accepted legacy/invalid refresh token")
+			}
+		}
+	}
+	signed, _, err := tm.GenerateToken(uuid.New(), "tester@example.com", "user", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := tm.ValidateToken(signed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims.TokenVersion == nil || *claims.TokenVersion != 0 {
+		t.Fatal("explicit zero version must be accepted")
 	}
 }

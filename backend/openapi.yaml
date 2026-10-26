@@ -72,6 +72,11 @@ info:
     - Allowed Headers: `Accept, Authorization, Content-Type, X-CSRF-Token`
     - Exposed Headers: `Link`
     - Allow Credentials: `true`
+
+    ### Session revocation and resource limits
+     Both access and refresh JWTs carry a nonnegative integer token_version matching users.token_version. Missing or stale versions are rejected with 401. Password changes and administrator resets atomically increment the version and revoke existing sessions. A self-service password change returns a replacement token pair for the current device; administrator resets revoke every target-device session. Profile changes do not revoke sessions. Refresh tokens can be reused until expiry or account-wide revocation; they are not single-use. Clients clear tokens and sign in again after a rejected refresh.
+     Requests are limited to 4 MiB (including chunked bodies), 16 concurrent handlers per instance, and 30 seconds. Oversized bodies return 413 PAYLOAD_TOO_LARGE. Saturation returns 503 SERVER_BUSY with Retry-After: 1; timeouts return 503 REQUEST_TIMEOUT. Proxy limits may be smaller. Serverless initialization attempts are serialized with a 20-second deadline and retries after 1, 2, 4, 8, 16, then 30 seconds; requests during attempts/backoff receive 503 and Retry-After: 1, retaining the nested SERVICE_UNAVAILABLE envelope.
+    Contributors cannot delete collections/environments or move collections. Request/folder deletion is collection:write authoring. Moves require collection:move and min_role access in both project scopes; private scopes require ownership (superadmins bypass role/ownership restrictions).
 servers:
   - url: http://localhost:8080
     description: Local development backend server
@@ -117,6 +122,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/SystemStatusResponse'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /health:
     get:
       tags:
@@ -131,6 +140,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /api/v1/health:
     get:
       tags:
@@ -145,6 +158,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /api/v1/auth/register:
     post:
       tags:
@@ -179,6 +196,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /api/v1/auth/login:
     post:
       tags:
@@ -205,12 +226,16 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /api/v1/auth/refresh:
     post:
       tags:
         - Authentication & Profile
       summary: Refresh access token
-      description: Exchanges a valid rolling refresh token for a fresh access token and renewed refresh token.
+      description: "Validates an HS256 JWT with token_type=refresh, issuer airrest-api, expiration, and token_version matching the user. Returns a renewed token pair. Old, missing-version, revoked, or invalid refresh tokens return 401 INVALID_REFRESH_TOKEN. Renewal does not invalidate the previous refresh token."
       requestBody:
         required: true
         content:
@@ -231,6 +256,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /api/v1/auth/me:
     get:
       tags:
@@ -253,6 +282,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /api/v1/auth/profile:
     put:
       tags:
@@ -281,12 +314,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/auth/password:
     put:
       tags:
         - Authentication & Profile
       summary: Change password
-      description: Changes user password after verifying the existing current password.
+      description: "Verifies the current password and atomically updates the password and session version. It returns a replacement access/refresh pair for this device while invalidating every previously issued token. A concurrent credential change rejects the stale password update with 400 INVALID_CURRENT_PASSWORD."
       security:
         - BearerAuth: []
       requestBody:
@@ -297,11 +336,11 @@ paths:
               $ref: '#/components/schemas/ChangePasswordRequest'
       responses:
         '200':
-          description: Password updated successfully.
+          description: Password updated successfully and replacement tokens issued for the current device.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MessageEnvelope'
+                $ref: '#/components/schemas/AuthEnvelope'
         '400':
           description: Incorrect current password or password too short.
           content:
@@ -309,6 +348,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/users/search:
     get:
       tags:
@@ -336,6 +381,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/UserListEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/workspaces:
     get:
       tags:
@@ -351,6 +402,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/WorkspaceListEnvelope'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     post:
       tags:
         - Workspaces
@@ -372,6 +429,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/WorkspaceEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/workspaces/{id}:
     get:
       tags:
@@ -399,6 +462,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     put:
       tags:
         - Workspaces
@@ -425,6 +494,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/WorkspaceEnvelope'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     delete:
       tags:
         - Workspaces
@@ -447,6 +522,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/MessageEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/teams:
     get:
       tags:
@@ -462,6 +543,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TeamListEnvelope'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     post:
       tags:
         - Teams & Members
@@ -489,6 +576,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/teams/{id}:
     get:
       tags:
@@ -510,6 +603,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TeamEnvelope'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     put:
       tags:
         - Teams & Members
@@ -537,6 +636,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TeamEnvelope'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     delete:
       tags:
         - Teams & Members
@@ -559,6 +664,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/MessageEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/teams/{id}/members:
     get:
       tags:
@@ -580,6 +691,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TeamMemberListEnvelope'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     post:
       tags:
         - Teams & Members
@@ -608,6 +725,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/MessageEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/teams/{id}/members/{userId}:
     delete:
       tags:
@@ -637,6 +760,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/MessageEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/teams/{teamId}/projects:
     get:
       tags:
@@ -661,6 +790,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProjectListEnvelope'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     post:
       tags:
         - Projects & Isolation
@@ -689,6 +824,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProjectEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/projects/{id}:
     get:
       tags:
@@ -711,6 +852,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProjectEnvelope'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     put:
       tags:
         - Projects & Isolation
@@ -738,6 +885,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProjectEnvelope'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     delete:
       tags:
         - Projects & Isolation
@@ -760,6 +913,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/MessageEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/projects/{id}/members:
     get:
       tags:
@@ -781,6 +940,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProjectMemberListEnvelope'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     post:
       tags:
         - Projects & Isolation
@@ -809,6 +974,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/MessageEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/projects/{id}/members/{userId}:
     delete:
       tags:
@@ -837,6 +1008,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/MessageEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/collections:
     get:
       tags:
@@ -873,6 +1050,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CollectionListEnvelope'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     post:
       tags:
         - Collections
@@ -894,6 +1077,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/CollectionEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/collections/{id}:
     get:
       tags:
@@ -916,6 +1105,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CollectionEnvelope'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     put:
       tags:
         - Collections
@@ -951,11 +1146,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ConflictEnvelope'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     delete:
       tags:
         - Collections
       summary: Soft delete collection (Tombstone)
-      description: Soft deletes the collection by setting `deleted_at`.
+      description: "Requires collection:delete (maintainer/admin), scope access, and min_role. Workspace owners and superadmins retain access. Contributors cannot delete collections."
       security:
         - BearerAuth: []
       parameters:
@@ -973,12 +1174,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/MessageEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/collections/{id}/move:
     post:
       tags:
         - Collections
       summary: Move collection between scopes
-      description: Moves collection between workspace and project, or across projects in the same team.
+      description: "Requires collection:move and collection min_role access in both source and destination projects (maintainer/admin). Private workspaces require ownership; superadmins bypass role/ownership restrictions. Project-to-project moves remain within the same team."
       security:
         - BearerAuth: []
       parameters:
@@ -1002,6 +1209,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/MessageEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/collections/{id}/reorder:
     put:
       tags:
@@ -1031,6 +1244,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ReorderItemsResponseEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/collections/{id}/items/reorder:
     put:
       tags:
@@ -1060,6 +1279,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ReorderItemsResponseEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/items:
     post:
       tags:
@@ -1082,6 +1307,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/CollectionItemEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/items/{id}:
     get:
       tags:
@@ -1103,6 +1334,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CollectionItemEnvelope'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     put:
       tags:
         - Collection Items
@@ -1138,11 +1375,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ConflictEnvelope'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     delete:
       tags:
         - Collection Items
       summary: Soft delete item (Tombstone)
-      description: Soft deletes the item by setting `deleted_at`.
+      description: "Request/folder deletion is authoring and requires collection:write plus collection min_role access. Contributors may delete items/folders in accessible collections; this does not grant container deletion."
       security:
         - BearerAuth: []
       parameters:
@@ -1160,6 +1403,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/MessageEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/environments:
     get:
       tags:
@@ -1186,6 +1435,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/EnvironmentListEnvelope'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     post:
       tags:
         - Environments
@@ -1206,6 +1461,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/EnvironmentEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/environments/{id}:
     get:
       tags:
@@ -1227,6 +1488,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/EnvironmentEnvelope'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     put:
       tags:
         - Environments
@@ -1260,6 +1527,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ConflictEnvelope'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     delete:
       tags:
         - Environments
@@ -1281,6 +1554,14 @@ paths:
               schema:
                 $ref: '#/components/schemas/MessageEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      description: Requires env:delete (maintainer/admin), scope access, and min_role. Workspace owners and superadmins
+        retain access. Contributors cannot delete environments.
   /api/v1/sync/pull:
     get:
       tags:
@@ -1316,14 +1597,37 @@ paths:
               schema:
                 $ref: '#/components/schemas/SyncDeltaEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '400':
+          description: Exactly one valid scope is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Scope access, operation permission, or min_role denied.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Database/query failure; no successful partial delta is returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /api/v1/sync/push:
     post:
       tags:
         - Stateless Delta Sync
       summary: Batch push offline mutations (Stateless Delta Sync)
       description: |
-        Atomically applies a changeset of mutations (create, update, delete) for collections, items,
-        and environments. Conflicting entities are reported individually without failing non-conflicting mutations.
+        Processes at most 500 total collection, item, and environment mutations. Exactly one workspace_id or project_id is required. Mutations are applied independently, not as an atomic batch. Successful IDs appear in applied_ids; update failures appear in conflicts, while failed create/delete mutations are omitted from applied_ids. Contributor collection/environment deletes are denied by the same services as REST. Batch limits are checked before writes.
       security:
         - BearerAuth: []
       requestBody:
@@ -1340,14 +1644,37 @@ paths:
               schema:
                 $ref: '#/components/schemas/SyncPushResponseEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '400':
+          description: Exactly one valid scope is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Scope access, operation permission, or min_role denied.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Database/query failure; no successful partial delta is returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /api/v1/sync/import-batch:
     post:
       tags:
         - Stateless Delta Sync
       summary: Claim and import offline LocalStorage collections
       description: |
-        Imports an entire tree of collections, folders, and requests into a private workspace or project.
-        Uses `ON CONFLICT (id) DO UPDATE` to upsert without throwing duplicate key errors.
+        Atomically imports into exactly one workspace or project. Limits: 100 collections, 5000 total nested items, 32 item levels, 4 MiB body. Existing same-scope collections must be active and satisfy min_role. Scope, membership and collection locks keep authorization stable through commit. Unauthorized imports return 403 with no partial writes. Cross-scope IDs are remapped to fresh UUIDs. Authorized imports update metadata/items and increment existing versions without base_version OCC. Concurrent new-ID collisions return 409; retry the complete import. Deleted collections cannot be imported into. Existing item IDs in an authorized collection can be restored. The frontend rejects oversized selections; split manually into separate atomic requests.
       security:
         - BearerAuth: []
       requestBody:
@@ -1364,6 +1691,36 @@ paths:
               schema:
                 $ref: '#/components/schemas/MessageEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '400':
+          description: Exactly one valid scope is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Scope access, operation permission, or min_role denied.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Database/query failure; no successful partial delta is returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Concurrent import collision; retry complete import.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /api/v1/admin/users:
     get:
       tags:
@@ -1385,6 +1742,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     post:
       tags:
         - Admin Management
@@ -1412,12 +1775,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/admin/users/{userId}/password:
     put:
       tags:
         - Admin Management
       summary: Reset user password (Superadmin only)
-      description: Directly resets any user's password without needing their existing password.
+      description: "Resets the target user's password and atomically increments their session version, revoking all their access and refresh tokens. Resetting your own password also signs out the current session."
       security:
         - BearerAuth: []
       parameters:
@@ -1441,6 +1810,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/MessageEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/admin/users/{userId}:
     delete:
       tags:
@@ -1488,13 +1863,17 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
 
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 components:
   securitySchemes:
     BearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: Enter JWT access token obtained from `/api/v1/auth/login`.
+      description: "HS256 access JWT from login. Required claims: user_id (UUID), email, role, token_type=access, token_version (nonnegative int64), iss=airrest-api, exp; issued tokens also include iat. Database system role and token_version are authoritative. Both access and refresh JWTs carry a nonnegative integer token_version matching users.token_version. Missing or stale versions are rejected with 401. Password changes and administrator resets atomically increment the version and revoke existing tokens. A self-service password change returns a replacement pair for the current device; administrator resets revoke every target-device session. Profile changes do not revoke sessions. Refresh tokens can be reused until expiry or account-wide revocation; they are not single-use. Clients clear tokens and sign in again after a rejected refresh."
 
   schemas:
     # ------------------ Core Enums ------------------
@@ -2464,15 +2843,31 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/SyncCollectionMutation'
+          maxItems: 500
         items:
           type: array
           items:
             $ref: '#/components/schemas/SyncItemMutation'
+          maxItems: 500
         environments:
           type: array
           items:
             $ref: '#/components/schemas/SyncEnvironmentMutation'
 
+          maxItems: 500
+      description: At most 500 mutations total across all three arrays.
+      x-max-total-mutations: 500
+      oneOf:
+      - required:
+        - workspace_id
+        not:
+          required:
+          - project_id
+      - required:
+        - project_id
+        not:
+          required:
+          - workspace_id
     SyncConflictReport:
       type: object
       required:
@@ -2612,6 +3007,21 @@ components:
             $ref: '#/components/schemas/ImportCollectionRequest'
 
     # ------------------ Request Payloads ------------------
+          maxItems: 100
+      description: At most 5000 items in total and 32 item levels; all limit checks occur before writes.
+      x-max-total-items: 5000
+      x-max-item-depth: 32
+      oneOf:
+      - required:
+        - workspace_id
+        not:
+          required:
+          - project_id
+      - required:
+        - project_id
+        not:
+          required:
+          - workspace_id
     RegisterRequest:
       type: object
       required:
@@ -2910,3 +3320,48 @@ components:
           type: string
           format: password
           example: 'BrandNewSecurePassword123!'
+  responses:
+    PayloadTooLarge:
+      description: 'PAYLOAD_TOO_LARGE: body exceeds 4194304 bytes. Sync/import may also return BATCH_LIMIT_EXCEEDED
+        before writes.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ServiceUnavailable:
+      description: 'SERVER_BUSY (Retry-After: 1), REQUEST_TIMEOUT, or serverless SERVICE_UNAVAILABLE (Retry-After:
+        1). Initialization retries with bounded exponential backoff.'
+      headers:
+        Retry-After:
+          description: Present for saturation/initialization; retry after at least one second.
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            oneOf:
+            - $ref: '#/components/schemas/ErrorEnvelope'
+            - type: object
+              required:
+              - success
+              - error
+              properties:
+                success:
+                  const: false
+                error:
+                  type: object
+                  required:
+                  - code
+                  - message
+                  properties:
+                    code:
+                      const: SERVICE_UNAVAILABLE
+                    message:
+                      type: string
+    Unauthorized:
+      description: Missing/invalid/expired access token, missing token_version, or SESSION_REVOKED. Clear the session
+        if refresh is rejected.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'

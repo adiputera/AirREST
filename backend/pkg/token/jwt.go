@@ -21,10 +21,11 @@ const (
 )
 
 type CustomClaims struct {
-	UserID    uuid.UUID `json:"user_id"`
-	Email     string    `json:"email"`
-	Role      string    `json:"role"`
-	TokenType TokenType `json:"token_type,omitempty"`
+	TokenVersion *int64    `json:"token_version"`
+	UserID       uuid.UUID `json:"user_id"`
+	Email        string    `json:"email"`
+	Role         string    `json:"role"`
+	TokenType    TokenType `json:"token_type,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -47,14 +48,15 @@ func NewTokenManager(secret string, accessExpirationHours int, refreshExpiration
 }
 
 // GenerateToken generates a signed access JWT string for a user
-func (tm *TokenManager) GenerateToken(userID uuid.UUID, email, role string) (string, time.Time, error) {
+func (tm *TokenManager) GenerateToken(userID uuid.UUID, email, role string, version int64) (string, time.Time, error) {
 	expirationTime := time.Now().Add(time.Duration(tm.accessExpirationHours) * time.Hour)
 
 	claims := &CustomClaims{
-		UserID:    userID,
-		Email:     email,
-		Role:      role,
-		TokenType: TokenTypeAccess,
+		TokenVersion: &version,
+		UserID:       userID,
+		Email:        email,
+		Role:         role,
+		TokenType:    TokenTypeAccess,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -72,14 +74,15 @@ func (tm *TokenManager) GenerateToken(userID uuid.UUID, email, role string) (str
 }
 
 // GenerateRefreshToken generates a rolling refresh JWT string for a user
-func (tm *TokenManager) GenerateRefreshToken(userID uuid.UUID, email, role string) (string, time.Time, error) {
+func (tm *TokenManager) GenerateRefreshToken(userID uuid.UUID, email, role string, version int64) (string, time.Time, error) {
 	expirationTime := time.Now().Add(time.Duration(tm.refreshExpirationDays) * 24 * time.Hour)
 
 	claims := &CustomClaims{
-		UserID:    userID,
-		Email:     email,
-		Role:      role,
-		TokenType: TokenTypeRefresh,
+		TokenVersion: &version,
+		UserID:       userID,
+		Email:        email,
+		Role:         role,
+		TokenType:    TokenTypeRefresh,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -99,23 +102,23 @@ func (tm *TokenManager) GenerateRefreshToken(userID uuid.UUID, email, role strin
 // ValidateToken parses and validates an access JWT string
 func (tm *TokenManager) ValidateToken(tokenString string) (*CustomClaims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &CustomClaims{}, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+		if token.Method != jwt.SigningMethodHS256 {
 			return nil, ErrInvalidToken
 		}
 		return tm.secret, nil
-	})
+	}, jwt.WithValidMethods([]string{"HS256"}), jwt.WithIssuer("airrest-api"), jwt.WithExpirationRequired())
 
 	if err != nil {
 		return nil, ErrInvalidToken
 	}
 
 	claims, ok := token.Claims.(*CustomClaims)
-	if !ok || !token.Valid {
+	if !ok || !token.Valid || claims.TokenVersion == nil || *claims.TokenVersion < 0 {
 		return nil, ErrInvalidToken
 	}
 
 	// Refresh token cannot be used as an access token
-	if claims.TokenType == TokenTypeRefresh {
+	if claims.TokenType != TokenTypeAccess {
 		return nil, ErrInvalidToken
 	}
 
@@ -125,18 +128,18 @@ func (tm *TokenManager) ValidateToken(tokenString string) (*CustomClaims, error)
 // ValidateRefreshToken parses and validates a refresh JWT string
 func (tm *TokenManager) ValidateRefreshToken(tokenString string) (*CustomClaims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &CustomClaims{}, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+		if token.Method != jwt.SigningMethodHS256 {
 			return nil, ErrInvalidRefreshToken
 		}
 		return tm.secret, nil
-	})
+	}, jwt.WithValidMethods([]string{"HS256"}), jwt.WithIssuer("airrest-api"), jwt.WithExpirationRequired())
 
 	if err != nil {
 		return nil, ErrInvalidRefreshToken
 	}
 
 	claims, ok := token.Claims.(*CustomClaims)
-	if !ok || !token.Valid {
+	if !ok || !token.Valid || claims.TokenVersion == nil || *claims.TokenVersion < 0 {
 		return nil, ErrInvalidRefreshToken
 	}
 

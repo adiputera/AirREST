@@ -1,18 +1,28 @@
 import { User, Team, TeamMember, Project, ProjectMember, Collection, Environment, ProjectRole } from '../types';
 
 export interface TokenRefreshCallback {
-  (tokens: { token: string; refreshToken: string; expiresAt: string }): void;
+  (tokens: { token: string; refreshToken: string; expiresAt: string; previousRefreshToken: string }): void;
+}
+
+export interface AuthEvictedCallback {
+  (evictedSession?: { token?: string | null; refreshToken?: string | null }): void;
 }
 
 let onTokenRefreshed: TokenRefreshCallback | null = null;
-let onAuthEvicted: (() => void) | null = null;
-let isRefreshing = false;
+let onAuthEvicted: AuthEvictedCallback | null = null;
+let sessionGeneration = 0;
+
+// A login, logout, or server change invalidates all work from the previous session.
+export function invalidateHubSession() {
+  sessionGeneration++;
+  refreshRequests.clear();
+}
 
 export function registerHubTokenRefresh(cb: TokenRefreshCallback | null) {
   onTokenRefreshed = cb;
 }
 
-export function registerHubAuthEvicted(cb: (() => void) | null) {
+export function registerHubAuthEvicted(cb: AuthEvictedCallback | null) {
   onAuthEvicted = cb;
 }
 
@@ -40,7 +50,11 @@ export const DEFAULT_API_URL: string =
   (import.meta.env.VITE_API_URL ? String(import.meta.env.VITE_API_URL) : 'http://localhost:8080').replace(/\/+$/, '');
 
 export async function fetchWithAuth(endpoint: string, options: ApiFetchOptions): Promise<Response> {
+  const generation = sessionGeneration;
   const { apiUrl, token, refreshToken, ...fetchInit } = options;
+  if (typeof fetchInit.body === 'string' && new TextEncoder().encode(fetchInit.body).byteLength > 4 * 1024 * 1024) {
+    throw new Error('This request exceeds the 4 MiB limit. Reduce its size or import fewer collections.');
+  }
   const baseUrl = apiUrl ? apiUrl.replace(/\/+$/, '') : DEFAULT_API_URL;
   const url = `${baseUrl}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`;
 
@@ -51,38 +65,51 @@ export async function fetchWithAuth(endpoint: string, options: ApiFetchOptions):
   }
 
   let response = await fetch(url, { ...fetchInit, headers });
+  if (generation !== sessionGeneration) throw new Error('Session changed. Please try again.');
 
   if (response.status === 401 && refreshToken) {
     try {
       const result = await handleSilentRefresh(baseUrl, refreshToken);
+      if (generation !== sessionGeneration) throw new Error('Session changed. Please try again.');
       if (result.token) {
         headers.set('Authorization', `Bearer ${result.token}`);
         response = await fetch(url, { ...fetchInit, headers });
+        if (response.status === 401 && generation === sessionGeneration) {
+          onAuthEvicted?.({ token: result.token, refreshToken: result.refreshToken || refreshToken });
+        }
       } else if (result.evicted) {
-        if (onAuthEvicted) onAuthEvicted();
+        if (generation === sessionGeneration && onAuthEvicted) {
+          onAuthEvicted({ token, refreshToken });
+        }
       }
     } catch {
       // Network or transient error during refresh attempt - do not evict session
     }
   } else if (response.status === 401 && !refreshToken) {
-    if (onAuthEvicted) onAuthEvicted();
+    if (generation === sessionGeneration && onAuthEvicted) {
+      onAuthEvicted({ token, refreshToken });
+    }
   }
 
+  if (generation !== sessionGeneration) throw new Error('Session changed. Please try again.');
   return response;
 }
 
 interface SilentRefreshResult {
   token: string | null;
+  refreshToken: string | null;
   evicted: boolean;
 }
 
-let refreshPromise: Promise<SilentRefreshResult> | null = null;
+const refreshRequests = new Map<string, Promise<SilentRefreshResult>>();
 
 async function handleSilentRefresh(apiUrl: string, refreshTokenStr: string): Promise<SilentRefreshResult> {
-  if (isRefreshing && refreshPromise) return refreshPromise;
+  const generation = sessionGeneration;
+  const key = JSON.stringify([generation, apiUrl, refreshTokenStr]);
+  const pending = refreshRequests.get(key);
+  if (pending) return pending;
 
-  isRefreshing = true;
-  refreshPromise = (async (): Promise<SilentRefreshResult> => {
+  const refreshPromise = (async (): Promise<SilentRefreshResult> => {
     try {
       const res = await fetch(`${apiUrl}/api/v1/auth/refresh`, {
         method: 'POST',
@@ -91,34 +118,35 @@ async function handleSilentRefresh(apiUrl: string, refreshTokenStr: string): Pro
       });
 
       if (res.status === 401 || res.status === 403) {
-        return { token: null, evicted: true };
+        return { token: null, refreshToken: null, evicted: true };
       }
 
       if (!res.ok) {
-        return { token: null, evicted: false };
+        return { token: null, refreshToken: null, evicted: false };
       }
 
-      const json = await res.json();
+      const json = await res.json().catch(() => ({}));
       const data = unwrapData<any>(json);
       if (data && data.token && data.refresh_token) {
-        if (onTokenRefreshed) {
+        if (onTokenRefreshed && generation === sessionGeneration) {
           onTokenRefreshed({
             token: data.token,
             refreshToken: data.refresh_token,
             expiresAt: data.expires_at,
+            previousRefreshToken: refreshTokenStr,
           });
         }
-        return { token: data.token as string, evicted: false };
+        return { token: data.token as string, refreshToken: data.refresh_token as string, evicted: false };
       }
-      return { token: null, evicted: false };
+      return { token: null, refreshToken: null, evicted: false };
     } catch {
-      return { token: null, evicted: false };
+      return { token: null, refreshToken: null, evicted: false };
     } finally {
-      isRefreshing = false;
-      refreshPromise = null;
+      refreshRequests.delete(key);
     }
   })();
 
+  refreshRequests.set(key, refreshPromise);
   return refreshPromise;
 }
 
@@ -130,7 +158,7 @@ export async function apiLogin(apiUrl: string, email: string, password: string) 
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
   });
-  const json = await res.json();
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(extractError(json, 'Login failed'));
   return unwrapData<{ user: User; token: string; refresh_token: string; expires_at: string }>(json);
 }
@@ -141,14 +169,14 @@ export async function apiRegister(apiUrl: string, email: string, password: strin
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password, name }),
   });
-  const json = await res.json();
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(extractError(json, 'Registration failed'));
   return unwrapData<{ user: User; token: string; refresh_token: string; expires_at: string }>(json);
 }
 
 export async function apiGetMe(apiUrl: string, token: string, refreshToken?: string) {
   const res = await fetchWithAuth('/api/v1/auth/me', { apiUrl, token, refreshToken });
-  const json = await res.json();
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(extractError(json, 'Failed to fetch current user'));
   return unwrapData<User>(json);
 }
@@ -157,7 +185,7 @@ export async function apiGetMe(apiUrl: string, token: string, refreshToken?: str
 
 export async function apiListTeams(apiUrl: string, token: string, refreshToken?: string) {
   const res = await fetchWithAuth('/api/v1/teams', { apiUrl, token, refreshToken });
-  const json = await res.json();
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(extractError(json, 'Failed to list teams'));
   const data = unwrapData<any>(json);
   return (Array.isArray(data) ? data : []) as Team[];
@@ -171,7 +199,7 @@ export async function apiCreateTeam(apiUrl: string, token: string, name: string,
     refreshToken,
     body: JSON.stringify({ name, description }),
   });
-  const json = await res.json();
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(extractError(json, 'Failed to create team'));
   return unwrapData<Team>(json);
 }
@@ -191,7 +219,7 @@ export async function apiUpdateTeam(
     refreshToken,
     body: JSON.stringify({ name, description }),
   });
-  const json = await res.json();
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(extractError(json, 'Failed to update team'));
   return unwrapData<Team>(json);
 }
@@ -211,7 +239,7 @@ export async function apiDeleteTeam(apiUrl: string, token: string, teamId: strin
 
 export async function apiListTeamMembers(apiUrl: string, token: string, teamId: string, refreshToken?: string) {
   const res = await fetchWithAuth(`/api/v1/teams/${teamId}/members`, { apiUrl, token, refreshToken });
-  const json = await res.json();
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(extractError(json, 'Failed to list team members'));
   const data = unwrapData<any>(json);
   return (Array.isArray(data) ? data : []) as TeamMember[];
@@ -232,7 +260,7 @@ export async function apiAddTeamMember(
     refreshToken,
     body: JSON.stringify({ user_id: userId, role }),
   });
-  const json = await res.json();
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(extractError(json, 'Failed to add team member'));
   return unwrapData<any>(json);
 }
@@ -254,7 +282,7 @@ export async function apiRemoveTeamMember(apiUrl: string, token: string, teamId:
 
 export async function apiListTeamProjects(apiUrl: string, token: string, teamId: string, refreshToken?: string) {
   const res = await fetchWithAuth(`/api/v1/teams/${teamId}/projects`, { apiUrl, token, refreshToken });
-  const json = await res.json();
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(extractError(json, 'Failed to list projects'));
   const data = unwrapData<any>(json);
   return (Array.isArray(data) ? data : []) as Project[];
@@ -275,7 +303,7 @@ export async function apiCreateProject(
     refreshToken,
     body: JSON.stringify({ name, description }),
   });
-  const json = await res.json();
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(extractError(json, 'Failed to create project'));
   return unwrapData<Project>(json);
 }
@@ -295,7 +323,7 @@ export async function apiUpdateProject(
     refreshToken,
     body: JSON.stringify({ name, description }),
   });
-  const json = await res.json();
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(extractError(json, 'Failed to update project'));
   return unwrapData<Project>(json);
 }
@@ -315,7 +343,7 @@ export async function apiDeleteProject(apiUrl: string, token: string, projectId:
 
 export async function apiListProjectMembers(apiUrl: string, token: string, projectId: string, refreshToken?: string) {
   const res = await fetchWithAuth(`/api/v1/projects/${projectId}/members`, { apiUrl, token, refreshToken });
-  const json = await res.json();
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(extractError(json, 'Failed to list project members'));
   const data = unwrapData<any>(json);
   return (Array.isArray(data) ? data : []) as ProjectMember[];
@@ -336,7 +364,7 @@ export async function apiAddProjectMember(
     refreshToken,
     body: JSON.stringify({ user_id: userId, role }),
   });
-  const json = await res.json();
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(extractError(json, 'Failed to assign project member'));
   return unwrapData<any>(json);
 }
@@ -362,7 +390,7 @@ export async function apiSearchUsers(apiUrl: string, token: string, query: strin
     token,
     refreshToken,
   });
-  const json = await res.json();
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(extractError(json, 'Search failed'));
   const data = unwrapData<any>(json);
   return (Array.isArray(data) ? data : []) as User[];
@@ -370,7 +398,7 @@ export async function apiSearchUsers(apiUrl: string, token: string, query: strin
 
 export async function apiListAllUsers(apiUrl: string, token: string, refreshToken?: string) {
   const res = await fetchWithAuth('/api/v1/admin/users', { apiUrl, token, refreshToken });
-  const json = await res.json();
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(extractError(json, 'Failed to list users'));
   const data = unwrapData<any>(json);
   return (Array.isArray(data) ? data : []) as User[];
@@ -392,7 +420,7 @@ export async function apiProvisionUser(
     refreshToken,
     body: JSON.stringify({ email, password, name, role }),
   });
-  const json = await res.json();
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(extractError(json, 'Failed to provision user'));
   return unwrapData<User>(json);
 }
@@ -446,7 +474,7 @@ export async function apiListProjectCollections(
     token,
     refreshToken,
   });
-  const json = await res.json();
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(extractError(json, 'Failed to list collections'));
   const data = unwrapData<any>(json);
   return (Array.isArray(data) ? data : []) as Collection[];
@@ -463,7 +491,7 @@ export async function apiGetCollection(
     token,
     refreshToken,
   });
-  const json = await res.json();
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(extractError(json, 'Failed to fetch collection'));
   return unwrapData<Collection>(json);
 }
@@ -483,7 +511,7 @@ export async function apiUpdateCollectionPermission(
     refreshToken,
     body: JSON.stringify({ min_role: minRole, base_version: baseVersion }),
   });
-  const json = await res.json();
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(extractError(json, 'Failed to update collection permission'));
   return unwrapData<Collection>(json);
 }
@@ -524,7 +552,7 @@ export async function apiListProjectEnvironments(
     token,
     refreshToken,
   });
-  const json = await res.json();
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(extractError(json, 'Failed to list environments'));
   const data = unwrapData<any>(json);
   return (Array.isArray(data) ? data : []) as Environment[];
@@ -545,7 +573,7 @@ export async function apiUpdateEnvironmentPermission(
     refreshToken,
     body: JSON.stringify({ min_role: minRole, base_version: baseVersion }),
   });
-  const json = await res.json();
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(extractError(json, 'Failed to update environment permission'));
   return unwrapData<Environment>(json);
 }
@@ -583,4 +611,3 @@ export async function apiDeleteEnvironment(
   if (!res.ok) throw new Error(extractError(json, 'Failed to delete environment'));
   return unwrapData<{ message: string }>(json);
 }
-

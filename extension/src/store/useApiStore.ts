@@ -866,20 +866,43 @@ export const useApiStore = create<ApiStoreState>()(
         if (colsToImport.length === 0) {
           return { success: false, message: 'No local collections found to import' };
         }
+
+        let importedCount = 0;
         try {
           set({ syncStatus: 'syncing', syncError: null });
-          await batchImportToScope(
-            cloudConfig.apiUrl,
-            cloudConfig.token,
-            cloudConfig.activeScope,
-            colsToImport,
-            cloudConfig.refreshToken
-          );
+          for (let i = 0; i < colsToImport.length; i++) {
+            const col = colsToImport[i];
+            if (colsToImport.length > 1) {
+              set({
+                syncStatus: 'syncing',
+                syncError: `Importing collection ${i + 1} of ${colsToImport.length} (${col.name})...`,
+              });
+            }
+            await batchImportToScope(
+              cloudConfig.apiUrl,
+              cloudConfig.token,
+              cloudConfig.activeScope,
+              [col],
+              cloudConfig.refreshToken
+            );
+            importedCount++;
+          }
           await get().pullCloudDelta();
+          set({ syncStatus: 'synced', syncError: null });
           return { success: true, message: `Successfully imported ${colsToImport.length} collection(s) to cloud` };
         } catch (err: any) {
-          set({ syncStatus: 'error', syncError: err.message || 'Import failed' });
-          return { success: false, message: err.message || 'Import failed' };
+          if (importedCount > 0) {
+            try {
+              await get().pullCloudDelta();
+            } catch {
+              // ignore delta pull error during failure recovery
+            }
+          }
+          const failMsg = importedCount > 0
+            ? `Imported ${importedCount} of ${colsToImport.length} collection(s). Error on remaining: ${err.message || 'Import failed'}`
+            : (err.message || 'Import failed');
+          set({ syncStatus: 'error', syncError: failMsg });
+          return { success: false, message: failMsg };
         }
       },
       fetchScopes: async (force = false) => {
@@ -3753,6 +3776,7 @@ export const useApiStore = create<ApiStoreState>()(
 // Register silent background refresh listener to keep cloudConfig tokens up to date
 if (!isOfflineOnly) {
   registerTokenRefreshCallback((newTokens) => {
+    if (useApiStore.getState().cloudConfig.refreshToken !== newTokens.previousRefreshToken) return;
     useApiStore.getState().setCloudConfig({
       token: newTokens.token,
       refreshToken: newTokens.refreshToken,
@@ -3762,8 +3786,9 @@ if (!isOfflineOnly) {
 
   registerAuthEvictedCallback((reason) => {
     const state = useApiStore.getState();
-    if (state.workspaceMode === 'cloud') {
+    if (state.cloudConfig.token) {
       state.logoutCloud();
+      if (typeof window !== 'undefined') window.dispatchEvent(new Event('airrest:auth-required'));
       setTimeout(() => {
         useApiStore.setState({ syncError: reason });
       }, 300);

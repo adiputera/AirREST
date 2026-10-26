@@ -50,6 +50,7 @@ import {
   CollectionItem,
 } from '../types';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { normalizeEnvironmentVariables } from '../lib/environmentVariables';
 
 export const ProjectsView: React.FC = () => {
   const apiUrl = useHubStore((state) => state.apiUrl);
@@ -82,7 +83,8 @@ export const ProjectsView: React.FC = () => {
   const [isUpdatingProj, setIsUpdatingProj] = useState(false);
 
   const [isAssignMemberOpen, setIsAssignMemberOpen] = useState(false);
-  const [selectedUserIdToAssign, setSelectedUserIdToAssign] = useState<string>('');
+  const [memberFilterQuery, setMemberFilterQuery] = useState('');
+  const [selectedUserIdsToAssign, setSelectedUserIdsToAssign] = useState<string[]>([]);
   const [assignedRole, setAssignedRole] = useState<'admin' | 'maintainer' | 'contributor' | 'reader'>('contributor');
   const [isAssigningMember, setIsAssigningMember] = useState(false);
 
@@ -121,23 +123,30 @@ export const ProjectsView: React.FC = () => {
   // 1. Load teams list
   useEffect(() => {
     if (!token) return;
+    let cancelled = false;
     const loadTeams = async () => {
       try {
         const data = await apiListTeams(apiUrl, token, refreshToken || undefined);
+        if (cancelled) return;
         setTeams(data);
-        if (data.length > 0 && !selectedTeamId) {
-          setSelectedTeamId(data[0].id);
+        if (!data.some((team) => team.id === useHubStore.getState().selectedTeamId)) {
+          setSelectedTeamId(data[0]?.id || null);
         }
       } catch (err) {
-        console.error('Failed to load teams:', err);
+        if (!cancelled) setErrorMsg(err instanceof Error ? err.message : 'Failed to load teams');
       }
     };
     loadTeams();
+    return () => { cancelled = true; };
   }, [apiUrl, token]);
 
   // 2. Load projects for selected team
   useEffect(() => {
+    setProjects([]);
+    setTeamMembers([]);
+    setIsLoadingProjects(false);
     if (!selectedTeamId || !token) return;
+    let cancelled = false;
     const loadProjects = async () => {
       setIsLoadingProjects(true);
       setErrorMsg(null);
@@ -146,52 +155,57 @@ export const ProjectsView: React.FC = () => {
           apiListTeamProjects(apiUrl, token, selectedTeamId, refreshToken || undefined),
           apiListTeamMembers(apiUrl, token, selectedTeamId, refreshToken || undefined),
         ]);
+        if (cancelled || useHubStore.getState().selectedTeamId !== selectedTeamId) return;
         setProjects(projData);
         setTeamMembers(tmData);
 
         if (projData.length > 0) {
-          if (!selectedProjectId || !projData.some((p) => p.id === selectedProjectId)) {
+          if (!projData.some((p) => p.id === useHubStore.getState().selectedProjectId)) {
             setSelectedProjectId(projData[0].id);
           }
         } else {
           setSelectedProjectId(null);
         }
       } catch (err: any) {
-        setErrorMsg(err.message || 'Failed to load projects');
+        if (!cancelled) setErrorMsg(err.message || 'Failed to load projects');
       } finally {
-        setIsLoadingProjects(false);
+        if (!cancelled) setIsLoadingProjects(false);
       }
     };
     loadProjects();
-  }, [selectedTeamId, token]);
+    return () => { cancelled = true; };
+  }, [selectedTeamId, apiUrl, token]);
 
   // 3. Load project members for selected project
   useEffect(() => {
-    if (!selectedProjectId || !token) {
-      setProjectMembers([]);
-      return;
-    }
+    setProjectMembers([]);
+    setIsLoadingMembers(false);
+    if (!selectedProjectId || !token) return;
+    let cancelled = false;
     const loadMembers = async () => {
       setIsLoadingMembers(true);
       try {
         const data = await apiListProjectMembers(apiUrl, token, selectedProjectId, refreshToken || undefined);
+        if (cancelled || useHubStore.getState().selectedProjectId !== selectedProjectId) return;
         setProjectMembers(data);
       } catch (err) {
-        console.error('Failed to load project members:', err);
+        if (!cancelled) setErrorMsg(err instanceof Error ? err.message : 'Failed to load project members');
       } finally {
-        setIsLoadingMembers(false);
+        if (!cancelled) setIsLoadingMembers(false);
       }
     };
     loadMembers();
-  }, [selectedProjectId, token]);
+    return () => { cancelled = true; };
+  }, [selectedProjectId, apiUrl, token]);
 
   // 4. Load project collections and environments for selected project
   useEffect(() => {
-    if (!selectedProjectId || !token) {
-      setCollections([]);
-      setEnvironments([]);
-      return;
-    }
+    setCollections([]);
+    setEnvironments([]);
+    setIsLoadingCollections(false);
+    setIsLoadingEnvironments(false);
+    if (!selectedProjectId || !token) return;
+    let cancelled = false;
     const loadResources = async () => {
       setIsLoadingCollections(true);
       setIsLoadingEnvironments(true);
@@ -200,6 +214,7 @@ export const ProjectsView: React.FC = () => {
           apiListProjectCollections(apiUrl, token, selectedProjectId, refreshToken || undefined),
           apiListProjectEnvironments(apiUrl, token, selectedProjectId, refreshToken || undefined),
         ]);
+        if (cancelled) return;
         const colDetails = await Promise.all(
           colList.map((c) =>
             apiGetCollection(apiUrl, token, c.id, refreshToken || undefined).catch(() => ({
@@ -208,36 +223,37 @@ export const ProjectsView: React.FC = () => {
             }))
           )
         );
+        if (cancelled || useHubStore.getState().selectedProjectId !== selectedProjectId) return;
         setCollections(colDetails);
         setEnvironments(envData);
       } catch (err) {
-        console.error('Failed to load project collections/environments:', err);
+        if (!cancelled) setErrorMsg(err instanceof Error ? err.message : 'Failed to load project resources');
       } finally {
-        setIsLoadingCollections(false);
-        setIsLoadingEnvironments(false);
+        if (!cancelled) {
+          setIsLoadingCollections(false);
+          setIsLoadingEnvironments(false);
+        }
       }
     };
     loadResources();
-  }, [selectedProjectId, token]);
+    return () => { cancelled = true; };
+  }, [selectedProjectId, apiUrl, token]);
 
   const activeProject = projects.find((p) => p.id === selectedProjectId);
   const activeTeam = teams.find((t) => t.id === selectedTeamId);
-  const canEditProject =
-    user?.role === 'superadmin' ||
-    activeTeam?.user_role === 'admin' ||
-    activeProject?.user_role === 'admin';
+  const isTeamAdmin = user?.role === 'superadmin' || activeTeam?.user_role === 'admin';
+  const canEditProject = isTeamAdmin || activeProject?.user_role === 'admin';
   const canManagePermissions = canEditProject || activeProject?.user_role === 'maintainer';
   const canMoveCollection =
     canEditProject ||
-    activeProject?.user_role === 'maintainer' ||
-    activeProject?.user_role === 'contributor';
+    activeProject?.user_role === 'maintainer';
 
   const eligibleTargetProjects = projects.filter((p) => {
     if (p.id === selectedProjectId) return false;
     const isSuper = user?.role === 'superadmin';
     const isTeamAdm = activeTeam?.user_role === 'admin';
     const role = p.user_role;
-    return isSuper || isTeamAdm || role === 'admin' || role === 'maintainer' || role === 'contributor';
+    return isSuper || isTeamAdm || role === 'admin' || role === 'maintainer';
   });
 
   const handleConfirmMoveCollection = async (e: React.FormEvent) => {
@@ -248,6 +264,7 @@ export const ProjectsView: React.FC = () => {
     try {
       await apiMoveCollection(apiUrl, token, moveColItem.id, targetMoveProjectId, undefined, refreshToken || undefined);
       setMoveColItem(null);
+      if (useHubStore.getState().selectedProjectId !== selectedProjectId) return;
       if (selectedProjectId) {
         const colList = await apiListProjectCollections(apiUrl, token, selectedProjectId, refreshToken || undefined);
         const colDetails = await Promise.all(
@@ -258,6 +275,7 @@ export const ProjectsView: React.FC = () => {
             }))
           )
         );
+        if (useHubStore.getState().selectedProjectId !== selectedProjectId) return;
         setCollections(colDetails);
       }
     } catch (err: any) {
@@ -397,7 +415,12 @@ export const ProjectsView: React.FC = () => {
       }
     }
 
-    const renderItem = (item: CollectionItem, depth = 0) => {
+    const renderItem = (item: CollectionItem, depth = 0, ancestors = new Set<string>()): React.ReactNode => {
+      if (ancestors.has(item.id) || depth >= 128) {
+        return <div key={item.id} className="px-3 py-2 text-xs text-amber-400">Folder hierarchy cannot be displayed: cycle or excessive depth.</div>;
+      }
+      const path = new Set(ancestors);
+      path.add(item.id);
       const isFolder = item.type === 'folder';
       const children = childMap.get(item.id) || [];
 
@@ -416,7 +439,7 @@ export const ProjectsView: React.FC = () => {
             </div>
             {children.length > 0 && (
               <div className="space-y-1">
-                {children.map((child) => renderItem(child, depth + 1))}
+                {children.map((child) => renderItem(child, depth + 1, path))}
               </div>
             )}
           </div>
@@ -424,7 +447,10 @@ export const ProjectsView: React.FC = () => {
       }
 
       // It is a request item - purely list title, cannot click like in extension
-      const method = (item.method || 'GET').toUpperCase();
+      const method = (typeof item.method === 'string' && item.method ? item.method : 'GET').toUpperCase();
+      const displayUrl = typeof item.url === 'string'
+        ? item.url
+        : (item.url && typeof (item.url as any).raw === 'string' ? (item.url as any).raw : '');
       return (
         <div
           key={item.id}
@@ -442,11 +468,11 @@ export const ProjectsView: React.FC = () => {
             </span>
             <span className="font-medium text-zinc-200 truncate">{item.name}</span>
           </div>
-          {item.url && (
+          {displayUrl ? (
             <span className="text-[10px] text-zinc-500 font-mono truncate max-w-xs ml-2 hidden sm:inline">
-              {item.url}
+              {displayUrl}
             </span>
-          )}
+          ) : null}
         </div>
       );
     };
@@ -483,7 +509,7 @@ export const ProjectsView: React.FC = () => {
         editProjDesc.trim(),
         refreshToken || undefined
       );
-      setProjects(projects.map((p) => (p.id === selectedProjectId ? { ...p, ...updated } : p)));
+      setProjects((previous) => previous.map((p) => (p.id === selectedProjectId ? { ...p, ...updated } : p)));
       setIsEditProjOpen(false);
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to update project');
@@ -495,7 +521,11 @@ export const ProjectsView: React.FC = () => {
   // Handle Create Project
   const handleCreateProject = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!token || !selectedTeamId) return;
+    if (!token) return;
+    if (!selectedTeamId) {
+      setErrorMsg('A team must be selected before creating a project.');
+      return;
+    }
     setIsCreatingProj(true);
     setErrorMsg(null);
     try {
@@ -507,7 +537,8 @@ export const ProjectsView: React.FC = () => {
         newProjDesc,
         refreshToken || undefined
       );
-      setProjects([newProj, ...projects]);
+      if (useHubStore.getState().selectedTeamId !== selectedTeamId) return;
+      setProjects((previous) => [newProj, ...previous]);
       setSelectedProjectId(newProj.id);
       setIsCreateProjOpen(false);
       setNewProjName('');
@@ -519,24 +550,85 @@ export const ProjectsView: React.FC = () => {
     }
   };
 
-  // Handle Assign Member
+  // Toggle selection for assigning team member to project
+  const toggleSelectTeamMember = (userId: string) => {
+    setSelectedUserIdsToAssign((prev) =>
+      prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId]
+    );
+  };
+
+  // Select / Deselect all eligible team members (filtered)
+  const handleSelectAllTeamMembers = (eligibleList: TeamMember[]) => {
+    setSelectedUserIdsToAssign((prev) => {
+      const allSelected = eligibleList.length > 0 && eligibleList.every((tm) => prev.includes(tm.user_id));
+      if (allSelected) {
+        const eligibleSet = new Set(eligibleList.map((tm) => tm.user_id));
+        return prev.filter((id) => !eligibleSet.has(id));
+      } else {
+        const combined = new Set([...prev, ...eligibleList.map((tm) => tm.user_id)]);
+        return Array.from(combined);
+      }
+    });
+  };
+
+  // Handle Assign Member(s)
   const handleAssignMember = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!token || !selectedProjectId || !selectedUserIdToAssign) return;
+    if (!token || !selectedProjectId || selectedUserIdsToAssign.length === 0) return;
     setIsAssigningMember(true);
     try {
-      await apiAddProjectMember(
-        apiUrl,
-        token,
-        selectedProjectId,
-        selectedUserIdToAssign,
-        assignedRole,
-        refreshToken || undefined
+      const results = await Promise.allSettled(
+        selectedUserIdsToAssign.map((userId) =>
+          apiAddProjectMember(
+            apiUrl,
+            token,
+            selectedProjectId,
+            userId,
+            assignedRole,
+            refreshToken || undefined
+          )
+        )
       );
-      const updated = await apiListProjectMembers(apiUrl, token, selectedProjectId, refreshToken || undefined);
-      setProjectMembers(updated);
-      setIsAssignMemberOpen(false);
-      setSelectedUserIdToAssign('');
+
+      const successfulIds = new Set<string>();
+      const failedAssignments: { userId: string; error: string }[] = [];
+
+      results.forEach((res, index) => {
+        const uid = selectedUserIdsToAssign[index];
+        if (res.status === 'fulfilled') {
+          successfulIds.add(uid);
+        } else {
+          failedAssignments.push({
+            userId: uid,
+            error: res.reason?.message || 'Failed to assign member',
+          });
+        }
+      });
+
+      if (useHubStore.getState().selectedProjectId === selectedProjectId) {
+        const updated = await apiListProjectMembers(apiUrl, token, selectedProjectId, refreshToken || undefined);
+        if (useHubStore.getState().selectedProjectId === selectedProjectId) {
+          setProjectMembers(updated);
+        }
+      }
+
+      if (failedAssignments.length === 0) {
+        setIsAssignMemberOpen(false);
+        setSelectedUserIdsToAssign([]);
+        setMemberFilterQuery('');
+      } else {
+        setSelectedUserIdsToAssign((prev) => prev.filter((id) => !successfulIds.has(id)));
+        const errorList = failedAssignments
+          .map((f) => {
+            const tm = teamMembers.find((m) => m.user_id === f.userId);
+            const name = tm?.user?.name || tm?.name || f.userId;
+            return `${name}: ${f.error}`;
+          })
+          .join('\n');
+        alert(
+          `Successfully assigned ${successfulIds.size} member(s).\nFailed to assign ${failedAssignments.length} member(s):\n${errorList}`
+        );
+      }
     } catch (err: any) {
       alert(err.message || 'Failed to assign project member');
     } finally {
@@ -560,7 +652,8 @@ export const ProjectsView: React.FC = () => {
     setIsRemovingMember(true);
     try {
       await apiRemoveProjectMember(apiUrl, token, selectedProjectId, memberToRemove.user_id, refreshToken || undefined);
-      setProjectMembers(projectMembers.filter((m) => m.user_id !== memberToRemove.user_id));
+      if (useHubStore.getState().selectedProjectId !== selectedProjectId) return;
+      setProjectMembers((previous) => previous.filter((m) => m.user_id !== memberToRemove.user_id));
       setMemberToRemove(null);
     } catch (err: any) {
       alert(err.message || 'Failed to unassign member');
@@ -575,9 +668,10 @@ export const ProjectsView: React.FC = () => {
     setIsDeletingProject(true);
     try {
       await apiDeleteProject(apiUrl, token, projectToDelete.id, refreshToken || undefined);
+      if (useHubStore.getState().selectedTeamId !== selectedTeamId) return;
       const updatedProjects = projects.filter((p) => p.id !== projectToDelete.id);
       setProjects(updatedProjects);
-      if (selectedProjectId === projectToDelete.id) {
+      if (useHubStore.getState().selectedProjectId === projectToDelete.id) {
         setSelectedProjectId(updatedProjects[0]?.id || null);
       }
       setProjectToDelete(null);
@@ -633,7 +727,9 @@ export const ProjectsView: React.FC = () => {
         editRole,
         refreshToken || undefined
       );
+      if (useHubStore.getState().selectedProjectId !== selectedProjectId) return;
       const updated = await apiListProjectMembers(apiUrl, token, selectedProjectId, refreshToken || undefined);
+      if (useHubStore.getState().selectedProjectId !== selectedProjectId) return;
       setProjectMembers(updated);
       setEditingMember(null);
     } catch (err: any) {
@@ -659,13 +755,9 @@ export const ProjectsView: React.FC = () => {
     const q = searchEnvironment.toLowerCase();
     if (!q) return true;
     if (env.name.toLowerCase().includes(q)) return true;
-    const rawVars: any[] = Array.isArray(env.variables)
-      ? env.variables
-      : typeof env.variables === 'string'
-      ? JSON.parse(env.variables || '[]')
-      : [];
+    const rawVars = normalizeEnvironmentVariables(env.variables);
     return rawVars.some(
-      (v: any) =>
+      (v) =>
         (typeof v.key === 'string' && v.key.toLowerCase().includes(q)) ||
         (typeof v.value === 'string' && v.value.toLowerCase().includes(q))
     );
@@ -686,13 +778,20 @@ export const ProjectsView: React.FC = () => {
               <select
                 value={selectedTeamId || ''}
                 onChange={(e) => setSelectedTeamId(e.target.value)}
-                className="w-full bg-transparent text-xs font-semibold text-zinc-200 focus:outline-none cursor-pointer truncate"
+                disabled={teams.length === 0}
+                className="w-full bg-transparent text-xs font-semibold text-zinc-200 focus:outline-none cursor-pointer truncate disabled:opacity-50"
               >
-                {teams.map((t) => (
-                  <option key={t.id} value={t.id} className="bg-zinc-900 text-zinc-200">
-                    {t.name}
+                {teams.length === 0 ? (
+                  <option value="" disabled className="bg-zinc-900 text-zinc-400">
+                    -- No Teams Available --
                   </option>
-                ))}
+                ) : (
+                  teams.map((t) => (
+                    <option key={t.id} value={t.id} className="bg-zinc-900 text-zinc-200">
+                      {t.name}
+                    </option>
+                  ))
+                )}
               </select>
             </div>
           </div>
@@ -702,13 +801,15 @@ export const ProjectsView: React.FC = () => {
               <FolderGit2 className="h-3.5 w-3.5 text-sky-400" />
               <span>Projects ({projects.length})</span>
             </h2>
-            <button
-              onClick={() => setIsCreateProjOpen(true)}
-              className="flex items-center gap-1 rounded-lg bg-sky-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-sky-500 transition shadow-sm"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              <span>New Project</span>
-            </button>
+            {isTeamAdmin && selectedTeamId && (
+              <button
+                onClick={() => setIsCreateProjOpen(true)}
+                className="flex items-center gap-1 rounded-lg bg-sky-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-sky-500 transition shadow-sm"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>New Project</span>
+              </button>
+            )}
           </div>
 
           <div className="relative">
@@ -768,43 +869,37 @@ export const ProjectsView: React.FC = () => {
       {/* Right Column: Selected Project & RBAC Members */}
       <div className="flex-1 overflow-y-auto p-8 bg-zinc-950">
         {activeProject ? (
-          <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in duration-150">
+          <div className="max-w-5xl mx-auto space-y-8 animate-in fade-in duration-150">
             {/* Project Banner */}
-            <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <div>
-                <div className="flex items-center gap-2 mb-1">
-                  <h1 className="text-xl font-bold text-zinc-100">{activeProject.name}</h1>
-                  <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-2.5 py-0.5 text-xs font-semibold text-sky-400">
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+              <div className="min-w-0 flex-1 space-y-2">
+                <h1 className="text-xl md:text-2xl font-bold text-zinc-100 tracking-tight">
+                  {activeProject.name}
+                </h1>
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-sky-500/30 bg-sky-500/10 px-2.5 py-0.5 text-xs font-semibold text-sky-400 shrink-0">
+                    <Users className="h-3 w-3" />
                     Team: {activeTeam?.name}
                   </span>
-                  {canEditProject && (
-                    <button
-                      onClick={() => handleOpenEditProject(activeProject)}
-                      className="rounded-lg p-1 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition"
-                      title="Edit Project"
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </button>
-                  )}
                 </div>
-                <p className="text-xs text-zinc-400 max-w-xl">
+                <p className="text-xs text-zinc-400 leading-relaxed max-w-2xl">
                   {activeProject.description || 'No description provided for this project.'}
                 </p>
               </div>
 
-              <div className="flex items-center gap-2.5 shrink-0">
+              <div className="flex flex-wrap items-center gap-2.5 shrink-0 self-start lg:self-auto">
                 {canEditProject && (
                   <>
                     <button
                       onClick={() => handleOpenEditProject(activeProject)}
-                      className="flex items-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-800/80 px-3 py-2 text-xs font-semibold text-zinc-200 hover:bg-zinc-700 hover:text-white transition shadow-sm"
+                      className="flex items-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-800/80 px-3.5 py-2 text-xs font-semibold text-zinc-200 hover:bg-zinc-700 hover:text-white transition shadow-sm whitespace-nowrap"
                     >
                       <Pencil className="h-3.5 w-3.5 text-zinc-400" />
                       <span>Edit Project</span>
                     </button>
                     <button
                       onClick={() => setProjectToDelete(activeProject)}
-                      className="flex items-center gap-1.5 rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs font-semibold text-rose-300 hover:bg-rose-500/20 hover:text-rose-200 transition shadow-sm"
+                      className="flex items-center gap-1.5 rounded-xl border border-rose-500/20 bg-rose-500/10 px-3.5 py-2 text-xs font-semibold text-rose-300 hover:bg-rose-500/20 hover:text-rose-200 transition shadow-sm whitespace-nowrap"
                       title="Delete Project"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -813,7 +908,7 @@ export const ProjectsView: React.FC = () => {
                   </>
                 )}
                 {activeProject.user_role && (
-                  <div className="flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2 text-xs">
+                  <div className="flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2 text-xs shrink-0 whitespace-nowrap">
                     <Shield className="h-4 w-4 text-sky-400" />
                     <span className="text-zinc-400">Your Role:</span>
                     <span className="font-bold text-zinc-100 uppercase">{activeProject.user_role}</span>
@@ -886,21 +981,37 @@ export const ProjectsView: React.FC = () => {
             {/* TAB 1: Assigned Project Members */}
             {projectSubTab === 'members' && (
               <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-base font-bold text-zinc-100">Assigned Project Members</h3>
-                    <p className="text-xs text-zinc-400">
-                      Granular RBAC: Admin (full), Maintainer (manage envs &amp; collections), Contributor (read &amp; write OCC), Reader (read-only)
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+                  <div className="space-y-1 min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-base font-bold text-zinc-100">Assigned Project Members</h3>
+                      <span className="rounded-full bg-zinc-800/80 px-2 py-0.5 text-[10px] font-semibold text-zinc-400 border border-zinc-700/50">
+                        {projectMembers.length} {projectMembers.length === 1 ? 'member' : 'members'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-zinc-400 leading-relaxed">
+                      Granular RBAC:{' '}
+                      <span className="text-zinc-300 font-medium">Admin</span> (full),{' '}
+                      <span className="text-zinc-300 font-medium">Maintainer</span> (move, delete &amp; manage collections),{' '}
+                      <span className="text-zinc-300 font-medium">Contributor</span> (read &amp; write collections),{' '}
+                      <span className="text-zinc-300 font-medium">Reader</span> (read-only)
                     </p>
                   </div>
 
-                  <button
-                    onClick={() => setIsAssignMemberOpen(true)}
-                    className="flex items-center gap-1.5 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-400 hover:bg-sky-500/20 transition shadow-sm"
-                  >
-                    <UserCheck className="h-3.5 w-3.5" />
-                    <span>Assign Team Member</span>
-                  </button>
+                  {canEditProject && (
+                    <button
+                      onClick={() => {
+                        setMemberFilterQuery('');
+                        setSelectedUserIdsToAssign([]);
+                        setAssignedRole('contributor');
+                        setIsAssignMemberOpen(true);
+                      }}
+                      className="flex items-center gap-2 rounded-xl border border-sky-500/30 bg-sky-500/10 px-3.5 py-2 text-xs font-semibold text-sky-400 hover:bg-sky-500/20 transition shadow-sm shrink-0 whitespace-nowrap self-start sm:self-auto"
+                    >
+                      <UserCheck className="h-4 w-4" />
+                      <span>Assign Team Members</span>
+                    </button>
+                  )}
                 </div>
 
                 {/* Members Table */}
@@ -911,20 +1022,20 @@ export const ProjectsView: React.FC = () => {
                         <th className="px-4 py-3">Member</th>
                         <th className="px-4 py-3">Email</th>
                         <th className="px-4 py-3">Access Level (RBAC)</th>
-                        <th className="px-4 py-3 text-right">Actions</th>
+                        {canEditProject && <th className="px-4 py-3 text-right">Actions</th>}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-800/60 text-zinc-200">
                       {isLoadingMembers ? (
                         <tr>
-                          <td colSpan={4} className="py-8 text-center text-zinc-500">
+                          <td colSpan={canEditProject ? 4 : 3} className="py-8 text-center text-zinc-500">
                             <Loader2 className="h-4 w-4 animate-spin inline mr-2 text-sky-400" />
                             Loading project members...
                           </td>
                         </tr>
                       ) : projectMembers.length === 0 ? (
                         <tr>
-                          <td colSpan={4} className="py-8 text-center text-zinc-500">
+                          <td colSpan={canEditProject ? 4 : 3} className="py-8 text-center text-zinc-500">
                             No members assigned to this project yet. Assign team members to grant access.
                           </td>
                         </tr>
@@ -932,6 +1043,7 @@ export const ProjectsView: React.FC = () => {
                         projectMembers.map((member) => {
                           const mName = member.user?.name || member.name || 'Member';
                           const mEmail = member.user?.email || member.email || '';
+                          const isSuper = member.user?.role === 'superadmin';
                           return (
                             <tr key={member.user_id} className="hover:bg-zinc-800/30 transition">
                               <td className="px-4 py-3 font-medium flex items-center gap-2">
@@ -942,43 +1054,58 @@ export const ProjectsView: React.FC = () => {
                               </td>
                               <td className="px-4 py-3 text-zinc-400">{mEmail}</td>
                               <td className="px-4 py-3">
-                                <span
-                                  className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
-                                    member.role === 'admin'
-                                      ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                                      : member.role === 'maintainer'
-                                      ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
-                                      : member.role === 'contributor'
-                                      ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
-                                      : 'bg-zinc-800 text-zinc-300'
-                                  }`}
-                                >
-                                  {member.role}
-                                </span>
-                              </td>
-                              <td className="px-4 py-3 text-right">
-                                <div className="flex items-center justify-end gap-1">
-                                  <button
-                                    onClick={() => {
-                                      setEditingMember(member);
-                                      setEditRole(member.role);
-                                    }}
-                                    className="rounded p-1 text-zinc-500 hover:bg-sky-500/10 hover:text-sky-400 transition"
-                                    title="Edit Role"
+                                {isSuper ? (
+                                  <span className="rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider inline-flex items-center gap-1">
+                                    <Shield className="h-3 w-3" />
+                                    Superadmin
+                                  </span>
+                                ) : (
+                                  <span
+                                    className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                                      member.role === 'admin'
+                                        ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                                        : member.role === 'maintainer'
+                                        ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
+                                        : member.role === 'contributor'
+                                        ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
+                                        : 'bg-zinc-800 text-zinc-300'
+                                    }`}
                                   >
-                                    <Pencil className="h-3.5 w-3.5" />
-                                  </button>
-                                  {member.user_id !== user?.id && (
-                                    <button
-                                      onClick={() => setMemberToRemove(member)}
-                                      className="rounded p-1 text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400 transition"
-                                      title="Unassign Member"
-                                    >
-                                      <Trash2 className="h-3.5 w-3.5" />
-                                    </button>
-                                  )}
-                                </div>
+                                    {member.role}
+                                  </span>
+                                )}
                               </td>
+                              {canEditProject && (
+                                <td className="px-4 py-3 text-right">
+                                  {isSuper ? (
+                                    <span className="text-[10px] text-zinc-500 italic pr-1" title="Superadmin permissions are system-wide and cannot be modified">
+                                      Permanent
+                                    </span>
+                                  ) : (
+                                    <div className="flex items-center justify-end gap-1">
+                                      <button
+                                        onClick={() => {
+                                          setEditingMember(member);
+                                          setEditRole(member.role);
+                                        }}
+                                        className="rounded p-1 text-zinc-500 hover:bg-sky-500/10 hover:text-sky-400 transition"
+                                        title="Edit Role"
+                                      >
+                                        <Pencil className="h-3.5 w-3.5" />
+                                      </button>
+                                      {member.user_id !== user?.id && (
+                                        <button
+                                          onClick={() => setMemberToRemove(member)}
+                                          className="rounded p-1 text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400 transition"
+                                          title="Unassign Member"
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5" />
+                                        </button>
+                                      )}
+                                    </div>
+                                  )}
+                                </td>
+                              )}
                             </tr>
                           );
                         })
@@ -1175,11 +1302,7 @@ export const ProjectsView: React.FC = () => {
                     {filteredEnvironments.map((env) => {
                       const minRole = env.min_role || 'reader';
                       const roleBadge = getMinRoleBadge(minRole);
-                      const rawVars: any[] = Array.isArray(env.variables)
-                        ? env.variables
-                        : typeof env.variables === 'string'
-                        ? JSON.parse(env.variables || '[]')
-                        : [];
+                      const rawVars = normalizeEnvironmentVariables(env.variables);
 
                       return (
                         <div
@@ -1254,7 +1377,7 @@ export const ProjectsView: React.FC = () => {
                                     </td>
                                   </tr>
                                 ) : (
-                                  rawVars.map((v: any, idx: number) => {
+                                  rawVars.map((v, idx) => {
                                     const isEnabled = v.enabled !== false;
                                     return (
                                       <tr key={v.id || v.key || idx} className="hover:bg-zinc-800/20 transition">
@@ -1369,11 +1492,11 @@ export const ProjectsView: React.FC = () => {
       {/* Modal: Assign Team Member to Project */}
       {isAssignMemberOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
-          <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+          <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl flex flex-col max-h-[90vh]">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
                 <UserCheck className="h-5 w-5 text-sky-400" />
-                <span>Assign Member to Project</span>
+                <span>Assign Members to Project</span>
               </h3>
               <button
                 onClick={() => setIsAssignMemberOpen(false)}
@@ -1383,28 +1506,184 @@ export const ProjectsView: React.FC = () => {
               </button>
             </div>
 
-            <form onSubmit={handleAssignMember} className="space-y-4">
+            <form onSubmit={handleAssignMember} className="space-y-4 flex flex-col flex-1 overflow-hidden">
+              {/* Filter search */}
               <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1">Select Team Member</label>
-                <select
-                  required
-                  value={selectedUserIdToAssign}
-                  onChange={(e) => setSelectedUserIdToAssign(e.target.value)}
-                  className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none"
-                >
-                  <option value="">-- Choose member from team --</option>
-                  {teamMembers.map((tm) => {
-                    const tmName = tm.user?.name || tm.name || 'Member';
-                    const tmEmail = tm.user?.email || tm.email || '';
-                    return (
-                      <option key={tm.user_id} value={tm.user_id}>
-                        {tmName} {tmEmail ? `(${tmEmail})` : ''}
-                      </option>
-                    );
-                  })}
-                </select>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1">
+                  Search Team Members
+                </label>
+                <div className="relative">
+                  <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-zinc-400" />
+                  <input
+                    type="text"
+                    placeholder="Filter by name or email..."
+                    value={memberFilterQuery}
+                    onChange={(e) => setMemberFilterQuery(e.target.value)}
+                    className="w-full rounded-lg border border-zinc-800 bg-zinc-900 pl-9 pr-8 py-2 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none"
+                  />
+                  {memberFilterQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setMemberFilterQuery('')}
+                      className="absolute right-2.5 top-2 text-zinc-500 hover:text-zinc-300 p-0.5"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
               </div>
 
+              {/* Members Selection List */}
+              {(() => {
+                const query = memberFilterQuery.trim().toLowerCase();
+                const filteredTeamMembers = teamMembers.filter((tm) => {
+                  if (!query) return true;
+                  const name = (tm.user?.name || tm.name || '').toLowerCase();
+                  const email = (tm.user?.email || tm.email || '').toLowerCase();
+                  return name.includes(query) || email.includes(query);
+                });
+
+                const eligibleList = filteredTeamMembers.filter((tm) => {
+                  const isSuper = tm.user?.role === 'superadmin' || (tm as any).user_role === 'superadmin';
+                  return !isSuper && !projectMembers.some((pm) => pm.user_id === tm.user_id);
+                });
+                const allEligibleSelected =
+                  eligibleList.length > 0 &&
+                  eligibleList.every((tm) => selectedUserIdsToAssign.includes(tm.user_id));
+
+                return (
+                  <div className="flex flex-col flex-1 min-h-[140px] max-h-52 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/60">
+                    {/* Header with select all */}
+                    <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800 bg-zinc-900/90 text-[11px] text-zinc-400">
+                      <label className="flex items-center gap-2 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          disabled={eligibleList.length === 0}
+                          checked={allEligibleSelected}
+                          onChange={() => handleSelectAllTeamMembers(eligibleList)}
+                          className="h-3.5 w-3.5 rounded border-zinc-700 bg-zinc-800 text-sky-500 focus:ring-sky-500 focus:ring-offset-zinc-950 cursor-pointer disabled:cursor-not-allowed"
+                        />
+                        <span className="font-medium text-zinc-300">
+                          {allEligibleSelected ? 'Deselect All' : 'Select All Available'}
+                        </span>
+                      </label>
+                      <span>
+                        {eligibleList.length} available · {filteredTeamMembers.length - eligibleList.length} assigned / superadmin
+                      </span>
+                    </div>
+
+                    {/* Member rows */}
+                    {filteredTeamMembers.length === 0 ? (
+                      <div className="p-4 text-center text-xs text-zinc-500">
+                        No team members found matching "{memberFilterQuery}"
+                      </div>
+                    ) : (
+                      <div className="overflow-y-auto divide-y divide-zinc-800/60 p-1">
+                        {filteredTeamMembers.map((tm) => {
+                          const tmName = tm.user?.name || tm.name || 'Member';
+                          const tmEmail = tm.user?.email || tm.email || '';
+                          const isSuper = tm.user?.role === 'superadmin' || (tm as any).user_role === 'superadmin';
+                          const isAlreadyAssigned = isSuper || projectMembers.some((pm) => pm.user_id === tm.user_id);
+                          const isChecked = selectedUserIdsToAssign.includes(tm.user_id);
+
+                          return (
+                            <label
+                              key={tm.user_id}
+                              className={`flex items-center justify-between px-3 py-2 rounded-md transition select-none ${
+                                isAlreadyAssigned
+                                  ? 'opacity-40 cursor-not-allowed bg-zinc-900/30'
+                                  : isChecked
+                                  ? 'bg-sky-500/10 cursor-pointer hover:bg-sky-500/15'
+                                  : 'hover:bg-zinc-800/60 cursor-pointer'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <input
+                                  type="checkbox"
+                                  disabled={isAlreadyAssigned}
+                                  checked={isChecked}
+                                  onChange={() => !isAlreadyAssigned && toggleSelectTeamMember(tm.user_id)}
+                                  className="h-3.5 w-3.5 rounded border-zinc-700 bg-zinc-800 text-sky-500 focus:ring-sky-500 focus:ring-offset-zinc-950 cursor-pointer disabled:cursor-not-allowed"
+                                />
+                                <div className="truncate">
+                                  <div className="text-xs font-semibold text-zinc-200 truncate">{tmName}</div>
+                                  {tmEmail && (
+                                    <div className="text-[11px] text-zinc-400 truncate">{tmEmail}</div>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                {isSuper ? (
+                                  <span className="text-[10px] uppercase font-bold tracking-wider text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded border border-amber-400/20 inline-flex items-center gap-1" title="Superadmin automatically has permanent admin access to all projects">
+                                    <Shield className="h-2.5 w-2.5" />
+                                    Superadmin
+                                  </span>
+                                ) : isAlreadyAssigned ? (
+                                  <span className="text-[10px] uppercase font-semibold tracking-wider text-amber-400/80 bg-amber-400/10 px-1.5 py-0.5 rounded border border-amber-400/20">
+                                    In Project
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] text-zinc-500 capitalize">
+                                    {tm.role}
+                                  </span>
+                                )}
+                              </div>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Selected Chips */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-semibold text-zinc-300">
+                    Selected Members ({selectedUserIdsToAssign.length})
+                  </label>
+                  {selectedUserIdsToAssign.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedUserIdsToAssign([])}
+                      className="text-[11px] text-zinc-400 hover:text-red-400 transition"
+                    >
+                      Clear all
+                    </button>
+                  )}
+                </div>
+
+                {selectedUserIdsToAssign.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-zinc-800 p-3 text-center text-xs text-zinc-500">
+                    No members selected yet. Choose one or more members above.
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto p-2 rounded-lg border border-zinc-800 bg-zinc-900/50">
+                    {selectedUserIdsToAssign.map((userId) => {
+                      const tm = teamMembers.find((m) => m.user_id === userId);
+                      const name = tm?.user?.name || tm?.name || 'Member';
+                      return (
+                        <span
+                          key={userId}
+                          className="inline-flex items-center gap-1.5 rounded-full bg-sky-500/15 border border-sky-500/30 px-2.5 py-0.5 text-[11px] text-sky-200"
+                        >
+                          <span className="font-medium truncate max-w-[120px]">{name}</span>
+                          <button
+                            type="button"
+                            onClick={() => toggleSelectTeamMember(userId)}
+                            className="text-sky-400 hover:text-white transition"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Project Role selection */}
               <div>
                 <label className="block text-xs font-semibold text-zinc-300 mb-1">Project Role (RBAC)</label>
                 <select
@@ -1414,12 +1693,12 @@ export const ProjectsView: React.FC = () => {
                 >
                   <option value="reader">Reader (Read-Only Collections)</option>
                   <option value="contributor">Contributor (Read &amp; Write Collections)</option>
-                  <option value="maintainer">Maintainer (Collections &amp; Production Environments)</option>
+                  <option value="maintainer">Maintainer (Move, Delete &amp; Manage Collections)</option>
                   <option value="admin">Admin (Manage Project &amp; Assign Members)</option>
                 </select>
               </div>
 
-              <div className="flex justify-end gap-2 pt-2">
+              <div className="flex justify-end gap-2 pt-2 border-t border-zinc-800">
                 <button
                   type="button"
                   onClick={() => setIsAssignMemberOpen(false)}
@@ -1429,10 +1708,16 @@ export const ProjectsView: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  disabled={!selectedUserIdToAssign || isAssigningMember}
+                  disabled={selectedUserIdsToAssign.length === 0 || isAssigningMember}
                   className="flex items-center gap-1.5 rounded-lg bg-sky-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-sky-500 transition shadow-md disabled:opacity-50"
                 >
-                  {isAssigningMember ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Confirm Assignment'}
+                  {isAssigningMember ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    `Confirm Assign ${selectedUserIdsToAssign.length > 0 ? `${selectedUserIdsToAssign.length} ` : ''}Member${
+                      selectedUserIdsToAssign.length > 1 ? 's' : ''
+                    }`
+                  )}
                 </button>
               </div>
             </form>
@@ -1477,7 +1762,7 @@ export const ProjectsView: React.FC = () => {
                 >
                   <option value="reader">Reader (Read-Only Collections)</option>
                   <option value="contributor">Contributor (Read &amp; Write Collections)</option>
-                  <option value="maintainer">Maintainer (Collections &amp; Production Environments)</option>
+                  <option value="maintainer">Maintainer (Move, Delete &amp; Manage Collections)</option>
                   <option value="admin">Admin (Manage Project &amp; Assign Members)</option>
                 </select>
               </div>
@@ -1798,7 +2083,7 @@ export const ProjectsView: React.FC = () => {
                 {eligibleTargetProjects.length === 0 ? (
                   <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3 text-center">
                     <p className="text-xs text-zinc-400 leading-relaxed">
-                      No other eligible projects found in this team. You must have at least Contributor role in the destination project.
+                      No other eligible projects found in this team. You must have at least Maintainer role in the destination project.
                     </p>
                   </div>
                 ) : (

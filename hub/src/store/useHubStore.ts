@@ -1,9 +1,19 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { User } from '../types';
-import { DEFAULT_API_URL, registerHubTokenRefresh, registerHubAuthEvicted } from '../lib/api';
+import { DEFAULT_API_URL, registerHubTokenRefresh, registerHubAuthEvicted, invalidateHubSession } from '../lib/api';
 
 export type HubTab = 'teams' | 'projects' | 'superadmin';
+
+const signedOutState = {
+  user: null,
+  token: null,
+  refreshToken: null,
+  tokenExpiresAt: null,
+  activeTab: 'teams' as HubTab,
+  selectedTeamId: null,
+  selectedProjectId: null,
+};
 
 interface HubStoreState {
   apiUrl: string;
@@ -18,6 +28,7 @@ interface HubStoreState {
 
   setApiUrl: (url: string) => void;
   setAuth: (user: User, token: string, refreshToken: string, expiresAt: string) => void;
+  updateUser: (user: User) => void;
   updateTokens: (token: string, refreshToken: string, expiresAt: string) => void;
   logout: () => void;
   setActiveTab: (tab: HubTab) => void;
@@ -38,21 +49,29 @@ export const useHubStore = create<HubStoreState>()(
       selectedTeamId: null,
       selectedProjectId: null,
 
-      setApiUrl: (apiUrl) => set({ apiUrl }),
-      setAuth: (user, token, refreshToken, tokenExpiresAt) =>
-        set({ user, token, refreshToken, tokenExpiresAt }),
+      setApiUrl: (url) => set((state) => {
+        const apiUrl = url.trim().replace(/\/+$/, '') || DEFAULT_API_URL;
+        if (apiUrl === state.apiUrl) return state;
+        invalidateHubSession();
+        return { ...signedOutState, apiUrl };
+      }),
+      setAuth: (user, token, refreshToken, tokenExpiresAt) => {
+        invalidateHubSession();
+        set({ ...signedOutState, user, token, refreshToken, tokenExpiresAt });
+      },
+      updateUser: (user) => set((state) => ({
+        user,
+        activeTab: state.activeTab === 'superadmin' && user.role !== 'superadmin' ? 'teams' : state.activeTab,
+      })),
       updateTokens: (token, refreshToken, tokenExpiresAt) =>
         set({ token, refreshToken, tokenExpiresAt }),
-      logout: () =>
-        set({
-          user: null,
-          token: null,
-          refreshToken: null,
-          tokenExpiresAt: null,
-          selectedTeamId: null,
-          selectedProjectId: null,
-        }),
-      setActiveTab: (activeTab) => set({ activeTab }),
+      logout: () => {
+        invalidateHubSession();
+        set(signedOutState);
+      },
+      setActiveTab: (activeTab) => set((state) => ({
+        activeTab: activeTab === 'superadmin' && state.user?.role !== 'superadmin' ? 'teams' : activeTab,
+      })),
       setSelectedTeamId: (selectedTeamId) => set({ selectedTeamId, selectedProjectId: null }),
       setSelectedProjectId: (selectedProjectId) => set({ selectedProjectId }),
     }),
@@ -70,9 +89,14 @@ export const useHubStore = create<HubStoreState>()(
       }),
       merge: (persistedState: any, currentState) => {
         const merged = { ...currentState, ...(persistedState as object) };
-        // If VITE_API_URL is configured and user's persisted storage is still pointing to default localhost, update to VITE_API_URL
-        if (import.meta.env.VITE_API_URL && persistedState?.apiUrl === 'http://localhost:8080') {
-          merged.apiUrl = DEFAULT_API_URL;
+        // If VITE_API_URL is configured and different from persisted apiUrl, or persisted apiUrl points to vercel while in local dev
+        const isPersistedVercel = typeof persistedState?.apiUrl === 'string' && persistedState.apiUrl.includes('vercel.app');
+        if (
+          (import.meta.env.VITE_API_URL && persistedState?.apiUrl === 'http://localhost:8080' && DEFAULT_API_URL !== persistedState.apiUrl) ||
+          (DEFAULT_API_URL === 'http://localhost:8080' && isPersistedVercel)
+        ) {
+          invalidateHubSession();
+          return { ...merged, ...signedOutState, apiUrl: DEFAULT_API_URL };
         }
         return merged;
       },
@@ -82,10 +106,20 @@ export const useHubStore = create<HubStoreState>()(
 
 // Register silent token refresh callback to persist renewed tokens
 registerHubTokenRefresh((newTokens) => {
+  if (useHubStore.getState().refreshToken !== newTokens.previousRefreshToken) return;
   useHubStore.getState().updateTokens(newTokens.token, newTokens.refreshToken, newTokens.expiresAt);
 });
 
 // Register auth eviction callback to automatically log out if account is deleted/deactivated
-registerHubAuthEvicted(() => {
+registerHubAuthEvicted((evictedSession) => {
+  const current = useHubStore.getState();
+  if (evictedSession) {
+    if (evictedSession.refreshToken && current.refreshToken && evictedSession.refreshToken !== current.refreshToken) {
+      return;
+    }
+    if (evictedSession.token && current.token && evictedSession.token !== current.token) {
+      return;
+    }
+  }
   useHubStore.getState().logout();
 });
