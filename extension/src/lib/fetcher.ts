@@ -1,4 +1,58 @@
 import { ApiRequest, ApiResponse, NetworkErrorCategory } from '@/types/api';
+import { trackBlobUrl } from '@/lib/blobManager';
+import { hasHostPermission } from '@/lib/hostPermissions';
+
+export const RESPONSE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024;
+export const REQUEST_TIMEOUT_MS = 30_000;
+
+class ResponseTooLargeError extends Error {
+  constructor() {
+    super(`Response exceeded the ${RESPONSE_SIZE_LIMIT_BYTES / (1024 * 1024)} MiB limit.`);
+    this.name = 'ResponseTooLargeError';
+  }
+}
+
+async function readResponseBody(response: Response, controller: AbortController): Promise<Uint8Array> {
+  const declaredSize = Number.parseInt(response.headers.get('content-length') || '', 10);
+  if (Number.isFinite(declaredSize) && declaredSize > RESPONSE_SIZE_LIMIT_BYTES) {
+    controller.abort();
+    throw new ResponseTooLargeError();
+  }
+
+  if (!response.body) return new Uint8Array();
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      if (total + value.byteLength > RESPONSE_SIZE_LIMIT_BYTES) {
+        controller.abort();
+        try {
+          await reader.cancel();
+        } catch {
+          // The size-limit result is more useful than a secondary cancellation failure.
+        }
+        throw new ResponseTooLargeError();
+      }
+      chunks.push(value);
+      total += value.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body;
+}
 
 /**
  * Replaces {{variable}} placeholders with values from variables map
@@ -180,9 +234,12 @@ export function prepareRequest(
 
       for (const item of activeFormItems) {
         const itemKey = interpolateVariables(String(item.key).trim(), variables);
-        if (item.type === 'file' && item.file instanceof Blob) {
-          formData.append(itemKey, item.file, item.file.name || 'file.bin');
-        } else if (item.type !== 'file') {
+        if (item.type === 'file') {
+          if (!(item.file instanceof Blob)) {
+            throw new Error(`Attachment for “${item.key || item.fileName || 'unnamed field'}” must be selected again.`);
+          }
+          formData.append(itemKey, item.file, item.file.name || item.fileName || 'file.bin');
+        } else {
           formData.append(itemKey, interpolateVariables(String(item.value ?? ''), variables));
         }
       }
@@ -193,11 +250,12 @@ export function prepareRequest(
       delete headers['content-type'];
     } else if (request.bodyType === 'binary') {
       // Direct raw binary stream upload
-      if (request.bodyBinaryFile?.file) {
-        bodyPayload = request.bodyBinaryFile.file;
-        if (!headers['Content-Type'] && !headers['content-type']) {
-          headers['Content-Type'] = request.bodyBinaryFile.type || 'application/octet-stream';
-        }
+      if (!(request.bodyBinaryFile?.file instanceof Blob)) {
+        throw new Error(`Binary attachment “${request.bodyBinaryFile?.name || 'unnamed file'}” must be selected again.`);
+      }
+      bodyPayload = request.bodyBinaryFile.file;
+      if (!headers['Content-Type'] && !headers['content-type']) {
+        headers['Content-Type'] = request.bodyBinaryFile.type || 'application/octet-stream';
       }
     }
   }
@@ -367,20 +425,46 @@ async function getChromiumNetworkError(url: string): Promise<string | null> {
 
 export async function executeApiRequest(
   request: ApiRequest,
-  variables: Record<string, string> = {}
+  variables: Record<string, string> = {},
+  signal?: AbortSignal
 ): Promise<ApiResponse> {
   const startTime = performance.now();
   let finalUrl = request?.url || '';
+  const controller = new AbortController();
+  let timedOut = false;
+  const abortFromCaller = () => controller.abort();
+  if (signal?.aborted) controller.abort();
+  signal?.addEventListener('abort', abortFromCaller, { once: true });
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, REQUEST_TIMEOUT_MS);
 
   try {
     const { finalUrl: preparedUrl, finalHeaders, finalBody } = prepareRequest(request, variables);
     finalUrl = preparedUrl;
+
+    if (await hasHostPermission(finalUrl) === false) {
+      return {
+        status: 0,
+        statusText: 'Host Permission Required',
+        timeMs: Math.round(performance.now() - startTime),
+        sizeBytes: 0,
+        headers: {},
+        data: `Chrome has not granted this extension access to ${new URL(finalUrl).origin}.`,
+        isError: true,
+        failureKind: 'host_permission',
+        requestUrl: finalUrl,
+        timestamp: Date.now(),
+      };
+    }
 
     const fetchOptions: RequestInit = {
       method: request.method,
       headers: finalHeaders,
       redirect: 'follow',
       cache: 'no-store',
+      signal: controller.signal,
     };
 
     if (request.method !== 'GET' && request.method !== 'HEAD') {
@@ -397,9 +481,8 @@ export async function executeApiRequest(
     });
 
     const rawContentType = response.headers.get('content-type') || '';
-    const arrayBuffer = await response.arrayBuffer();
-    const sizeBytes = arrayBuffer.byteLength;
-    const uint8 = new Uint8Array(arrayBuffer);
+    const uint8 = await readResponseBody(response, controller);
+    const sizeBytes = uint8.byteLength;
 
     const { isBinary, isImage, mimeType } = detectMediaType(uint8, rawContentType);
 
@@ -407,8 +490,10 @@ export async function executeApiRequest(
     let blobUrl: string | undefined = undefined;
 
     if (isBinary) {
-      const blob = new Blob([arrayBuffer], { type: mimeType });
-      blobUrl = URL.createObjectURL(blob);
+      const blobBuffer = new ArrayBuffer(uint8.byteLength);
+      new Uint8Array(blobBuffer).set(uint8);
+      const blob = new Blob([blobBuffer], { type: mimeType });
+      blobUrl = trackBlobUrl(URL.createObjectURL(blob));
       if (mimeType === 'image/svg+xml') {
         const decoder = new TextDecoder('utf-8', { fatal: false });
         textData = decoder.decode(uint8);
@@ -439,6 +524,41 @@ export async function executeApiRequest(
     const timeMs = Math.round(performance.now() - startTime);
     const errorMsg = err instanceof Error ? err.message : String(err);
 
+    if (err instanceof ResponseTooLargeError) {
+      return {
+        status: 0,
+        statusText: 'Response Too Large',
+        timeMs,
+        sizeBytes: 0,
+        headers: {},
+        data: errorMsg,
+        isError: true,
+        errorDetail: errorMsg,
+        failureKind: 'response_too_large',
+        requestUrl: finalUrl,
+        timestamp: Date.now(),
+      };
+    }
+
+    if (controller.signal.aborted) {
+      const failureKind = timedOut ? 'timeout' : 'cancelled';
+      return {
+        status: 0,
+        statusText: timedOut ? 'Request Timed Out' : 'Request Cancelled',
+        timeMs,
+        sizeBytes: 0,
+        headers: {},
+        data: timedOut
+          ? `Request timed out after ${REQUEST_TIMEOUT_MS / 1000} seconds.`
+          : 'Request was cancelled before a complete response was received.',
+        isError: true,
+        errorDetail: errorMsg,
+        failureKind,
+        requestUrl: finalUrl,
+        timestamp: Date.now(),
+      };
+    }
+
     // Wait briefly for Chrome webRequest.onErrorOccurred to record exact net error
     let netErrorCode = await getChromiumNetworkError(finalUrl);
     if (!netErrorCode) {
@@ -463,7 +583,11 @@ export async function executeApiRequest(
       requestUrl: finalUrl,
       netErrorCode: netErrorCode || undefined,
       netErrorCategory,
+      failureKind: 'transport',
       timestamp: Date.now(),
     };
+  } finally {
+    clearTimeout(timeoutId);
+    signal?.removeEventListener('abort', abortFromCaller);
   }
 }

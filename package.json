@@ -1,6 +1,6 @@
 {
   "name": "airrest",
-  "version": "1.1.3",
+  "version": "1.1.4",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -22,6 +22,9 @@
     "typecheck": "npm run --prefix extension typecheck && npm run --prefix hub typecheck",
     "lint": "eslint",
     "test:security-clients": "node --test scripts/security-client.test.mjs",
+    "test:extension-lifecycle": "node --test scripts/extension-request-lifecycle.test.mjs",
+    "test:extension-storage": "node --test scripts/extension-storage.test.mjs",
+    "test:extension-fetcher": "node --test scripts/extension-fetcher.test.mjs",
     "test:hub": "node --test scripts/hub-regression.test.mjs"
   },
   "devDependencies": {

@@ -1,6 +1,6 @@
 # Chrome Web Store Listings — AirREST
 
-> Last Updated: 2026-10-26
+> Last Updated: 2026-10-27
 
 This document provides complete, copy-paste ready store listing metadata and privacy disclosures for both editions of AirREST:
 1. **Full Edition** (`npm run build:full` → `dist/`) — Online & Offline with optional cloud workspace sync.
@@ -60,6 +60,7 @@ SUPPORT
 For questions, bug reports, or feature suggestions, visit the project repository on GitHub:
 https://github.com/adiputera/AirREST
 
+Version 1.1.4 — Added request lifecycle safeguards (pre-request aborts, cancellation, 30s timeout, 10 MiB stream caps), atomic item-collection versioning, side-by-side environment OCC conflict resolution, durable multi-window storage sync, and attachment recovery.
 Version 1.1.3 — Added seamless password change re-authentication, sequential cloud collection import with real-time progress, and aligned move collection capabilities.
 Version 1.1.2 — Added strict RBAC authority enforcement across project scopes, read-only UI indicators, and hardened client stability against edge-case crashes.
 Version 1.1.1 — Refined dropdown & action button UI, optimized cloud sync payload streaming for serverless backends, and added resilient session eviction handling.
@@ -143,6 +144,7 @@ SUPPORT
 For questions, bug reports, or feature suggestions, visit the project repository on GitHub:
 https://github.com/adiputera/AirREST
 
+Version 1.1.4 — Added request lifecycle safeguards (pre-request aborts, cancellation, 30s timeout, 10 MiB stream caps), attachment recovery, multi-window storage synchronization, and isolated memory cleanup.
 Version 1.1.3 — Client performance stability improvements, enhanced offline collection safeguards, and hardened memory management.
 Version 1.1.2 — Hardened client stability against edge-case crashes, improved base64 JWT decoding, and safeguarded form-data file handling.
 Version 1.1.1 — Refined dropdown & action button UI, improved header controls, and enhanced offline workspace switching.

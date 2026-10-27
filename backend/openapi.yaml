@@ -1140,8 +1140,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CollectionEnvelope'
+        '400':
+          description: Validation error or invalid request payload.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Collection not found or deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '409':
-          description: Optimistic concurrency conflict.
+          description: Optimistic concurrency conflict. Data contains latest server collection object.
           content:
             application/json:
               schema:
@@ -1156,7 +1168,7 @@ paths:
       tags:
         - Collections
       summary: Soft delete collection (Tombstone)
-      description: "Requires collection:delete (maintainer/admin), scope access, and min_role. Workspace owners and superadmins retain access. Contributors cannot delete collections."
+      description: "Requires collection:delete (maintainer/admin), scope access, and min_role. Workspace owners and superadmins retain access. Contributors cannot delete collections. Atomically soft-deletes the collection and all child items."
       security:
         - BearerAuth: []
       parameters:
@@ -1173,6 +1185,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MessageEnvelope'
+        '404':
+          description: Collection not found or deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
 
         '413':
           $ref: '#/components/responses/PayloadTooLarge'
@@ -1243,6 +1261,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReorderItemsResponseEnvelope'
+        '400':
+          description: Invalid reorder payload, cycle detected, or item outside collection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Collection not found or deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
 
         '413':
           $ref: '#/components/responses/PayloadTooLarge'
@@ -1278,6 +1308,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReorderItemsResponseEnvelope'
+        '400':
+          description: Invalid reorder payload, cycle detected, or item outside collection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Collection not found or deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
 
         '413':
           $ref: '#/components/responses/PayloadTooLarge'
@@ -1290,7 +1332,9 @@ paths:
       tags:
         - Collection Items
       summary: Create request or folder item
-      description: Creates an item inside a collection.
+      description: |
+        Creates an item inside a collection. Mutating an item atomically increments the parent collection's version and updated_at timestamp.
+        Validates payload structure and hierarchy (rejects malformed arrays, invalid auth, cycle, or non-existent parent).
       security:
         - BearerAuth: []
       requestBody:
@@ -1306,6 +1350,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CollectionItemEnvelope'
+        '400':
+          description: Validation error, malformed item payload, or invalid parent folder.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Target collection or parent folder not found or deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
 
         '413':
           $ref: '#/components/responses/PayloadTooLarge'
@@ -1334,6 +1390,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CollectionItemEnvelope'
+        '404':
+          description: Item or parent collection not found or deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '413':
           $ref: '#/components/responses/PayloadTooLarge'
         '503':
@@ -1346,6 +1408,7 @@ paths:
       summary: Update item (OCC)
       description: |
         Updates request or folder details. Validates `base_version` against current database version.
+        Mutating an item atomically increments the parent collection's version and updated_at timestamp.
         Returns HTTP 409 Conflict with latest server object if stale.
       security:
         - BearerAuth: []
@@ -1369,6 +1432,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CollectionItemEnvelope'
+        '400':
+          description: Validation error, malformed item payload, self-parent, cycle, or invalid parent folder.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Item, collection, or parent folder not found or deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '409':
           description: Optimistic concurrency conflict.
           content:
@@ -1385,7 +1460,11 @@ paths:
       tags:
         - Collection Items
       summary: Soft delete item (Tombstone)
-      description: "Request/folder deletion is authoring and requires collection:write plus collection min_role access. Contributors may delete items/folders in accessible collections; this does not grant container deletion."
+      description: |
+        Request/folder deletion is authoring and requires collection:write plus collection min_role access.
+        Contributors may delete items/folders in accessible collections; this does not grant container deletion.
+        Soft-deleting a folder (`type === 'folder'`) recursively soft-deletes all descendant items and subfolders within the collection in a single atomic transaction.
+        Atomically increments the parent collection's version and updated_at timestamp.
       security:
         - BearerAuth: []
       parameters:
@@ -1402,6 +1481,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MessageEnvelope'
+        '404':
+          description: Item or parent collection not found or deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
 
         '413':
           $ref: '#/components/responses/PayloadTooLarge'

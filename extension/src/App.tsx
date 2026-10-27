@@ -6,9 +6,11 @@ import { RequestEditor } from '@/components/RequestEditor';
 import { ResponseViewer } from '@/components/ResponseViewer';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { useApiStore } from '@/store/useApiStore';
+import { onStorageCommit } from '@/lib/storage';
 
 export const App: React.FC = () => {
   const [hasHydrated, setHasHydrated] = useState(() => useApiStore.persist.hasHydrated());
+  const [storageUpdateAvailable, setStorageUpdateAvailable] = useState(false);
   const isSwitchingWorkspace = useApiStore((state) => state.isSwitchingWorkspace);
 
   useEffect(() => {
@@ -21,6 +23,10 @@ export const App: React.FC = () => {
     });
     return () => unsub();
   }, []);
+
+  useEffect(() => onStorageCommit((notice) => {
+    if (notice.key === 'air-rest-storage') setStorageUpdateAvailable(true);
+  }), []);
 
   if (!hasHydrated) {
     return (
@@ -67,6 +73,21 @@ export const App: React.FC = () => {
               <div className="h-8 w-8 animate-spin rounded-full border-2 border-zinc-700 border-t-white" />
               <span className="text-xs font-medium text-zinc-300">Loading workspace...</span>
             </div>
+          </div>
+        )}
+        {storageUpdateAvailable && !isSwitchingWorkspace && (
+          <div className="fixed bottom-4 right-4 z-50 flex max-w-sm items-center gap-3 rounded-xl border border-sky-500/30 bg-zinc-900 p-3 text-xs text-zinc-200 shadow-xl">
+            <span>Shared storage changed in another window.</span>
+            <button
+              type="button"
+              onClick={async () => {
+                await useApiStore.persist.rehydrate();
+                setStorageUpdateAvailable(false);
+              }}
+              className="shrink-0 rounded-md bg-sky-500 px-2.5 py-1 font-semibold text-zinc-950 hover:bg-sky-400"
+            >
+              Reload
+            </button>
           </div>
         )}
       </div>

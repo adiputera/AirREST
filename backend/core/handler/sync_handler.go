@@ -129,6 +129,8 @@ func (h *SyncHandler) ImportBatch(w http.ResponseWriter, r *http.Request) {
 
 func writeSyncError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, service.ErrInvalidItemPayload):
+		response.Error(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST")
 	case errors.Is(err, service.ErrBatchLimit):
 		response.Error(w, http.StatusRequestEntityTooLarge, err.Error(), "BATCH_LIMIT_EXCEEDED")
 	case errors.Is(err, service.ErrInvalidScope):

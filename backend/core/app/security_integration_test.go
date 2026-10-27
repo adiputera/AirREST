@@ -343,6 +343,187 @@ func TestSecurityIntegration(t *testing.T) {
 		}
 	})
 
+	t.Run("audit regression tests covering findings 1 through 8", func(t *testing.T) {
+		// Finding 1: Malformed payloads rejected with 400
+		assertStatus(request("POST", "/api/v1/items", contributorTokens.AccessToken, map[string]any{
+			"collection_id": open.ID.String(),
+			"name":          "Malformed headers",
+			"type":          "request",
+			"headers":       map[string]any{},
+		}), 400)
+
+		assertStatus(request("POST", "/api/v1/items", contributorTokens.AccessToken, map[string]any{
+			"collection_id": open.ID.String(),
+			"name":          "Malformed params",
+			"type":          "request",
+			"params":        []any{nil},
+		}), 400)
+
+		// Finding 2: Item mutation bumps collection.version and collection.updated_at
+		auditCol := createCollection("Audit Col", domain.ProjectRoleReader)
+		initialVer := auditCol.Version
+		time.Sleep(10 * time.Millisecond)
+
+		reqItem := &domain.CollectionItem{
+			ID:           uuid.New(),
+			CollectionID: auditCol.ID,
+			Name:         "Request 1",
+			Type:         domain.ItemTypeRequest,
+		}
+		if err := collections.CreateItem(ctx, contributor, reqItem); err != nil {
+			t.Fatalf("failed to create valid item: %v", err)
+		}
+		afterCreateCol, err := collections.GetCollection(ctx, contributor, auditCol.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if afterCreateCol.Version <= initialVer {
+			t.Fatalf("expected collection version to increment on item create, was %d, now %d", initialVer, afterCreateCol.Version)
+		}
+
+		// Update item bumps version again
+		time.Sleep(10 * time.Millisecond)
+		reqItem.Name = "Request 1 Updated"
+		_, err = collections.UpdateItem(ctx, contributor, reqItem, 1)
+		if err != nil {
+			t.Fatalf("failed to update item: %v", err)
+		}
+		afterUpdateCol, err := collections.GetCollection(ctx, contributor, auditCol.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if afterUpdateCol.Version <= afterCreateCol.Version {
+			t.Fatalf("expected collection version to increment on item update, was %d, now %d", afterCreateCol.Version, afterUpdateCol.Version)
+		}
+
+		// Finding 3: parent_id cross-collection, self-cycle, and invalid type rejected
+		assertStatus(request("POST", "/api/v1/items", contributorTokens.AccessToken, map[string]any{
+			"collection_id": open.ID.String(),
+			"name":          "Cross-collection parent",
+			"type":          "request",
+			"parent_id":     reqItem.ID.String(),
+		}), 400)
+
+		assertStatus(request("PUT", "/api/v1/items/"+reqItem.ID.String(), contributorTokens.AccessToken, map[string]any{
+			"base_version": 2,
+			"item": map[string]any{
+				"name":      "Self parent",
+				"type":      "request",
+				"parent_id": reqItem.ID.String(),
+			},
+		}), 400)
+
+		// Finding 4: Delete folder soft-deletes descendant subtree
+		folder := &domain.CollectionItem{
+			ID:           uuid.New(),
+			CollectionID: auditCol.ID,
+			Name:         "Folder 1",
+			Type:         domain.ItemTypeFolder,
+		}
+		if err := collections.CreateItem(ctx, contributor, folder); err != nil {
+			t.Fatal(err)
+		}
+		child := &domain.CollectionItem{
+			ID:           uuid.New(),
+			CollectionID: auditCol.ID,
+			ParentID:     &folder.ID,
+			Name:         "Child Req",
+			Type:         domain.ItemTypeRequest,
+		}
+		if err := collections.CreateItem(ctx, contributor, child); err != nil {
+			t.Fatal(err)
+		}
+		if err := collections.DeleteItem(ctx, contributor, folder.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := collections.GetItem(ctx, contributor, child.ID); !errors.Is(err, postgres.ErrItemNotFound) {
+			t.Fatalf("expected child to be deleted with parent folder, got err: %v", err)
+		}
+
+		// Finding 5: Deleted collection rejects new items and reading existing items
+		deletedCol := createCollection("To Be Deleted", domain.ProjectRoleReader)
+		dItem := &domain.CollectionItem{
+			ID:           uuid.New(),
+			CollectionID: deletedCol.ID,
+			Name:         "Item in deleted col",
+			Type:         domain.ItemTypeRequest,
+		}
+		if err := collections.CreateItem(ctx, contributor, dItem); err != nil {
+			t.Fatal(err)
+		}
+		if err := collections.DeleteCollection(ctx, admin, deletedCol.ID); err != nil {
+			t.Fatal(err)
+		}
+		newItemInDeleted := &domain.CollectionItem{
+			ID:           uuid.New(),
+			CollectionID: deletedCol.ID,
+			Name:         "Late item",
+			Type:         domain.ItemTypeRequest,
+		}
+		if err := collections.CreateItem(ctx, contributor, newItemInDeleted); !errors.Is(err, postgres.ErrCollectionNotFound) {
+			t.Fatalf("expected ErrCollectionNotFound when creating item in deleted collection, got: %v", err)
+		}
+		if _, err := collections.GetItem(ctx, contributor, dItem.ID); !errors.Is(err, postgres.ErrCollectionNotFound) {
+			t.Fatalf("expected ErrCollectionNotFound when reading item in deleted collection, got: %v", err)
+		}
+
+		// Finding 7: OCC 409 Conflict returns current server entity
+		serverCol := createCollection("Server truth", domain.ProjectRoleReader)
+		conflictResp := request("PUT", "/api/v1/collections/"+serverCol.ID.String(), contributorTokens.AccessToken, map[string]any{
+			"base_version": 99,
+			"name":         "Stale client",
+		})
+		assertStatus(conflictResp, 409)
+		var conflictData struct {
+			Data struct {
+				Name    string `json:"name"`
+				Version int64  `json:"version"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(conflictResp.Body).Decode(&conflictData); err != nil {
+			t.Fatal(err)
+		}
+		if conflictData.Data.Name != "Server truth" {
+			t.Fatalf("expected 409 data to contain server truth name 'Server truth', got '%s'", conflictData.Data.Name)
+		}
+		if conflictData.Data.Version == 0 {
+			t.Fatalf("expected 409 data to contain server version > 0, got %d", conflictData.Data.Version)
+		}
+
+		// Finding 8: MoveCollection updates child items updated_at timestamp atomically
+		moveCol := createCollection("Move Col", domain.ProjectRoleReader)
+		mItem := &domain.CollectionItem{
+			ID:           uuid.New(),
+			CollectionID: moveCol.ID,
+			Name:         "Item in moved col",
+			Type:         domain.ItemTypeRequest,
+		}
+		if err := collections.CreateItem(ctx, contributor, mItem); err != nil {
+			t.Fatal(err)
+		}
+		itemBeforeMove, err := collections.GetItem(ctx, contributor, mItem.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond)
+
+		targetProjID := uuid.New()
+		exec("INSERT INTO projects (id,team_id,name,created_by) VALUES ($1,$2,'Target project',$3)", targetProjID, teamID, admin.ID)
+		exec("INSERT INTO project_members (project_id,user_id,role) VALUES ($1,$2,'admin')", targetProjID, admin.ID)
+		exec("INSERT INTO project_members (project_id,user_id,role) VALUES ($1,$2,'contributor')", targetProjID, contributor.ID)
+
+		if err := collections.MoveCollection(ctx, admin, moveCol.ID, nil, &targetProjID); err != nil {
+			t.Fatalf("failed to move collection: %v", err)
+		}
+		itemAfterMove, err := collections.GetItem(ctx, contributor, mItem.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !itemAfterMove.UpdatedAt.After(itemBeforeMove.UpdatedAt) {
+			t.Fatalf("expected item.updated_at to be bumped on move, before=%v, after=%v", itemBeforeMove.UpdatedAt, itemAfterMove.UpdatedAt)
+		}
+	})
+
 	t.Run("HTTP limits reject before mutation", func(t *testing.T) {
 		assertStatus(request("POST", "/api/v1/sync/push", contributorTokens.AccessToken, service.SyncPushRequest{ProjectID: &projectID, Items: make([]service.SyncItemMutation, service.MaxSyncMutations+1)}), 413)
 		for _, length := range []int64{-1, (4 << 20) + 1} {

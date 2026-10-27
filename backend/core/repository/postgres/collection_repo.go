@@ -141,33 +141,55 @@ func (r *CollectionRepository) UpdateCollection(ctx context.Context, c *domain.C
 	return nil
 }
 
-// MoveCollection moves a collection to a new workspace or project
+// MoveCollection moves a collection to a new workspace or project and touches child items updated_at atomically
 func (r *CollectionRepository) MoveCollection(ctx context.Context, id uuid.UUID, workspaceID, projectID *uuid.UUID, modifiedBy uuid.UUID) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	now := time.Now().UTC()
 	query := `
 		UPDATE collections
 		SET workspace_id = $1, project_id = $2, version = version + 1, last_modified_by = $3, updated_at = $4
 		WHERE id = $5 AND deleted_at IS NULL
 	`
-	now := time.Now().UTC()
-	result, err := r.pool.Exec(ctx, query, workspaceID, projectID, modifiedBy, now, id)
+	result, err := tx.Exec(ctx, query, workspaceID, projectID, modifiedBy, now, id)
 	if err != nil {
 		return fmt.Errorf("failed to move collection: %w", err)
 	}
 	if result.RowsAffected() == 0 {
 		return ErrCollectionNotFound
 	}
-	return nil
+
+	itemsQuery := `
+		UPDATE collection_items
+		SET updated_at = $1, last_modified_by = $2
+		WHERE collection_id = $3 AND deleted_at IS NULL
+	`
+	if _, err := tx.Exec(ctx, itemsQuery, now, modifiedBy, id); err != nil {
+		return fmt.Errorf("failed to update collection items on move: %w", err)
+	}
+
+	return tx.Commit(ctx)
 }
 
-// SoftDeleteCollection sets tombstone
+// SoftDeleteCollection sets tombstone atomically for collection and all child items
 func (r *CollectionRepository) SoftDeleteCollection(ctx context.Context, id uuid.UUID, modifiedBy uuid.UUID) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	now := time.Now().UTC()
 	query := `
 		UPDATE collections
 		SET deleted_at = $1, updated_at = $1, last_modified_by = $2, version = version + 1
 		WHERE id = $3 AND deleted_at IS NULL
 	`
-	now := time.Now().UTC()
-	result, err := r.pool.Exec(ctx, query, now, modifiedBy, id)
+	result, err := tx.Exec(ctx, query, now, modifiedBy, id)
 	if err != nil {
 		return fmt.Errorf("failed to soft delete collection: %w", err)
 	}
@@ -175,18 +197,50 @@ func (r *CollectionRepository) SoftDeleteCollection(ctx context.Context, id uuid
 		return ErrCollectionNotFound
 	}
 
-	// Also tombstone all items in this collection
+	// Also tombstone all items in this collection within the same transaction and propagate error
 	itemsQuery := `
 		UPDATE collection_items
 		SET deleted_at = $1, updated_at = $1, last_modified_by = $2, version = version + 1
 		WHERE collection_id = $3 AND deleted_at IS NULL
 	`
-	_, _ = r.pool.Exec(ctx, itemsQuery, now, modifiedBy, id)
-	return nil
+	if _, err := tx.Exec(ctx, itemsQuery, now, modifiedBy, id); err != nil {
+		return fmt.Errorf("failed to soft delete collection items: %w", err)
+	}
+
+	return tx.Commit(ctx)
 }
 
-// CreateItem inserts a request or folder
+// CreateItem inserts a request or folder and touches parent collection version atomically
 func (r *CollectionRepository) CreateItem(ctx context.Context, item *domain.CollectionItem) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	now := time.Now().UTC()
+
+	// 1. Lock and touch parent collection
+	colQuery := `
+		UPDATE collections
+		SET updated_at = $1, last_modified_by = $2, version = version + 1
+		WHERE id = $3 AND deleted_at IS NULL
+	`
+	res, err := tx.Exec(ctx, colQuery, now, item.LastModifiedBy, item.CollectionID)
+	if err != nil {
+		return fmt.Errorf("failed to touch collection version: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return ErrCollectionNotFound
+	}
+
+	if item.ID == uuid.Nil {
+		item.ID = uuid.New()
+	}
+	item.Version = 1
+	item.CreatedAt = now
+	item.UpdatedAt = now
+
 	query := `
 		INSERT INTO collection_items (
 			id, collection_id, parent_id, type, name, sort_order,
@@ -202,15 +256,7 @@ func (r *CollectionRepository) CreateItem(ctx context.Context, item *domain.Coll
 			$21, $22
 		)
 	`
-	if item.ID == uuid.Nil {
-		item.ID = uuid.New()
-	}
-	now := time.Now().UTC()
-	item.Version = 1
-	item.CreatedAt = now
-	item.UpdatedAt = now
-
-	_, err := r.pool.Exec(ctx, query,
+	_, err = tx.Exec(ctx, query,
 		item.ID, item.CollectionID, item.ParentID, string(item.Type), item.Name, item.SortOrder,
 		item.Method, item.URL, item.Params, item.Headers, item.Auth, item.BodyType, item.RawType,
 		item.BodyContent, item.GraphQLQuery, item.GraphQLVariables, item.BodyFormData,
@@ -220,7 +266,8 @@ func (r *CollectionRepository) CreateItem(ctx context.Context, item *domain.Coll
 	if err != nil {
 		return fmt.Errorf("failed to create collection item: %w", err)
 	}
-	return nil
+
+	return tx.Commit(ctx)
 }
 
 // GetItemByID returns item by ID
@@ -253,8 +300,31 @@ func (r *CollectionRepository) GetItemByID(ctx context.Context, id uuid.UUID) (*
 	return &item, nil
 }
 
-// UpdateItem updates item with OCC base_version check
+// UpdateItem updates item with OCC base_version check and touches parent collection version atomically
 func (r *CollectionRepository) UpdateItem(ctx context.Context, item *domain.CollectionItem, baseVersion int64) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	now := time.Now().UTC()
+
+	// 1. Lock and touch parent collection
+	colQuery := `
+		UPDATE collections
+		SET updated_at = $1, last_modified_by = $2, version = version + 1
+		WHERE id = $3 AND deleted_at IS NULL
+	`
+	res, err := tx.Exec(ctx, colQuery, now, item.LastModifiedBy, item.CollectionID)
+	if err != nil {
+		return fmt.Errorf("failed to touch collection version: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return ErrCollectionNotFound
+	}
+
+	// 2. Update item with OCC check
 	query := `
 		UPDATE collection_items
 		SET parent_id = $1, name = $2, sort_order = $3,
@@ -265,8 +335,7 @@ func (r *CollectionRepository) UpdateItem(ctx context.Context, item *domain.Coll
 		    updated_at = $18
 		WHERE id = $19 AND version = $20 AND deleted_at IS NULL
 	`
-	now := time.Now().UTC()
-	result, err := r.pool.Exec(ctx, query,
+	result, err := tx.Exec(ctx, query,
 		item.ParentID, item.Name, item.SortOrder,
 		item.Method, item.URL, item.Params, item.Headers, item.Auth,
 		item.BodyType, item.RawType, item.BodyContent, item.GraphQLQuery,
@@ -282,25 +351,84 @@ func (r *CollectionRepository) UpdateItem(ctx context.Context, item *domain.Coll
 	}
 	item.Version = baseVersion + 1
 	item.UpdatedAt = now
-	return nil
+
+	return tx.Commit(ctx)
 }
 
-// SoftDeleteItem marks an item as deleted (tombstone)
+// SoftDeleteItem marks an item as deleted (and recursively deletes all descendant items if folder),
+// touching parent collection version atomically within a single transaction.
 func (r *CollectionRepository) SoftDeleteItem(ctx context.Context, id uuid.UUID, modifiedBy uuid.UUID) error {
-	query := `
-		UPDATE collection_items
-		SET deleted_at = $1, updated_at = $1, last_modified_by = $2, version = version + 1
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Fetch collection_id and type of the item being deleted
+	var colID uuid.UUID
+	var itemType string
+	err = tx.QueryRow(ctx, `SELECT collection_id, type FROM collection_items WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`, id).Scan(&colID, &itemType)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrItemNotFound
+		}
+		return fmt.Errorf("failed to query item for deletion: %w", err)
+	}
+
+	now := time.Now().UTC()
+
+	// 1. Touch parent collection version
+	colQuery := `
+		UPDATE collections
+		SET updated_at = $1, last_modified_by = $2, version = version + 1
 		WHERE id = $3 AND deleted_at IS NULL
 	`
-	now := time.Now().UTC()
-	result, err := r.pool.Exec(ctx, query, now, modifiedBy, id)
+	res, err := tx.Exec(ctx, colQuery, now, modifiedBy, colID)
 	if err != nil {
-		return fmt.Errorf("failed to soft delete item: %w", err)
+		return fmt.Errorf("failed to touch collection version: %w", err)
 	}
-	if result.RowsAffected() == 0 {
-		return ErrItemNotFound
+	if res.RowsAffected() == 0 {
+		return ErrCollectionNotFound
 	}
-	return nil
+
+	// 2. If folder: recursive CTE soft-delete all active descendants and the folder itself
+	if itemType == string(domain.ItemTypeFolder) {
+		recursiveQuery := `
+			WITH RECURSIVE subtree AS (
+				SELECT id FROM collection_items WHERE id = $1 AND deleted_at IS NULL
+				UNION ALL
+				SELECT ci.id FROM collection_items ci
+				INNER JOIN subtree s ON ci.parent_id = s.id
+				WHERE ci.deleted_at IS NULL AND ci.collection_id = $2
+			)
+			UPDATE collection_items
+			SET deleted_at = $3, updated_at = $3, last_modified_by = $4, version = version + 1
+			WHERE id IN (SELECT id FROM subtree) AND deleted_at IS NULL
+		`
+		result, err := tx.Exec(ctx, recursiveQuery, id, colID, now, modifiedBy)
+		if err != nil {
+			return fmt.Errorf("failed to soft delete folder subtree: %w", err)
+		}
+		if result.RowsAffected() == 0 {
+			return ErrItemNotFound
+		}
+	} else {
+		// Single request item
+		query := `
+			UPDATE collection_items
+			SET deleted_at = $1, updated_at = $1, last_modified_by = $2, version = version + 1
+			WHERE id = $3 AND deleted_at IS NULL
+		`
+		result, err := tx.Exec(ctx, query, now, modifiedBy, id)
+		if err != nil {
+			return fmt.Errorf("failed to soft delete item: %w", err)
+		}
+		if result.RowsAffected() == 0 {
+			return ErrItemNotFound
+		}
+	}
+
+	return tx.Commit(ctx)
 }
 
 // ListActiveItemsByCollection returns non-deleted items for collection

@@ -23,6 +23,7 @@ import {
   WifiOff,
 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
+import { requestHostPermission } from '@/lib/hostPermissions';
 
 function getExtensionFromMime(mime: string): string {
   const m = (mime || '').toLowerCase();
@@ -82,13 +83,15 @@ export const ResponseViewer: React.FC = () => {
   const netCategory = activeResponse?.netErrorCategory;
   const netCode = activeResponse?.netErrorCode;
 
-  const [activeTab, setActiveTab] = useState<'body' | 'headers'>('body');
+  const [activeTab, setActiveTab] = useState<'body' | 'headers' | 'scripts'>('body');
   const [viewMode, setViewMode] = useState<'pretty' | 'raw'>('pretty');
   const [copied, setCopied] = useState(false);
   const [imgDimensions, setImgDimensions] = useState<{ width: number; height: number } | null>(null);
+  const [permissionMessage, setPermissionMessage] = useState<string | null>(null);
 
   useEffect(() => {
     setImgDimensions(null);
+    setActiveTab(activeResponse?.scriptErrorStage === 'pre-request' ? 'scripts' : 'body');
   }, [activeResponse]);
 
   const handleCopy = () => {
@@ -121,6 +124,16 @@ export const ResponseViewer: React.FC = () => {
     a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const handleRequestHostPermission = async () => {
+    const granted = await requestHostPermission(targetUrl);
+    if (granted) {
+      setPermissionMessage(null);
+      sendRequest();
+    } else {
+      setPermissionMessage('Chrome did not grant access to this host. Check the extension site-access setting and try again.');
+    }
   };
 
   const loadSampleAndSend = (url: string, method: 'GET' | 'POST' = 'GET', body = '') => {
@@ -241,6 +254,23 @@ export const ResponseViewer: React.FC = () => {
               )}
             </button>
 
+            {activeResponse.scriptError && (
+              <button
+                onClick={() => setActiveTab('scripts')}
+                className={`flex items-center gap-1.5 pb-1 border-b-2 transition ${
+                  activeTab === 'scripts'
+                    ? 'border-rose-500 text-rose-300 font-semibold'
+                    : 'border-transparent hover:text-zinc-200'
+                }`}
+              >
+                <AlertCircle className="h-3.5 w-3.5" />
+                <span>Scripts</span>
+                <span className="rounded-full border border-rose-500/20 bg-rose-500/10 px-1.5 text-[10px] text-rose-300">
+                  failed
+                </span>
+              </button>
+            )}
+
             <button
               onClick={handleDownload}
               className="flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-white transition"
@@ -324,17 +354,6 @@ export const ResponseViewer: React.FC = () => {
 
       {/* Main Response Content */}
       <div className="flex-1 overflow-auto p-4">
-        {/* Post-response Script / Tests Feedback */}
-        {activeResponse && !isLoading && activeResponse.scriptError && (
-          <div className="mb-4 flex items-center gap-2.5 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-300">
-            <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />
-            <div>
-              <span className="font-semibold">Tests Script Failed: </span>
-              <span className="font-mono">{activeResponse.scriptError}</span>
-            </div>
-          </div>
-        )}
-
         {activeResponse && !isLoading && activeResponse.updatedEnvVars && activeResponse.updatedEnvVars.length > 0 && (
           <div className="mb-4 flex items-center gap-2.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-300">
             <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
@@ -437,11 +456,58 @@ export const ResponseViewer: React.FC = () => {
               </button>
             </div>
           </div>
+        ) : activeTab === 'scripts' ? (
+          <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-xs text-rose-200 shadow-sm">
+            <div className="flex items-start gap-2.5">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
+              <div className="min-w-0 space-y-2">
+                <p className="font-semibold text-rose-200">
+                  {activeResponse.scriptErrorStage === 'pre-request'
+                    ? 'Pre-request Script Failed — Request not sent'
+                    : 'Post-response Script Failed'}
+                </p>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-lg border border-rose-500/20 bg-zinc-950/50 p-3 font-mono text-[11px] leading-relaxed text-rose-100">
+                  {activeResponse.scriptError || 'No script error details were provided.'}
+                </pre>
+              </div>
+            </div>
+          </div>
         ) : activeTab === 'body' ? (
           <div>
             {activeResponse.isError && activeResponse.status === 0 && (
               <div className="mb-4">
-                {netCategory === 'ssl' || (netCode && (netCode.includes('CERT') || netCode.includes('AUTHORITY'))) ? (
+                {activeResponse.failureKind ? (
+                  <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs text-amber-100 shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 font-semibold text-amber-300">
+                        <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
+                        <span>{activeResponse.statusText}</span>
+                      </div>
+                      {activeResponse.failureKind !== 'cancelled' && (
+                        <button
+                          type="button"
+                          onClick={() => sendRequest()}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-750 bg-zinc-900/80 px-2.5 py-1 text-[11px] font-medium text-zinc-200 hover:bg-zinc-800 hover:text-white transition"
+                        >
+                          <RotateCw className="h-3 w-3 text-sky-400" />
+                          <span>Retry Request</span>
+                        </button>
+                      )}
+                      {activeResponse.failureKind === 'host_permission' && (
+                        <button
+                          type="button"
+                          onClick={handleRequestHostPermission}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/15 px-2.5 py-1 text-[11px] font-semibold text-sky-100 hover:bg-sky-500/25 transition"
+                        >
+                          <ShieldAlert className="h-3 w-3" />
+                          <span>Request Host Permission</span>
+                        </button>
+                      )}
+                    </div>
+                    <p className="mt-2 leading-relaxed">{activeResponse.errorDetail || activeResponse.data}</p>
+                    {permissionMessage && <p className="mt-2 text-amber-200">{permissionMessage}</p>}
+                  </div>
+                ) : netCategory === 'ssl' || (netCode && (netCode.includes('CERT') || netCode.includes('AUTHORITY'))) ? (
                   /* 1. Verified SSL Certificate Error */
                   <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs text-amber-200 shadow-sm">
                     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-500/20 pb-3">

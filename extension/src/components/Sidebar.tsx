@@ -24,6 +24,7 @@ import {
   Check,
   X,
   Lock,
+  AlertTriangle,
 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
 import { CollectionItem, ApiRequest, Collection } from '@/types/api';
@@ -813,6 +814,8 @@ export const Sidebar: React.FC = () => {
   const openRequestInTab = useApiStore((state) => state.openRequestInTab);
   const workspaceMode = useApiStore((state) => state.workspaceMode);
   const cloudConfig = useApiStore((state) => state.cloudConfig);
+  const pullCloudDelta = useApiStore((state) => state.pullCloudDelta);
+  const syncStatus = useApiStore((state) => state.syncStatus);
 
   const canWriteScope = hasScopePermission(cloudConfig.activeScope, 'collection:write', workspaceMode, cloudConfig.user?.role);
   const canMoveScope = hasScopePermission(cloudConfig.activeScope, 'collection:move', workspaceMode, cloudConfig.user?.role);
@@ -1175,7 +1178,7 @@ export const Sidebar: React.FC = () => {
               <div className="space-y-2">
                 {filteredCollections.map((col) => {
                   const isCollapsed = !trimmedQuery && !!collapsedCollections[col.id];
-                  const canEditCol = canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role);
+                  const canEditCol = !col.isPartial && canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role);
 
                   return (
                     <div key={col.id} className="rounded-lg border border-zinc-850 bg-zinc-900/40 p-1.5 transition">
@@ -1247,6 +1250,21 @@ export const Sidebar: React.FC = () => {
                               <span title="Read-only collection">
                                 <Lock className="h-3 w-3 text-zinc-500 shrink-0" />
                               </span>
+                            )}
+                            {col.isPartial && (
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void pullCloudDelta();
+                                }}
+                                disabled={syncStatus === 'syncing'}
+                                className="inline-flex shrink-0 items-center text-amber-400 hover:text-amber-300 disabled:cursor-wait disabled:opacity-60"
+                                title="Details incomplete. Click to retry sync."
+                                aria-label={`Retry loading details for ${col.name}`}
+                              >
+                                <AlertTriangle className="h-3.5 w-3.5" />
+                              </button>
                             )}
                             <span className="text-[10px] text-zinc-500 shrink-0 font-mono">
                               {(col.items || []).length}

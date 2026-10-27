@@ -20,8 +20,8 @@ func validateImport(collections []ImportCollectionRequest) error {
 		return ErrBatchLimit
 	}
 	total := 0
-	var walk func([]ImportItemRequest, int) error
-	walk = func(items []ImportItemRequest, depth int) error {
+	var checkLimits func([]ImportItemRequest, int) error
+	checkLimits = func(items []ImportItemRequest, depth int) error {
 		if len(items) == 0 {
 			return nil
 		}
@@ -33,14 +33,32 @@ func validateImport(collections []ImportCollectionRequest) error {
 			return ErrBatchLimit
 		}
 		for _, item := range items {
-			if err := walk(item.Items, depth+1); err != nil {
+			if err := checkLimits(item.Items, depth+1); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
 	for _, col := range collections {
-		if err := walk(col.Items, 1); err != nil {
+		if err := checkLimits(col.Items, 1); err != nil {
+			return err
+		}
+	}
+
+	var validateItems func([]ImportItemRequest) error
+	validateItems = func(items []ImportItemRequest) error {
+		for _, item := range items {
+			if err := ValidateImportItem(&item); err != nil {
+				return err
+			}
+			if err := validateItems(item.Items); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for _, col := range collections {
+		if err := validateItems(col.Items); err != nil {
 			return err
 		}
 	}

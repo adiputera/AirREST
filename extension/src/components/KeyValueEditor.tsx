@@ -35,19 +35,19 @@ export const KeyValueEditor: React.FC<KeyValueEditorProps> = ({
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-850">
-            {(items || []).map((item) => (
-              <tr key={item.id} className="group hover:bg-zinc-900/40 transition">
+            {(Array.isArray(items) ? items : []).filter(Boolean).map((item, index) => (
+              <tr key={item.id || index} className="group hover:bg-zinc-900/40 transition">
                 <td className="px-3 py-1.5 text-center">
                   <input
                     type="checkbox"
-                    checked={item.enabled}
+                    checked={item.enabled ?? true}
                     onChange={(e) => onUpdate(item.id, { enabled: e.target.checked })}
                     className="h-3.5 w-3.5 rounded border-zinc-700 bg-zinc-900 text-sky-500 focus:ring-0 focus:ring-offset-0 cursor-pointer accent-sky-500"
                   />
                 </td>
                 <td className="px-2 py-1.5">
                   <VariableInput
-                    value={item.key}
+                    value={item.key || ''}
                     onChange={(key) => onUpdate(item.id, { key })}
                     placeholder={keyPlaceholder}
                     size="sm"
@@ -55,7 +55,7 @@ export const KeyValueEditor: React.FC<KeyValueEditorProps> = ({
                 </td>
                 <td className="px-2 py-1.5">
                   <VariableInput
-                    value={item.value}
+                    value={item.value || ''}
                     onChange={(value) => onUpdate(item.id, { value })}
                     placeholder={valuePlaceholder}
                     size="sm"
