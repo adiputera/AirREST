@@ -3,7 +3,7 @@
   "info": {
     "title": "AirREST Backend API Contract",
     "version": "1.1.2",
-"description": "# AirREST Cloud Backend API Specification & Contract\n\nThis document defines the formal API Contract for the AirREST backend synchronization and collaboration service.\nAny backend implementation (written in Go, Node.js/TypeScript, Python, Java, Rust, C#, PHP, etc.) that complies\nwith this specification will work as an immediate drop-in replacement for:\n- **AirREST Chrome Extension** (DevTools / Popup REST client)\n- **AirREST Hub** (Web-based workspace and team collaboration dashboard)\n\n---\n\n## Key Architectural Principles\n\n### 1. Standard Response Envelope\nAll HTTP endpoints return responses wrapped in a consistent Envelope structure:\n```json\n{\n  \"success\": true,\n  \"data\": { ... }\n}\n```\nOn errors:\n```json\n{\n  \"success\": false,\n  \"error\": \"Human-readable error description\",\n  \"code\": \"ERROR_CODE_STRING\"\n}\n```\n\n### 2. Authentication & Silent Rolling Refresh\n- Authenticated endpoints require `Authorization: Bearer <access_token>`.\n- Access tokens are JWTs (HS256) valid for 72 hours.\n- Refresh tokens are rolling 30-day tokens.\n- When the client receives HTTP `401 Unauthorized`, it transparently calls `POST /api/v1/auth/refresh`\n  with `{ \"refresh_token\": \"...\" }` and retries the original request upon renewal.\n\n### 3. Optimistic Concurrency Control (OCC)\n- Mutable entities (`collections`, `collection_items`, `environments`) include a numeric `version` (int64).\n- When updating, clients send `base_version`.\n- If `base_version != current_server_version`, the server aborts the write and returns HTTP `409 Conflict`:\n  ```json\n  {\n    \"success\": false,\n    \"error\": \"conflict: item has been modified by another user\",\n    \"code\": \"CONFLICT\",\n    \"data\": { ...latest_server_object... }\n  }\n  ```\n\n### 4. Soft-Deletes & Tombstone Deltas\n- Deletions are soft-deletes setting `deleted_at = NOW()`.\n- `GET /api/v1/sync/pull?since=<timestamp>` returns active items AND deleted items (`deleted_at != null`)\n  so that distributed clients purge deleted entities locally and never re-upload them as zombies.\n\n### 5. Hierarchical RBAC & Project Isolation\n- **System Roles**: `superadmin`, `user`\n- **Team Roles**: `admin`, `member`\n- **Project Roles**: `admin`, `maintainer`, `contributor`, `reader`\n- **Project Isolation**: Non-superadmin users can only view or query projects to which they are explicitly assigned.\n- **Granular Permissions**: Collections and Environments support `min_role` (`admin`, `maintainer`, `contributor`, `reader`).\n  Users with a project role below `min_role` are prohibited from reading or writing that resource.\n\n### 6. CORS Requirements\nThe backend MUST support CORS with:\n- Allowed Origins: `*` or user-configured hosts, including `chrome-extension://*`\n- Allowed Methods: `GET, POST, PUT, PATCH, DELETE, OPTIONS`\n- Allowed Headers: `Accept, Authorization, Content-Type, X-CSRF-Token`\n- Exposed Headers: `Link`\n- Allow Credentials: `true`\n\n### Session revocation and resource limits\n Both access and refresh JWTs carry a nonnegative integer token_version matching users.token_version. Missing or stale versions are rejected with 401. Password changes and administrator resets atomically increment the version and revoke existing sessions. A self-service password change returns a replacement token pair for the current device; administrator resets revoke every target-device session. Profile changes do not revoke sessions. Refresh tokens can be reused until expiry or account-wide revocation; they are not single-use. Clients clear tokens and sign in again after a rejected refresh.\n Requests are limited to 4 MiB (including chunked bodies), 16 concurrent handlers per instance, and 30 seconds. Oversized bodies return 413 PAYLOAD_TOO_LARGE. Saturation returns 503 SERVER_BUSY with Retry-After: 1; timeouts return 503 REQUEST_TIMEOUT. Proxy limits may be smaller. Serverless initialization attempts are serialized with a 20-second deadline and retries after 1, 2, 4, 8, 16, then 30 seconds; requests during attempts/backoff receive 503 and Retry-After: 1, retaining the nested SERVICE_UNAVAILABLE envelope.\nContributors cannot delete collections/environments or move collections. Request/folder deletion is collection:write authoring. Moves require collection:move and min_role access in both project scopes; private scopes require ownership (superadmins bypass role/ownership restrictions).\n"
+    "description": "# AirREST Cloud Backend API Specification & Contract\n\nThis document defines the formal API Contract for the AirREST backend synchronization and collaboration service.\nAny backend implementation (written in Go, Node.js/TypeScript, Python, Java, Rust, C#, PHP, etc.) that complies\nwith this specification will work as an immediate drop-in replacement for:\n- **AirREST Chrome Extension** (DevTools / Popup REST client)\n- **AirREST Hub** (Web-based workspace and team collaboration dashboard)\n\n---\n\n## Key Architectural Principles\n\n### 1. Standard Response Envelope\nAll HTTP endpoints return responses wrapped in a consistent Envelope structure:\n```json\n{\n  \"success\": true,\n  \"data\": { ... }\n}\n```\nOn errors:\n```json\n{\n  \"success\": false,\n  \"error\": \"Human-readable error description\",\n  \"code\": \"ERROR_CODE_STRING\"\n}\n```\n\n### 2. Authentication & Silent Rolling Refresh\n- Authenticated endpoints require `Authorization: Bearer <access_token>`.\n- Access tokens are JWTs (HS256) valid for 72 hours.\n- Refresh tokens are rolling 30-day tokens.\n- When the client receives HTTP `401 Unauthorized`, it transparently calls `POST /api/v1/auth/refresh`\n  with `{ \"refresh_token\": \"...\" }` and retries the original request upon renewal.\n\n### 3. Optimistic Concurrency Control (OCC)\n- Mutable entities (`collections`, `collection_items`, `environments`) include a numeric `version` (int64).\n- When updating, clients send `base_version`.\n- If `base_version != current_server_version`, the server aborts the write and returns HTTP `409 Conflict`:\n  ```json\n  {\n    \"success\": false,\n    \"error\": \"conflict: item has been modified by another user\",\n    \"code\": \"CONFLICT\",\n    \"data\": { ...latest_server_object... }\n  }\n  ```\n\n### 4. Soft-Deletes & Tombstone Deltas\n- Deletions are soft-deletes setting `deleted_at = NOW()`.\n- `GET /api/v1/sync/pull?since=<timestamp>` returns active items AND deleted items (`deleted_at != null`)\n  so that distributed clients purge deleted entities locally and never re-upload them as zombies.\n\n### 5. Hierarchical RBAC & Project Isolation\n- **System Roles**: `superadmin`, `user`\n- **Team Roles**: `admin`, `member`\n- **Project Roles**: `admin`, `maintainer`, `contributor`, `reader`\n- **Project Isolation**: Non-superadmin users can only view or query projects to which they are explicitly assigned.\n- **Granular Permissions**: Collections and Environments support `min_role` (`admin`, `maintainer`, `contributor`, `reader`).\n  Users with a project role below `min_role` are prohibited from reading or writing that resource.\n\n### 6. CORS Requirements\nThe backend MUST support CORS with:\n- Allowed Origins: `*` or user-configured hosts, including `chrome-extension://*`\n- Allowed Methods: `GET, POST, PUT, PATCH, DELETE, OPTIONS`\n- Allowed Headers: `Accept, Authorization, Content-Type, X-CSRF-Token`\n- Exposed Headers: `Link`\n- Allow Credentials: `true`\n\n### Session revocation and resource limits\n Both access and refresh JWTs carry a nonnegative integer token_version matching users.token_version. Missing or stale versions are rejected with 401. Password changes and administrator resets atomically increment the version and revoke existing sessions. A self-service password change returns a replacement token pair for the current device; administrator resets revoke every target-device session. Profile changes do not revoke sessions. Refresh tokens can be reused until expiry or account-wide revocation; they are not single-use. Clients clear tokens and sign in again after a rejected refresh.\n Requests are limited to 4 MiB (including chunked bodies), 16 concurrent handlers per instance, and 30 seconds. Oversized bodies return 413 PAYLOAD_TOO_LARGE. Saturation returns 503 SERVER_BUSY with Retry-After: 1; timeouts return 503 REQUEST_TIMEOUT. Proxy limits may be smaller. Serverless initialization attempts are serialized with a 20-second deadline and retries after 1, 2, 4, 8, 16, then 30 seconds; requests during attempts/backoff receive 503 and Retry-After: 1, retaining the nested SERVICE_UNAVAILABLE envelope.\nContributors cannot delete collections/environments or move collections. Request/folder deletion is collection:write authoring. Moves require collection:move and min_role access in both project scopes; private scopes require ownership (superadmins bypass role/ownership restrictions).\n"
   },
   "servers": [
     {
@@ -1706,8 +1706,28 @@
               }
             }
           },
+          "400": {
+            "description": "Validation error or invalid request payload.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found or deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "409": {
-            "description": "Optimistic concurrency conflict.",
+            "description": "Optimistic concurrency conflict. Data contains latest server collection object.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1732,7 +1752,7 @@
           "Collections"
         ],
         "summary": "Soft delete collection (Tombstone)",
-        "description": "Requires collection:delete (maintainer/admin), scope access, and min_role. Workspace owners and superadmins retain access. Contributors cannot delete collections.",
+        "description": "Requires collection:delete (maintainer/admin), scope access, and min_role. Workspace owners and superadmins retain access. Contributors cannot delete collections. Atomically soft-deletes the collection and all child items.",
         "security": [
           {
             "BearerAuth": []
@@ -1756,6 +1776,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/MessageEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found or deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -1872,6 +1902,26 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid reorder payload, cycle detected, or item outside collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found or deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
@@ -1928,6 +1978,26 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid reorder payload, cycle detected, or item outside collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found or deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
@@ -1946,7 +2016,7 @@
           "Collection Items"
         ],
         "summary": "Create request or folder item",
-        "description": "Creates an item inside a collection.",
+        "description": "Creates an item inside a collection. Mutating an item atomically increments the parent collection's version and updated_at timestamp.\nValidates payload structure and hierarchy (rejects malformed arrays, invalid auth, cycle, or non-existent parent).\n",
         "security": [
           {
             "BearerAuth": []
@@ -1969,6 +2039,26 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CollectionItemEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error, malformed item payload, or invalid parent folder.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Target collection or parent folder not found or deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -2018,6 +2108,16 @@
               }
             }
           },
+          "404": {
+            "description": "Item or parent collection not found or deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
@@ -2034,7 +2134,7 @@
           "Collection Items"
         ],
         "summary": "Update item (OCC)",
-        "description": "Updates request or folder details. Validates `base_version` against current database version.\nReturns HTTP 409 Conflict with latest server object if stale.\n",
+        "description": "Updates request or folder details. Validates `base_version` against current database version.\nMutating an item atomically increments the parent collection's version and updated_at timestamp.\nReturns HTTP 409 Conflict with latest server object if stale.\n",
         "security": [
           {
             "BearerAuth": []
@@ -2072,6 +2172,26 @@
               }
             }
           },
+          "400": {
+            "description": "Validation error, malformed item payload, self-parent, cycle, or invalid parent folder.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Item, collection, or parent folder not found or deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "409": {
             "description": "Optimistic concurrency conflict.",
             "content": {
@@ -2098,7 +2218,7 @@
           "Collection Items"
         ],
         "summary": "Soft delete item (Tombstone)",
-        "description": "Request/folder deletion is authoring and requires collection:write plus collection min_role access. Contributors may delete items/folders in accessible collections; this does not grant container deletion.",
+        "description": "Request/folder deletion is authoring and requires collection:write plus collection min_role access.\nContributors may delete items/folders in accessible collections; this does not grant container deletion.\nSoft-deleting a folder (`type === 'folder'`) recursively soft-deletes all descendant items and subfolders within the collection in a single atomic transaction.\nAtomically increments the parent collection's version and updated_at timestamp.\n",
         "security": [
           {
             "BearerAuth": []
@@ -2122,6 +2242,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/MessageEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Item or parent collection not found or deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -2882,7 +3012,7 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "JWT",
-"description": "HS256 access JWT from login. Required claims: user_id (UUID), email, role, token_type=access, token_version (nonnegative int64), iss=airrest-api, exp; issued tokens also include iat. Database system role and token_version are authoritative. Both access and refresh JWTs carry a nonnegative integer token_version matching users.token_version. Missing or stale versions are rejected with 401. Password changes and administrator resets atomically increment the version and revoke existing tokens. A self-service password change returns a replacement pair for the current device; administrator resets revoke every target-device session. Profile changes do not revoke sessions. Refresh tokens can be reused until expiry or account-wide revocation; they are not single-use. Clients clear tokens and sign in again after a rejected refresh."
+        "description": "HS256 access JWT from login. Required claims: user_id (UUID), email, role, token_type=access, token_version (nonnegative int64), iss=airrest-api, exp; issued tokens also include iat. Database system role and token_version are authoritative. Both access and refresh JWTs carry a nonnegative integer token_version matching users.token_version. Missing or stale versions are rejected with 401. Password changes and administrator resets atomically increment the version and revoke existing tokens. A self-service password change returns a replacement pair for the current device; administrator resets revoke every target-device session. Profile changes do not revoke sessions. Refresh tokens can be reused until expiry or account-wide revocation; they are not single-use. Clients clear tokens and sign in again after a rejected refresh."
       }
     },
     "schemas": {

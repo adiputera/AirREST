@@ -14,6 +14,11 @@ export interface FormDataItem {
   type: 'text' | 'file';
   value: string; // text value or file name display
   file?: File;
+  /** Persistence-only attachment metadata. A file handle is never restored after reload. */
+  fileName?: string;
+  fileSize?: number;
+  fileType?: string;
+  needsReselection?: boolean;
   enabled: boolean;
 }
 
@@ -22,6 +27,8 @@ export interface BinaryFileData {
   size: number;
   type: string;
   file?: File;
+  /** True when this entry was restored without its original File handle. */
+  needsReselection?: boolean;
 }
 
 export type RawType = 'text' | 'json' | 'xml' | 'html';
@@ -61,6 +68,8 @@ export interface ApiRequest {
 }
 
 export type NetworkErrorCategory = 'ssl' | 'connection_refused' | 'dns' | 'timeout' | 'other';
+export type ScriptErrorStage = 'pre-request' | 'post-response';
+export type RequestFailureKind = 'cancelled' | 'timeout' | 'response_too_large' | 'host_permission' | 'transport';
 
 export interface ApiResponse {
   status: number;
@@ -72,6 +81,7 @@ export interface ApiResponse {
   isError?: boolean;
   errorDetail?: string;
   scriptError?: string;
+  scriptErrorStage?: ScriptErrorStage;
   updatedEnvVars?: string[];
   timestamp: number;
   contentType?: string;
@@ -81,6 +91,7 @@ export interface ApiResponse {
   requestUrl?: string;
   netErrorCode?: string;
   netErrorCategory?: NetworkErrorCategory;
+  failureKind?: RequestFailureKind;
 }
 
 export interface CollectionItem {
@@ -100,6 +111,8 @@ export interface Collection {
   items: CollectionItem[];
   version?: number;
   minRole?: ProjectRole;
+  /** Local cache state; never included in cloud or Postman payloads. */
+  isPartial?: boolean;
   createdAt: number;
   updatedAt: number;
   _origin?: 'offline' | 'cloud';
@@ -212,4 +225,3 @@ export interface ScopesCacheData {
   teamsWithProjects: { team: CloudTeam; projects: CloudProject[] }[];
   lastFetchedAt: number;
 }
-

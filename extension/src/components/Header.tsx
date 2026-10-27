@@ -5,6 +5,7 @@ import { Upload, Globe, Settings2 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
 import { ImportModal } from './ImportModal';
 import { EnvironmentModal } from './EnvironmentModal';
+import { EnvironmentOccModal } from './EnvironmentOccModal';
 import { ModeSelectorModal } from './ModeSelectorModal';
 import { CloudAuthModal } from './CloudAuthModal';
 import { ScopeSwitcher } from './ScopeSwitcher';
@@ -114,6 +115,7 @@ export const Header: React.FC = () => {
       {/* Modals */}
       <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} />
       <EnvironmentModal isOpen={isEnvModalOpen} onClose={() => setIsEnvModalOpen(false)} />
+      <EnvironmentOccModal />
       {!isOfflineOnly && (
         <>
           <ModeSelectorModal
@@ -130,4 +132,3 @@ export const Header: React.FC = () => {
     </>
   );
 };
-

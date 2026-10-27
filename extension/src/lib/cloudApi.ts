@@ -245,8 +245,8 @@ export async function changeUserPassword(
 
 // ----------------- Workspaces & Teams -----------------
 
-export async function fetchUserWorkspaces(apiUrl: string, token: string, refreshToken?: string) {
-  const res = await fetchWithAuth('/api/v1/workspaces', { apiUrl, token, refreshToken });
+export async function fetchUserWorkspaces(apiUrl: string, token: string, refreshToken?: string, signal?: AbortSignal) {
+  const res = await fetchWithAuth('/api/v1/workspaces', { apiUrl, token, refreshToken, signal });
   const json = await safeJson(res);
   if (!res.ok) {
     throw new Error(extractError(json, 'Failed to fetch workspaces', res.status));
@@ -255,8 +255,8 @@ export async function fetchUserWorkspaces(apiUrl: string, token: string, refresh
   return (Array.isArray(data) ? data : []) as CloudWorkspace[];
 }
 
-export async function fetchUserTeams(apiUrl: string, token: string, refreshToken?: string) {
-  const res = await fetchWithAuth('/api/v1/teams', { apiUrl, token, refreshToken });
+export async function fetchUserTeams(apiUrl: string, token: string, refreshToken?: string, signal?: AbortSignal) {
+  const res = await fetchWithAuth('/api/v1/teams', { apiUrl, token, refreshToken, signal });
   const json = await safeJson(res);
   if (!res.ok) {
     throw new Error(extractError(json, 'Failed to fetch teams', res.status));
@@ -265,8 +265,8 @@ export async function fetchUserTeams(apiUrl: string, token: string, refreshToken
   return (Array.isArray(data) ? data : []) as CloudTeam[];
 }
 
-export async function fetchTeamProjects(apiUrl: string, teamId: string, token: string, refreshToken?: string) {
-  const res = await fetchWithAuth(`/api/v1/teams/${teamId}/projects`, { apiUrl, token, refreshToken });
+export async function fetchTeamProjects(apiUrl: string, teamId: string, token: string, refreshToken?: string, signal?: AbortSignal) {
+  const res = await fetchWithAuth(`/api/v1/teams/${teamId}/projects`, { apiUrl, token, refreshToken, signal });
   const json = await safeJson(res);
   if (!res.ok) {
     throw new Error(extractError(json, 'Failed to fetch team projects', res.status));
@@ -275,44 +275,7 @@ export async function fetchTeamProjects(apiUrl: string, teamId: string, token: s
   return (Array.isArray(data) ? data : []) as CloudProject[];
 }
 
-// ----------------- Stateless Delta Sync & Import -----------------
-
-export async function pullScopeDelta(
-  apiUrl: string,
-  token: string,
-  scope: ActiveScope,
-  sinceTimestamp: string | null = null,
-  refreshToken?: string
-) {
-  const query = new URLSearchParams();
-  if (scope.type === 'workspace') {
-    query.set('workspace_id', scope.id);
-  } else if (scope.type === 'project') {
-    query.set('project_id', scope.id);
-  }
-
-  if (sinceTimestamp) {
-    query.set('since', sinceTimestamp);
-  }
-
-  const res = await fetchWithAuth(`/api/v1/sync/pull?${query.toString()}`, {
-    apiUrl,
-    token,
-    refreshToken,
-  });
-
-  const json = await safeJson(res);
-  if (!res.ok) {
-    throw new Error(extractError(json, 'Failed to pull cloud sync delta', res.status));
-  }
-
-  return unwrapData<{
-    collections: any[];
-    items: any[];
-    environments: any[];
-    server_time: string;
-  }>(json);
-}
+// ----------------- Batch Import -----------------
 
 export async function batchImportToScope(
   apiUrl: string,
@@ -362,16 +325,6 @@ export async function batchImportToScope(
     throw new Error(extractError(json, 'Batch import failed', res.status));
   }
   return unwrapData<any>(json);
-}
-
-export async function batchImportToWorkspace(
-  apiUrl: string,
-  token: string,
-  workspaceId: string,
-  collections: Collection[],
-  refreshToken?: string
-) {
-  return batchImportToScope(apiUrl, token, workspaceId, collections, refreshToken);
 }
 
 export async function moveScopeCollection(
@@ -594,7 +547,8 @@ export async function fetchScopeCollections(
   apiUrl: string,
   token: string,
   scope: ActiveScope,
-  refreshToken?: string
+  refreshToken?: string,
+  signal?: AbortSignal
 ): Promise<any[]> {
   const query = new URLSearchParams();
   if (scope.type === 'workspace') {
@@ -607,6 +561,7 @@ export async function fetchScopeCollections(
     apiUrl,
     token,
     refreshToken,
+    signal,
   });
 
   const json = await safeJson(res);
@@ -625,12 +580,14 @@ export async function fetchCollectionById(
   apiUrl: string,
   token: string,
   collectionId: string,
-  refreshToken?: string
+  refreshToken?: string,
+  signal?: AbortSignal
 ): Promise<any> {
   const res = await fetchWithAuth(`/api/v1/collections/${collectionId}`, {
     apiUrl,
     token,
     refreshToken,
+    signal,
   });
 
   const json = await safeJson(res);
@@ -647,7 +604,8 @@ export async function fetchScopeEnvironments(
   apiUrl: string,
   token: string,
   scope: ActiveScope,
-  refreshToken?: string
+  refreshToken?: string,
+  signal?: AbortSignal
 ): Promise<any[]> {
   const query = new URLSearchParams();
   if (scope.type === 'workspace') {
@@ -660,6 +618,7 @@ export async function fetchScopeEnvironments(
     apiUrl,
     token,
     refreshToken,
+    signal,
   });
 
   const json = await safeJson(res);

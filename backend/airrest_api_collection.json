@@ -618,6 +618,149 @@
               ]
             }
           }
+        },
+        {
+          "name": "Create Item in Collection",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"collection_id\": \"{{collectionId}}\",\n  \"type\": \"request\",\n  \"name\": \"Sample HTTPBin Request\",\n  \"method\": \"GET\",\n  \"url\": \"https://httpbin.org/get?user=tester&tag=api\",\n  \"sort_order\": 0,\n  \"params\": [],\n  \"headers\": [],\n  \"body_type\": \"none\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/items",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "items"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Item (OCC)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"base_version\": 1,\n  \"item\": {\n    \"name\": \"Updated HTTPBin Request\",\n    \"method\": \"GET\",\n    \"url\": \"https://httpbin.org/get?user=tester&tag=api\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/items/{{itemId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "items",
+                "{{itemId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Item (Soft Delete)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/items/{{itemId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "items",
+                "{{itemId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Collection (OCC)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Updated Collection Name\",\n  \"base_version\": 1\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/collections/{{collectionId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "collections",
+                "{{collectionId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Soft Delete Collection",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/collections/{{collectionId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "collections",
+                "{{collectionId}}"
+              ]
+            }
+          }
         }
       ]
     },

@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.4] - 2026-10-27
+
+### Added
+- **Request Lifecycle Safeguards & Cancellation**:
+  - Added dedicated **Scripts** tab in `ResponseViewer` that automatically activates upon pre-request script errors with clear feedback (`Pre-request Script Failed — Request not sent`), immediately halting HTTP execution.
+  - Implemented request cancellation via `AbortController` and an interactive **Cancel** button in `RequestEditor` for terminating inflight requests.
+  - Added 30-second execution deadlines/timeouts and streamed response body capping (rejecting payloads over 10 MiB) to prevent browser memory exhaustion.
+- **Environment OCC Side-by-Side Conflict Resolution**:
+  - Added interactive `EnvironmentOccModal` triggered upon HTTP 409 conflicts, displaying remote server version versus local draft side-by-side.
+  - Enables users to pull remote truth or resubmit the local draft using the server's latest version.
+- **Revisioned Storage Snapshots & Multi-Window Sync**:
+  - Implemented `StorageSnapshotEnvelope` with monotonically increasing revisions, timestamps, writer IDs, and deletion tombstones across IndexedDB and localStorage snapshots.
+  - Integrated Web Locks (`navigator.locks`) to serialize commits across concurrent extension windows.
+  - Added multi-window broadcast coordination showing an in-app reload banner to refresh state rather than silently overwriting active drafts.
+- **Progressive Host Permission Diagnostics & Recovery**:
+  - Added origin checks (`chrome.permissions.contains`) for HTTP(S) endpoints before dispatch.
+  - Displays user-initiated "Request Host Permission" prompt (`chrome.permissions.request`) and origin guidance when browser site access is restricted by the user.
+- **Binary Response & Blob URL Lifecycle Management**:
+  - Added `blobManager.ts` to track and safely release binary object URLs (`URL.revokeObjectURL`) upon request completion, history eviction, history deletion, and offline workspace deletion.
+  - Stripped transient blob URLs from persisted history records to prevent dead reference accumulation in local storage.
+- **Collection Detail Retry Mechanism**:
+  - Flagged partial collection download failures with a retryable state in `useApiStore.ts`, keeping access restrictions intact and rendering an explicit retry badge in the sidebar.
+
+### Fixed
+- **Item Payload Validation on All Backend Write Paths**:
+  - Centralized structural item validation (`backend/core/service/item_validation.go`) across `POST /api/v1/items`, `PUT /api/v1/items/{id}`, sync push mutations, and batch imports.
+  - Strictly rejects malformed arrays, null entries, non-string keys, invalid auth types, and invalid item types with sanitized, leak-free error responses.
+  - Hardened extension transformer (`cloudSyncTransformer.ts`) and key-value editors against malformed legacy cloud data.
+- **Atomic Item Mutations & Parent Collection Version Invalidation**:
+  - Wrapped item mutations (`CreateItem`, `UpdateItem`, `SoftDeleteItem`, `BatchReorderItems`) and parent collection version bump (`version = version + 1`, `updated_at = NOW()`) inside a single PostgreSQL database transaction.
+  - Enforced top-down lock acquisition order (`collections` followed by `collection_items` in deterministic ID order) to prevent deadlocks, guaranteeing multi-client cache invalidation.
+- **Active Collection Invariant & Hierarchy Cycle Prevention**:
+  - Enforced active collection checks across all item creation, updates, and reordering operations.
+  - Added cycle detection (`isDescendantOf`), cross-collection parent prevention, and validated that item parents must be of `type: 'folder'`.
+- **Recursive Subtree Soft-Delete & Atomic Collection Deletion**:
+  - Soft-deleting a folder recursively tombstones all descendant subfolders and request items within the collection in a single transaction.
+  - Soft-deleting a collection atomically soft-deletes all contained items without swallowing errors.
+- **OCC Server Truth Synchronization**:
+  - Collection OCC conflict responses (`HTTP 409`) re-fetch and return the latest server database entity in `data`, matching `API_CONTRACT.md` specifications and allowing clients to perform clean merges.
+- **Delta Move Timestamp Invalidation**:
+  - Moving a collection between workspaces or projects atomically updates child items' `updated_at` timestamps, allowing destination scope incremental delta pulls (`GET /api/v1/sync/pull?since=...`) to retrieve all moved items.
+- **Attachment Serialization Recovery**:
+  - Persisted multipart form-data and binary file attachments now store clean metadata with a `needsReselection` flag instead of serializing empty `{}` objects.
+  - Blocks dispatch if an enabled file attachment requires user reselection, preventing corrupt payload transmissions.
+- **Workspace & Tab Session Ownership Isolation**:
+  - Inflight requests and background cloud sync pulls carry session IDs and scope checks; results returning after a workspace switch or logout are safely discarded to prevent cross-scope data contamination.
+- **API Contract & Collection Parity**:
+  - Synchronized `backend/openapi.yaml`, `backend/openapi.json`, `backend/API_CONTRACT.md`, and `backend/airrest_api_collection.json` with 100% schema and type parity.
+
+---
+
 ## [1.1.3] - 2026-10-26
 
 ### Added

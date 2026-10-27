@@ -297,13 +297,13 @@ func (s *SyncService) PushChangeset(ctx context.Context, user *domain.User, req 
 			}
 		case "update":
 			col := m.Collection
-			if err := s.collectionService.UpdateCollection(ctx, user, &col, m.BaseVersion); err != nil {
-				latest, _ := s.collectionService.GetCollection(ctx, user, col.ID)
+			updated, err := s.collectionService.UpdateCollection(ctx, user, &col, m.BaseVersion)
+			if err != nil {
 				resp.Conflicts = append(resp.Conflicts, SyncConflictReport{
 					ID:         col.ID,
 					Type:       "collection",
 					Message:    err.Error(),
-					ServerData: latest,
+					ServerData: updated,
 				})
 			} else {
 				resp.AppliedIDs = append(resp.AppliedIDs, col.ID)

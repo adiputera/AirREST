@@ -206,26 +206,29 @@ func (s *CollectionService) GetCollection(ctx context.Context, user *domain.User
 }
 
 // UpdateCollection updates collection with OCC check
-func (s *CollectionService) UpdateCollection(ctx context.Context, user *domain.User, c *domain.Collection, baseVersion int64) error {
+func (s *CollectionService) UpdateCollection(ctx context.Context, user *domain.User, c *domain.Collection, baseVersion int64) (*domain.Collection, error) {
 	existing, err := s.collectionRepo.GetCollectionByID(ctx, c.ID)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	if existing.DeletedAt != nil {
+		return nil, postgres.ErrCollectionNotFound
 	}
 
 	if err := s.CheckPermission(ctx, user, existing.WorkspaceID, existing.ProjectID, true); err != nil {
-		return err
+		return nil, err
 	}
 
 	if existing.ProjectID != nil && !user.IsSuperadmin() {
 		role, err := s.projectService.GetEffectiveRole(ctx, user, *existing.ProjectID)
 		if err != nil {
-			return ErrForbidden
+			return nil, ErrForbidden
 		}
 		if !CanAccessCollection(role, existing.MinRole) {
-			return ErrForbidden
+			return nil, ErrForbidden
 		}
 		if c.MinRole != "" && !CanAccessCollection(role, c.MinRole) {
-			return ErrForbidden
+			return nil, ErrForbidden
 		}
 	}
 
@@ -243,7 +246,17 @@ func (s *CollectionService) UpdateCollection(ctx context.Context, user *domain.U
 	}
 
 	c.LastModifiedBy = &user.ID
-	return s.collectionRepo.UpdateCollection(ctx, c, baseVersion)
+	err = s.collectionRepo.UpdateCollection(ctx, c, baseVersion)
+	if err != nil {
+		if errors.Is(err, postgres.ErrVersionConflict) {
+			latest, fetchErr := s.collectionRepo.GetCollectionByID(ctx, c.ID)
+			if fetchErr == nil {
+				return latest, err
+			}
+		}
+		return nil, err
+	}
+	return c, nil
 }
 
 // DeleteCollection soft-deletes collection
@@ -368,13 +381,27 @@ func (s *CollectionService) MoveCollection(ctx context.Context, user *domain.Use
 
 // CreateItem creates a request or folder
 func (s *CollectionService) CreateItem(ctx context.Context, user *domain.User, item *domain.CollectionItem) error {
+	if err := ValidateCollectionItem(item); err != nil {
+		return err
+	}
+
 	col, err := s.collectionRepo.GetCollectionByID(ctx, item.CollectionID)
 	if err != nil {
 		return err
 	}
+	if col.DeletedAt != nil {
+		return postgres.ErrCollectionNotFound
+	}
 
 	if err := s.CheckCollectionAccess(ctx, user, col, true); err != nil {
 		return err
+	}
+
+	if item.ParentID != nil {
+		parent, err := s.collectionRepo.GetItemByID(ctx, *item.ParentID)
+		if err != nil || parent.DeletedAt != nil || parent.CollectionID != item.CollectionID || parent.Type != domain.ItemTypeFolder {
+			return newValidationError("parent_id", "parent folder not found in this collection")
+		}
 	}
 
 	item.LastModifiedBy = &user.ID
@@ -383,20 +410,55 @@ func (s *CollectionService) CreateItem(ctx context.Context, user *domain.User, i
 
 // UpdateItem updates a request or folder with OCC validation
 func (s *CollectionService) UpdateItem(ctx context.Context, user *domain.User, item *domain.CollectionItem, baseVersion int64) (*domain.CollectionItem, error) {
+	if err := ValidateCollectionItem(item); err != nil {
+		return nil, err
+	}
+
 	existing, err := s.collectionRepo.GetItemByID(ctx, item.ID)
 	if err != nil {
 		return nil, err
+	}
+	if existing.DeletedAt != nil {
+		return nil, postgres.ErrItemNotFound
 	}
 
 	col, err := s.collectionRepo.GetCollectionByID(ctx, existing.CollectionID)
 	if err != nil {
 		return nil, err
 	}
+	if col.DeletedAt != nil {
+		return nil, postgres.ErrCollectionNotFound
+	}
 
 	if err := s.CheckCollectionAccess(ctx, user, col, true); err != nil {
 		return nil, err
 	}
 
+	if item.ParentID != nil {
+		if *item.ParentID == item.ID {
+			return nil, newValidationError("parent_id", "item cannot be its own parent")
+		}
+		parent, err := s.collectionRepo.GetItemByID(ctx, *item.ParentID)
+		if err != nil || parent.DeletedAt != nil || parent.CollectionID != existing.CollectionID || parent.Type != domain.ItemTypeFolder {
+			return nil, newValidationError("parent_id", "parent folder not found in this collection")
+		}
+
+		if existing.Type == domain.ItemTypeFolder {
+			curr := parent
+			for curr.ParentID != nil {
+				if *curr.ParentID == item.ID {
+					return nil, newValidationError("parent_id", "cycle detected: folder cannot be child of its own descendant")
+				}
+				anc, err := s.collectionRepo.GetItemByID(ctx, *curr.ParentID)
+				if err != nil || anc.DeletedAt != nil {
+					break
+				}
+				curr = anc
+			}
+		}
+	}
+
+	item.CollectionID = existing.CollectionID
 	item.LastModifiedBy = &user.ID
 	err = s.collectionRepo.UpdateItem(ctx, item, baseVersion)
 	if err != nil {
@@ -445,6 +507,9 @@ func (s *CollectionService) GetItem(ctx context.Context, user *domain.User, id u
 	if err != nil {
 		return nil, err
 	}
+	if col.DeletedAt != nil {
+		return nil, postgres.ErrCollectionNotFound
+	}
 
 	if err := s.CheckCollectionAccess(ctx, user, col, false); err != nil {
 		return nil, err
@@ -459,9 +524,24 @@ func (s *CollectionService) ReorderItems(ctx context.Context, user *domain.User,
 	if err != nil {
 		return nil, err
 	}
+	if col.DeletedAt != nil {
+		return nil, postgres.ErrCollectionNotFound
+	}
 
 	if err := s.CheckCollectionAccess(ctx, user, col, true); err != nil {
 		return nil, err
+	}
+
+	for _, pos := range items {
+		if pos.ParentID != nil {
+			if *pos.ParentID == pos.ID {
+				return nil, newValidationError("parent_id", "item cannot be its own parent")
+			}
+			parent, err := s.collectionRepo.GetItemByID(ctx, *pos.ParentID)
+			if err != nil || parent.DeletedAt != nil || parent.CollectionID != collectionID || parent.Type != domain.ItemTypeFolder {
+				return nil, newValidationError("parent_id", "target parent folder not found in this collection")
+			}
+		}
 	}
 
 	if err := s.collectionRepo.BatchReorderItems(ctx, collectionID, items, user.ID); err != nil {

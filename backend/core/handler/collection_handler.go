@@ -160,16 +160,21 @@ func (h *CollectionHandler) Update(w http.ResponseWriter, r *http.Request) {
 		col.MinRole = domain.ProjectRole(*req.MinRole)
 	}
 
-	if err := h.collectionService.UpdateCollection(r.Context(), user, col, req.BaseVersion); err != nil {
+	updated, err := h.collectionService.UpdateCollection(r.Context(), user, col, req.BaseVersion)
+	if err != nil {
 		if errors.Is(err, postgres.ErrVersionConflict) {
-			response.Conflict(w, "conflict: collection has been modified by another user", col)
+			response.Conflict(w, "conflict: collection has been modified by another user", updated)
+			return
+		}
+		if errors.Is(err, postgres.ErrCollectionNotFound) {
+			response.Error(w, http.StatusNotFound, "collection not found", "NOT_FOUND")
 			return
 		}
 		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
 		return
 	}
 
-	response.JSON(w, http.StatusOK, col)
+	response.JSON(w, http.StatusOK, updated)
 }
 
 func (h *CollectionHandler) Delete(w http.ResponseWriter, r *http.Request) {
@@ -242,6 +247,10 @@ func (h *CollectionHandler) CreateItem(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.collectionService.CreateItem(r.Context(), user, &item); err != nil {
+		if errors.Is(err, service.ErrInvalidItemPayload) {
+			response.Error(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST")
+			return
+		}
 		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
 		return
 	}
@@ -272,6 +281,10 @@ func (h *CollectionHandler) UpdateItem(w http.ResponseWriter, r *http.Request) {
 	req.Item.ID = id
 	updated, err := h.collectionService.UpdateItem(r.Context(), user, &req.Item, req.BaseVersion)
 	if err != nil {
+		if errors.Is(err, service.ErrInvalidItemPayload) {
+			response.Error(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST")
+			return
+		}
 		if errors.Is(err, postgres.ErrVersionConflict) {
 			response.Conflict(w, "conflict: item has been modified by another user", updated)
 			return

@@ -144,17 +144,27 @@ Data collisions are resolved using an explicit monotonic `version` counter (int6
    - If current DB version != `base_version`:
      - Abort write.
      - Return HTTP `409 Conflict` with `code: "CONFLICT"` and `"data"` containing the current DB entity.
+4. **Item-Collection Atomic Versioning**:
+   - Creating, updating, or soft-deleting a `CollectionItem` (`POST /api/v1/items`, `PUT /api/v1/items/{id}`, `DELETE /api/v1/items/{id}`) and batch reordering atomically increments `collection.version` (`version = version + 1`) and updates `collection.updated_at = NOW()` in the parent collection.
+   - This invalidates frontend smart caches (`useApiStore.ts`) so subsequent pulls fetch the refreshed item details.
 
 ---
 
-### 5. Tombstone Soft-Deletes & Zombie Prevention
+### 5. Tombstone Soft-Deletes & Subtree Cascading
 
-When a user deletes a collection, item, or environment:
+When a user deletes a collection, folder, item, or environment:
 1. **Never physically remove the row immediately (`DELETE FROM ...`)**.
 2. Instead, set `deleted_at = NOW()` and `updated_at = NOW()`.
-3. When clients call `GET /api/v1/sync/pull?since=<timestamp>`:
+3. **Recursive Folder Subtree Soft-Delete**:
+   - Soft-deleting a folder (`type === 'folder'`) recursively soft-deletes all descendant items and subfolders within that collection atomically in a single transaction.
+   - Descendant items receive individual tombstones (`deleted_at = NOW()`, `version = version + 1`), ensuring offline delta pulls purge them cleanly.
+4. **Collection Deletion Atomicity**:
+   - Soft-deleting a collection atomically soft-deletes all contained items in the same database transaction.
+   - Deleted collections cannot receive new items, accept updates, or serve items via active REST endpoints.
+5. When clients call `GET /api/v1/sync/pull?since=<timestamp>`:
    - The server queries `WHERE updated_at > $since` (including soft-deleted rows where `deleted_at IS NOT NULL`).
    - The client inspects `deleted_at`: if non-null, the client purges the item from its local IndexedDB / LocalStorage cache.
+   - When a collection is moved to a new workspace or project, all contained active items have their `updated_at` updated to ensure the target scope's incremental delta pull retrieves them.
    - This ensures deleted items never reappear when another offline device reconnects.
 
 ---

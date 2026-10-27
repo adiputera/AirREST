@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Send,
-  Loader2,
   Lock,
   Code2,
   Sliders,
@@ -19,6 +18,7 @@ import {
   UploadCloud,
   FileUp,
   RefreshCw,
+  XCircle,
 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
 import { HttpMethod, BodyType, RawType, KeyValuePair } from '@/types/api';
@@ -68,6 +68,7 @@ export const RequestEditor: React.FC = () => {
   const removeUrlEncodedItem = useApiStore((state) => state.removeUrlEncodedItem);
   const setUrlEncodedItems = useApiStore((state) => state.setUrlEncodedItems);
   const sendRequest = useApiStore((state) => state.sendRequest);
+  const cancelActiveRequest = useApiStore((state) => state.cancelActiveRequest);
   const isLoading = useApiStore((state) => state.isLoading);
   const environments = useApiStore((state) => state.environments);
   const activeEnvironmentId = useApiStore((state) => state.activeEnvironmentId);
@@ -386,14 +387,14 @@ export const RequestEditor: React.FC = () => {
 
           {/* Send Button */}
           <button
-            onClick={() => sendRequest()}
-            disabled={isLoading || !currentTab.url.trim()}
+            onClick={() => isLoading ? cancelActiveRequest() : sendRequest()}
+            disabled={!isLoading && !currentTab.url.trim()}
             className="flex h-11 items-center gap-2 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-6 font-semibold text-xs text-white shadow-lg shadow-sky-500/20 hover:from-sky-400 hover:to-blue-500 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed transition shrink-0"
           >
             {isLoading ? (
               <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span>Sending...</span>
+                <XCircle className="h-4 w-4" />
+                <span>Cancel</span>
               </>
             ) : (
               <>
@@ -426,9 +427,9 @@ export const RequestEditor: React.FC = () => {
           >
             <Sliders className="h-3.5 w-3.5" />
             <span>Params</span>
-            {(currentTab?.params || []).filter((p) => p && p.enabled && p.key?.trim()).length > 0 && (
+            {(Array.isArray(currentTab?.params) ? currentTab.params : []).filter((p) => p && p.enabled && p.key?.trim()).length > 0 && (
               <span className="rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/20 px-1.5 text-[10px]">
-                {(currentTab?.params || []).filter((p) => p && p.enabled && p.key?.trim()).length}
+                {(Array.isArray(currentTab?.params) ? currentTab.params : []).filter((p) => p && p.enabled && p.key?.trim()).length}
               </span>
             )}
           </button>
@@ -443,9 +444,9 @@ export const RequestEditor: React.FC = () => {
           >
             <Code2 className="h-3.5 w-3.5" />
             <span>Headers</span>
-            {(currentTab?.headers || []).filter((h) => h && h.enabled && h.key?.trim()).length > 0 && (
+            {(Array.isArray(currentTab?.headers) ? currentTab.headers : []).filter((h) => h && h.enabled && h.key?.trim()).length > 0 && (
               <span className="rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/20 px-1.5 text-[10px]">
-                {(currentTab?.headers || []).filter((h) => h && h.enabled && h.key?.trim()).length}
+                {(Array.isArray(currentTab?.headers) ? currentTab.headers : []).filter((h) => h && h.enabled && h.key?.trim()).length}
               </span>
             )}
           </button>
@@ -521,7 +522,7 @@ export const RequestEditor: React.FC = () => {
         <div className="mt-3">
           {activeTab === 'params' && (
             <KeyValueEditor
-              items={currentTab?.params || []}
+              items={Array.isArray(currentTab?.params) ? currentTab.params : []}
               onUpdate={updateParam}
               onAdd={addParam}
               onRemove={removeParam}
@@ -532,7 +533,7 @@ export const RequestEditor: React.FC = () => {
 
           {activeTab === 'headers' && (
             <KeyValueEditor
-              items={currentTab?.headers || []}
+              items={Array.isArray(currentTab?.headers) ? currentTab.headers : []}
               onUpdate={updateHeader}
               onAdd={addHeader}
               onRemove={removeHeader}
@@ -811,7 +812,7 @@ export const RequestEditor: React.FC = () => {
                                 <div className="flex items-center gap-2">
                                   <label className="flex items-center gap-1.5 rounded-lg border border-dashed border-zinc-700 bg-zinc-900/80 px-2.5 py-1 text-xs text-zinc-300 hover:border-sky-500 hover:text-white cursor-pointer transition">
                                     <Paperclip className="h-3.5 w-3.5 text-sky-400" />
-                                    <span>{item.file ? item.file.name : 'Select File...'}</span>
+                                    <span>{item.file ? item.file.name : item.fileName || 'Select File...'}</span>
                                     <input
                                       type="file"
                                       className="hidden"
@@ -823,9 +824,9 @@ export const RequestEditor: React.FC = () => {
                                       }}
                                     />
                                   </label>
-                                  {item.file && (
+                                  {(item.file || item.needsReselection) && (
                                     <span className="text-[10px] text-zinc-500 font-mono">
-                                      ({Math.round(item.file.size / 1024)} KB)
+                                      {item.file ? `(${Math.round(item.file.size / 1024)} KB)` : '(select again before sending)'}
                                     </span>
                                   )}
                                 </div>
@@ -925,6 +926,9 @@ export const RequestEditor: React.FC = () => {
                               <code className="rounded bg-zinc-900 border border-zinc-800 px-1.5 py-0.5 font-mono text-sky-300">
                                 {currentTab.bodyBinaryFile.type || 'application/octet-stream'}
                               </code>
+                              {currentTab.bodyBinaryFile.needsReselection && (
+                                <span className="text-amber-300">Select the file again before sending.</span>
+                              )}
                             </div>
                           </div>
                         </div>

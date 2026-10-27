@@ -3,7 +3,7 @@
 > A fast, lightweight, and modern browser-based REST API testing studio packaged as a **Google Chrome Extension (Manifest V3)** and standalone web client with optional cloud team synchronization. Built with **React 19**, **Vite**, **Tailwind CSS v4**, **Zustand**, and a **Go + PostgreSQL** backend.
 
 [![GitHub Repository](https://img.shields.io/badge/GitHub-adiputera%2FAirREST-181717?logo=github)](https://github.com/adiputera/AirREST)
-[![Version](https://img.shields.io/badge/Version-1.1.3-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.1.4-blue.svg)](CHANGELOG.md)
 [![Manifest V3](https://img.shields.io/badge/Chrome%20Extension-Manifest%20V3-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=white)](https://vitejs.dev/)
@@ -35,6 +35,7 @@ AirREST is an API testing client that runs directly inside Google Chrome as a Ma
 - **HTTP Methods**: Full support for `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, and `OPTIONS`.
 - **Bidirectional URL & Query Sync**: Editing query parameters in the URL input updates the key-value table automatically, and edits within the table update the URL query string in real time. Supports multi-value keys, templated variables (`{{var}}`), and parameter toggling.
 - **Unsaved Modifications Tracker**: Visual indicator dot (`●`) marks tabs with unsaved edits. Pressing <kbd>Ctrl + S</kbd> / <kbd>Cmd + S</kbd> saves updates directly into the source collection item.
+- **Request Safety & Cancellation**: Inflight requests can be cancelled on demand via the **Cancel** button using native `AbortController`. Built-in 30-second execution deadlines and a 10 MiB streamed response body limit protect against memory overflow and hung connections.
 - **Keyboard Shortcuts**: Quick dispatch with <kbd>Ctrl + Enter</kbd> (Windows/Linux) or <kbd>Cmd + Enter</kbd> (macOS).
 
 ### 2. 📝 Flexible Request Body Formats
@@ -92,6 +93,7 @@ AirREST is an API testing client that runs directly inside Google Chrome as a Ma
   - `{{$isoTimestamp}}` — Current ISO 8601 UTC date-time string.
   - `{{$randomInt}}` — Random integer between 1 and 1000.
 - **Role-Based Environment Access**: Configure environment visibility in team projects using minimum-role settings (`All Members`, `Contributor+`, `Maintainer+`, or `Admin Only`).
+- **Visual OCC Conflict Resolution**: Dedicated interactive modal for HTTP 409 conflicts displaying server truth versus local draft side-by-side, enabling selective pull or draft resubmission with updated base version.
 
 ### 5. 🔐 Authorization Suite
 - **Supported Auth Types**:
@@ -136,6 +138,8 @@ Scripts are executed in a sandboxed, isolated environment using a dedicated Mani
         ▼
 [Response Viewer & Test Feedback Rendered]
 ```
+
+- **Pre-Request Failure Guard**: If a pre-request script throws an unhandled error or times out, HTTP dispatch is automatically aborted, protecting remote endpoints and switching directly to the dedicated **Scripts** tab in the response pane with informative diagnostics.
 
 #### 📚 Script API Reference
 

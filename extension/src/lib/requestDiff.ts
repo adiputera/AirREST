@@ -359,6 +359,14 @@ export function generateCopyCollectionName(baseName: string, existingNames: stri
 }
 
 export function cloneCollectionWithNewIds(col: Collection, newName: string): Collection {
+  const cloneRequest = (request: ApiRequest): ApiRequest => ({
+    ...request,
+    params: (request.params || []).map((pair) => ({ ...pair })),
+    headers: (request.headers || []).map((pair) => ({ ...pair })),
+    bodyFormData: request.bodyFormData?.map((field) => ({ ...field })),
+    bodyUrlEncoded: request.bodyUrlEncoded?.map((pair) => ({ ...pair })),
+    bodyBinaryFile: request.bodyBinaryFile ? { ...request.bodyBinaryFile } : undefined,
+  });
   const cloneItems = (items: CollectionItem[]): CollectionItem[] => {
     return items.map((item) => {
       const newItemId = makeUUID();
@@ -373,7 +381,7 @@ export function cloneCollectionWithNewIds(col: Collection, newName: string): Col
 
       const reqClone: ApiRequest | undefined = item.request
         ? {
-            ...JSON.parse(JSON.stringify(item.request)),
+            ...cloneRequest(item.request),
             id: newItemId,
           }
         : undefined;
@@ -389,7 +397,7 @@ export function cloneCollectionWithNewIds(col: Collection, newName: string): Col
   const newColId = makeUUID();
 
   return {
-    ...JSON.parse(JSON.stringify(col)),
+    ...col,
     id: newColId,
     name: newName,
     items: cloneItems(col.items || []),

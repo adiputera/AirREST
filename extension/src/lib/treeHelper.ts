@@ -1,6 +1,21 @@
 import { CollectionItem } from '@/types/api';
 import { ReorderItemPayload } from './cloudApi';
 
+function cloneItemsPreservingAttachments(items: CollectionItem[]): CollectionItem[] {
+  return items.map((item) => ({
+    ...item,
+    request: item.request ? {
+      ...item.request,
+      params: (item.request.params || []).map((pair) => ({ ...pair })),
+      headers: (item.request.headers || []).map((pair) => ({ ...pair })),
+      bodyFormData: item.request.bodyFormData?.map((field) => ({ ...field })),
+      bodyUrlEncoded: item.request.bodyUrlEncoded?.map((pair) => ({ ...pair })),
+      bodyBinaryFile: item.request.bodyBinaryFile ? { ...item.request.bodyBinaryFile } : undefined,
+    } : undefined,
+    items: item.items ? cloneItemsPreservingAttachments(item.items) : undefined,
+  }));
+}
+
 /**
  * Checks whether targetId is the ancestor itself or any nested descendant of ancestorId.
  * Used to prevent circular dependency (e.g. moving a parent folder into its child).
@@ -69,8 +84,8 @@ export function reorderItemInTree(
     return null;
   }
 
-  // Clone deeply
-  const cloned: CollectionItem[] = JSON.parse(JSON.stringify(items));
+  // Clone request structure while retaining live File references used by attachments.
+  const cloned = cloneItemsPreservingAttachments(items);
 
   // Extract active item
   let activeItem: CollectionItem | null = null;
