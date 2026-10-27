@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="extension/public/logo.png" alt="AirREST Logo" width="280" />
+</p>
+
 # AirREST
 
 > A fast, lightweight, and modern browser-based REST API testing studio packaged as a **Google Chrome Extension (Manifest V3)** and standalone web client with optional cloud team synchronization. Built with **React 19**, **Vite**, **Tailwind CSS v4**, **Zustand**, and a **Go + PostgreSQL** backend.
