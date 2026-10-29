@@ -1,6 +1,6 @@
 # Chrome Web Store Listings — AirREST
 
-> Last Updated: 2026-10-27
+> Last Updated: 2026-10-28
 
 This document provides complete, copy-paste ready store listing metadata and privacy disclosures for both editions of AirREST:
 1. **Full Edition** (`npm run build:full` → `dist/`) — Online & Offline with optional cloud workspace sync.
@@ -53,13 +53,14 @@ The optional cloud synchronization backend (Go backend and AirREST Hub portal) i
 
 PERMISSIONS
 • Access all websites ("host_permissions"): Needed to send API requests to any endpoint you configure (including localhost and private network servers) and connect to your chosen self-hosted sync server without CORS restrictions.
-• Storage ("storage", "unlimitedStorage"): Needed to store your collections, environments, settings, and request history locally without quota limitation errors.
+• Local database quota ("unlimitedStorage"): Needed to store your collections, environments, settings, and request history locally in IndexedDB without quota limitation errors.
 • Network diagnostics ("webRequest"): Needed strictly as an observational listener to capture low-level network failure codes (e.g., ERR_CONNECTION_REFUSED, ERR_NAME_NOT_RESOLVED, ERR_CERT_AUTHORITY_INVALID) for accurate diagnostic feedback when local servers are offline or certificates fail. It does not block or modify requests.
 
 SUPPORT
 For questions, bug reports, or feature suggestions, visit the project repository on GitHub:
 https://github.com/adiputera/AirREST
 
+Version 1.1.5 — Removed unused storage permission to adhere to the Chrome Web Store minimal permissions policy; all workspaces, collections, and environments persist durably in IndexedDB.
 Version 1.1.4 — Added request lifecycle safeguards (pre-request aborts, cancellation, 30s timeout, 10 MiB stream caps), atomic item-collection versioning, side-by-side environment OCC conflict resolution, durable multi-window storage sync, and attachment recovery.
 Version 1.1.3 — Added seamless password change re-authentication, sequential cloud collection import with real-time progress, and aligned move collection capabilities.
 Version 1.1.2 — Added strict RBAC authority enforcement across project scopes, read-only UI indicators, and hardened client stability against edge-case crashes.
@@ -84,8 +85,7 @@ English
 | Permission | Type | Justification |
 |------------|------|---------------|
 | `<all_urls>` | host_permissions | AirREST functions as an in-browser REST API client. Users need to send arbitrary HTTP and HTTPS requests to custom API endpoints of their choice—including public APIs, staging servers, and local development environments (localhost)—directly from the browser without Cross-Origin Resource Sharing (CORS) or mixed-content restrictions. It also enables connecting to user-configured self-hosted sync backends. Because the target API host depends entirely on what the user tests, access to all URLs is fundamentally required. |
-| `storage` | permissions | The storage permission is used exclusively to locally store the user's API collections, request configurations (headers, query parameters, auth tokens, body payloads), environment variables, active workspace tabs, and user interface preferences directly within their browser. |
-| `unlimitedStorage` | permissions | The unlimitedStorage permission is necessary because users frequently import large Postman collection files containing hundreds of endpoints, comprehensive schemas, and heavy test scripts, as well as accumulate extensive API execution histories and response logs. The default 10MB quota for chrome.storage.local would result in quota exceeded errors and critical data loss for developers managing complex API projects. |
+| `unlimitedStorage` | permissions | The unlimitedStorage permission is necessary because users frequently import large Postman collection files containing hundreds of endpoints, comprehensive schemas, and heavy test scripts, as well as accumulate extensive API execution histories and response logs. It ensures that IndexedDB is not constrained by standard browser origin eviction quotas or storage limits. |
 | `webRequest` | permissions | The webRequest permission is used strictly as an observational listener (`chrome.webRequest.onErrorOccurred`) to capture low-level network failure codes (e.g., `ERR_CONNECTION_REFUSED`, `ERR_NAME_NOT_RESOLVED`, `ERR_CERT_AUTHORITY_INVALID`) so developers receive accurate diagnostic feedback when local servers are offline or certificates fail. It does not block or modify requests. |
 
 ### Privacy & Data Use (Tab Praktik Privasi)
@@ -137,13 +137,14 @@ AirREST Offline operates entirely on your device. It contains no external analyt
 
 PERMISSIONS
 • Access all websites ("host_permissions"): Needed solely to send API requests to any endpoint you configure (including localhost and private network servers) directly from the browser without CORS restrictions. The extension never contacts any developer servers.
-• Storage ("storage", "unlimitedStorage"): Needed to store your collections, environments, settings, and request history locally on your machine without quota limitation errors.
+• Local database quota ("unlimitedStorage"): Needed to store your collections, environments, settings, and request history locally in IndexedDB without quota limitation errors.
 • Network diagnostics ("webRequest"): Needed strictly as an observational listener to capture low-level network failure codes (e.g., ERR_CONNECTION_REFUSED, ERR_NAME_NOT_RESOLVED, ERR_CERT_AUTHORITY_INVALID) for accurate diagnostic feedback when local servers are offline or certificates fail. It does not block or modify requests.
 
 SUPPORT
 For questions, bug reports, or feature suggestions, visit the project repository on GitHub:
 https://github.com/adiputera/AirREST
 
+Version 1.1.5 — Removed unused storage permission to adhere to the Chrome Web Store minimal permissions policy; local collections and history persist durably in IndexedDB.
 Version 1.1.4 — Added request lifecycle safeguards (pre-request aborts, cancellation, 30s timeout, 10 MiB stream caps), attachment recovery, multi-window storage synchronization, and isolated memory cleanup.
 Version 1.1.3 — Client performance stability improvements, enhanced offline collection safeguards, and hardened memory management.
 Version 1.1.2 — Hardened client stability against edge-case crashes, improved base64 JWT decoding, and safeguarded form-data file handling.
@@ -168,8 +169,7 @@ English
 | Permission | Type | Justification |
 |------------|------|---------------|
 | `<all_urls>` | host_permissions | AirREST Offline functions as a standalone in-browser REST API client. Users need to send arbitrary HTTP and HTTPS requests to custom API endpoints of their choice—including public APIs, staging servers, and local development environments (localhost)—directly from the browser without Cross-Origin Resource Sharing (CORS) or mixed-content restrictions. The extension never communicates with any developer servers; access to all URLs is used solely to execute user-initiated API tests. |
-| `storage` | permissions | The storage permission is used exclusively to locally store the user's API collections, request configurations (headers, query parameters, auth tokens, body payloads), environment variables, active workspace tabs, and user interface preferences directly within their browser. |
-| `unlimitedStorage` | permissions | The unlimitedStorage permission is necessary because users frequently import large Postman collection files containing hundreds of endpoints, comprehensive schemas, and heavy test scripts, as well as accumulate extensive API execution histories and response logs. The default 10MB quota for chrome.storage.local would result in quota exceeded errors and critical data loss for developers managing complex API projects. |
+| `unlimitedStorage` | permissions | The unlimitedStorage permission is necessary because users frequently import large Postman collection files containing hundreds of endpoints, comprehensive schemas, and heavy test scripts, as well as accumulate extensive API execution histories and response logs. It ensures that IndexedDB is not constrained by standard browser origin eviction quotas or storage limits. |
 | `webRequest` | permissions | The webRequest permission is used strictly as an observational listener (`chrome.webRequest.onErrorOccurred`) to capture low-level network failure codes (e.g., `ERR_CONNECTION_REFUSED`, `ERR_NAME_NOT_RESOLVED`, `ERR_CERT_AUTHORITY_INVALID`) so developers receive accurate diagnostic feedback when local servers are offline or certificates fail. It does not block or modify requests. |
 
 ### Privacy & Data Use (Tab Praktik Privasi)

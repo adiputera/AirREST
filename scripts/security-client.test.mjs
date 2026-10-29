@@ -77,3 +77,133 @@ test('import count and depth limits fail before network IO', async () => {
   for (let i = 0; i < 32; i++) items = [{ name: 'folder', items }];
   await assert.rejects(api.batchImportToScope('https://example.com', 'token', 'workspace', [{ items }]), /32 folder levels/);
 });
+
+function loadCommonModule(file, customRequires = {}) {
+  const source = fs.readFileSync(new URL(`../${file}`, import.meta.url), 'utf8').replaceAll('import.meta.env', '({})');
+  const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const exports = {};
+  const require = (id) => {
+    if (customRequires[id]) return customRequires[id];
+    if (id.includes('urlParams')) return loadCommonModule('packages/common/src/lib/urlParams.ts');
+    return {};
+  };
+  vm.runInNewContext(compiled, { exports, require, Map, Set, console, URL, URLSearchParams, Date, JSON, atob, btoa, Buffer }, { filename: file });
+  return exports;
+}
+
+test('T-C4 (C4): buildItemTree and convertPostmanItem safely handle cyclic parent references and bounded recursion', () => {
+  for (const transformerPath of ['packages/common/src/lib/cloudSyncTransformer.ts', 'extension/src/lib/cloudSyncTransformer.ts']) {
+    const { buildItemTree } = loadCommonModule(transformerPath);
+    assert.equal(typeof buildItemTree, 'function');
+
+    // 1. Cyclic parent reference (mutual cycle: item-1 -> item-2 -> item-1)
+    const cyclicItems = [
+      { id: 'item-1', name: 'Item 1', parent_id: 'item-2', type: 'folder' },
+      { id: 'item-2', name: 'Item 2', parent_id: 'item-1', type: 'folder' },
+    ];
+    assert.doesNotThrow(() => {
+      const tree = buildItemTree(cyclicItems, 'item-2');
+      assert.ok(Array.isArray(tree));
+    }, 'Mutual cycle must not throw RangeError');
+
+    // 2. Self-referential item (item -> item)
+    const selfCycle = [
+      { id: 'self-1', name: 'Self Cycle', parent_id: 'self-1', type: 'folder' },
+    ];
+    assert.doesNotThrow(() => {
+      const tree = buildItemTree(selfCycle, 'self-1');
+      assert.ok(Array.isArray(tree));
+    }, 'Self-referential item must not throw RangeError');
+
+    // 3. Deeply nested hierarchy (> 32 levels)
+    const deepItems = [];
+    for (let i = 0; i < 40; i++) {
+      deepItems.push({
+        id: `node-${i}`,
+        name: `Folder ${i}`,
+        parent_id: i === 0 ? null : `node-${i - 1}`,
+        type: 'folder',
+      });
+    }
+    const deepTree = buildItemTree(deepItems, null);
+    assert.ok(Array.isArray(deepTree));
+
+    let current = deepTree[0];
+    let measuredDepth = 0;
+    while (current && current.items && current.items.length > 0) {
+      measuredDepth++;
+      current = current.items[0];
+    }
+    assert.ok(measuredDepth <= 32, `Recursion depth must be capped at 32, got ${measuredDepth}`);
+  }
+
+  // 4. Postman convertPostmanItem deeply nested structure (> 40 levels)
+  const { convertPostmanItem } = loadCommonModule('packages/common/src/lib/postman.ts');
+  assert.equal(typeof convertPostmanItem, 'function');
+
+  let deepPostman = { name: 'Leaf Request', request: { url: 'https://example.com/test', method: 'GET' } };
+  for (let i = 0; i < 45; i++) {
+    deepPostman = { name: `Folder Level ${i}`, item: [deepPostman] };
+  }
+
+  assert.doesNotThrow(() => {
+    const converted = convertPostmanItem(deepPostman);
+    assert.ok(converted);
+
+    let node = converted;
+    let postmanDepth = 0;
+    while (node && node.items && node.items.length > 0) {
+      postmanDepth++;
+      node = node.items[0];
+    }
+    assert.ok(postmanDepth <= 32, `Postman import depth must be capped at 32, got ${postmanDepth}`);
+  }, 'convertPostmanItem must not throw RangeError on deeply nested items');
+});
+
+test('T-VN3 (V-NEW-3): getUserScopeRank strictly prioritizes user.role over untrusted JWT claims', () => {
+  for (const jwtPath of ['packages/common/src/lib/jwt.ts', 'extension/src/lib/jwt.ts']) {
+    const { getUserScopeRank } = loadCommonModule(jwtPath);
+    assert.equal(typeof getUserScopeRank, 'function', `${jwtPath} must export getUserScopeRank`);
+
+    // Forged JWT containing { role: 'superadmin' } in payload
+    const forgedSuperadminPayload = Buffer.from(JSON.stringify({ role: 'superadmin', user_id: 'bad-actor' })).toString('base64url');
+    const forgedToken = `header.${forgedSuperadminPayload}.signature`;
+
+    // 1. User has verified server role 'reader' in a project scope where scope role is 'reader'
+    // Even though JWT claims superadmin, user.role 'reader' MUST NOT be overridden to admin rank 4
+    const readerRank = getUserScopeRank(
+      'cloud',
+      { type: 'project', role: 'reader' },
+      forgedToken,
+      { role: 'reader' }
+    );
+    assert.equal(readerRank, 1, `${jwtPath}: verified user.role='reader' must not be overridden by JWT superadmin claim`);
+
+    // 2. User has verified server role 'contributor' in a project scope where scope role is 'contributor'
+    const contributorRank = getUserScopeRank(
+      'cloud',
+      { type: 'project', role: 'contributor' },
+      forgedToken,
+      { role: 'contributor' }
+    );
+    assert.equal(contributorRank, 2, `${jwtPath}: verified user.role='contributor' must return scope rank 2, not rank 4`);
+
+    // 3. User has verified server role 'superadmin' -> rank 4
+    const superadminRank = getUserScopeRank(
+      'cloud',
+      { type: 'project', role: 'reader' },
+      null,
+      { role: 'superadmin' }
+    );
+    assert.equal(superadminRank, 4, `${jwtPath}: verified user.role='superadmin' must return rank 4`);
+
+    // 4. Fallback to JWT role only when user object or user.role is absent/null
+    const fallbackRank = getUserScopeRank(
+      'cloud',
+      { type: 'project', role: 'reader' },
+      forgedToken,
+      null
+    );
+    assert.equal(fallbackRank, 4, `${jwtPath}: absence of user.role should fall back to JWT claim`);
+  }
+});

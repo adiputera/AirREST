@@ -19,3 +19,13 @@ Whenever there are modifications, additions, or deprecations to backend REST end
 2. **Type & Value Parity**: Ensure that field names, data types (e.g., boolean vs string), and strict enum values (e.g., roles, item types, methods) match across the OpenAPI specs, markdown guide, backend code, and frontend client handlers.
 3. **Syntax Validation**: Always validate the YAML/JSON syntax of `backend/openapi.yaml` and `backend/openapi.json` after making updates to ensure machine-readability.
 
+## Mandatory Audit & Scan Documentation
+
+Whenever asked to perform a code audit, security scan, reliability scan, or architectural review:
+
+1. **Always Create Documentation in `docs/`**: In addition to summarizing in chat, you MUST automatically create or update structured markdown documentation in the `docs/` directory (using `docs/audits/` for findings and `docs/plans/` for remediation & verification plans, or a combined document in `docs/` if appropriate):
+   - **Findings**: Categorized list of issues with severity/priority levels (`P1`/`P2`/`P3`), root-cause analysis, impact, and exact file/line references.
+   - **Remediation / Fix Plan**: Actionable, step-by-step work packages and checklists detailing how to fix each finding without breaking existing contracts.
+   - **Verification Guide**: Concrete test matrix (automated test scenarios, expected assertions, target test files), exact CLI verification commands, and manual verification steps.
+
+

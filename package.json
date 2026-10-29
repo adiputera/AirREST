@@ -1,9 +1,11 @@
 {
   "name": "airrest",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "private": true,
   "type": "module",
   "workspaces": [
+    "packages/*",
+    "apps/*",
     "extension",
     "hub"
   ],
@@ -16,16 +18,22 @@
     "build:extension": "npm run --prefix extension build",
     "build:all-extensions": "npm run --prefix extension build:all-extensions",
     "dev:hub": "npm run --prefix hub dev",
+    "dev:desktop": "npm run --prefix apps/desktop tauri -- dev",
     "build:hub": "npm run --prefix hub build",
+    "build:desktop": "npm run --prefix apps/desktop tauri -- build",
     "build:all": "npm run build && npm run build:offline && npm run build:hub",
     "preview": "npm run --prefix extension preview",
-    "typecheck": "npm run --prefix extension typecheck && npm run --prefix hub typecheck",
+    "typecheck": "npm run --prefix packages/common typecheck && npm run --prefix extension typecheck && npm run --prefix hub typecheck && npm run --prefix apps/desktop typecheck",
     "lint": "eslint",
     "test:security-clients": "node --test scripts/security-client.test.mjs",
     "test:extension-lifecycle": "node --test scripts/extension-request-lifecycle.test.mjs",
     "test:extension-storage": "node --test scripts/extension-storage.test.mjs",
     "test:extension-fetcher": "node --test scripts/extension-fetcher.test.mjs",
-    "test:hub": "node --test scripts/hub-regression.test.mjs"
+    "test:hub": "node --test scripts/hub-regression.test.mjs",
+    "test:desktop-sandbox": "node --test scripts/desktop-quickjs-sandbox.test.mjs",
+    "test:desktop-transport": "node --test scripts/desktop-transport-lifecycle.test.mjs",
+    "test:desktop": "npm run test:desktop-sandbox && npm run test:desktop-transport",
+    "test:all": "npm run test:security-clients && npm run test:extension-lifecycle && npm run test:extension-storage && npm run test:extension-fetcher && npm run test:hub && npm run test:desktop"
   },
   "devDependencies": {
     "eslint": "^9",

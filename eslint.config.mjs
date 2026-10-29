@@ -10,6 +10,8 @@ export default tseslint.config(
       '**/public/**',
       '**/.next/**',
       '**/out/**',
+      '**/src-tauri/**',
+      'scripts/**',
     ],
   },
   js.configs.recommended,
@@ -20,6 +22,7 @@ export default tseslint.config(
         'warn',
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
       ],
+      '@typescript-eslint/no-explicit-any': 'warn',
     },
   }
 );

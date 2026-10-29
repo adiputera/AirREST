@@ -405,7 +405,16 @@ export function extractAuthFromHeaders(headers: KeyValuePair[]): AuthConfig | nu
   return null;
 }
 
-function convertPostmanItem(item: PostmanRawItem, inheritedAuth?: AuthConfig): CollectionItem {
+export function convertPostmanItem(item: PostmanRawItem, inheritedAuth?: AuthConfig, depth: number = 0): CollectionItem {
+  if (depth >= 32) {
+    return {
+      id: item.id || generateId(),
+      name: item.name || 'Unnamed Folder (depth exceeded)',
+      type: 'folder',
+      items: [],
+    };
+  }
+
   const isFolder = Array.isArray(item.item);
 
   // Folder auth overrides or falls back to inherited collection/parent auth
@@ -416,7 +425,7 @@ function convertPostmanItem(item: PostmanRawItem, inheritedAuth?: AuthConfig): C
       id: item.id || generateId(),
       name: item.name || 'Unnamed Folder',
       type: 'folder',
-      items: (item.item || []).map((child) => convertPostmanItem(child, folderAuth)),
+      items: (item.item || []).map((child) => convertPostmanItem(child, folderAuth, depth + 1)),
     };
   }
 

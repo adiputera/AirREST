@@ -7,7 +7,7 @@
 > A fast, lightweight, and modern browser-based REST API testing studio packaged as a **Google Chrome Extension (Manifest V3)** and standalone web client with optional cloud team synchronization. Built with **React 19**, **Vite**, **Tailwind CSS v4**, **Zustand**, and a **Go + PostgreSQL** backend.
 
 [![GitHub Repository](https://img.shields.io/badge/GitHub-adiputera%2FAirREST-181717?logo=github)](https://github.com/adiputera/AirREST)
-[![Version](https://img.shields.io/badge/Version-1.1.4-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.1.5-blue.svg)](CHANGELOG.md)
 [![Manifest V3](https://img.shields.io/badge/Chrome%20Extension-Manifest%20V3-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=white)](https://vitejs.dev/)
@@ -389,10 +389,14 @@ AirREST is completely backend-agnostic! If you prefer implementing the backend i
 | `npm run build:all-extensions` | Compiles both Chrome Extension editions |
 | `npm run dev:hub` | Runs the Vite dev server for AirREST Hub |
 | `npm run build:hub` | Builds the production bundle for AirREST Hub |
+| `npm run dev:desktop` | Runs the Tauri v2 Desktop client in development mode |
+| `npm run build:desktop` | Builds the Tauri v2 Desktop client binary |
 | `npm run build:all` | Compiles all targets (Extension and Hub) |
 | `npm run preview` | Previews the production extension build locally |
 | `npm run typecheck` | Validates TypeScript types across extension and hub |
 | `npm run test:security-clients` | Runs security client regression tests for extension & hub |
+| `npm run test:desktop-sandbox` | Runs Gate P0.3 QuickJS WebAssembly guest sandbox verification |
+| `npm run test:desktop-transport` | Runs Gate P0.1/P0.2 native transport, header echo, & stream limit tests |
 | `npm run test:hub` | Runs frontend Hub regression test suite |
 | `npm run lint` | Runs ESLint validation across the repository |
 
@@ -411,10 +415,27 @@ AirREST is completely backend-agnostic! If you prefer implementing the backend i
 
 ```
 ├── .gitignore                    # Ignore rules (.env, build outputs, dependencies)
-├── package.json                  # Root npm workspace configuration (workspaces: ["extension", "hub"])
+├── package.json                  # Root npm workspace configuration (workspaces: ["packages/*", "apps/*", "extension", "hub"])
 ├── package-lock.json
 ├── eslint.config.mjs             # Monorepo ESLint configuration
 ├── tsconfig.json                 # Workspace root TypeScript configuration
+├── packages/
+│   └── common/                   # Shared Core Library (@airrest/common)
+│       ├── src/
+│       │   ├── components/       # Universal UI components (Header, RequestEditor, ResponseViewer, Modals)
+│       │   ├── lib/              # Shared business logic (cURL, fetcher, postman, scriptRunner, cloudApi)
+│       │   ├── store/            # Zustand persistent store with multi-workspace support
+│       │   ├── types/            # Domain interfaces and PlatformAdapter contracts
+│       │   ├── runtime.ts        # Runtime factory (createAirrestRuntime)
+│       │   ├── context.tsx       # AirrestProvider & useAirrestRuntime
+│       │   └── App.tsx           # Shared application studio UI
+│       └── package.json          # Shared package configuration
+│
+├── apps/
+│   └── desktop/                  # Tauri v2 Desktop Application (React 19 + Rust Shell)
+│       ├── src/                  # Desktop renderer frontend & adapters (tauriAdapter.ts)
+│       ├── src-tauri/            # Tauri backend shell (Cargo.toml, capabilities, tauri.conf.json)
+│       └── package.json          # Desktop dependencies (@tauri-apps/api, plugins, quickjs-emscripten)
 │
 ├── extension/                    # Chrome Extension (Manifest V3 + React 19 + Tailwind CSS v4)
 │   ├── dist/                     # Compiled full edition

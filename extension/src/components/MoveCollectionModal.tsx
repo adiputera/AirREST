@@ -99,8 +99,8 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
 
         // 2. Cloud Workspaces & Projects (Full edition only, if authenticated)
         if (!isOfflineOnly && cloudConfig.token) {
-          const jwtRole = getRoleFromJwt(cloudConfig.token);
-          const isSuperadmin = jwtRole === 'superadmin' || cloudConfig.user?.role === 'superadmin';
+          const effectiveUserRole = (cloudConfig.user?.role || getRoleFromJwt(cloudConfig.token) || '').toLowerCase();
+          const isSuperadmin = effectiveUserRole === 'superadmin';
 
           const [workspaces, teams] = await Promise.all([
             fetchUserWorkspaces(cloudConfig.apiUrl, cloudConfig.token!, cloudConfig.refreshToken).catch(() => []),

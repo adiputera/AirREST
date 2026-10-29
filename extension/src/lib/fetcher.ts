@@ -104,7 +104,7 @@ export function prepareRequest(
   let rawUrl = interpolateVariables((request?.url || '').trim(), variables);
 
   // If no scheme provided, default to http:// for localhost/private network IPs or https:// for others
-  if (!/^https?:\/\//i.test(rawUrl)) {
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//i.test(rawUrl)) {
     const isLocalOrIp = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)/i.test(rawUrl);
     rawUrl = isLocalOrIp ? `http://${rawUrl}` : `https://${rawUrl}`;
   }
@@ -358,13 +358,33 @@ export function detectMediaType(
  * Dispatches an API request with full variable interpolation,
  * file upload support, and zero CORS limitations.
  */
-const localRecentErrors = new Map<string, { error: string; timestamp: number }>();
+export const localRecentErrors = new Map<string, { error: string; timestamp: number }>();
+
+export function recordLocalRecentError(url: string, error: string): void {
+  const now = Date.now();
+  // Purge entries older than 30s
+  for (const [key, val] of localRecentErrors.entries()) {
+    if (now - val.timestamp > 30000) {
+      localRecentErrors.delete(key);
+    }
+  }
+  // Enforce max capacity of 100 entries (evict oldest)
+  while (localRecentErrors.size >= 100) {
+    const oldestKey = localRecentErrors.keys().next().value;
+    if (oldestKey !== undefined) {
+      localRecentErrors.delete(oldestKey);
+    } else {
+      break;
+    }
+  }
+  localRecentErrors.set(url, { error, timestamp: now });
+}
 
 if (typeof chrome !== 'undefined' && chrome.webRequest?.onErrorOccurred) {
   try {
     chrome.webRequest.onErrorOccurred.addListener(
       (details) => {
-        localRecentErrors.set(details.url, { error: details.error, timestamp: Date.now() });
+        recordLocalRecentError(details.url, details.error);
       },
       { urls: ['<all_urls>'] }
     );
@@ -444,6 +464,39 @@ export async function executeApiRequest(
     const { finalUrl: preparedUrl, finalHeaders, finalBody } = prepareRequest(request, variables);
     finalUrl = preparedUrl;
 
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(finalUrl);
+    } catch {
+      return {
+        status: 0,
+        statusText: 'Invalid URL',
+        timeMs: Math.round(performance.now() - startTime),
+        sizeBytes: 0,
+        headers: {},
+        data: `The URL "${finalUrl}" is invalid.`,
+        isError: true,
+        failureKind: 'transport',
+        requestUrl: finalUrl,
+        timestamp: Date.now(),
+      };
+    }
+
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+      return {
+        status: 0,
+        statusText: 'Host Permission Required',
+        timeMs: Math.round(performance.now() - startTime),
+        sizeBytes: 0,
+        headers: {},
+        data: `Protocol "${parsedUrl.protocol}" is not supported. Only http: and https: are allowed.`,
+        isError: true,
+        failureKind: 'host_permission',
+        requestUrl: finalUrl,
+        timestamp: Date.now(),
+      };
+    }
+
     if (await hasHostPermission(finalUrl) === false) {
       return {
         status: 0,
@@ -451,7 +504,7 @@ export async function executeApiRequest(
         timeMs: Math.round(performance.now() - startTime),
         sizeBytes: 0,
         headers: {},
-        data: `Chrome has not granted this extension access to ${new URL(finalUrl).origin}.`,
+        data: `Chrome has not granted this extension access to ${parsedUrl.origin}.`,
         isError: true,
         failureKind: 'host_permission',
         requestUrl: finalUrl,

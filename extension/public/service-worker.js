@@ -17,6 +17,16 @@ if (typeof chrome !== 'undefined' && chrome.webRequest?.onErrorOccurred) {
           recentNetworkErrors.delete(url);
         }
       }
+
+      // Enforce max capacity of 100 entries (evict oldest)
+      while (recentNetworkErrors.size > 100) {
+        const oldestKey = recentNetworkErrors.keys().next().value;
+        if (oldestKey !== undefined) {
+          recentNetworkErrors.delete(oldestKey);
+        } else {
+          break;
+        }
+      }
     },
     { urls: ['<all_urls>'] }
   );

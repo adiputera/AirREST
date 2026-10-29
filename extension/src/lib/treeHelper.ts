@@ -23,22 +23,25 @@ function cloneItemsPreservingAttachments(items: CollectionItem[]): CollectionIte
 export function isDescendantOf(
   items: CollectionItem[] = [],
   ancestorId: string,
-  targetId: string
+  targetId: string,
+  depth: number = 0
 ): boolean {
+  if (depth > 64) return false;
   if (ancestorId === targetId) return true;
 
   for (const it of items || []) {
     if (it.id === ancestorId) {
-      const searchChildren = (children: CollectionItem[]): boolean => {
+      const searchChildren = (children: CollectionItem[], childDepth: number = depth): boolean => {
+        if (childDepth > 64) return false;
         for (const child of children) {
           if (child.id === targetId) return true;
-          if (child.items && searchChildren(child.items)) return true;
+          if (child.items && searchChildren(child.items, childDepth + 1)) return true;
         }
         return false;
       };
       return searchChildren(it.items || []);
     }
-    if (it.items && isDescendantOf(it.items, ancestorId, targetId)) {
+    if (it.items && isDescendantOf(it.items, ancestorId, targetId, depth + 1)) {
       return true;
     }
   }
