@@ -34,7 +34,7 @@ import {
 import { Collection, Environment, HttpMethod } from '@/types/api';
 import { MethodBadge } from './MethodBadge';
 import { handleCodeEditorKeyDown } from '@/lib/editorHelper';
-import { canModifyCollection, hasScopePermission } from '@/lib/jwt';
+import { canModifyCollection, canModifyEnvironment, hasScopePermission } from '@/lib/jwt';
 
 interface ImportModalProps {
   isOpen: boolean;
@@ -232,8 +232,9 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
         await replaceCollection(conflict.existingCol.id, conflict.incomingCol);
         setSuccessMsg(`Collection "${conflict.existingCol.name}" replaced successfully!`);
       } else {
-        if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
-          setErrorMsg('Insufficient permission to replace environment in this scope (requires env:write).');
+        if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role) ||
+            !canModifyEnvironment(conflict.existingEnv.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+          setErrorMsg('Cannot replace environment: read-only for your role or lacking write permissions.');
           return;
         }
 

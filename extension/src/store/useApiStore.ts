@@ -49,6 +49,7 @@ import {
   fetchScopeCollections,
   fetchCollectionById,
   fetchScopeEnvironments,
+  normalizeCloudApiUrl,
 } from '@/lib/cloudApi';
 import { reorderItemInTree } from '@/lib/treeHelper';
 import {
@@ -62,7 +63,7 @@ import {
   flattenCollectionRequests,
   alignEnvironmentVariableIds,
 } from '@/lib/requestDiff';
-import { canModifyCollection, hasScopePermission } from '@/lib/jwt';
+import { canModifyCollection, canModifyEnvironment, hasScopePermission } from '@/lib/jwt';
 
 function generateId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -482,6 +483,7 @@ function scheduleEnvironmentCloudSync(
 
   if (envSyncDebounceTimers[envId]) {
     clearTimeout(envSyncDebounceTimers[envId]);
+    delete envSyncDebounceTimers[envId];
   }
 
   envSyncDebounceTimers[envId] = setTimeout(async () => {
@@ -493,6 +495,7 @@ function scheduleEnvironmentCloudSync(
     const currentEnv = environments.find((e) => e.id === envId);
     if (!currentEnv) return;
 
+    const operation = beginAsyncOperation();
     try {
       const res = await updateScopeEnvironment(
         cloudConfig.apiUrl,
@@ -504,30 +507,42 @@ function scheduleEnvironmentCloudSync(
           min_role: currentEnv.minRole,
           base_version: currentEnv.version || 1,
         },
-        cloudConfig.refreshToken
+        cloudConfig.refreshToken,
+        operation.controller.signal
       );
 
+      if (!isAsyncOperationCurrent(operation)) return;
+
       if (res && typeof res.version === 'number') {
-        set((s) => ({
-          environments: s.environments.map((e) =>
-            e.id === envId ? { ...e, version: res.version } : e
-          ),
-        }));
+        set((s) => {
+          if (!isAsyncOperationCurrent(operation)) return {};
+          return {
+            environments: s.environments.map((e) =>
+              e.id === envId ? { ...e, version: res.version } : e
+            ),
+          };
+        });
       }
     } catch (err: any) {
+      if (!isAsyncOperationCurrent(operation)) return;
       if (err?.status === 409) {
         const remote = getRemoteEnvironment(err.data);
         console.warn('Environment sync conflict requires explicit resolution:', err);
-        set((state) => ({
-          syncStatus: 'error',
-          syncError: 'Environment changes conflict with a newer server version. Review the conflict before saving again.',
-          environmentOccConflict: remote
-            ? { local: state.environments.find((environment) => environment.id === envId) || currentEnv, remote }
-            : null,
-        }));
+        set((state) => {
+          if (!isAsyncOperationCurrent(operation)) return {};
+          return {
+            syncStatus: 'error',
+            syncError: 'Environment changes conflict with a newer server version. Review the conflict before saving again.',
+            environmentOccConflict: remote
+              ? { local: state.environments.find((environment) => environment.id === envId) || currentEnv, remote }
+              : null,
+          };
+        });
         return;
       }
       console.error('Failed to sync updated environment to cloud:', err);
+    } finally {
+      completeAsyncOperation(operation);
     }
   }, 300);
 }
@@ -720,13 +735,17 @@ export const useApiStore = create<ApiStoreState>()(
         }),
       setCloudConfig: (updates) => {
         const currentConfig = get().cloudConfig;
+        const normalizedUpdates: Partial<CloudConfig> = { ...updates };
+        if (normalizedUpdates.apiUrl !== undefined) {
+          normalizedUpdates.apiUrl = normalizeCloudApiUrl(normalizedUpdates.apiUrl);
+        }
         const isNewSession =
-          (updates.apiUrl !== undefined && updates.apiUrl !== currentConfig.apiUrl) ||
-          (updates.user?.id !== undefined && updates.user.id !== currentConfig.user?.id) ||
-          (updates.token !== undefined && !currentConfig.token);
+          (normalizedUpdates.apiUrl !== undefined && normalizedUpdates.apiUrl !== currentConfig.apiUrl) ||
+          (normalizedUpdates.user?.id !== undefined && normalizedUpdates.user.id !== currentConfig.user?.id) ||
+          (normalizedUpdates.token !== undefined && !currentConfig.token);
         if (isNewSession) invalidateAsyncOperations({ session: true });
         set((state) => ({
-          cloudConfig: { ...state.cloudConfig, ...updates },
+          cloudConfig: { ...state.cloudConfig, ...normalizedUpdates },
         }));
       },
       setActiveScope: async (scope, forceSync = false) => {
@@ -1627,10 +1646,14 @@ export const useApiStore = create<ApiStoreState>()(
 
       createEnvironment: (name, minRole = 'reader') => {
         const { workspaceMode, cloudConfig } = get();
+        let effectiveMinRole = minRole;
         if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
           if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
             console.warn('User lacks permission to create environment in this scope');
             return '';
+          }
+          if (effectiveMinRole && !canModifyEnvironment(effectiveMinRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+            effectiveMinRole = 'reader';
           }
         }
 
@@ -1638,7 +1661,7 @@ export const useApiStore = create<ApiStoreState>()(
           id: generateId(),
           name: name.trim() || 'New Environment',
           variables: [{ id: generateId(), key: '', value: '', initialValue: '', currentValue: '', enabled: true }],
-          minRole,
+          minRole: effectiveMinRole,
           version: 1,
           createdAt: Date.now(),
           updatedAt: Date.now(),
@@ -1682,7 +1705,8 @@ export const useApiStore = create<ApiStoreState>()(
         const { workspaceMode, cloudConfig, environments } = get();
         const env = environments.find((e) => e.id === id);
         if (env && workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
-          if (!hasScopePermission(cloudConfig.activeScope, 'env:delete', workspaceMode, cloudConfig.user?.role)) {
+          if (!hasScopePermission(cloudConfig.activeScope, 'env:delete', workspaceMode, cloudConfig.user?.role) ||
+              !canModifyEnvironment(env.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
             console.warn(`User lacks permission to delete environment "${env.name}"`);
             return;
           }
@@ -1709,8 +1733,13 @@ export const useApiStore = create<ApiStoreState>()(
         const { workspaceMode, cloudConfig, environments } = get();
         const env = environments.find((e) => e.id === id);
         if (env && workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
-          if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
+          if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role) ||
+              !canModifyEnvironment(env.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
             console.warn(`User lacks permission to update environment "${env.name}"`);
+            return;
+          }
+          if (updates.minRole && !canModifyEnvironment(updates.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+            console.warn(`User lacks permission to assign minRole "${updates.minRole}" to environment "${env.name}"`);
             return;
           }
         }
@@ -1728,9 +1757,11 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       addEnvironmentVariable: (envId) => {
-        const { workspaceMode, cloudConfig } = get();
-        if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
-          if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
+        const { workspaceMode, cloudConfig, environments } = get();
+        const env = environments.find((e) => e.id === envId);
+        if (env && workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
+          if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role) ||
+              !canModifyEnvironment(env.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
             console.warn('User lacks permission to modify environments in this scope');
             return;
           }
@@ -1758,9 +1789,11 @@ export const useApiStore = create<ApiStoreState>()(
         const isOnlyCurrentValue = updateKeys.length === 1 && updateKeys[0] === 'currentValue';
 
         if (!isOnlyCurrentValue) {
-          const { workspaceMode, cloudConfig } = get();
-          if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
-            if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
+          const { workspaceMode, cloudConfig, environments } = get();
+          const env = environments.find((e) => e.id === envId);
+          if (env && workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
+            if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role) ||
+                !canModifyEnvironment(env.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
               console.warn('User lacks permission to modify environments in this scope');
               return;
             }
@@ -1791,9 +1824,11 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       removeEnvironmentVariable: (envId, varId) => {
-        const { workspaceMode, cloudConfig } = get();
-        if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
-          if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
+        const { workspaceMode, cloudConfig, environments } = get();
+        const env = environments.find((e) => e.id === envId);
+        if (env && workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
+          if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role) ||
+              !canModifyEnvironment(env.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
             console.warn('User lacks permission to modify environments in this scope');
             return;
           }
@@ -1830,9 +1865,11 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       persistEnvironmentCurrentValues: (envId) => {
-        const { workspaceMode, cloudConfig } = get();
-        if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
-          if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
+        const { workspaceMode, cloudConfig, environments } = get();
+        const env = environments.find((e) => e.id === envId);
+        if (env && workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
+          if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role) ||
+              !canModifyEnvironment(env.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
             console.warn('User lacks permission to modify environments in this scope');
             return;
           }
@@ -1904,9 +1941,16 @@ export const useApiStore = create<ApiStoreState>()(
 
       replaceEnvironment: async (existingId: string, incomingEnv: Environment) => {
         const { workspaceMode, cloudConfig } = get();
+        const state = get();
+        const existingEnv = state.environments.find((e) => e.id === existingId);
+        if (!existingEnv) {
+          throw new Error('Existing environment not found');
+        }
+
         if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
-          if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
-            throw new Error('Insufficient permission to modify environments in this scope (requires env:write)');
+          if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role) ||
+              !canModifyEnvironment(existingEnv.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+            throw new Error('Insufficient permission to modify environments in this scope (requires env:write and adequate role)');
           }
         }
 
@@ -1915,20 +1959,21 @@ export const useApiStore = create<ApiStoreState>()(
           delete envSyncDebounceTimers[existingId];
         }
 
-        const state = get();
-        const existingEnv = state.environments.find((e) => e.id === existingId);
-        if (!existingEnv) {
-          throw new Error('Existing environment not found');
-        }
-
         const alignedVars = alignEnvironmentVariableIds(existingEnv.variables || [], incomingEnv.variables || []);
+
+        let effectiveMinRole = incomingEnv.minRole || existingEnv.minRole;
+        if (incomingEnv.minRole && incomingEnv.minRole !== existingEnv.minRole && workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
+          if (!canModifyEnvironment(incomingEnv.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+            effectiveMinRole = existingEnv.minRole;
+          }
+        }
 
         const replacedEnv: Environment = {
           ...incomingEnv,
           id: existingId,
           name: incomingEnv.name,
           variables: alignedVars,
-          minRole: incomingEnv.minRole || existingEnv.minRole,
+          minRole: effectiveMinRole,
           version: existingEnv.version || 1,
           updatedAt: Date.now(),
         };
@@ -2770,14 +2815,19 @@ export const useApiStore = create<ApiStoreState>()(
         }));
 
         if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
+          const operation = beginAsyncOperation();
           batchImportToScope(
             cloudConfig.apiUrl,
             cloudConfig.token,
             cloudConfig.activeScope,
             [newCol],
-            cloudConfig.refreshToken
+            cloudConfig.refreshToken,
+            operation.controller.signal
           ).catch((err) => {
+            if (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation)) return;
             console.error('Failed to sync created collection to cloud:', err);
+          }).finally(() => {
+            completeAsyncOperation(operation);
           });
         }
 
@@ -2812,14 +2862,19 @@ export const useApiStore = create<ApiStoreState>()(
         if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
           const updatedCol = updatedCols.find((c) => c.id === id);
           if (updatedCol) {
+            const operation = beginAsyncOperation();
             batchImportToScope(
               cloudConfig.apiUrl,
               cloudConfig.token,
               cloudConfig.activeScope,
               [updatedCol],
-              cloudConfig.refreshToken
+              cloudConfig.refreshToken,
+              operation.controller.signal
             ).catch((err) => {
+              if (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation)) return;
               console.error('Failed to sync renamed collection to cloud:', err);
+            }).finally(() => {
+              completeAsyncOperation(operation);
             });
           }
         }
@@ -2884,13 +2939,20 @@ export const useApiStore = create<ApiStoreState>()(
         if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
           const updatedCol = updatedCols.find((c) => c.id === collectionId);
           if (updatedCol) {
+            const operation = beginAsyncOperation();
             batchImportToScope(
               cloudConfig.apiUrl,
               cloudConfig.token,
               cloudConfig.activeScope,
               [updatedCol],
-              cloudConfig.refreshToken
-            ).catch((err) => console.error('Failed to sync created folder to cloud:', err));
+              cloudConfig.refreshToken,
+              operation.controller.signal
+            ).catch((err) => {
+              if (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation)) return;
+              console.error('Failed to sync created folder to cloud:', err);
+            }).finally(() => {
+              completeAsyncOperation(operation);
+            });
           }
         }
 
@@ -2980,13 +3042,20 @@ export const useApiStore = create<ApiStoreState>()(
         if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
           const updatedCol = updatedCols.find((c) => c.id === collectionId);
           if (updatedCol) {
+            const operation = beginAsyncOperation();
             batchImportToScope(
               cloudConfig.apiUrl,
               cloudConfig.token,
               cloudConfig.activeScope,
               [updatedCol],
-              cloudConfig.refreshToken
-            ).catch((err) => console.error('Failed to sync created request to cloud:', err));
+              cloudConfig.refreshToken,
+              operation.controller.signal
+            ).catch((err) => {
+              if (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation)) return;
+              console.error('Failed to sync created request to cloud:', err);
+            }).finally(() => {
+              completeAsyncOperation(operation);
+            });
           }
         }
 
@@ -3123,13 +3192,20 @@ export const useApiStore = create<ApiStoreState>()(
         if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
           const updatedCol = updatedCols.find((c) => c.id === collectionId);
           if (updatedCol) {
+            const operation = beginAsyncOperation();
             batchImportToScope(
               cloudConfig.apiUrl,
               cloudConfig.token,
               cloudConfig.activeScope,
               [updatedCol],
-              cloudConfig.refreshToken
-            ).catch((err) => console.error('Failed to sync renamed item to cloud:', err));
+              cloudConfig.refreshToken,
+              operation.controller.signal
+            ).catch((err) => {
+              if (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation)) return;
+              console.error('Failed to sync renamed item to cloud:', err);
+            }).finally(() => {
+              completeAsyncOperation(operation);
+            });
           }
         }
       },
@@ -3234,13 +3310,20 @@ export const useApiStore = create<ApiStoreState>()(
         if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
           const updatedCol = updatedCols.find((c) => c.id === collectionId);
           if (updatedCol) {
+            const operation = beginAsyncOperation();
             batchImportToScope(
               cloudConfig.apiUrl,
               cloudConfig.token,
               cloudConfig.activeScope,
               [updatedCol],
-              cloudConfig.refreshToken
-            ).catch((err) => console.error('Failed to sync updated collection item to cloud:', err));
+              cloudConfig.refreshToken,
+              operation.controller.signal
+            ).catch((err) => {
+              if (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation)) return;
+              console.error('Failed to sync updated collection item to cloud:', err);
+            }).finally(() => {
+              completeAsyncOperation(operation);
+            });
           }
         }
       },
@@ -3280,18 +3363,26 @@ export const useApiStore = create<ApiStoreState>()(
         }));
 
         if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
+          const operation = beginAsyncOperation();
+          const targetScope = cloudConfig.activeScope;
           try {
             set({ syncStatus: 'syncing', syncError: null });
             await batchImportToScope(
               cloudConfig.apiUrl,
               cloudConfig.token,
-              cloudConfig.activeScope,
+              targetScope,
               [collection],
-              cloudConfig.refreshToken
+              cloudConfig.refreshToken,
+              operation.controller.signal
             );
+            if (!isAsyncOperationCurrent(operation)) return;
+            if (get().cloudConfig.activeScope?.id !== targetScope.id) return;
             await get().pullCloudDelta();
           } catch (err: any) {
+            if (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation)) return;
             set({ syncStatus: 'error', syncError: err.message || 'Failed to sync collection to cloud' });
+          } finally {
+            completeAsyncOperation(operation);
           }
         }
       },
@@ -3714,7 +3805,8 @@ export const useApiStore = create<ApiStoreState>()(
           }
 
           if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
-            if (!hasScopePermission(cloudConfig.activeScope, 'collection:move', workspaceMode, cloudConfig.user?.role)) {
+            if (!hasScopePermission(cloudConfig.activeScope, 'collection:move', workspaceMode, cloudConfig.user?.role) ||
+                !canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
               return { success: false, error: 'Insufficient permission to move collection from this project' };
             }
           }
@@ -3828,7 +3920,8 @@ export const useApiStore = create<ApiStoreState>()(
             return { success: false, error: 'Not connected to cloud' };
           }
           if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
-            if (!hasScopePermission(cloudConfig.activeScope, 'collection:move', workspaceMode, cloudConfig.user?.role)) {
+            if (!hasScopePermission(cloudConfig.activeScope, 'collection:move', workspaceMode, cloudConfig.user?.role) ||
+                !canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
               return { success: false, error: 'Insufficient permission to move collection from this project' };
             }
           }
@@ -4063,6 +4156,10 @@ export const useApiStore = create<ApiStoreState>()(
           },
         ]));
 
+        if (state.cloudConfig?.apiUrl) {
+          state.cloudConfig.apiUrl = normalizeCloudApiUrl(state.cloudConfig.apiUrl);
+        }
+
         // 1. Ensure offlineWorkspaces has at least the default workspace
         if (!state.offlineWorkspaces || state.offlineWorkspaces.length === 0) {
           state.offlineWorkspaces = [defaultOfflineWorkspace];
@@ -4126,25 +4223,3 @@ export const useApiStore = create<ApiStoreState>()(
   )
 );
 
-// Register silent background refresh listener to keep cloudConfig tokens up to date
-if (!isOfflineOnly) {
-  registerTokenRefreshCallback((newTokens) => {
-    if (useApiStore.getState().cloudConfig.refreshToken !== newTokens.previousRefreshToken) return;
-    useApiStore.getState().setCloudConfig({
-      token: newTokens.token,
-      refreshToken: newTokens.refreshToken,
-      tokenExpiresAt: newTokens.expiresAt,
-    });
-  });
-
-  registerAuthEvictedCallback((reason) => {
-    const state = useApiStore.getState();
-    if (state.cloudConfig.token) {
-      state.logoutCloud();
-      if (typeof window !== 'undefined') window.dispatchEvent(new Event('airrest:auth-required'));
-      setTimeout(() => {
-        useApiStore.setState({ syncError: reason });
-      }, 300);
-    }
-  });
-}

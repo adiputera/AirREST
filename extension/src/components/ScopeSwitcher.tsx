@@ -194,8 +194,8 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
     await pullCloudDelta();
   };
 
-  const jwtRole = getRoleFromJwt(cloudConfig.token);
-  const scopeRole = (jwtRole === 'superadmin' || jwtRole === 'admin') ? 'admin' : activeScope?.role;
+  const effectiveUserRole = (cloudConfig.user?.role || getRoleFromJwt(cloudConfig.token) || '').toLowerCase();
+  const scopeRole = (effectiveUserRole === 'superadmin' || effectiveUserRole === 'admin') ? 'admin' : activeScope?.role;
 
   const scopeLabel = isOffline
     ? (activeOfflineWs ? activeOfflineWs.name : 'Offline Workspace')

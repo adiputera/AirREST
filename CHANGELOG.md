@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Monorepo Migration & Shared Core Architecture**:
+  - Re-architected the repository into a clean monorepo structure with `@airrest/common` (`packages/common/`), Chrome Extension (`extension/`), Hub Web Portal (`hub/`), and Desktop Client (`apps/desktop/`).
+  - Extracted shared domain models, Zustand state store, universal UI components, cURL/Postman transformers, and runtime factory into private ESM package `@airrest/common`.
+  - Added extensible `PlatformAdapter` contract decoupling UI and store layers from host platform APIs (`TestTransport`, `CloudTransport`, `ScriptExecutor`, native file system, and origin permission checks).
+- **Tauri v2 Desktop Application & Sandbox Hardening (`apps/desktop/`)**:
+  - Implemented standalone desktop client powered by Tauri v2 with Rust backend shell.
+  - Native HTTP transport via `@tauri-apps/plugin-http` with opt-in SSL verification bypass for local testing and full custom `Cookie`, `User-Agent`, and `Host` headers.
+  - Web Worker offloaded WebAssembly scripting engine (`quickjs.worker.ts` + `quickjsRunner.ts`), executing guest scripts off the main thread with 64 MiB heap and 512 KiB stack boundaries.
+  - Strict boundary validation via `scriptProtocol.ts`: 256 KiB script limit, 1 MiB serialized UTF-8 input/output bounds, prototype pollution guards (`__proto__`, `constructor`, `prototype`), and captured immutable primitives.
+  - Safe `console.log/info/warn/error/debug` stubs ensuring snippet compatibility without host leakage.
+  - Release CSP hardening in `tauri.conf.json` (`script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob;`).
+  - Native file system integration via `@tauri-apps/plugin-dialog` and `@tauri-apps/plugin-fs` with byte-for-byte binary parity and user cancellation differentiation.
+  - Cloud redirect protection (`maxRedirections: 0`, `redirect: 'manual'`) preventing credential forwarding on HTTP 3xx responses.
+  - State isolation through `createApiStore` store factory and `StoreContext` provider.
+- **Automated Monorepo Testing & Gated Spikes**:
+  - Added Gate P0.1 & P0.2 test suite (`scripts/desktop-transport-lifecycle.test.mjs`) verifying native transport, header echo, 10 MiB bounded streaming, cancellation, and runtime isolation.
+  - Added Gate P0.3 test suite (`scripts/desktop-quickjs-sandbox.test.mjs`) directly importing production runner modules and testing memory bounds, prototype defense, and interruption.
+  - Added `npm run test:all` consolidating 72 unit and integration tests across extension, hub, and desktop.
+
+---
+
+## [1.1.5] - 2026-10-28
+
+### Changed
+- **Chrome Web Store Permissions Alignment**:
+  - Removed unused `storage` permission from `extension/public/manifest.json` in accordance with the Chrome Web Store minimal permissions policy (Purple Potassium review guidance).
+  - All local collections, environments, tabs, and execution history continue to persist securely and durably via IndexedDB (`airrest-db`) with `unlimitedStorage` quota protection.
+
+---
+
 ## [1.1.4] - 2026-10-27
 
 ### Added

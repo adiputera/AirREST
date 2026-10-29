@@ -6,7 +6,16 @@
   </head>
   <body>
     <script>
+      function isValidOrigin(origin) {
+        if (!origin || typeof origin !== 'string' || origin === 'null') return false;
+        if (origin.startsWith('chrome-extension://')) return true;
+        if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
+        return false;
+      }
+
       window.addEventListener('message', function (event) {
+        if (!event.source || event.source !== window.parent) return;
+        if (!isValidOrigin(event.origin)) return;
         if (!event.data || typeof event.data !== 'object') return;
         const { id, script, response, environment = {}, variables = {} } = event.data;
         if (!id || !script) return;
@@ -63,7 +72,13 @@
             try {
               if (typeof fn === 'function') fn();
             } catch (err) {
-              throw new Error('Test [' + name + '] failed: ' + (err && err.message ? err.message : String(err)));
+              let testErr = 'Test failed';
+              try {
+                testErr = (err && err.message) ? err.message : String(err);
+              } catch {
+                testErr = 'Test failed';
+              }
+              throw new Error('Test [' + name + '] failed: ' + testErr);
             }
           },
           expect: function (actual) {
@@ -103,7 +118,7 @@
         const responseTime = response ? (response.timeMs || 0) : 0;
         const responseHeaders = response ? (response.headers || {}) : {};
         const tests = {};
-        const targetOrigin = (event.origin && event.origin !== 'null') ? event.origin : '*';
+        const targetOrigin = event.origin;
 
         try {
           const fn = new Function(
@@ -127,11 +142,21 @@
             }, targetOrigin);
           }
         } catch (err) {
+          let errorMessage = 'Script execution failed.';
+          try {
+            if (err && typeof err.message === 'string') {
+              errorMessage = err.message;
+            } else if (err) {
+              errorMessage = String(err);
+            }
+          } catch {
+            errorMessage = 'Script execution failed.';
+          }
           if (event.source && typeof event.source.postMessage === 'function') {
             event.source.postMessage({
               id: id,
               success: false,
-              error: err && err.message ? err.message : String(err),
+              error: errorMessage,
               environment: currentEnv,
               variables: currentVars
             }, targetOrigin);

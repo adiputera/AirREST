@@ -10,7 +10,18 @@ export function getHostPermissionPattern(url: string): string | null {
 
 export async function hasHostPermission(url: string): Promise<boolean | null> {
   const origin = getHostPermissionPattern(url);
-  if (!origin || typeof chrome === 'undefined' || !chrome.permissions?.contains) return null;
+  if (!origin) {
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+    return null;
+  }
+  if (typeof chrome === 'undefined' || !chrome.permissions?.contains) return null;
   try {
     return await chrome.permissions.contains({ origins: [origin] });
   } catch {
