@@ -1,6 +1,8 @@
 # Chrome Web Store Listings — AirREST
 
-> Last Updated: 2026-10-28
+> Last Updated: 2026-10-29
+
+> Chrome Web Store release notes describe browser-extension changes only. Do not include backend, Hub, or desktop release notes here.
 
 This document provides complete, copy-paste ready store listing metadata and privacy disclosures for both editions of AirREST:
 1. **Full Edition** (`npm run build:full` → `dist/`) — Online & Offline with optional cloud workspace sync.

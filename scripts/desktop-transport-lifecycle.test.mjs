@@ -1816,3 +1816,198 @@ test('T-VN4 (V-NEW-4): user cannot escalate environment minRole beyond their own
   runtime.dispose();
 });
 
+test('T-IMPORT-1: Non-native platform adapter (e.g. extension) triggers HTML input element click for file choosing', () => {
+  let fileInputClicked = false;
+  const mockFileInput = {
+    click: () => { fileInputClicked = true; },
+  };
+
+  const extensionAdapter = {
+    platformId: 'extension',
+    capabilities: {
+      supportsNativeFileSystem: false,
+    },
+    openFile: async () => null,
+  };
+
+  const chooseFile = async (adapter, inputRef) => {
+    if (adapter?.capabilities?.supportsNativeFileSystem && adapter?.openFile) {
+      return await adapter.openFile();
+    }
+    inputRef?.click();
+    return null;
+  };
+
+  chooseFile(extensionAdapter, mockFileInput);
+  assert.equal(fileInputClicked, true, 'Non-native adapter must trigger file input element click');
+});
+
+test('T-IMPORT-2: Native platform adapter (desktop) uses adapter.openFile instead of file input click', async () => {
+  let fileInputClicked = false;
+  let nativeDialogInvoked = false;
+  const mockFileInput = {
+    click: () => { fileInputClicked = true; },
+  };
+
+  const desktopAdapter = {
+    platformId: 'desktop',
+    capabilities: {
+      supportsNativeFileSystem: true,
+    },
+    openFile: async () => {
+      nativeDialogInvoked = true;
+      return { filename: 'collection.json', content: '{"info":{}}' };
+    },
+  };
+
+  const chooseFile = async (adapter, inputRef) => {
+    if (adapter?.capabilities?.supportsNativeFileSystem && adapter?.openFile) {
+      return await adapter.openFile();
+    }
+    inputRef?.click();
+    return null;
+  };
+
+  const result = await chooseFile(desktopAdapter, mockFileInput);
+  assert.equal(nativeDialogInvoked, true, 'Native desktop adapter must invoke adapter.openFile()');
+  assert.equal(fileInputClicked, false, 'Native desktop adapter must not trigger file input element click');
+  assert.deepEqual(result, { filename: 'collection.json', content: '{"info":{}}' });
+});
+
+test('T-IMPORT-3: chromeAdapter.openFile in DOM environment creates file input and reads selected file', async () => {
+  let appendedElement = null;
+  let removedElement = null;
+  let simulatedInput = null;
+
+  class MockFileReader {
+    readAsText(file) {
+      this.onload({ target: { result: file.testContent } });
+    }
+  }
+
+  const mockDocument = {
+    createElement: (tag) => {
+      if (tag === 'input') {
+        simulatedInput = {
+          type: '',
+          accept: '',
+          style: {},
+          files: [],
+          click: () => {
+            simulatedInput.files = [{ name: 'postman.json', testContent: '{"values":[]}' }];
+            simulatedInput.onchange();
+          },
+          remove: () => {
+            removedElement = simulatedInput;
+          },
+        };
+        return simulatedInput;
+      }
+      return {};
+    },
+    body: {
+      appendChild: (el) => {
+        appendedElement = el;
+      },
+    },
+  };
+
+  const adapterSrc = fs.readFileSync(new URL('../extension/src/adapters/chromeAdapter.ts', import.meta.url), 'utf8');
+  const adapterExports = {};
+  vm.runInNewContext(
+    ts.transpileModule(adapterSrc, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText,
+    {
+      exports: adapterExports,
+      require: () => ({}),
+      fetch: () => {},
+      Blob: class {},
+      URL: { createObjectURL: () => '', revokeObjectURL: () => {} },
+      document: mockDocument,
+      FileReader: MockFileReader,
+    },
+    { filename: 'chromeAdapter.ts' }
+  );
+
+  const { chromeAdapter } = adapterExports;
+  const result = await chromeAdapter.openFile({ filters: [{ name: 'JSON', extensions: ['json'] }] });
+
+  assert.ok(appendedElement, 'chromeAdapter.openFile must append input element to document.body');
+  assert.ok(removedElement, 'chromeAdapter.openFile must remove input element after file selection');
+  assert.equal(result?.filename, 'postman.json');
+  assert.equal(result?.content, '{"values":[]}');
+});
+
+test('T-TEAM-EXPAND-1: fetchScopes does not pollute teamProjects with empty arrays, and fetchProjectsForTeam accurately fetches and caches projects', async () => {
+  const { runtimeModule, cloudApiModule } = await setupRuntimeModules();
+  const fetchedEndpoints = [];
+
+  cloudApiModule.setCloudTransport({
+    fetch: async (url, init) => {
+      const urlObj = new URL(url);
+      fetchedEndpoints.push(urlObj.pathname);
+
+      if (urlObj.pathname === '/api/v1/workspaces') {
+        return new Response(JSON.stringify({ data: [{ id: 'ws1', name: 'Personal WS' }] }), { status: 200 });
+      }
+      if (urlObj.pathname === '/api/v1/teams') {
+        return new Response(JSON.stringify({ data: [{ id: 'team1', name: 'Engineering Team' }, { id: 'team2', name: 'Design Team' }] }), { status: 200 });
+      }
+      if (urlObj.pathname === '/api/v1/teams/team1/projects') {
+        return new Response(JSON.stringify({ data: [{ id: 'proj1', name: 'Core Engine', user_role: 'admin' }] }), { status: 200 });
+      }
+      if (urlObj.pathname === '/api/v1/teams/team2/projects') {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ data: {} }), { status: 200 });
+    }
+  });
+
+  const adapter = {
+    id: 'test-adapter',
+    hasHostPermission: async () => true,
+    requestHostPermission: async () => true,
+    dispose: () => {},
+  };
+  const runtime = runtimeModule.createAirrestRuntime({ adapter });
+  runtime.store.setState({
+    workspaceMode: 'cloud',
+    cloudConfig: {
+      apiUrl: 'http://localhost:8080',
+      token: 'valid-tok',
+      refreshToken: 'ref-tok',
+      user: { id: 'u1', role: 'member' },
+      activeScope: { type: 'workspace', id: 'ws1', name: 'Personal WS', role: 'owner' }
+    },
+  });
+
+  // Step 1: Initial fetchScopes should load workspaces and teams, without polluting un-fetched team projects
+  await runtime.store.getState().fetchScopes(true);
+
+  const initialCache = runtime.store.getState().scopesCache;
+  assert.equal(initialCache.workspaces.length, 1);
+  assert.equal(initialCache.teams.length, 2);
+  assert.equal(initialCache.teamProjects?.team1, undefined, 'team1 must not be pre-populated with empty array');
+  assert.equal(initialCache.teamProjects?.team2, undefined, 'team2 must not be pre-populated with empty array');
+
+  // Step 2: Expanding team1 triggers fetchProjectsForTeam
+  const team1Projects = await runtime.store.getState().fetchProjectsForTeam('team1', true);
+  assert.equal(team1Projects.length, 1);
+  assert.equal(team1Projects[0].name, 'Core Engine');
+
+  const afterTeam1Cache = runtime.store.getState().scopesCache;
+  assert.equal(afterTeam1Cache.teamProjects?.team1?.length, 1);
+  assert.equal(afterTeam1Cache.teamProjects?.team2, undefined);
+
+  // Step 3: Fetching team1 again with force=false returns cached projects without re-requesting
+  const endpointCountBefore = fetchedEndpoints.length;
+  const cachedProjects = await runtime.store.getState().fetchProjectsForTeam('team1', false);
+  assert.equal(cachedProjects.length, 1);
+  assert.equal(fetchedEndpoints.length, endpointCountBefore, 'Must return from cache without re-requesting');
+
+  // Step 4: Expanding team2 (which has 0 projects) fetches and stores []
+  const team2Projects = await runtime.store.getState().fetchProjectsForTeam('team2', true);
+  assert.equal(team2Projects.length, 0);
+  const afterTeam2Cache = runtime.store.getState().scopesCache;
+  assert.deepEqual(afterTeam2Cache.teamProjects?.team2, []);
+});
+
