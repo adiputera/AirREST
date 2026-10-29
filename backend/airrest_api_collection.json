@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "c1f7a4e2-63b9-4a92-8db3-982827170123",
     "name": "AirREST Backend API",
-    "description": "Complete API testing collection for AirREST Go backend synchronization service with Auth, Workspaces, Teams, Projects, RBAC, and Stateless OCC Sync. Security upgrade: supply your own bootstrap credentials; no default signing or administrator secrets. Password changes/resets revoke existing sessions; a self-service change returns replacement tokens for the current device. JWT access/refresh tokens carry a required account session version. Limits: 4 MiB per body, 500 sync mutations, 100 import collections, 5000 import items, 32 levels; oversize returns 413. Busy/timeout/startup failures return 503; retry initialization with bounded backoff. Contributors may remove requests/folders but cannot delete collections/environments or move collections.",
+    "description": "Complete API testing collection for AirREST Go backend synchronization service with Auth, Workspaces, Teams, Projects, RBAC, and Stateless OCC Sync. Security upgrade: supply your own bootstrap credentials; no default signing or administrator secrets. Password changes/resets revoke existing sessions; a self-service change returns replacement tokens for the current device. JWT access/refresh tokens carry a required account session version. Limits: 4 MiB identity body, or for sync push/import one gzip member of at most 3,000,000 bytes and 16 MiB decoded; each request must contain exactly one JSON document; 500 sync mutations, 100 import collections, 5000 import items, 32 levels. To test gzip in Postman, gzip a JSON fixture as a binary file, select binary body, and send Content-Encoding: gzip; setting the header alone does not compress raw JSON. Busy/timeout/startup failures return 503; retry initialization with bounded backoff. Contributors may remove requests/folders but cannot delete collections/environments or move collections.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -360,6 +360,10 @@
               {
                 "key": "Authorization",
                 "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Accept-Encoding",
+                "value": "gzip"
               }
             ],
             "url": {
@@ -775,6 +779,10 @@
               {
                 "key": "Authorization",
                 "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Accept-Encoding",
+                "value": "gzip"
               }
             ],
             "url": {
@@ -1020,6 +1028,10 @@
               {
                 "key": "Authorization",
                 "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Accept-Encoding",
+                "value": "gzip"
               }
             ],
             "url": {
@@ -1063,7 +1075,7 @@
                 "push"
               ]
             },
-            "description": "Up to 500 total mutations, applied independently. Contributor collection/environment deletes are denied; inspect applied_ids and conflicts.",
+            "description": "Up to 500 total mutations, applied independently. Contributor collection/environment deletes are denied; inspect applied_ids and conflicts. The response remains below 4 MiB; oversized optional conflict server_data may be omitted while IDs, types, and messages remain.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"workspace_id\": \"{{workspaceId}}\",\n  \"collections\": [],\n  \"items\": [],\n  \"environments\": []\n}"
@@ -1096,7 +1108,7 @@
                 "import-batch"
               ]
             },
-            "description": "Atomic request; existing collections must satisfy min_role and be active. Limits: 100 collections, 5000 items, 32 levels and 4 MiB. 403 leaves no partial writes; 409 concurrent collisions require retrying the full import.",
+            "description": "Atomic request; existing collections must satisfy min_role and be active. Limits: 100 collections, 5000 items, 32 levels, and 4 MiB identity or one gzip member at most 3,000,000 bytes/16 MiB decoded. The body must contain exactly one JSON document. For gzip, select a gzipped JSON fixture as a binary body and add Content-Encoding: gzip. 403 leaves no partial writes; 409 concurrent collisions require retrying the full import.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"workspace_id\": \"{{workspaceId}}\",\n  \"collections\": [\n    {\n      \"id\": \"offline-sample\",\n      \"name\": \"Sample API\",\n      \"items\": [\n        {\n          \"id\": \"request-sample\",\n          \"type\": \"request\",\n          \"name\": \"Get example\",\n          \"method\": \"GET\",\n          \"url\": \"https://httpbin.org/get?user=tester&tag=api\"\n        }\n      ]\n    }\n  ]\n}"

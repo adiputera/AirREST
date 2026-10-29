@@ -144,6 +144,86 @@ export interface ApiFetchOptions extends RequestInit {
   refreshToken?: string;
 }
 
+const IDENTITY_REQUEST_LIMIT = 4 * 1024 * 1024;
+const GZIP_REQUEST_LIMIT = 3_000_000;
+const GZIP_DECODED_REQUEST_LIMIT = 16 * 1024 * 1024;
+const GZIP_DECODED_RESPONSE_LIMIT = 16 * 1024 * 1024;
+const GZIP_THRESHOLD = 64 * 1024;
+
+function supportsGzipRequest(endpoint: string): boolean {
+  const path = endpoint.split('?', 1)[0];
+  return path === '/api/v1/sync/push' || path === '/api/v1/sync/import-batch';
+}
+
+async function gzipRequestBody(body: string, signal?: AbortSignal): Promise<ArrayBuffer | null> {
+  if (signal?.aborted) {
+    throw new Error('The request was aborted before compression completed.');
+  }
+  const source = new Blob([body]).stream();
+  const reader = source.pipeThrough(new CompressionStream('gzip')).getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const cancelCompression = () => {
+    void reader.cancel();
+  };
+  signal?.addEventListener('abort', cancelCompression, { once: true });
+
+  try {
+    while (true) {
+      if (signal?.aborted) {
+        throw new Error('The request was aborted before compression completed.');
+      }
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      if (total + value.byteLength > GZIP_REQUEST_LIMIT) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+      total += value.byteLength;
+    }
+  } finally {
+    signal?.removeEventListener('abort', cancelCompression);
+    reader.releaseLock();
+  }
+
+  const compressed = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    compressed.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new Response(compressed).arrayBuffer();
+}
+
+async function prepareRequestBody(endpoint: string, body: BodyInit | null | undefined, signal?: AbortSignal): Promise<{ body: BodyInit | null | undefined; gzip: boolean }> {
+  if (typeof body !== 'string') return { body, gzip: false };
+  const decodedSize = new TextEncoder().encode(body).byteLength;
+  if (decodedSize > GZIP_DECODED_REQUEST_LIMIT) {
+    throw new Error('This request exceeds the 16 MiB decoded transfer limit.');
+  }
+  if (decodedSize < GZIP_THRESHOLD || !supportsGzipRequest(endpoint)) {
+    if (decodedSize > IDENTITY_REQUEST_LIMIT) {
+      throw new Error('This request exceeds the 4 MiB limit. Reduce its size or import fewer collections.');
+    }
+    return { body, gzip: false };
+  }
+  if (typeof CompressionStream === 'undefined') {
+    if (decodedSize <= IDENTITY_REQUEST_LIMIT) return { body, gzip: false };
+    throw new Error('This request is too large for this client because gzip compression is unavailable.');
+  }
+  const compressed = await gzipRequestBody(body, signal);
+  if (compressed === null) {
+    if (decodedSize <= IDENTITY_REQUEST_LIMIT) return { body, gzip: false };
+    throw new Error('This request exceeds the 3 MB gzip transfer limit.');
+  }
+  if (compressed.byteLength >= decodedSize && decodedSize <= IDENTITY_REQUEST_LIMIT) {
+    return { body, gzip: false };
+  }
+  return { body: compressed, gzip: true };
+}
+
 function unwrapData<T>(json: any): T {
   if (json && typeof json === 'object' && 'data' in json && json.data !== undefined) {
     return json.data as T;
@@ -167,6 +247,54 @@ async function safeJson(res: Response): Promise<any> {
   }
 }
 
+class CloudResponseTooLargeError extends Error {
+  constructor() {
+    super('The cloud response exceeds the 16 MiB decoded transfer limit.');
+    this.name = 'CloudResponseTooLargeError';
+  }
+}
+
+async function readSuccessfulJson(res: Response): Promise<unknown> {
+  if (!res.body) {
+    throw new Error('Cloud response contains invalid JSON.');
+  }
+
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      if (total + value.byteLength > GZIP_DECODED_RESPONSE_LIMIT) {
+        await reader.cancel();
+        throw new CloudResponseTooLargeError();
+      }
+      chunks.push(value);
+      total += value.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    throw new Error('Cloud response contains invalid JSON.');
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 /**
  * Robust fetch wrapper that automatically handles Bearer authorization and
  * silent token refresh upon encountering 401 Unauthorized / TOKEN_EXPIRED.
@@ -176,19 +304,20 @@ export async function fetchWithAuth(
   options: ApiFetchOptions
 ): Promise<Response> {
   const { apiUrl, token, refreshToken, ...fetchInit } = options;
-  if (typeof fetchInit.body === 'string' && new TextEncoder().encode(fetchInit.body).byteLength > 4 * 1024 * 1024) {
-    throw new Error('This request exceeds the 4 MiB limit. Reduce its size or import fewer collections.');
-  }
+  const requestBody = await prepareRequestBody(endpoint, fetchInit.body, fetchInit.signal as AbortSignal | undefined);
   const base = normalizeCloudApiUrl(apiUrl);
   const url = `${base}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`;
 
   const headers = new Headers(fetchInit.headers || {});
   headers.set('Content-Type', 'application/json');
+  headers.delete('Content-Encoding');
+  if (requestBody.gzip) headers.set('Content-Encoding', 'gzip');
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
   }
 
-  let response = await cloudFetch(url, { ...fetchInit, headers });
+  const requestInit = { ...fetchInit, body: requestBody.body, headers };
+  let response = await cloudFetch(url, requestInit);
 
   // If 401 Unauthorized, attempt background refresh if refreshToken is available
   if (response.status === 401 && refreshToken) {
@@ -197,7 +326,7 @@ export async function fetchWithAuth(
       if (result.token) {
         headers.set('Authorization', `Bearer ${result.token}`);
         // Retry the original request
-        response = await cloudFetch(url, { ...fetchInit, headers });
+        response = await cloudFetch(url, requestInit);
         if (response.status === 401) notifyAuthEvicted('Your session has expired or been revoked. Please sign in again.', result.token);
       } else if (result.evicted) {
         notifyAuthEvicted('Your session has expired or been revoked. Please sign in again.', token);
@@ -687,12 +816,15 @@ export async function fetchScopeCollections(
     signal,
   });
 
-  const json = await safeJson(res);
+  const json = res.ok ? await readSuccessfulJson(res) : await safeJson(res);
   if (!res.ok) {
     throw new Error(extractError(json, 'Failed to fetch collections', res.status));
   }
   const data = unwrapData<any>(json);
-  return (Array.isArray(data) ? data : []) as any[];
+  if (!Array.isArray(data)) {
+    throw new Error('Cloud response contains an invalid collection list.');
+  }
+  return data as any[];
 }
 
 /**
@@ -713,11 +845,15 @@ export async function fetchCollectionById(
     signal,
   });
 
-  const json = await safeJson(res);
+  const json = res.ok ? await readSuccessfulJson(res) : await safeJson(res);
   if (!res.ok) {
     throw new Error(extractError(json, 'Failed to fetch collection', res.status));
   }
-  return unwrapData<any>(json);
+  const data = unwrapData<unknown>(json);
+  if (!isRecord(data) || typeof data.id !== 'string') {
+    throw new Error('Cloud response contains an invalid collection detail.');
+  }
+  return data;
 }
 
 /**

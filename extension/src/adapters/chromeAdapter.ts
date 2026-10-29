@@ -74,8 +74,57 @@ export const chromeAdapter: PlatformAdapter = {
     URL.revokeObjectURL(url);
     return true;
   },
-  openFile: async () => {
-    return null;
+  openFile: async (options) => {
+    if (typeof document === 'undefined') return null;
+    return new Promise<{ filename: string; content: string } | null>((resolve) => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      if (options?.filters?.length) {
+        const exts = options.filters.flatMap((f) =>
+          f.extensions.map((ext) => (ext.startsWith('.') ? ext : `.${ext}`))
+        );
+        input.accept = exts.join(',');
+      }
+      input.style.display = 'none';
+      document.body.appendChild(input);
+
+      let settled = false;
+      const cleanup = () => {
+        if (!settled) {
+          settled = true;
+          input.remove();
+        }
+      };
+
+      input.onchange = () => {
+        const file = input.files?.[0];
+        if (!file) {
+          cleanup();
+          resolve(null);
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          cleanup();
+          resolve({
+            filename: file.name,
+            content: (e.target?.result as string) || '',
+          });
+        };
+        reader.onerror = () => {
+          cleanup();
+          resolve(null);
+        };
+        reader.readAsText(file);
+      };
+
+      input.oncancel = () => {
+        cleanup();
+        resolve(null);
+      };
+
+      input.click();
+    });
   },
   hasHostPermission,
   requestHostPermission,

@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -344,16 +345,17 @@ func TestSecurityIntegration(t *testing.T) {
 	})
 
 	t.Run("audit regression tests covering findings 1 through 8", func(t *testing.T) {
+		auditTarget := createCollection("Audit validation target", domain.ProjectRoleReader)
 		// Finding 1: Malformed payloads rejected with 400
 		assertStatus(request("POST", "/api/v1/items", contributorTokens.AccessToken, map[string]any{
-			"collection_id": open.ID.String(),
+			"collection_id": auditTarget.ID.String(),
 			"name":          "Malformed headers",
 			"type":          "request",
 			"headers":       map[string]any{},
 		}), 400)
 
 		assertStatus(request("POST", "/api/v1/items", contributorTokens.AccessToken, map[string]any{
-			"collection_id": open.ID.String(),
+			"collection_id": auditTarget.ID.String(),
 			"name":          "Malformed params",
 			"type":          "request",
 			"params":        []any{nil},
@@ -398,7 +400,7 @@ func TestSecurityIntegration(t *testing.T) {
 
 		// Finding 3: parent_id cross-collection, self-cycle, and invalid type rejected
 		assertStatus(request("POST", "/api/v1/items", contributorTokens.AccessToken, map[string]any{
-			"collection_id": open.ID.String(),
+			"collection_id": auditTarget.ID.String(),
 			"name":          "Cross-collection parent",
 			"type":          "request",
 			"parent_id":     reqItem.ID.String(),
@@ -463,8 +465,8 @@ func TestSecurityIntegration(t *testing.T) {
 		if err := collections.CreateItem(ctx, contributor, newItemInDeleted); !errors.Is(err, postgres.ErrCollectionNotFound) {
 			t.Fatalf("expected ErrCollectionNotFound when creating item in deleted collection, got: %v", err)
 		}
-		if _, err := collections.GetItem(ctx, contributor, dItem.ID); !errors.Is(err, postgres.ErrCollectionNotFound) {
-			t.Fatalf("expected ErrCollectionNotFound when reading item in deleted collection, got: %v", err)
+		if _, err := collections.GetItem(ctx, contributor, dItem.ID); !errors.Is(err, postgres.ErrItemNotFound) {
+			t.Fatalf("expected ErrItemNotFound when reading item in deleted collection, got: %v", err)
 		}
 
 		// Finding 7: OCC 409 Conflict returns current server entity
@@ -521,6 +523,58 @@ func TestSecurityIntegration(t *testing.T) {
 		}
 		if !itemAfterMove.UpdatedAt.After(itemBeforeMove.UpdatedAt) {
 			t.Fatalf("expected item.updated_at to be bumped on move, before=%v, after=%v", itemBeforeMove.UpdatedAt, itemAfterMove.UpdatedAt)
+		}
+	})
+
+	t.Run("gzip import is atomic and rejects trailing JSON", func(t *testing.T) {
+		requestGzip := func(payload []byte) *httptest.ResponseRecorder {
+			t.Helper()
+			var compressed bytes.Buffer
+			writer := gzip.NewWriter(&compressed)
+			if _, err := writer.Write(payload); err != nil {
+				t.Fatal(err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest("POST", "/api/v1/sync/import-batch", &compressed).WithContext(ctx)
+			req.Header.Set("Authorization", "Bearer "+contributorTokens.AccessToken)
+			req.Header.Set("Content-Encoding", "gzip")
+			w := httptest.NewRecorder()
+			a.Router.ServeHTTP(w, req)
+			return w
+		}
+
+		validID := uuid.New()
+		validPayload, err := json.Marshal(map[string]any{
+			"project_id": projectID.String(),
+			"collections": []service.ImportCollectionRequest{{
+				ID:   validID.String(),
+				Name: "Gzip import",
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertStatus(requestGzip(validPayload), 200)
+		if _, err := collections.GetCollection(ctx, contributor, validID); err != nil {
+			t.Fatalf("gzip import did not persist collection: %v", err)
+		}
+
+		trailingID := uuid.New()
+		trailingPayload, err := json.Marshal(map[string]any{
+			"project_id": projectID.String(),
+			"collections": []service.ImportCollectionRequest{{
+				ID:   trailingID.String(),
+				Name: "Trailing JSON must not write",
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertStatus(requestGzip(append(trailingPayload, []byte(" {}")...)), 400)
+		if _, err := collections.GetCollection(ctx, contributor, trailingID); !errors.Is(err, postgres.ErrCollectionNotFound) {
+			t.Fatalf("trailing JSON wrote a collection: %v", err)
 		}
 	})
 

@@ -169,6 +169,46 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
     e.target.value = '';
   };
 
+  const handleImportFileClick = async () => {
+    const adapter = getDefaultPlatformAdapter();
+    if (adapter?.capabilities?.supportsNativeFileSystem && adapter?.openFile) {
+      try {
+        setErrorMsg(null);
+        setSuccessMsg(null);
+        const result = await adapter.openFile({
+          filters: [{ name: 'Postman Environment JSON', extensions: ['json'] }],
+        });
+        if (result && typeof result.content === 'string') {
+          const incoming = importPostmanEnvironment(result.content);
+          const existing = (environments || []).find(
+            (env) => String(env?.name || '').trim().toLowerCase() === String(incoming?.name || '').trim().toLowerCase()
+          );
+
+          if (existing) {
+            const diff = compareEnvironments(existing, incoming);
+            setConflict({
+              existingEnv: existing,
+              incomingEnv: incoming,
+              diff,
+            });
+            return;
+          }
+
+          const newId = await addEnvironment(incoming);
+          setSelectedEnvId(newId);
+          setSuccessMsg(
+            `Environment "${incoming.name}" imported with ${incoming.variables?.length || 0} variables!`
+          );
+          setTimeout(() => setSuccessMsg(null), 3000);
+        }
+      } catch (err: unknown) {
+        setErrorMsg(err instanceof Error ? err.message : 'Failed to import environment file.');
+      }
+      return;
+    }
+    fileInputRef.current?.click();
+  };
+
   const handlePasteImport = async () => {
     setErrorMsg(null);
     setSuccessMsg(null);
@@ -272,7 +312,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
               {!isCreateDisabled && (
                 <>
                   <button
-                    onClick={() => fileInputRef.current?.click()}
+                    onClick={handleImportFileClick}
                     className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800 hover:text-sky-300 transition"
                     title="Import Postman Environment (.json)"
                   >
@@ -388,7 +428,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
           {!isCreateDisabled && (
             <div className="pt-3 border-t border-zinc-850 flex items-center justify-between text-[11px] text-zinc-400">
               <button
-                onClick={() => fileInputRef.current?.click()}
+                onClick={handleImportFileClick}
                 className="flex items-center gap-1.5 text-sky-400 hover:text-sky-300 transition"
               >
                 <Upload className="h-3 w-3" />

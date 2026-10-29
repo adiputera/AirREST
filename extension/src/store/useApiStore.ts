@@ -1136,14 +1136,19 @@ export const useApiStore = create<ApiStoreState>()(
           ]);
           if (!isAsyncOperationCurrent(operation)) return;
 
-          const currentTeamProjects: Record<string, CloudProject[]> = {
-            ...(scopesCache?.teamProjects || {}),
-          };
+          const currentTeamProjects: Record<string, CloudProject[]> = {};
+          if (scopesCache?.teamProjects) {
+            for (const [tId, pList] of Object.entries(scopesCache.teamProjects)) {
+              if (Array.isArray(pList) && pList.length > 0) {
+                currentTeamProjects[tId] = pList;
+              }
+            }
+          }
 
           // Migrate legacy teamsWithProjects cache if teamProjects is empty
           if (Object.keys(currentTeamProjects).length === 0 && scopesCache?.teamsWithProjects) {
             for (const tp of scopesCache.teamsWithProjects) {
-              if (tp.team?.id && tp.projects) {
+              if (tp.team?.id && tp.projects && tp.projects.length > 0) {
                 currentTeamProjects[tp.team.id] = tp.projects;
               }
             }
@@ -1256,7 +1261,11 @@ export const useApiStore = create<ApiStoreState>()(
         const { cloudConfig, scopesCache } = get();
         if (!cloudConfig.token || !teamId) return [];
 
-        if (!force && scopesCache?.teamProjects?.[teamId]) {
+        const hasCached = Boolean(
+          scopesCache?.teamProjects &&
+          Object.prototype.hasOwnProperty.call(scopesCache.teamProjects, teamId)
+        );
+        if (!force && hasCached && scopesCache?.teamProjects?.[teamId] && scopesCache.teamProjects[teamId].length > 0) {
           return scopesCache.teamProjects[teamId];
         }
 

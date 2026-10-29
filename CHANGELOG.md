@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Scope Switcher Team Projects Auto-Loading**:
+  - Fixed an issue in [`ScopeSwitcher.tsx`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/packages/common/src/components/ScopeSwitcher.tsx) and [`useApiStore.ts`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/packages/common/src/store/useApiStore.ts) where expanding a team accordion in the desktop app failed to auto-load projects from the backend.
+  - Corrected `fetchScopes` to prevent un-fetched teams from polluting `scopesCache.teamProjects` with empty arrays (`[]`), ensuring un-fetched teams remain `undefined` until loaded.
+  - Added robust loaded state tracking (`fetchedTeamsRef`) so that expanding a team triggers `fetchProjectsForTeam(teamId, true)` whenever its projects have not yet been populated.
+  - Added auto-fetch logic when the active scope is an un-fetched project team upon opening the Scope Switcher.
+  - Enhanced the team accordion UI to display a dedicated spinner while loading, an interactive "Click to load projects" fallback if unloaded, and project counts once loaded.
+- **File Picker & Import Dialog Flow**:
+  - Resolved an issue in [`ImportModal.tsx`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/packages/common/src/components/ImportModal.tsx) where clicking the file chooser button in non-desktop environments (Chrome extension, web) failed to open the file selection dialog due to unconditional native dialog interception.
+  - Guarded native dialog invocation against `adapter?.capabilities?.supportsNativeFileSystem`, falling back to standard HTML file inputs for browser and extension runtimes.
+  - Added drag-and-drop support (`onDragOver`, `onDragEnter`, `onDrop`) to the Postman import dropzone.
+  - Implemented DOM-based file input fallback in `chromeAdapter.openFile` and unified native/web import flows in [`EnvironmentModal.tsx`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/packages/common/src/components/EnvironmentModal.tsx).
+
+### Changed
+- **Collection Transfer Compression**:
+  - Cloud collection import and sync push now gzip eligible JSON payloads, with separate encoded and decoded size budgets; identity remains available when it is the smaller valid representation.
+  - Collection list, detail, and delta pull responses support negotiated gzip with bounded identity, gzip, and decoded serialization sizes.
+  - Malformed gzip payloads and requests containing more than one JSON document are rejected before collection mutations; successful collection responses are parsed with a decoded-size cap.
+  - Enabled gzip support in the desktop HTTP transport and added browser/client, backend, and PostgreSQL integration coverage for compressed collection transfer.
+
 ### Added
 - **Monorepo Migration & Shared Core Architecture**:
   - Re-architected the repository into a clean monorepo structure with `@airrest/common` (`packages/common/`), Chrome Extension (`extension/`), Hub Web Portal (`hub/`), and Desktop Client (`apps/desktop/`).

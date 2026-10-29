@@ -311,7 +311,22 @@ npm run build
 2. Enable **Developer mode** (top-right toggle).
 3. Click **Load unpacked** and select `extension/dist/` (or `extension/dist-offline/`).
 
-### 2. Run the AirREST Hub Portal (Optional)
+### 2. Build and Run the Desktop Application (Tauri v2)
+
+```bash
+# Run the desktop app in development mode
+npm run dev:desktop
+
+# Build native installers for your current OS
+npm run build:desktop
+```
+
+#### Automated Multi-OS Releases (GitHub Actions)
+The repository includes a cross-platform release workflow ([`.github/workflows/desktop-release.yml`](.github/workflows/desktop-release.yml)) powered by `tauri-apps/tauri-action` that builds native installers for **macOS** (`.dmg` / `.app` for Apple Silicon & Intel), **Linux** (`.deb`, `.rpm`, `.AppImage`), and **Windows** (`.msi`, `.exe` NSIS) and publishes them directly to **GitHub Releases**:
+- **Tag Trigger**: Push a version tag matching `desktop-v*` or `v*` (e.g., `git tag desktop-v0.1.0 && git push origin desktop-v0.1.0`).
+- **Manual Trigger**: Run the **Release AirREST Desktop** workflow from the GitHub Actions tab (`workflow_dispatch`).
+
+### 3. Run the AirREST Hub Portal (Optional)
 
 ```bash
 # Start Hub locally
@@ -326,7 +341,7 @@ Deploying to Vercel:
 2. Set **Root Directory** to `hub`.
 3. Set Framework Preset to **Vite** and click **Deploy**.
 
-### 3. Run the Cloud Synchronization Backend (Optional)
+### 4. Run the Cloud Synchronization Backend (Optional)
 
 ```bash
 cd backend
@@ -414,6 +429,9 @@ AirREST is completely backend-agnostic! If you prefer implementing the backend i
 ## 📦 Project Structure
 
 ```
+├── .github/
+│   └── workflows/
+│       └── desktop-release.yml   # Multi-OS Tauri v2 build & GitHub Release workflow
 ├── .gitignore                    # Ignore rules (.env, build outputs, dependencies)
 ├── package.json                  # Root npm workspace configuration (workspaces: ["packages/*", "apps/*", "extension", "hub"])
 ├── package-lock.json

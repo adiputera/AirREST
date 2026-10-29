@@ -84,18 +84,19 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
 
   const [expandedTeams, setExpandedTeams] = useState<Record<string, boolean>>({});
   const [loadingTeams, setLoadingTeams] = useState<Record<string, boolean>>({});
+  const fetchedTeamsRef = React.useRef<Set<string>>(new Set());
 
   const workspaces = scopesCache?.workspaces || [];
   const teams = scopesCache?.teams || scopesCache?.teamsWithProjects?.map((tp) => tp.team) || [];
-  const teamProjects: Record<string, CloudProject[]> = React.useMemo(() => {
-    if (scopesCache?.teamProjects && Object.keys(scopesCache.teamProjects).length > 0) {
+  const teamProjects: Record<string, CloudProject[] | undefined> = React.useMemo(() => {
+    if (scopesCache?.teamProjects) {
       return scopesCache.teamProjects;
     }
     const map: Record<string, CloudProject[]> = {};
     if (scopesCache?.teamsWithProjects) {
       for (const tp of scopesCache.teamsWithProjects) {
-        if (tp.team?.id) {
-          map[tp.team.id] = tp.projects || [];
+        if (tp.team?.id && tp.projects && tp.projects.length > 0) {
+          map[tp.team.id] = tp.projects;
         }
       }
     }
@@ -137,13 +138,33 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
     }
   }, [cloudConfig.token]);
 
-  // Auto-expand the currently active team project accordion
+  // Auto-expand the currently active team project accordion and ensure projects are loaded
   useEffect(() => {
     if (activeScope?.type === 'project' && activeScope.teamId) {
+      const activeTeamId = activeScope.teamId;
       setExpandedTeams((prev) => ({
         ...prev,
-        [activeScope.teamId!]: true,
+        [activeTeamId]: true,
       }));
+
+      const isLoaded =
+        fetchedTeamsRef.current.has(activeTeamId) ||
+        Boolean(
+          scopesCache?.teamProjects &&
+            Object.prototype.hasOwnProperty.call(scopesCache.teamProjects, activeTeamId) &&
+            (scopesCache.teamProjects[activeTeamId]?.length ?? 0) > 0
+        );
+
+      if (!isLoaded && !isOfflineOnly && cloudConfig.token) {
+        setLoadingTeams((prev) => ({ ...prev, [activeTeamId]: true }));
+        fetchProjectsForTeam(activeTeamId, true)
+          .then(() => {
+            fetchedTeamsRef.current.add(activeTeamId);
+          })
+          .finally(() => {
+            setLoadingTeams((prev) => ({ ...prev, [activeTeamId]: false }));
+          });
+      }
     }
   }, [activeScope?.teamId, activeScope?.id]);
 
@@ -243,10 +264,19 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
     const next = !isCurrentlyOpen;
     setExpandedTeams((prev) => ({ ...prev, [teamId]: next }));
 
-    if (next && !teamProjects[teamId]) {
+    const isLoaded =
+      fetchedTeamsRef.current.has(teamId) ||
+      Boolean(
+        scopesCache?.teamProjects &&
+          Object.prototype.hasOwnProperty.call(scopesCache.teamProjects, teamId) &&
+          (scopesCache.teamProjects[teamId]?.length ?? 0) > 0
+      );
+
+    if (next && !isLoaded) {
       setLoadingTeams((prev) => ({ ...prev, [teamId]: true }));
       try {
-        await fetchProjectsForTeam(teamId);
+        await fetchProjectsForTeam(teamId, true);
+        fetchedTeamsRef.current.add(teamId);
       } finally {
         setLoadingTeams((prev) => ({ ...prev, [teamId]: false }));
       }
@@ -258,6 +288,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
     setLoadingTeams((prev) => ({ ...prev, [teamId]: true }));
     try {
       await fetchProjectsForTeam(teamId, true);
+      fetchedTeamsRef.current.add(teamId);
     } finally {
       setLoadingTeams((prev) => ({ ...prev, [teamId]: false }));
     }
@@ -683,7 +714,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                                       )}
                                       {isLoadingThisTeam ? (
                                         <Loader2 className="h-3 w-3 animate-spin text-indigo-400" />
-                                      ) : projs !== undefined ? (
+                                      ) : projs !== undefined && (projs.length > 0 || fetchedTeamsRef.current.has(team.id)) ? (
                                         <div className="flex items-center gap-1">
                                           <button
                                             type="button"
@@ -708,10 +739,20 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                                   {/* Accordion Content: Projects */}
                                   {isExpanded && (
                                     <div className="border-t border-zinc-800/60 bg-zinc-950/40 p-1 space-y-0.5 animate-in fade-in duration-100">
-                                      {isLoadingThisTeam && !projs ? (
+                                      {isLoadingThisTeam && (!projs || projs.length === 0) ? (
                                         <div className="flex items-center justify-center py-2.5 text-xs text-zinc-500 gap-1.5">
                                           <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-400" />
                                           <span>Loading projects...</span>
+                                        </div>
+                                      ) : !projs && !fetchedTeamsRef.current.has(team.id) ? (
+                                        <div className="py-2 text-center text-[11px] text-zinc-500 italic">
+                                          <button
+                                            type="button"
+                                            onClick={() => handleToggleTeam(team.id)}
+                                            className="text-indigo-400 hover:underline"
+                                          >
+                                            Click to load projects
+                                          </button>
                                         </div>
                                       ) : projs && projs.length === 0 ? (
                                         <div className="py-2 text-center text-[11px] text-zinc-500 italic">
