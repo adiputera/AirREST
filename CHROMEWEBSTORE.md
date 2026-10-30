@@ -63,6 +63,7 @@ SUPPORT
 For questions, bug reports, or feature suggestions, visit the project repository on GitHub:
 https://github.com/adiputera/AirREST
 
+Version 1.1.8 — Added Hub-managed controls for moving, deleting, and exporting cloud collections. The extension refreshes these controls when changing cloud scope or using Sync Online, and prevents moving project collections into personal workspaces.
 Version 1.1.7 — Added universal sidebar collection and request search with multi-token parsing, multi-tab request isolation eliminating collisions across collections, in-memory per-tab response persistence, zero-tabs empty state studio, and collection badges in editor and tab hover tooltips.
 Version 1.1.6 — Added Save As duplicate request independence, HTTP method and name duplicate collision guard with interactive conflict resolution (Save Copy / Replace), reader scope read-only enforcement, Scope Switcher personal workspaces management, resilient empty workspace cloud delta sync, team project auto-loading, and unified file picker flow.
 Version 1.1.5 — Removed unused storage permission to adhere to the Chrome Web Store minimal permissions policy; all workspaces, collections, and environments persist durably in IndexedDB.
@@ -150,6 +151,7 @@ SUPPORT
 For questions, bug reports, or feature suggestions, visit the project repository on GitHub:
 https://github.com/adiputera/AirREST
 
+Version 1.1.8 — Updated release metadata. Offline mode remains local-only and does not connect to Hub feature controls.
 Version 1.1.7 — Added universal sidebar collection and request search with multi-token parsing, multi-tab request isolation eliminating collisions across collections, in-memory per-tab response persistence, zero-tabs empty state studio, and collection badges in editor and tab hover tooltips.
 Version 1.1.6 — Added Save As duplicate request independence, HTTP method and name duplicate collision guard with interactive conflict resolution (Save Copy / Replace), Scope Switcher offline workspace navigation, unified native and browser file picker flows, and enhanced local collection management.
 Version 1.1.5 — Removed unused storage permission to adhere to the Chrome Web Store minimal permissions policy; local collections and history persist durably in IndexedDB.

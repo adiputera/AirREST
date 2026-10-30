@@ -1116,6 +1116,92 @@
           }
         }
       ]
+    },
+    {
+      "name": "Feature Controls",
+      "item": [
+        {
+          "name": "Get global feature policy",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/feature-policy",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "feature-policy"
+              ]
+            },
+            "description": "Returns the global collection feature policy for the authenticated cloud client."
+          }
+        },
+        {
+          "name": "Get feature policy (superadmin)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/feature-policy",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "feature-policy"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update feature policy (superadmin)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/feature-policy",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "feature-policy"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"base_revision\": 1,\n  \"flags\": {\n    \"collection.move\": true,\n    \"collection.delete\": true,\n    \"collection.export\": true\n  }\n}"
+            },
+            "description": "Replace all global flags. Read the current policy first and send its revision; stale revisions return 409 CONFLICT."
+          }
+        }
+      ]
     }
   ],
   "variable": [

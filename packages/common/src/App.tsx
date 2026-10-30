@@ -19,6 +19,9 @@ export const App: React.FC = () => {
   const isSwitchingWorkspace = activeStore((state) => state.isSwitchingWorkspace);
   const tabs = activeStore((state) => state.tabs);
   const createTab = activeStore((state) => state.createTab);
+  const workspaceMode = activeStore((state) => state.workspaceMode);
+  const cloudToken = activeStore((state) => state.cloudConfig.token);
+  const refreshFeaturePolicy = activeStore((state) => state.refreshFeaturePolicy);
 
   useEffect(() => {
     if (activeStore.persist.hasHydrated()) {
@@ -34,6 +37,32 @@ export const App: React.FC = () => {
   useEffect(() => onStorageCommit((notice) => {
     if (notice.key === 'air-rest-storage') setStorageUpdateAvailable(true);
   }), []);
+
+  useEffect(() => {
+    if (workspaceMode !== 'cloud' || !cloudToken) return;
+
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const schedule = () => {
+      timer = setTimeout(() => {
+        void refreshFeaturePolicy(true).finally(() => {
+          if (!disposed) schedule();
+        });
+      }, 30 * 60 * 1000);
+    };
+    const refreshIfNeeded = () => {
+      void refreshFeaturePolicy(false);
+    };
+
+    refreshIfNeeded();
+    schedule();
+    window.addEventListener('focus', refreshIfNeeded);
+    return () => {
+      disposed = true;
+      if (timer) clearTimeout(timer);
+      window.removeEventListener('focus', refreshIfNeeded);
+    };
+  }, [workspaceMode, cloudToken, refreshFeaturePolicy]);
 
   if (!hasHydrated) {
     return (

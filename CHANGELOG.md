@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.8] - 2026-10-30
+
+### Added
+- **Hub-managed Collection Feature Controls**:
+  - Added global controls for moving, deleting, and exporting cloud collections: `collection.move`, `collection.delete`, and `collection.export`.
+  - Added a Superadmin Feature Controls panel with revision-aware saves, plus backend policy storage, audit records, and optimistic-concurrency protection.
+  - Enforced move and delete policy server-side, including sync deletions, so older clients cannot bypass a disabled control.
+  - Refreshed client policy on login, scope changes, manual Sync Online, every 30 minutes, and immediately after a `FEATURE_DISABLED` response.
+
+### Changed
+- **Collection Move Direction**:
+  - Personal offline or cloud collections can move into eligible team projects.
+  - Collections in a project cannot move into a personal cloud or offline workspace; the backend enforces the cloud restriction and the client omits personal targets.
+- **Desktop Release Metadata**:
+  - Bumped the desktop application to `v0.1.3` across its package, Tauri, and Cargo metadata.
+
 ## [1.1.7] - 2026-10-30
 
 ### Added

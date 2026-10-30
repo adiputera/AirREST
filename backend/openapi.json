@@ -59,6 +59,10 @@
     {
       "name": "Admin Management",
       "description": "Superadmin user provisioning and password resets"
+    },
+    {
+      "name": "Feature Controls",
+      "description": "Global cloud collection capabilities controlled by superadmins"
     }
   ],
   "paths": {
@@ -379,14 +383,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -434,14 +438,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -487,14 +491,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -522,14 +526,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -565,14 +569,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -610,6 +614,9 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "404": {
             "description": "Workspace not found.",
             "content": {
@@ -625,9 +632,6 @@
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -673,14 +677,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -717,14 +721,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -752,14 +756,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -795,6 +799,9 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "403": {
             "description": "Superadmin privileges required.",
             "content": {
@@ -810,9 +817,6 @@
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -850,14 +854,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -904,14 +908,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -948,14 +952,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -993,14 +997,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -1047,14 +1051,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1102,14 +1106,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1148,14 +1152,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -1202,14 +1206,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1248,14 +1252,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -1302,14 +1306,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -1346,14 +1350,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1391,14 +1395,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -1445,14 +1449,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1499,14 +1503,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1574,17 +1578,17 @@
               }
             }
           },
-          "413": {
-            "$ref": "#/components/responses/ResponsePayloadTooLarge"
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           },
           "406": {
             "$ref": "#/components/responses/NotAcceptable"
           },
+          "413": {
+            "$ref": "#/components/responses/ResponsePayloadTooLarge"
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -1620,14 +1624,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1677,17 +1681,17 @@
               }
             }
           },
-          "413": {
-            "$ref": "#/components/responses/ResponsePayloadTooLarge"
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           },
           "406": {
             "$ref": "#/components/responses/NotAcceptable"
           },
+          "413": {
+            "$ref": "#/components/responses/ResponsePayloadTooLarge"
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -1744,6 +1748,9 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "404": {
             "description": "Collection not found or deleted.",
             "content": {
@@ -1769,9 +1776,6 @@
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -1780,7 +1784,7 @@
           "Collections"
         ],
         "summary": "Soft delete collection (Tombstone)",
-        "description": "Requires collection:delete (maintainer/admin), scope access, and min_role. Workspace owners and superadmins retain access. Contributors cannot delete collections. Atomically soft-deletes the collection and all child items.",
+        "description": "Requires collection:delete (maintainer/admin), scope access, and min_role, plus the global `collection.delete` feature policy. Workspace owners and superadmins retain access but do not bypass the feature policy. Contributors cannot delete collections. Atomically soft-deletes the collection and all child items.",
         "security": [
           {
             "BearerAuth": []
@@ -1808,6 +1812,19 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Permission denied or `FEATURE_DISABLED` when the global collection delete control is off.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Collection not found or deleted.",
             "content": {
@@ -1823,9 +1840,6 @@
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1836,7 +1850,7 @@
           "Collections"
         ],
         "summary": "Move collection between scopes",
-        "description": "Requires collection:move and collection min_role access in both source and destination projects (maintainer/admin). Private workspaces require ownership; superadmins bypass role/ownership restrictions. Project-to-project moves remain within the same team.",
+        "description": "Requires collection:move and collection min_role access in both source and destination projects (maintainer/admin), plus the global `collection.move` feature policy. Personal/offline sources may move into a project, but a project collection cannot move into a personal workspace. Private workspaces require ownership; superadmins bypass role/ownership restrictions but not this scope-direction rule or the feature policy. Project-to-project moves remain within the same team.",
         "security": [
           {
             "BearerAuth": []
@@ -1874,14 +1888,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Permission denied or `FEATURE_DISABLED` when the global collection move control is off.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1940,6 +1964,9 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "404": {
             "description": "Collection not found or deleted.",
             "content": {
@@ -1955,9 +1982,6 @@
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -2016,6 +2040,9 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "404": {
             "description": "Collection not found or deleted.",
             "content": {
@@ -2031,9 +2058,6 @@
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -2081,6 +2105,9 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "404": {
             "description": "Target collection or parent folder not found or deleted.",
             "content": {
@@ -2096,9 +2123,6 @@
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -2136,6 +2160,9 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "404": {
             "description": "Item or parent collection not found or deleted.",
             "content": {
@@ -2151,9 +2178,6 @@
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -2210,6 +2234,9 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "404": {
             "description": "Item, collection, or parent folder not found or deleted.",
             "content": {
@@ -2235,9 +2262,6 @@
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -2274,6 +2298,9 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "404": {
             "description": "Item or parent collection not found or deleted.",
             "content": {
@@ -2289,9 +2316,6 @@
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -2337,14 +2361,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -2379,14 +2403,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -2424,14 +2448,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -2478,6 +2502,9 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "409": {
             "description": "Optimistic concurrency conflict.",
             "content": {
@@ -2493,9 +2520,6 @@
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -2531,14 +2555,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         },
         "description": "Requires env:delete (maintainer/admin), scope access, and min_role. Workspace owners and superadmins retain access. Contributors cannot delete environments."
@@ -2605,18 +2629,6 @@
               }
             }
           },
-          "413": {
-            "$ref": "#/components/responses/ResponsePayloadTooLarge"
-          },
-          "406": {
-            "$ref": "#/components/responses/NotAcceptable"
-          },
-          "503": {
-            "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
           "400": {
             "description": "Exactly one valid scope is required.",
             "content": {
@@ -2626,6 +2638,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           },
           "403": {
             "description": "Scope access, operation permission, or min_role denied.",
@@ -2637,6 +2652,12 @@
               }
             }
           },
+          "406": {
+            "$ref": "#/components/responses/NotAcceptable"
+          },
+          "413": {
+            "$ref": "#/components/responses/ResponsePayloadTooLarge"
+          },
           "500": {
             "description": "Database/query failure; no successful partial delta is returned.",
             "content": {
@@ -2646,6 +2667,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
           }
         }
       }
@@ -2683,25 +2707,6 @@
               }
             }
           },
-          "413": {
-            "$ref": "#/components/responses/PayloadTooLarge"
-          },
-          "415": {
-            "description": "Unsupported request content encoding.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
           "400": {
             "description": "Exactly one valid scope is required, or the request contains malformed gzip or anything other than one JSON document.",
             "content": {
@@ -2712,8 +2717,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "403": {
             "description": "Scope access, operation permission, or min_role denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "description": "Unsupported request content encoding.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2731,6 +2752,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
           }
         }
       }
@@ -2768,25 +2792,6 @@
               }
             }
           },
-          "413": {
-            "$ref": "#/components/responses/PayloadTooLarge"
-          },
-          "415": {
-            "description": "Unsupported request content encoding.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
           "400": {
             "description": "Exactly one valid scope is required, or the request contains malformed gzip or anything other than one JSON document.",
             "content": {
@@ -2797,8 +2802,34 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "403": {
             "description": "Scope access, operation permission, or min_role denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Concurrent import collision; retry complete import.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "description": "Unsupported request content encoding.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2817,8 +2848,48 @@
               }
             }
           },
-          "409": {
-            "description": "Concurrent import collision; retry complete import.",
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/feature-policy": {
+      "get": {
+        "tags": [
+          "Feature Controls"
+        ],
+        "summary": "Get global feature policy",
+        "description": "Returns the global cloud capability flags for the authenticated client. The snapshot controls client UI only; move and delete are always rechecked by the backend.",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Feature policy retrieved.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "private, no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeaturePolicyEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "description": "Policy cannot be evaluated; cloud clients fail closed for controlled actions.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2826,6 +2897,117 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/feature-policy": {
+      "get": {
+        "tags": [
+          "Feature Controls"
+        ],
+        "summary": "Get global feature policy (Superadmin only)",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Feature policy retrieved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeaturePolicyEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Superadmin access required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Feature Controls"
+        ],
+        "summary": "Replace global feature policy (Superadmin only)",
+        "description": "Updates all three flags atomically. `base_revision` provides optimistic concurrency; unknown or missing flag keys are rejected.",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateFeaturePolicyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Feature policy updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeaturePolicyEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid revision or incomplete/invalid flags.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Superadmin access required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Feature policy revision conflict. Data contains the latest policy when available.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
           }
         }
       }
@@ -2853,6 +3035,9 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "403": {
             "description": "Superadmin access required.",
             "content": {
@@ -2868,9 +3053,6 @@
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -2906,6 +3088,9 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "409": {
             "description": "User with this email already exists.",
             "content": {
@@ -2921,9 +3106,6 @@
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -2972,14 +3154,14 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -3260,6 +3442,87 @@
           "data": {
             "description": "The latest server version of the conflicting object.",
             "type": "object"
+          }
+        }
+      },
+      "FeatureFlags": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "collection.move",
+          "collection.delete",
+          "collection.export"
+        ],
+        "properties": {
+          "collection.move": {
+            "type": "boolean"
+          },
+          "collection.delete": {
+            "type": "boolean"
+          },
+          "collection.export": {
+            "type": "boolean"
+          }
+        }
+      },
+      "FeaturePolicy": {
+        "type": "object",
+        "required": [
+          "flags",
+          "revision",
+          "updated_at"
+        ],
+        "properties": {
+          "flags": {
+            "$ref": "#/components/schemas/FeatureFlags"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "updated_by": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "FeaturePolicyEnvelope": {
+        "type": "object",
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/FeaturePolicy"
+          }
+        }
+      },
+      "UpdateFeaturePolicyRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "base_revision",
+          "flags"
+        ],
+        "properties": {
+          "base_revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "flags": {
+            "$ref": "#/components/schemas/FeatureFlags"
           }
         }
       },

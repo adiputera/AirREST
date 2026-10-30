@@ -300,11 +300,15 @@ func TestSecurityIntegration(t *testing.T) {
 		if err := collections.MoveCollection(ctx, maintainer, open.ID, &workspaceID, nil); err == nil {
 			t.Fatal("foreign workspace accepted")
 		}
-		if err := collections.MoveCollection(ctx, admin, open.ID, &workspaceID, nil); err != nil {
+		if err := collections.MoveCollection(ctx, admin, open.ID, &workspaceID, nil); !errors.Is(err, service.ErrProjectCollectionMoveToPersonalScope) {
+			t.Fatalf("project-to-personal move: %v", err)
+		}
+		personal := &domain.Collection{ID: uuid.New(), Name: "Personal", WorkspaceID: &workspaceID, MinRole: domain.ProjectRoleReader}
+		if err := collections.CreateCollection(ctx, contributor, personal); err != nil {
 			t.Fatal(err)
 		}
-		if err := collections.DeleteCollection(ctx, contributor, open.ID); err != nil {
-			t.Fatal("workspace owner denied", err)
+		if err := collections.MoveCollection(ctx, admin, personal.ID, nil, &projectID); err != nil {
+			t.Fatalf("personal-to-project move: %v", err)
 		}
 		permitted := createCollection("Maintainer can delete", domain.ProjectRoleMaintainer)
 		if err := collections.DeleteCollection(ctx, maintainer, permitted.ID); err != nil {

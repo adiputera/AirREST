@@ -52,6 +52,7 @@ import {
   ActiveScope,
   Collection,
   Environment,
+  FeaturePolicy,
 } from '../types/api';
 
 export interface TokenRefreshCallback {
@@ -237,6 +238,25 @@ function extractError(json: any, fallback: string, status?: number): string {
   if (json?.message) return json.message;
   if (status) return `${fallback} (HTTP ${status})`;
   return fallback;
+}
+
+function extractErrorCode(json: unknown): string | undefined {
+  if (json && typeof json === 'object' && typeof (json as { code?: unknown }).code === 'string') {
+    return (json as { code: string }).code;
+  }
+  return undefined;
+}
+
+export class CloudApiError extends Error {
+  readonly code?: string;
+  readonly status: number;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = 'CloudApiError';
+    this.status = status;
+    this.code = code;
+  }
 }
 
 async function safeJson(res: Response): Promise<any> {
@@ -442,6 +462,45 @@ export async function getCurrentUser(apiUrl: string, token: string, refreshToken
     throw new Error(extractError(json, 'Failed to fetch current user', res.status));
   }
   return unwrapData<CloudUser>(json);
+}
+
+export async function fetchFeaturePolicy(
+  apiUrl: string,
+  token: string,
+  refreshToken?: string,
+  signal?: AbortSignal
+): Promise<FeaturePolicy> {
+  const res = await fetchWithAuth('/api/v1/feature-policy', {
+    apiUrl,
+    token,
+    refreshToken,
+    signal,
+  });
+  const json = await safeJson(res);
+  if (!res.ok) {
+    throw new CloudApiError(extractError(json, 'Failed to fetch feature policy', res.status), res.status, extractErrorCode(json));
+  }
+  const policy = unwrapData<unknown>(json);
+  if (
+    !policy ||
+    typeof policy !== 'object' ||
+    !('revision' in policy) ||
+    !('flags' in policy) ||
+    typeof (policy as { revision: unknown }).revision !== 'number' ||
+    !(policy as { flags: unknown }).flags ||
+    typeof (policy as { flags: unknown }).flags !== 'object'
+  ) {
+    throw new Error('Cloud server returned an invalid feature policy.');
+  }
+  const flags = (policy as { flags: Record<string, unknown> }).flags;
+  if (
+    typeof flags['collection.move'] !== 'boolean' ||
+    typeof flags['collection.delete'] !== 'boolean' ||
+    typeof flags['collection.export'] !== 'boolean'
+  ) {
+    throw new Error('Cloud server returned an invalid feature policy.');
+  }
+  return policy as FeaturePolicy;
 }
 
 export async function changeUserPassword(
@@ -657,7 +716,7 @@ export async function moveScopeCollection(
 
   const json = await safeJson(res);
   if (!res.ok) {
-    throw new Error(extractError(json, 'Failed to move collection', res.status));
+    throw new CloudApiError(extractError(json, 'Failed to move collection', res.status), res.status, extractErrorCode(json));
   }
   return unwrapData<any>(json);
 }
@@ -830,7 +889,7 @@ export async function deleteScopeCollection(
 
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(extractError(json, 'Failed to delete collection'));
+    throw new CloudApiError(extractError(json, 'Failed to delete collection', res.status), res.status, extractErrorCode(json));
   }
   return unwrapData<any>(json);
 }

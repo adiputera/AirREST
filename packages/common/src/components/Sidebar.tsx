@@ -822,12 +822,19 @@ export const Sidebar: React.FC = () => {
   const openRequestInTab = useApiStore((state) => state.openRequestInTab);
   const workspaceMode = useApiStore((state) => state.workspaceMode);
   const cloudConfig = useApiStore((state) => state.cloudConfig);
+  const featurePolicy = useApiStore((state) => state.featurePolicy);
+  const featurePolicyStatus = useApiStore((state) => state.featurePolicyStatus);
+  const refreshFeaturePolicy = useApiStore((state) => state.refreshFeaturePolicy);
   const pullCloudDelta = useApiStore((state) => state.pullCloudDelta);
   const syncStatus = useApiStore((state) => state.syncStatus);
 
   const canWriteScope = hasScopePermission(cloudConfig.activeScope, 'collection:write', workspaceMode, cloudConfig.user?.role);
   const canMoveScope = hasScopePermission(cloudConfig.activeScope, 'collection:move', workspaceMode, cloudConfig.user?.role);
   const canDeleteScope = hasScopePermission(cloudConfig.activeScope, 'collection:delete', workspaceMode, cloudConfig.user?.role);
+  const isCloudPolicyReady = workspaceMode !== 'cloud' || featurePolicyStatus === 'ready';
+  const isMoveEnabled = workspaceMode !== 'cloud' || (isCloudPolicyReady && featurePolicy?.flags['collection.move'] === true);
+  const isDeleteEnabled = workspaceMode !== 'cloud' || (isCloudPolicyReady && featurePolicy?.flags['collection.delete'] === true);
+  const isExportEnabled = workspaceMode !== 'cloud' || (isCloudPolicyReady && featurePolicy?.flags['collection.export'] === true);
   const isProjectReadOnly = workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project' && !canWriteScope;
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -838,6 +845,8 @@ export const Sidebar: React.FC = () => {
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [collectionToDelete, setCollectionToDelete] = useState<Collection | null>(null);
   const [collectionToMove, setCollectionToMove] = useState<Collection | null>(null);
+  const [collectionActionError, setCollectionActionError] = useState<string | null>(null);
+  const [isDeletingCollection, setIsDeletingCollection] = useState(false);
   const [showClearHistoryConfirm, setShowClearHistoryConfirm] = useState(false);
   const [collapsedCollections, setCollapsedCollections] = useState<Record<string, boolean>>({});
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({});
@@ -1013,6 +1022,13 @@ export const Sidebar: React.FC = () => {
   const handleExportCollection = async (e: React.MouseEvent, col: Collection) => {
     e.stopPropagation();
     try {
+      if (workspaceMode === 'cloud') {
+        const policy = await refreshFeaturePolicy(true);
+        if (!policy?.flags['collection.export']) {
+          setCollectionActionError('Collection export is disabled or feature policy is unavailable.');
+          return;
+        }
+      }
       const json = exportPostmanCollection(col);
       const filename = `${col.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-postman-v2.1.json`;
       const adapter = getDefaultPlatformAdapter();
@@ -1389,11 +1405,14 @@ export const Sidebar: React.FC = () => {
                                         {canMoveScope && (
                                           <button
                                             type="button"
+                                            disabled={!isMoveEnabled}
                                             onClick={() => {
+                                              if (!isMoveEnabled) return;
                                               setActiveAddMenuColId(null);
                                               setCollectionToMove(col);
                                             }}
-                                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-amber-400 transition"
+                                            title={!isMoveEnabled ? 'Move Collection is disabled by Hub policy' : undefined}
+                                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-amber-400 transition disabled:cursor-not-allowed disabled:opacity-45"
                                           >
                                             <FolderInput className="h-3.5 w-3.5 text-amber-400" />
                                             <span>Move Collection</span>
@@ -1403,11 +1422,14 @@ export const Sidebar: React.FC = () => {
                                     )}
                                     <button
                                       type="button"
+                                      disabled={!isExportEnabled}
                                       onClick={(e) => {
+                                        if (!isExportEnabled) return;
                                         setActiveAddMenuColId(null);
                                         handleExportCollection(e, col);
                                       }}
-                                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition"
+                                      title={!isExportEnabled ? 'Export Collection is disabled by Hub policy' : undefined}
+                                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition disabled:cursor-not-allowed disabled:opacity-45"
                                     >
                                       <Download className="h-3.5 w-3.5 text-sky-400" />
                                       <span>Export Collection</span>
@@ -1440,11 +1462,15 @@ export const Sidebar: React.FC = () => {
                                         <div className="my-1 border-t border-zinc-800/80" />
                                         <button
                                           type="button"
+                                          disabled={!isDeleteEnabled}
                                           onClick={() => {
+                                            if (!isDeleteEnabled) return;
                                             setActiveAddMenuColId(null);
+                                            setCollectionActionError(null);
                                             setCollectionToDelete(col);
                                           }}
-                                          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-rose-400 hover:bg-rose-500/10 transition"
+                                          title={!isDeleteEnabled ? 'Delete Collection is disabled by Hub policy' : undefined}
+                                          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-rose-400 hover:bg-rose-500/10 transition disabled:cursor-not-allowed disabled:opacity-45"
                                         >
                                           <Trash2 className="h-3.5 w-3.5 text-rose-400" />
                                           <span>Delete Collection</span>
@@ -1632,22 +1658,34 @@ export const Sidebar: React.FC = () => {
 
       <ConfirmModal
         isOpen={!!collectionToDelete}
-        onClose={() => setCollectionToDelete(null)}
+        onClose={() => {
+          if (!isDeletingCollection) setCollectionToDelete(null);
+        }}
         onConfirm={() => {
-          if (collectionToDelete) {
-            deleteCollection(collectionToDelete.id);
-            setCollectionToDelete(null);
-          }
+          if (!collectionToDelete) return;
+          setIsDeletingCollection(true);
+          void deleteCollection(collectionToDelete.id).then((result) => {
+            if (result.success) {
+              setCollectionToDelete(null);
+              setCollectionActionError(null);
+            } else {
+              setCollectionActionError(result.error || 'Failed to delete collection.');
+            }
+          }).finally(() => {
+            setIsDeletingCollection(false);
+          });
         }}
         title="Delete Collection"
         message={
           <span>
             Are you sure you want to delete collection{' '}
             <strong className="text-zinc-200">"{collectionToDelete?.name}"</strong>? This will permanently remove the collection and all its requests.
+            {collectionActionError && <span className="mt-2 block text-rose-300">{collectionActionError}</span>}
           </span>
         }
         confirmText="Delete Collection"
         variant="danger"
+        isLoading={isDeletingCollection}
       />
 
       <ConfirmModal

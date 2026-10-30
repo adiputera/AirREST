@@ -51,6 +51,7 @@ func New(ctx context.Context) (*App, error) {
 	projectRepo := postgres.NewProjectRepository(pool)
 	collectionRepo := postgres.NewCollectionRepository(pool)
 	envRepo := postgres.NewEnvironmentRepository(pool)
+	featurePolicyRepo := postgres.NewFeaturePolicyRepository(pool)
 
 	// Initialize Services
 	tokenManager := token.NewTokenManager(cfg.JWTSecret, cfg.JWTExpirationHours, cfg.JWTRefreshExpirationDays)
@@ -58,7 +59,8 @@ func New(ctx context.Context) (*App, error) {
 	workspaceService := service.NewWorkspaceService(workspaceRepo)
 	teamService := service.NewTeamService(teamRepo, userRepo)
 	projectService := service.NewProjectService(projectRepo, teamRepo, teamService)
-	collectionService := service.NewCollectionService(collectionRepo, workspaceRepo, projectRepo, projectService)
+	featurePolicyService := service.NewFeaturePolicyService(featurePolicyRepo)
+	collectionService := service.NewCollectionService(collectionRepo, workspaceRepo, projectRepo, projectService, featurePolicyService)
 	envService := service.NewEnvironmentService(envRepo, collectionService, projectService)
 	syncService := service.NewSyncService(pool, collectionService, envService)
 
@@ -81,6 +83,7 @@ func New(ctx context.Context) (*App, error) {
 	collectionHandler := handler.NewCollectionHandler(collectionService)
 	envHandler := handler.NewEnvironmentHandler(envService)
 	syncHandler := handler.NewSyncHandler(syncService)
+	featurePolicyHandler := handler.NewFeaturePolicyHandler(featurePolicyService)
 
 	// Build Chi Router
 	r := chi.NewRouter()
@@ -149,6 +152,9 @@ func New(ctx context.Context) (*App, error) {
 			r.Route("/users", func(r chi.Router) {
 				r.Get("/search", userHandler.Search)
 			})
+
+			// Global feature policy used by cloud clients to render capability controls.
+			r.Get("/feature-policy", featurePolicyHandler.Get)
 
 			// Workspaces
 			r.Route("/workspaces", func(r chi.Router) {
@@ -228,6 +234,8 @@ func New(ctx context.Context) (*App, error) {
 			// Superadmin User Management
 			r.Route("/admin", func(r chi.Router) {
 				r.Use(middleware.RequireSuperadmin)
+				r.Get("/feature-policy", featurePolicyHandler.GetAdmin)
+				r.Put("/feature-policy", featurePolicyHandler.Update)
 				r.Get("/users", adminHandler.ListUsers)
 				r.Post("/users", adminHandler.CreateUser)
 				r.Put("/users/{userId}/password", adminHandler.ResetUserPassword)
