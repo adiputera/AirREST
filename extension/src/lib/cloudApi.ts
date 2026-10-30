@@ -9,23 +9,111 @@ import {
 } from '@/types/api';
 
 export interface TokenRefreshCallback {
-  (tokens: { token: string; refreshToken: string; expiresAt: string; previousRefreshToken: string }): void;
+  (tokens: { token: string; refreshToken: string; expiresAt?: string; previousRefreshToken?: string }): void;
 }
 
 export interface AuthEvictedCallback {
-  (reason: string): void;
+  (reason: string, failedToken?: string): void;
 }
 
-let onTokenRefreshed: TokenRefreshCallback | null = null;
-let onAuthEvicted: AuthEvictedCallback | null = null;
-let isRefreshing = false;
+const tokenRefreshListeners = new Set<TokenRefreshCallback>();
+const authEvictedListeners = new Set<AuthEvictedCallback>();
 
-export function registerTokenRefreshCallback(cb: TokenRefreshCallback | null) {
-  onTokenRefreshed = cb;
+export function registerTokenRefreshCallback(cb: TokenRefreshCallback | null): () => void {
+  if (!cb) return () => {};
+  tokenRefreshListeners.add(cb);
+  return () => {
+    tokenRefreshListeners.delete(cb);
+  };
 }
 
-export function registerAuthEvictedCallback(cb: AuthEvictedCallback | null) {
-  onAuthEvicted = cb;
+export function registerAuthEvictedCallback(cb: AuthEvictedCallback | null): () => void {
+  if (!cb) return () => {};
+  authEvictedListeners.add(cb);
+  return () => {
+    authEvictedListeners.delete(cb);
+  };
+}
+
+function notifyTokenRefreshed(tokens: {
+  token: string;
+  refreshToken: string;
+  expiresAt?: string;
+  previousRefreshToken?: string;
+}) {
+  for (const listener of tokenRefreshListeners) {
+    try {
+      listener(tokens);
+    } catch {
+      // Ignore listener error to protect notification cycle
+    }
+  }
+}
+
+function notifyAuthEvicted(reason: string, failedToken?: string) {
+  for (const listener of authEvictedListeners) {
+    try {
+      listener(reason, failedToken);
+    } catch {
+      // Ignore listener error to protect notification cycle
+    }
+  }
+}
+
+async function cloudFetch(url: string, init: RequestInit): Promise<Response> {
+  const response = await fetch(url, {
+    ...init,
+    redirect: 'manual',
+  });
+
+  // Reject redirects to prevent leaking sensitive Authorization / session credentials
+  if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+    try {
+      if (response.body && !response.bodyUsed) {
+        await response.body.cancel();
+      }
+    } catch {
+      // ignore stream cancellation errors
+    }
+    throw new Error(
+      `Cloud server returned an unexpected redirect (HTTP ${response.status || 'opaque'}). ` +
+      `Redirects are prohibited for cloud synchronization to prevent credential leakage. Please check your Server URL configuration.`
+    );
+  }
+
+  return response;
+}
+
+/**
+ * Normalizes a cloud API URL.
+ * Preserves explicitly provided http:// or https:// schemes.
+ * For scheme-less inputs, loopback hosts default to http:// while remote hosts default to https://.
+ */
+export function normalizeCloudApiUrl(rawUrl?: string): string {
+  const trimmed = (rawUrl || '').trim().replace(/\/+$/, '');
+  if (!trimmed) return 'http://localhost:8080';
+
+  const hasExplicitScheme = /^https?:\/\//i.test(trimmed);
+  const candidate = hasExplicitScheme ? trimmed : `http://${trimmed}`;
+
+  try {
+    const parsed = new URL(candidate);
+    const hostname = parsed.hostname.toLowerCase();
+    const isLoopback =
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname === '[::1]' ||
+      hostname === '::1';
+
+    if (!hasExplicitScheme) {
+      parsed.protocol = isLoopback ? 'http:' : 'https:';
+    }
+
+    const pathname = parsed.pathname.replace(/\/+$/, '');
+    return `${parsed.protocol}//${parsed.host}${pathname}`;
+  } catch {
+    return trimmed;
+  }
 }
 
 export interface ApiFetchOptions extends RequestInit {
@@ -69,7 +157,8 @@ export async function fetchWithAuth(
   if (typeof fetchInit.body === 'string' && new TextEncoder().encode(fetchInit.body).byteLength > 4 * 1024 * 1024) {
     throw new Error('This request exceeds the 4 MiB limit. Reduce its size or import fewer collections.');
   }
-  const url = `${apiUrl.replace(/\/+$/, '')}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`;
+  const base = normalizeCloudApiUrl(apiUrl);
+  const url = `${base}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`;
 
   const headers = new Headers(fetchInit.headers || {});
   headers.set('Content-Type', 'application/json');
@@ -77,29 +166,25 @@ export async function fetchWithAuth(
     headers.set('Authorization', `Bearer ${token}`);
   }
 
-  let response = await fetch(url, { ...fetchInit, headers });
+  let response = await cloudFetch(url, { ...fetchInit, headers });
 
   // If 401 Unauthorized, attempt background refresh if refreshToken is available
   if (response.status === 401 && refreshToken) {
     try {
-      const result = await handleSilentRefresh(apiUrl, refreshToken);
+      const result = await handleSilentRefresh(base, refreshToken);
       if (result.token) {
         headers.set('Authorization', `Bearer ${result.token}`);
         // Retry the original request
-        response = await fetch(url, { ...fetchInit, headers });
-        if (response.status === 401) onAuthEvicted?.('Your session has expired or been revoked. Please sign in again.');
+        response = await cloudFetch(url, { ...fetchInit, headers });
+        if (response.status === 401) notifyAuthEvicted('Your session has expired or been revoked. Please sign in again.', result.token);
       } else if (result.evicted) {
-        if (onAuthEvicted) {
-          onAuthEvicted('Your session has expired or been revoked. Please sign in again.');
-        }
+        notifyAuthEvicted('Your session has expired or been revoked. Please sign in again.', token);
       }
     } catch {
       // Network or transient error during refresh attempt - do not evict session
     }
   } else if (response.status === 401 && !refreshToken) {
-    if (onAuthEvicted) {
-      onAuthEvicted('Your session has expired or been revoked. Please sign in again.');
-    }
+    notifyAuthEvicted('Your session has expired or been revoked. Please sign in again.', token);
   }
 
   return response;
@@ -110,17 +195,17 @@ interface SilentRefreshResult {
   evicted: boolean;
 }
 
-let refreshPromise: Promise<SilentRefreshResult> | null = null;
+const refreshRequests = new Map<string, Promise<SilentRefreshResult>>();
 
 async function handleSilentRefresh(apiUrl: string, refreshTokenStr: string): Promise<SilentRefreshResult> {
-  if (isRefreshing && refreshPromise) {
-    return refreshPromise;
-  }
+  const base = normalizeCloudApiUrl(apiUrl);
+  const key = `${base}:::${refreshTokenStr}`;
+  const pending = refreshRequests.get(key);
+  if (pending) return pending;
 
-  isRefreshing = true;
-  refreshPromise = (async (): Promise<SilentRefreshResult> => {
+  const refreshPromise = (async (): Promise<SilentRefreshResult> => {
     try {
-      const res = await fetch(`${apiUrl.replace(/\/+$/, '')}/api/v1/auth/refresh`, {
+      const res = await cloudFetch(`${base}/api/v1/auth/refresh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refresh_token: refreshTokenStr }),
@@ -137,32 +222,31 @@ async function handleSilentRefresh(apiUrl: string, refreshTokenStr: string): Pro
       const json = await safeJson(res);
       const data = unwrapData<any>(json);
       if (data && data.token && data.refresh_token) {
-        if (onTokenRefreshed) {
-          onTokenRefreshed({
-            token: data.token,
-            refreshToken: data.refresh_token,
-            expiresAt: data.expires_at,
-            previousRefreshToken: refreshTokenStr,
-          });
-        }
+        notifyTokenRefreshed({
+          token: data.token,
+          refreshToken: data.refresh_token,
+          expiresAt: data.expires_at,
+          previousRefreshToken: refreshTokenStr,
+        });
         return { token: data.token as string, evicted: false };
       }
       return { token: null, evicted: false };
     } catch {
       return { token: null, evicted: false };
     } finally {
-      isRefreshing = false;
-      refreshPromise = null;
+      refreshRequests.delete(key);
     }
   })();
 
+  refreshRequests.set(key, refreshPromise);
   return refreshPromise;
 }
 
 // ----------------- Auth Endpoints -----------------
 
 export async function loginUser(apiUrl: string, email: string, password: string) {
-  const res = await fetch(`${apiUrl.replace(/\/+$/, '')}/api/v1/auth/login`, {
+  const base = normalizeCloudApiUrl(apiUrl);
+  const res = await cloudFetch(`${base}/api/v1/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
@@ -181,7 +265,8 @@ export async function loginUser(apiUrl: string, email: string, password: string)
 }
 
 export async function registerUser(apiUrl: string, email: string, password: string, name: string) {
-  const res = await fetch(`${apiUrl.replace(/\/+$/, '')}/api/v1/auth/register`, {
+  const base = normalizeCloudApiUrl(apiUrl);
+  const res = await cloudFetch(`${base}/api/v1/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password, name }),
@@ -255,6 +340,72 @@ export async function fetchUserWorkspaces(apiUrl: string, token: string, refresh
   return (Array.isArray(data) ? data : []) as CloudWorkspace[];
 }
 
+export async function createCloudWorkspace(
+  apiUrl: string,
+  token: string,
+  workspace: { name: string; description?: string },
+  refreshToken?: string,
+  signal?: AbortSignal
+) {
+  const res = await fetchWithAuth('/api/v1/workspaces', {
+    method: 'POST',
+    apiUrl,
+    token,
+    refreshToken,
+    signal,
+    body: JSON.stringify(workspace),
+  });
+  const json = await safeJson(res);
+  if (!res.ok) {
+    throw new Error(extractError(json, 'Failed to create workspace', res.status));
+  }
+  return unwrapData<CloudWorkspace>(json);
+}
+
+export async function updateCloudWorkspace(
+  apiUrl: string,
+  token: string,
+  workspaceId: string,
+  workspace: { name: string; description?: string },
+  refreshToken?: string,
+  signal?: AbortSignal
+) {
+  const res = await fetchWithAuth(`/api/v1/workspaces/${workspaceId}`, {
+    method: 'PUT',
+    apiUrl,
+    token,
+    refreshToken,
+    signal,
+    body: JSON.stringify(workspace),
+  });
+  const json = await safeJson(res);
+  if (!res.ok) {
+    throw new Error(extractError(json, 'Failed to update workspace', res.status));
+  }
+  return unwrapData<CloudWorkspace>(json);
+}
+
+export async function deleteCloudWorkspace(
+  apiUrl: string,
+  token: string,
+  workspaceId: string,
+  refreshToken?: string,
+  signal?: AbortSignal
+) {
+  const res = await fetchWithAuth(`/api/v1/workspaces/${workspaceId}`, {
+    method: 'DELETE',
+    apiUrl,
+    token,
+    refreshToken,
+    signal,
+  });
+  const json = await safeJson(res);
+  if (!res.ok) {
+    throw new Error(extractError(json, 'Failed to delete workspace', res.status));
+  }
+  return true;
+}
+
 export async function fetchUserTeams(apiUrl: string, token: string, refreshToken?: string, signal?: AbortSignal) {
   const res = await fetchWithAuth('/api/v1/teams', { apiUrl, token, refreshToken, signal });
   const json = await safeJson(res);
@@ -282,7 +433,8 @@ export async function batchImportToScope(
   token: string,
   scope: ActiveScope | { id: string; type: 'workspace' | 'project' } | string,
   collections: Collection[],
-  refreshToken?: string
+  refreshToken?: string,
+  signal?: AbortSignal
 ) {
   if (collections.length > 100) throw new Error('Select at most 100 collections per import.');
   let itemCount = 0;
@@ -317,6 +469,7 @@ export async function batchImportToScope(
     apiUrl,
     token,
     refreshToken,
+    signal,
     body: JSON.stringify(payload),
   });
 
@@ -332,7 +485,8 @@ export async function moveScopeCollection(
   token: string,
   collectionId: string,
   targetScope: ActiveScope,
-  refreshToken?: string
+  refreshToken?: string,
+  signal?: AbortSignal
 ) {
   const payload: any = {};
   if (targetScope.type === 'workspace') {
@@ -346,6 +500,7 @@ export async function moveScopeCollection(
     apiUrl,
     token,
     refreshToken,
+    signal,
     body: JSON.stringify(payload),
   });
 
@@ -367,13 +522,15 @@ export async function reorderCollectionItems(
   token: string,
   collectionId: string,
   items: ReorderItemPayload[],
-  refreshToken?: string
+  refreshToken?: string,
+  signal?: AbortSignal
 ) {
   const res = await fetchWithAuth(`/api/v1/collections/${collectionId}/reorder`, {
     method: 'PUT',
     apiUrl,
     token,
     refreshToken,
+    signal,
     body: JSON.stringify({ items }),
   });
 
@@ -415,7 +572,8 @@ export async function createScopeEnvironment(
   token: string,
   scope: ActiveScope,
   env: { name: string; variables: any[]; min_role?: string },
-  refreshToken?: string
+  refreshToken?: string,
+  signal?: AbortSignal
 ) {
   const payload: any = {
     name: env.name,
@@ -434,6 +592,7 @@ export async function createScopeEnvironment(
     apiUrl,
     token,
     refreshToken,
+    signal,
     body: JSON.stringify(payload),
   });
 
@@ -449,7 +608,8 @@ export async function updateScopeEnvironment(
   token: string,
   envId: string,
   updates: { name?: string; variables?: any[]; min_role?: string; base_version?: number },
-  refreshToken?: string
+  refreshToken?: string,
+  signal?: AbortSignal
 ) {
   const payload: any = {
     name: updates.name,
@@ -465,6 +625,7 @@ export async function updateScopeEnvironment(
     apiUrl,
     token,
     refreshToken,
+    signal,
     body: JSON.stringify(payload),
   });
 
@@ -483,13 +644,15 @@ export async function deleteScopeEnvironment(
   apiUrl: string,
   token: string,
   envId: string,
-  refreshToken?: string
+  refreshToken?: string,
+  signal?: AbortSignal
 ) {
   const res = await fetchWithAuth(`/api/v1/environments/${envId}`, {
     method: 'DELETE',
     apiUrl,
     token,
     refreshToken,
+    signal,
   });
 
   const json = await safeJson(res);
@@ -503,13 +666,15 @@ export async function deleteScopeCollection(
   apiUrl: string,
   token: string,
   collectionId: string,
-  refreshToken?: string
+  refreshToken?: string,
+  signal?: AbortSignal
 ) {
   const res = await fetchWithAuth(`/api/v1/collections/${collectionId}`, {
     method: 'DELETE',
     apiUrl,
     token,
     refreshToken,
+    signal,
   });
 
   const json = await res.json().catch(() => ({}));
@@ -523,13 +688,15 @@ export async function deleteScopeItem(
   apiUrl: string,
   token: string,
   itemId: string,
-  refreshToken?: string
+  refreshToken?: string,
+  signal?: AbortSignal
 ) {
   const res = await fetchWithAuth(`/api/v1/items/${itemId}`, {
     method: 'DELETE',
     apiUrl,
     token,
     refreshToken,
+    signal,
   });
 
   const json = await res.json().catch(() => ({}));

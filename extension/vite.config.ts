@@ -59,6 +59,7 @@ export default defineConfig(({ mode }) => {
     ],
     define: {
       'import.meta.env.VITE_APP_EDITION': JSON.stringify(isOffline ? 'offline' : 'full'),
+      'import.meta.env.VITE_AIRREST_EDITION': JSON.stringify(isOffline ? 'offline' : 'full'),
     },
     resolve: {
       alias: {

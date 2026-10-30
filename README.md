@@ -7,7 +7,7 @@
 > A fast, lightweight, and modern browser-based REST API testing studio packaged as a **Google Chrome Extension (Manifest V3)** and standalone web client with optional cloud team synchronization. Built with **React 19**, **Vite**, **Tailwind CSS v4**, **Zustand**, and a **Go + PostgreSQL** backend.
 
 [![GitHub Repository](https://img.shields.io/badge/GitHub-adiputera%2FAirREST-181717?logo=github)](https://github.com/adiputera/AirREST)
-[![Version](https://img.shields.io/badge/Version-1.1.4-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.1.5-blue.svg)](CHANGELOG.md)
 [![Manifest V3](https://img.shields.io/badge/Chrome%20Extension-Manifest%20V3-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=white)](https://vitejs.dev/)
@@ -24,7 +24,7 @@ AirREST is an API testing client that runs directly inside Google Chrome as a Ma
 ### Core Highlights
 - ⚡ **Direct In-Browser Dispatching**: Chrome host permissions enable unrestricted HTTP and HTTPS requests directly from the client without CORS or mixed-content limitations.
 - 💾 **Dual Storage Modes**: Works in 100% Offline Mode with local storage, or connects to Cloud Sync Mode for multi-device backup and team collaboration.
-- 🗂️ **Multi Offline Workspaces & Cloud Scopes**: Create, rename, clone, and switch between multiple isolated Offline Workspaces, or connect to Cloud Workspaces (Personal & Team Projects) with per-scope tab/history isolation.
+- 🗂️ **Multi Workspaces & Cloud Scopes**: Create, rename, clone, and switch between multiple isolated Offline Workspaces as well as multiple Online Personal Workspaces and Team Projects with per-scope tab/history isolation.
 - 📁 **Postman v2.1 Native Compatibility**: Full import and export support for Postman Collections and Environments with duplicate resolution and diff inspector.
 - 📜 **Sandboxed Scripting Engine**: Pre-request automation and post-response test scripting (`pm.*` & legacy `postman.*`) running inside an isolated sandbox with automated token chaining.
 - 🏢 **AirREST Hub**: Dedicated web portal for managing teams, project permissions, and user administration.
@@ -257,11 +257,11 @@ pm.environment.set("lastRequestTimestamp", now);
 - **IndexedDB Storage**: Uses IndexedDB with the `unlimitedStorage` permission to support large collections and environments without 5MB storage limits.
 - **Local Persistence**: Restores open tabs, unsaved modifications, and active configuration across browser reloads.
 
-### 10. 👥 Multi Offline Workspaces, Teams & Cloud Synchronization
-- **Multi Offline Workspaces**:
-  - Create and manage multiple isolated offline workspaces (e.g., per client or local project).
-  - Rename, duplicate/clone, or delete offline workspaces safely.
-  - Each offline workspace maintains its own isolated tabs, collections, environments, and history.
+### 10. 👥 Multi Workspaces, Teams & Cloud Synchronization
+- **Multi Workspaces (Offline & Online Personal)**:
+  - Create and manage multiple isolated offline workspaces as well as online personal cloud workspaces.
+  - Rename, duplicate/clone, or delete workspaces safely (default workspace is guarded against deletion).
+  - Each workspace maintains its own isolated tabs, collections, environments, and history.
 - **Scope Switcher**: Seamlessly switch between Offline Workspaces and Cloud Workspaces (Personal & Team Projects) with RBAC role badges (`Admin`, `Maintainer`, `Contributor`, `Reader`).
 - **Scoped Data Isolation**: Separate tabs, history, and active environments per workspace scope.
 - **Smart Client Caching**: 12-hour cache enables instant project switching without redundant network fetches.
@@ -311,7 +311,22 @@ npm run build
 2. Enable **Developer mode** (top-right toggle).
 3. Click **Load unpacked** and select `extension/dist/` (or `extension/dist-offline/`).
 
-### 2. Run the AirREST Hub Portal (Optional)
+### 2. Build and Run the Desktop Application (Tauri v2)
+
+```bash
+# Run the desktop app in development mode
+npm run dev:desktop
+
+# Build native installers for your current OS
+npm run build:desktop
+```
+
+#### Automated Multi-OS Releases (GitHub Actions)
+The repository includes a cross-platform release workflow ([`.github/workflows/desktop-release.yml`](.github/workflows/desktop-release.yml)) powered by `tauri-apps/tauri-action` that builds native installers for **macOS** (`.dmg` / `.app` for Apple Silicon & Intel), **Linux** (`.deb`, `.rpm`, `.AppImage`), and **Windows** (`.msi`, `.exe` NSIS) and publishes them directly to **GitHub Releases**:
+- **Tag Trigger**: Push a version tag matching `desktop-v*` or `v*` (e.g., `git tag desktop-v0.1.0 && git push origin desktop-v0.1.0`).
+- **Manual Trigger**: Run the **Release AirREST Desktop** workflow from the GitHub Actions tab (`workflow_dispatch`).
+
+### 3. Run the AirREST Hub Portal (Optional)
 
 ```bash
 # Start Hub locally
@@ -326,7 +341,7 @@ Deploying to Vercel:
 2. Set **Root Directory** to `hub`.
 3. Set Framework Preset to **Vite** and click **Deploy**.
 
-### 3. Run the Cloud Synchronization Backend (Optional)
+### 4. Run the Cloud Synchronization Backend (Optional)
 
 ```bash
 cd backend
@@ -389,10 +404,14 @@ AirREST is completely backend-agnostic! If you prefer implementing the backend i
 | `npm run build:all-extensions` | Compiles both Chrome Extension editions |
 | `npm run dev:hub` | Runs the Vite dev server for AirREST Hub |
 | `npm run build:hub` | Builds the production bundle for AirREST Hub |
+| `npm run dev:desktop` | Runs the Tauri v2 Desktop client in development mode |
+| `npm run build:desktop` | Builds the Tauri v2 Desktop client binary |
 | `npm run build:all` | Compiles all targets (Extension and Hub) |
 | `npm run preview` | Previews the production extension build locally |
 | `npm run typecheck` | Validates TypeScript types across extension and hub |
 | `npm run test:security-clients` | Runs security client regression tests for extension & hub |
+| `npm run test:desktop-sandbox` | Runs Gate P0.3 QuickJS WebAssembly guest sandbox verification |
+| `npm run test:desktop-transport` | Runs Gate P0.1/P0.2 native transport, header echo, & stream limit tests |
 | `npm run test:hub` | Runs frontend Hub regression test suite |
 | `npm run lint` | Runs ESLint validation across the repository |
 
@@ -410,11 +429,31 @@ AirREST is completely backend-agnostic! If you prefer implementing the backend i
 ## 📦 Project Structure
 
 ```
+├── .github/
+│   └── workflows/
+│       └── desktop-release.yml   # Multi-OS Tauri v2 build & GitHub Release workflow
 ├── .gitignore                    # Ignore rules (.env, build outputs, dependencies)
-├── package.json                  # Root npm workspace configuration (workspaces: ["extension", "hub"])
+├── package.json                  # Root npm workspace configuration (workspaces: ["packages/*", "apps/*", "extension", "hub"])
 ├── package-lock.json
 ├── eslint.config.mjs             # Monorepo ESLint configuration
 ├── tsconfig.json                 # Workspace root TypeScript configuration
+├── packages/
+│   └── common/                   # Shared Core Library (@airrest/common)
+│       ├── src/
+│       │   ├── components/       # Universal UI components (Header, RequestEditor, ResponseViewer, Modals)
+│       │   ├── lib/              # Shared business logic (cURL, fetcher, postman, scriptRunner, cloudApi)
+│       │   ├── store/            # Zustand persistent store with multi-workspace support
+│       │   ├── types/            # Domain interfaces and PlatformAdapter contracts
+│       │   ├── runtime.ts        # Runtime factory (createAirrestRuntime)
+│       │   ├── context.tsx       # AirrestProvider & useAirrestRuntime
+│       │   └── App.tsx           # Shared application studio UI
+│       └── package.json          # Shared package configuration
+│
+├── apps/
+│   └── desktop/                  # Tauri v2 Desktop Application (React 19 + Rust Shell)
+│       ├── src/                  # Desktop renderer frontend & adapters (tauriAdapter.ts)
+│       ├── src-tauri/            # Tauri backend shell (Cargo.toml, capabilities, tauri.conf.json)
+│       └── package.json          # Desktop dependencies (@tauri-apps/api, plugins, quickjs-emscripten)
 │
 ├── extension/                    # Chrome Extension (Manifest V3 + React 19 + Tailwind CSS v4)
 │   ├── dist/                     # Compiled full edition

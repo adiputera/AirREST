@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Upload,
   X,
@@ -34,7 +34,8 @@ import {
 import { Collection, Environment, HttpMethod } from '@/types/api';
 import { MethodBadge } from './MethodBadge';
 import { handleCodeEditorKeyDown } from '@/lib/editorHelper';
-import { canModifyCollection, hasScopePermission } from '@/lib/jwt';
+import { canModifyCollection, canModifyEnvironment, hasScopePermission } from '@/lib/jwt';
+import { getDefaultPlatformAdapter } from '@airrest/common';
 
 interface ImportModalProps {
   isOpen: boolean;
@@ -75,6 +76,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
     | null
   >(null);
   const [isResolvingConflict, setIsResolvingConflict] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
 
@@ -90,6 +92,49 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
       setJsonText(content);
     };
     reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const handleFileDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result as string;
+      setJsonText(content);
+    };
+    reader.readAsText(file);
+  };
+
+  const handleChooseFileClick = async (e?: React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    const adapter = getDefaultPlatformAdapter();
+    if (adapter?.capabilities?.supportsNativeFileSystem && adapter?.openFile) {
+      try {
+        setErrorMsg(null);
+        setSuccessMsg(null);
+        const result = await adapter.openFile({
+          filters: [{ name: 'Postman JSON Files', extensions: ['json'] }],
+        });
+        if (result && typeof result.content === 'string') {
+          setJsonText(result.content);
+        }
+      } catch (err) {
+        setErrorMsg(err instanceof Error ? err.message : 'Failed to open file via system dialog.');
+      }
+      return;
+    }
+
+    // Web / Extension fallback: trigger standard HTML file input
+    fileInputRef.current?.click();
   };
 
   const handleImportPostman = async () => {
@@ -232,8 +277,9 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
         await replaceCollection(conflict.existingCol.id, conflict.incomingCol);
         setSuccessMsg(`Collection "${conflict.existingCol.name}" replaced successfully!`);
       } else {
-        if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
-          setErrorMsg('Insufficient permission to replace environment in this scope (requires env:write).');
+        if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role) ||
+            !canModifyEnvironment(conflict.existingEnv.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+          setErrorMsg('Cannot replace environment: read-only for your role or lacking write permissions.');
           return;
         }
 
@@ -826,18 +872,42 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
             {/* Tab 1: Postman Collection or Environment */}
             {activeImportTab === 'postman' && (
               <div className="mt-4 space-y-4">
-                <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-zinc-700 bg-zinc-900/60 p-4 text-center transition hover:border-sky-500/50 hover:bg-zinc-900">
+                {/* Hidden File Input placed outside clickable trigger to prevent recursive bubbling */}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  onChange={handleFileUpload}
+                  onClick={(e) => e.stopPropagation()}
+                  className="hidden"
+                />
+
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={handleChooseFileClick}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      handleChooseFileClick();
+                    }
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                  onDragEnter={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                  onDrop={handleFileDrop}
+                  className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-zinc-700 bg-zinc-900/60 p-4 text-center transition hover:border-sky-500/50 hover:bg-zinc-900 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                >
                   <FileJson className="h-5 w-5 text-sky-400" />
                   <span className="text-xs font-medium text-zinc-300">
                     Choose or drag a Postman Collection or Environment .json file
                   </span>
-                  <input
-                    type="file"
-                    accept=".json,application/json"
-                    onChange={handleFileUpload}
-                    className="hidden"
-                  />
-                </label>
+                </div>
 
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-zinc-300">

@@ -104,7 +104,7 @@ func (r *CollectionRepository) ListCollections(ctx context.Context, workspaceID,
 	}
 	defer rows.Close()
 
-	var collections []*domain.Collection
+	collections := make([]*domain.Collection, 0)
 	for rows.Next() {
 		var c domain.Collection
 		if err := rows.Scan(
@@ -449,7 +449,7 @@ func (r *CollectionRepository) ListActiveItemsByCollection(ctx context.Context, 
 	}
 	defer rows.Close()
 
-	var items []*domain.CollectionItem
+	items := make([]*domain.CollectionItem, 0)
 	for rows.Next() {
 		var item domain.CollectionItem
 		var typeStr string

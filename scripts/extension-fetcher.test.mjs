@@ -34,6 +34,8 @@ function loadFetcher(fetchImpl, hostPermissionResult = null) {
     setTimeout,
     clearTimeout,
     console,
+    Map,
+    Date,
   }, { filename: 'extension/src/lib/fetcher.ts' });
   return exports;
 }
@@ -128,4 +130,107 @@ test('reports withheld host access before starting fetch', async () => {
   assert.equal(fetchCalls, 0);
   assert.equal(response.failureKind, 'host_permission');
   assert.equal(response.statusText, 'Host Permission Required');
+});
+
+test('T-S4: rejects requests with non-HTTP(S) schemes before calling fetch', async () => {
+  let fetchCalls = 0;
+  const { executeApiRequest } = loadFetcher(async () => {
+    fetchCalls += 1;
+    return new Response();
+  }, null);
+
+  for (const url of ['file:///etc/passwd', 'chrome-extension://abc']) {
+    const response = await executeApiRequest({ ...binaryRequest(), url, method: 'GET', bodyType: 'none' });
+    assert.equal(fetchCalls, 0, `fetch must not be called for ${url}`);
+    assert.equal(response.failureKind, 'host_permission');
+    assert.equal(response.statusText, 'Host Permission Required');
+  }
+});
+
+test('T-C2 (C2): bounded memory for recent network errors enforces FIFO eviction and 30s TTL', () => {
+  // 1. Test fetcher.ts recordLocalRecentError bounded capacity and FIFO
+  const { recordLocalRecentError, localRecentErrors } = loadFetcher(async () => new Response());
+  assert.equal(typeof recordLocalRecentError, 'function');
+  assert.ok(localRecentErrors instanceof Map);
+
+  localRecentErrors.clear();
+
+  // Insert 250 errors sequentially
+  for (let i = 0; i < 250; i++) {
+    recordLocalRecentError(`https://example.com/api/item/${i}`, `net::ERR_CONNECTION_REFUSED_${i}`);
+  }
+
+  assert.equal(localRecentErrors.size, 100, 'localRecentErrors must be capped at 100 entries');
+  assert.equal(localRecentErrors.has('https://example.com/api/item/0'), false, 'Oldest entry 0 must be evicted (FIFO)');
+  assert.equal(localRecentErrors.has('https://example.com/api/item/149'), false, 'Old entry 149 must be evicted');
+  assert.equal(localRecentErrors.has('https://example.com/api/item/150'), true, 'Entry 150 must be preserved');
+  assert.equal(localRecentErrors.has('https://example.com/api/item/249'), true, 'Latest entry 249 must be preserved');
+
+  // Test TTL purge (> 30 seconds)
+  const pastTimestamp = Date.now() - 35000;
+  for (const [key, val] of localRecentErrors.entries()) {
+    val.timestamp = pastTimestamp;
+  }
+  recordLocalRecentError('https://example.com/api/item/new', 'net::ERR_NEW');
+  assert.equal(localRecentErrors.size, 1, 'All expired entries older than 30s must be purged');
+  assert.equal(localRecentErrors.has('https://example.com/api/item/new'), true);
+
+  // 2. Test service-worker.js listener bounds capacity
+  const swSource = fs.readFileSync(new URL('../extension/public/service-worker.js', import.meta.url), 'utf8');
+  let webRequestListener = null;
+  const mockChrome = {
+    webRequest: {
+      onErrorOccurred: {
+        addListener: (fn) => { webRequestListener = fn; },
+      },
+    },
+    runtime: {
+      onMessage: { addListener: () => {} },
+      getURL: () => '',
+    },
+    action: {
+      onClicked: { addListener: () => {} },
+    },
+    tabs: {
+      query: async () => [],
+      create: async () => {},
+      update: async () => {},
+    },
+  };
+
+  const swSandbox = {
+    chrome: mockChrome,
+    Date,
+    console,
+  };
+  vm.createContext(swSandbox);
+  vm.runInContext(swSource, swSandbox);
+
+  assert.ok(webRequestListener, 'service-worker.js must register onErrorOccurred listener');
+
+  // Fire 150 errors through service worker listener
+  for (let i = 0; i < 150; i++) {
+    webRequestListener({
+      url: `https://sw.example.com/resource/${i}`,
+      error: `net::ERR_RESET_${i}`,
+    });
+  }
+
+  // Check GET_RECENT_NETWORK_ERROR message handler
+  let recordedError = null;
+  // Read map size via vm context inspection or trigger message handler
+  const messageListeners = [];
+  mockChrome.runtime.onMessage.addListener = (fn) => messageListeners.push(fn);
+  // Re-run listener query check
+  const swExports = vm.runInContext(`
+    ({
+      size: recentNetworkErrors.size,
+      hasOldest: recentNetworkErrors.has('https://sw.example.com/resource/0'),
+      hasLatest: recentNetworkErrors.has('https://sw.example.com/resource/149')
+    })
+  `, swSandbox);
+
+  assert.equal(swExports.size, 100, 'service-worker.js recentNetworkErrors must be capped at 100 entries');
+  assert.equal(swExports.hasOldest, false, 'service worker must evict oldest entry (FIFO)');
+  assert.equal(swExports.hasLatest, true, 'service worker must preserve latest entry');
 });

@@ -3,6 +3,7 @@ package response
 import (
 	"encoding/json"
 	"net/http"
+	"reflect"
 )
 
 type Envelope struct {
@@ -16,6 +17,15 @@ type Envelope struct {
 func JSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
+
+	// If data is a nil slice, normalize to empty slice so JSON serialization produces [] instead of null
+	if data != nil {
+		v := reflect.ValueOf(data)
+		if v.Kind() == reflect.Slice && v.IsNil() {
+			data = []any{}
+		}
+	}
+
 	_ = json.NewEncoder(w).Encode(Envelope{
 		Success: true,
 		Data:    data,

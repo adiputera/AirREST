@@ -22,25 +22,55 @@ export function buildCollectionFromDetails(bc: any): Collection {
   };
 }
 
-function buildItemTree(items: any[], parentId: string | null): CollectionItem[] {
-  const matching = items.filter((item) => {
-    if (!parentId) {
-      return !item.parent_id;
+export const MAX_TREE_DEPTH = 32;
+
+export function buildItemTree(
+  items: any[],
+  parentId: string | null = null,
+  depth: number = 0,
+  visited: Set<string> = new Set(),
+  groupedByParent?: Map<string | null, any[]>
+): CollectionItem[] {
+  if (depth > MAX_TREE_DEPTH || !Array.isArray(items)) {
+    return [];
+  }
+
+  // Pre-group by parent_id on root invocation to reduce complexity from O(N^2) to O(N)
+  let parentMap = groupedByParent;
+  if (!parentMap) {
+    parentMap = new Map<string | null, any[]>();
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue;
+      const pid = item.parent_id || null;
+      const list = parentMap.get(pid);
+      if (list) {
+        list.push(item);
+      } else {
+        parentMap.set(pid, [item]);
+      }
     }
-    return item.parent_id === parentId;
-  });
+  }
 
+  const matching = parentMap.get(parentId) || [];
   // Sort by sort_order
-  matching.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+  const sorted = [...matching].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
 
-  return matching.map((item) => {
+  return sorted.flatMap<CollectionItem>((item) => {
+    if (!item.id || visited.has(item.id)) {
+      // Detected cycle or missing ID; break recursion safely
+      return [];
+    }
+
+    const nextVisited = new Set(visited);
+    nextVisited.add(item.id);
+
     if (item.type === 'folder') {
-      return {
+      return [{
         id: item.id,
         name: item.name,
-        type: 'folder',
-        items: buildItemTree(items, item.id),
-      };
+        type: 'folder' as const,
+        items: buildItemTree(items, item.id, depth + 1, nextVisited, parentMap),
+      }];
     }
 
     // Parse request
@@ -65,12 +95,12 @@ function buildItemTree(items: any[], parentId: string | null): CollectionItem[] 
       updatedAt: new Date(item.updated_at || Date.now()).getTime(),
     };
 
-    return {
+    return [{
       id: item.id,
       name: item.name,
-      type: 'request',
+      type: 'request' as const,
       request: req,
-    };
+    }];
   });
 }
 

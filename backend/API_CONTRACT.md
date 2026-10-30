@@ -34,7 +34,7 @@ Every response from the backend (both success and error) MUST follow the Envelop
   "data": { ... }
 }
 ```
-*Note: In the client codebase (`cloudApi.ts`), `unwrapData(json)` specifically checks for `json.data`. Always nest your payload inside `"data"`.*
+*Note: In the client codebase (`cloudApi.ts`), `unwrapData(json)` specifically checks for `json.data`. Always nest your payload inside `"data"`. For list and collection endpoints, empty results MUST return an empty array `"data": []`, never `"data": null`.*
 
 #### Error Response (HTTP 400, 401, 403, 404, 500)
 ```json
@@ -63,7 +63,7 @@ The Chrome Extension runs within browser sandboxes (with origins like `chrome-ex
 Your server **must** implement CORS with the following settings:
 - **Allowed Origins**: `*` or dynamically reflect the request `Origin` header.
 - **Allowed Methods**: `GET, POST, PUT, PATCH, DELETE, OPTIONS`
-- **Allowed Headers**: `Accept, Authorization, Content-Type, X-CSRF-Token`
+- **Allowed Headers**: `Accept, Authorization, Content-Type, Content-Encoding, X-CSRF-Token`
 - **Exposed Headers**: `Link`
 - **Allow Credentials**: `true`
 - **Preflight Max Age**: `300` seconds (5 minutes)
@@ -120,6 +120,7 @@ Your server **must** implement CORS with the following settings:
    - Use the version from the same user snapshot whose password/token was validated. Never reread a newer version to stamp tokens authenticated using old credentials. Self-service password writes compare the validated version to prevent overwriting a concurrent reset (`400 INVALID_CURRENT_PASSWORD`).
    - A successful self-service password change returns a replacement access/refresh pair for the current device. The frontend atomically replaces its stored tokens. Every previously issued pair, including pairs on other devices, is revoked. Administrator resets do not issue a pair and revoke every target-device session. Profile edits do not revoke sessions. Requests authenticated before a reset may finish.
    - Legacy sessions require login after deployment. Apply migration `005_user_token_version.sql` explicitly if automatic migrations are disabled. Individual-device logout and refresh replay detection are not provided by account-wide versioning.
+   - Default private workspaces are standardized to `Default Workspace` across all roles (migration `006_standardize_default_workspaces.sql`). Automatic migrations apply it on startup.
 
 ---
 
@@ -327,10 +328,10 @@ In addition to enums, the Frontend relies on specific primitive types and relati
   - Payload: `{ "user_id": UUID, "role": "admin" | "maintainer" | "contributor" | "reader" }`
 - `DELETE /api/v1/projects/{id}/members/{userId}` *(Auth, Project Admin)* — Unassign member.
 
-- `GET /api/v1/collections?workspace_id={id}&project_id={id}&include_items={bool}` *(Auth)* — List collections (filtered by `min_role`). Defaults to lightweight collection metadata (`include_items=false`) without items to prevent serverless payload overflows (`FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE`). Clients fetch each collection's items 1-by-1 via `GET /api/v1/collections/{id}`.
+- `GET /api/v1/collections?workspace_id={id}&project_id={id}&include_items={bool}` *(Auth)* — List collections (filtered by `min_role`). Defaults to lightweight collection metadata (`include_items=false`) without items to prevent serverless payload overflows (`FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE`). Clients fetch each collection's items 1-by-1 via `GET /api/v1/collections/{id}`. Collection list/detail JSON may be gzip encoded when the client accepts it; responses set `Vary: Accept-Encoding` and `Cache-Control: private, no-store`. Identity responses are capped at 4 MiB, gzip responses at 3,000,000 bytes, and decoded serialization at 16 MiB. An accepted-but-oversized response returns `413 RESPONSE_PAYLOAD_TOO_LARGE`; excluding both identity and gzip returns `406 NOT_ACCEPTABLE`.
 - `POST /api/v1/collections` *(Auth)* — Create collection.
   - Payload: `{ "workspace_id"?: UUID, "project_id"?: UUID, "name": string, "description"?: string, "min_role"?: ProjectRole }`
-- `GET /api/v1/collections/{id}` *(Auth)* — Get collection with hierarchical nested items.
+- `GET /api/v1/collections/{id}` *(Auth)* — Get collection with hierarchical nested items; response may be gzip encoded as above.
 - `PUT /api/v1/collections/{id}` *(Auth)* — Update collection (enforces `base_version` OCC).
   - Payload: `{ "name": string, "description"?: string, "min_role"?: ProjectRole, "base_version": int64 }`
 - `DELETE /api/v1/collections/{id}` *(Auth)* — Soft delete collection (tombstone).
@@ -362,21 +363,24 @@ In addition to enums, the Frontend relies on specific primitive types and relati
 - `GET /api/v1/sync/pull?workspace_id={id}&since={timestamp}` (or `project_id`, never both) *(Auth)*
   - Returns all collections, items, and environments updated after `since`. Includes rows with `deleted_at != null` (tombstones).
   - Response: `{ "collections": Collection[], "items": CollectionItem[], "environments": Environment[], "server_time": string }`
+  - Response may be gzip encoded when the client accepts it. Identity is capped at 4 MiB, gzip at 3,000,000 bytes, and decoded serialization at 16 MiB. An accepted-but-oversized response returns `413 RESPONSE_PAYLOAD_TOO_LARGE`; excluding both identity and gzip returns `406 NOT_ACCEPTABLE`.
 - `POST /api/v1/sync/push` *(Auth)*
   - Applies up to 500 total offline mutations across all three arrays; exactly one scope is required. This is not an atomic transaction across mutations. Denied create/delete mutations are absent from `applied_ids`; update failures are reported in `conflicts`.
   - Evaluates OCC per mutation and returns conflict reports for stale entities without aborting valid ones.
-  - Response: `{ "applied_ids": UUID[], "conflicts": SyncConflictReport[], "server_time": string }`
+  - Accepts identity JSON up to 4 MiB or one `Content-Encoding: gzip` member up to 3,000,000 bytes and 16 MiB after decoding. The body must contain exactly one JSON document. Unsupported content encoding returns `415 UNSUPPORTED_CONTENT_ENCODING`; malformed gzip or trailing JSON returns `400 BAD_REQUEST` before any mutation.
+  - Response: `{ "applied_ids": UUID[], "conflicts": SyncConflictReport[], "server_time": string }`, bounded below 4 MiB. If needed, optional conflict `server_data` is omitted while `applied_ids`, conflict ID/type, and message remain available.
 - `POST /api/v1/sync/import-batch` *(Auth)*
   - Claims offline LocalStorage collection tree and imports into cloud workspace/project.
   - Exactly one scope is required. The full request is atomic. Scope ownership, project/team memberships, and existing collection rows are locked in the same transaction/connection as writes.
   - Existing same-scope collections must be active and satisfy `min_role`; violations return `403 FORBIDDEN` and roll back all writes. Cross-scope IDs are remapped to fresh IDs without modifying the original resources.
   - Authorized imports increment existing versions without `base_version` OCC. A concurrent new-ID collision returns `409 CONFLICT`; retry the complete import. Existing item IDs in authorized active collections can be restored; deleted collections cannot be imported into.
-  - Limits: 100 collections, 5,000 total nested items, 32 item levels. Limit failures return `413 BATCH_LIMIT_EXCEEDED` before writes. The extension submits multiple selected collections as separate atomic requests and reports partial progress; split or flatten an individual oversized collection before importing it.
+  - Limits: 100 collections, 5,000 total nested items, 32 item levels, and an identity body of 4 MiB or one gzip member of 3,000,000 bytes/16 MiB decoded. The body must contain exactly one JSON document. Byte limit failures return `413 PAYLOAD_TOO_LARGE`; structural limit failures return `413 BATCH_LIMIT_EXCEEDED`, before writes. The extension submits multiple selected collections as separate atomic requests and reports partial progress; split or flatten an individual oversized collection before importing it.
   - Payload: `{ "workspace_id"?: UUID, "project_id"?: UUID, "collections": ImportCollectionRequest[] }`
+  - Clients do not retry mutations after `415`, timeout, connection failure, or `413`; the server response is returned to the caller.
 
 ### Request limits and availability
 
-All routes enforce a 4 MiB (4,194,304-byte) request body limit, including chunked bodies and bodies without `Content-Length`. Oversize bodies return `413 PAYLOAD_TOO_LARGE`. At most 16 handlers run concurrently per instance; excess requests receive `503 SERVER_BUSY` and `Retry-After: 1`. A 30-second request deadline propagates to database work and returns `503 REQUEST_TIMEOUT`. These errors use the standard flat error envelope. Hosting/proxy limits can be smaller.
+All routes enforce a 4 MiB (4,194,304-byte) request body limit, including chunked bodies and bodies without `Content-Length`. `POST /api/v1/sync/push` and `POST /api/v1/sync/import-batch` additionally accept one gzip member: maximum 3,000,000 encoded bytes and 16 MiB decoded JSON. Oversize bodies return `413 PAYLOAD_TOO_LARGE`. At most 16 handlers run concurrently per instance; excess requests receive `503 SERVER_BUSY` and `Retry-After: 1`. A 30-second request deadline propagates to database work and returns `503 REQUEST_TIMEOUT`. These errors use the standard flat error envelope. Hosting/proxy limits can be smaller.
 
 Sync failures do not return successful partial deltas. Role lookup and row iteration errors are propagated; result sets close before another connection is needed. Invalid scope returns 400; authorization returns 403; concurrent import collision returns 409; batch limits return 413; other sync/database failures return 500.
 

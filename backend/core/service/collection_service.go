@@ -152,6 +152,9 @@ func (s *CollectionService) ListCollections(ctx context.Context, user *domain.Us
 	if err != nil {
 		return nil, err
 	}
+	if collections == nil {
+		collections = make([]*domain.Collection, 0)
+	}
 
 	// If project scoped and user is not superadmin, filter collections based on user's effective role
 	if projectID != nil && !user.IsSuperadmin() {

@@ -46,12 +46,20 @@ function getExtensionFromMime(mime: string): string {
   return '.bin';
 }
 
-function getFileNameFromHeaders(headers: Record<string, string> = {}, defaultExt: string): string {
+export function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+export function getFileNameFromHeaders(headers: Record<string, string> = {}, defaultExt: string): string {
   const disposition = headers['content-disposition'] || headers['Content-Disposition'];
   if (disposition) {
     const match = /filename\*?=['"]?(?:UTF-\d['"]*)?([^;\r\n"']*)['"]?/i.exec(disposition);
     if (match && match[1]) {
-      return decodeURIComponent(match[1].trim());
+      return safeDecodeURIComponent(match[1].trim());
     }
   }
   return `response-${Date.now()}${defaultExt}`;
@@ -88,9 +96,11 @@ export const ResponseViewer: React.FC = () => {
   const [copied, setCopied] = useState(false);
   const [imgDimensions, setImgDimensions] = useState<{ width: number; height: number } | null>(null);
   const [permissionMessage, setPermissionMessage] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   useEffect(() => {
     setImgDimensions(null);
+    setDownloadError(null);
     setActiveTab(activeResponse?.scriptErrorStage === 'pre-request' ? 'scripts' : 'body');
   }, [activeResponse]);
 
@@ -103,27 +113,40 @@ export const ResponseViewer: React.FC = () => {
 
   const handleDownload = () => {
     if (!activeResponse) return;
-    const ext = getExtensionFromMime(activeResponse.contentType || '');
-    const filename = getFileNameFromHeaders(activeResponse.headers, ext);
+    setDownloadError(null);
 
-    if (activeResponse.blobUrl) {
-      const a = document.createElement('a');
-      a.href = activeResponse.blobUrl;
-      a.download = filename;
-      a.click();
+    // If binary response has lost its blob body (e.g. after restart / storage rehydration),
+    // do not export placeholder string "[Binary File: ...]"
+    if (activeResponse.isBinary && !activeResponse.blobUrl) {
+      setDownloadError('Binary response body is no longer available in memory. Please re-run the request to download the original file.');
       return;
     }
 
-    if (!activeResponse.data) return;
-    const blob = new Blob([activeResponse.data], {
-      type: activeResponse.contentType || 'text/plain',
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
+    try {
+      const ext = getExtensionFromMime(activeResponse.contentType || '');
+      const filename = getFileNameFromHeaders(activeResponse.headers, ext);
+
+      if (activeResponse.blobUrl) {
+        const a = document.createElement('a');
+        a.href = activeResponse.blobUrl;
+        a.download = filename;
+        a.click();
+        return;
+      }
+
+      if (!activeResponse.data) return;
+      const blob = new Blob([activeResponse.data], {
+        type: activeResponse.contentType || 'text/plain',
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: unknown) {
+      setDownloadError(err instanceof Error ? err.message : String(err));
+    }
   };
 
   const handleRequestHostPermission = async () => {
@@ -282,6 +305,22 @@ export const ResponseViewer: React.FC = () => {
           </div>
         )}
       </div>
+
+      {downloadError && (
+        <div className="mx-4 mt-2 flex items-center justify-between rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />
+            <span>{downloadError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setDownloadError(null)}
+            className="text-rose-400 hover:text-white transition"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Subtabs (Body vs Headers) when response exists */}
       {activeResponse && !isLoading && (
