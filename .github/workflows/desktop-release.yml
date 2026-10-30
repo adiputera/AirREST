@@ -92,16 +92,18 @@ jobs:
             echo "tag_name=desktop-v__VERSION__" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Inject Updater Public Key into tauri.conf.json
-        if: env.TAURI_UPDATER_PUBLIC_KEY != ''
+      - name: Configure Updater Signing in tauri.conf.json
+        if: env.TAURI_UPDATER_PUBLIC_KEY != '' && env.TAURI_SIGNING_PRIVATE_KEY != ''
         env:
           TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         shell: bash
         run: |
           node -e '
             const fs = require("fs");
             const p = "apps/desktop/src-tauri/tauri.conf.json";
             const conf = JSON.parse(fs.readFileSync(p, "utf8"));
+            conf.bundle.createUpdaterArtifacts = true;
             conf.plugins.updater.pubkey = process.env.TAURI_UPDATER_PUBLIC_KEY.trim();
             fs.writeFileSync(p, JSON.stringify(conf, null, 2) + "\n");
           '

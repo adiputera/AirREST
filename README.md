@@ -7,7 +7,7 @@
 > A fast, lightweight, and modern browser-based REST API testing studio packaged as a **Google Chrome Extension (Manifest V3)** and standalone web client with optional cloud team synchronization. Built with **React 19**, **Vite**, **Tailwind CSS v4**, **Zustand**, and a **Go + PostgreSQL** backend.
 
 [![GitHub Repository](https://img.shields.io/badge/GitHub-adiputera%2FAirREST-181717?logo=github)](https://github.com/adiputera/AirREST)
-[![Version](https://img.shields.io/badge/Version-1.1.5-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.1.7-blue.svg)](CHANGELOG.md)
 [![Manifest V3](https://img.shields.io/badge/Chrome%20Extension-Manifest%20V3-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=white)](https://vitejs.dev/)
@@ -77,10 +77,13 @@ AirREST is an API testing client that runs directly inside Google Chrome as a Ma
   - **Circular Dependency Guard**: Dropping a folder into itself or any of its nested children is strictly blocked with a `not-allowed` pointer.
   - Automatic synchronization: Updates positions in local storage and dispatches batch reordering (`PUT /api/v1/collections/{id}/reorder`) in Cloud mode.
 - **Auto-Sync on Import**: Importing collections in Cloud mode automatically syncs all endpoints and folders directly to the backend.
-- **Search & Filter**: Real-time filtering across collections, folders, and individual endpoints.
+- **Unified Collection & Request Search**: Real-time multi-token search across collections, folders, request names, HTTP methods (e.g. GET, POST), and URL endpoints with quick-clear button and automatic tree expansion.
 - **Hierarchical Tree Navigation**:
   - **1-Level Default Expansion**: Expanding any collection or folder defaults to 1 level only—child subfolders remain collapsed until explicitly opened, preventing tree clutter.
   - **Expand All & Collapse All**: Quick actions in each collection and folder dropdown menu to recursively expand all nested items or fold them back to a tidy 1-level view.
+- **Multi-Tab Request Isolation & Collection Association**: Requests from different collections (even with identical names or endpoints) open in separate dedicated tabs without colliding or overwriting, complete with collection badges in the editor header and collection names in tab tooltips.
+- **In-Memory Tab Response Persistence**: Executed request responses are cached per-tab in runtime memory throughout the active session. Switching between tabs preserves each tab's latest response viewer state without re-executing. Closing a tab purges its response and releases binary blob memory, and responses are omitted from persistent storage so tabs start fresh upon relaunch.
+- **Zero-Tabs Empty State Studio**: Tabs can be closed completely (`closeTab`, `closeAllTabs`), leaving 0 tabs open. When no tabs are open, the studio renders an elegant empty state with quick actions to create a new request or browse collections and history.
 - **Consolidated 3-Dots Action Menu & In-Place Renaming**:
   - Replaced cluttered action icon buttons with a clean, unified 3-dots (`MoreVertical`) dropdown menu on collections, folders, and requests.
   - In-place inline renaming for collections, folders, and requests with keyboard shortcuts (`Enter` to save, `Escape` to cancel) and `<Check>`/`<X>` action buttons.

@@ -1,6 +1,6 @@
 {
   "name": "airrest",
-  "version": "1.1.6",
+  "version": "1.1.7",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -20,7 +20,7 @@
     "dev:hub": "npm run --prefix hub dev",
     "dev:desktop": "npm run --prefix apps/desktop tauri -- dev",
     "build:hub": "npm run --prefix hub build",
-    "build:desktop": "npm run --prefix apps/desktop tauri -- build",
+    "build:desktop": "npm run --prefix apps/desktop tauri -- build && node scripts/fix-linux-deb.mjs",
     "version:desktop": "node scripts/bump-desktop-version.mjs",
     "build:all": "npm run build && npm run build:offline && npm run build:hub",
     "preview": "npm run --prefix extension preview",
@@ -36,7 +36,9 @@
     "test:desktop-transport": "node --test scripts/desktop-transport-lifecycle.test.mjs",
     "test:desktop-updater": "node --test scripts/desktop-updater.test.mjs",
     "test:desktop": "npm run test:desktop-sandbox && npm run test:desktop-transport && npm run test:desktop-updater",
-    "test:all": "npm run test:security-clients && npm run test:extension-lifecycle && npm run test:extension-storage && npm run test:extension-fetcher && npm run test:cloud-compression && npm run test:hub && npm run test:desktop"
+    "test:sidebar-search": "node --test scripts/sidebar-search.test.mjs",
+    "test:tab-response-cache": "node --test scripts/tab-response-cache.test.mjs",
+    "test:all": "npm run test:security-clients && npm run test:extension-lifecycle && npm run test:extension-storage && npm run test:extension-fetcher && npm run test:cloud-compression && npm run test:hub && npm run test:desktop && npm run test:sidebar-search && npm run test:tab-response-cache"
   },
   "devDependencies": {
     "eslint": "^9",

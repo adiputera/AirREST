@@ -215,12 +215,52 @@ function serializeCollectionAttachments(collection: Collection): Collection {
 }
 
 function normalizeCollectionAttachments(collection: Collection): Collection {
-  const normalizeItems = (items: CollectionItem[]): CollectionItem[] => items.map((item) => ({
-    ...item,
-    request: item.request ? normalizePersistedRequestAttachments(item.request) : undefined,
-    items: item.items ? normalizeItems(item.items) : undefined,
-  }));
+  const normalizeItems = (items: CollectionItem[]): CollectionItem[] => items.map((item) => {
+    const resolvedId = item.request?.id || item.id;
+    return {
+      ...item,
+      request: item.request ? {
+        ...normalizePersistedRequestAttachments(item.request),
+        id: resolvedId,
+        name: item.name || item.request.name || 'Untitled Request',
+      } : undefined,
+      items: item.items ? normalizeItems(item.items) : undefined,
+    };
+  });
   return { ...collection, items: normalizeItems(collection.items || []) };
+}
+
+function ensureUniqueCollectionItemIds(collections: Collection[]): Collection[] {
+  const seenIds = new Set<string>();
+
+  const processItems = (items: CollectionItem[]): CollectionItem[] => {
+    return (items || []).map((item) => {
+      let itemId = item.id;
+      if (seenIds.has(itemId)) {
+        itemId = generateId();
+      }
+      seenIds.add(itemId);
+
+      const updatedRequest = item.request
+        ? {
+            ...item.request,
+            id: itemId,
+          }
+        : undefined;
+
+      return {
+        ...item,
+        id: itemId,
+        request: updatedRequest,
+        items: item.items ? processItems(item.items) : undefined,
+      };
+    });
+  };
+
+  return (collections || []).map((col) => ({
+    ...col,
+    items: processItems(col.items || []),
+  }));
 }
 
 function serializeHistoryAttachments(history: HistoryItem[]): HistoryItem[] {
@@ -276,6 +316,7 @@ export interface ApiStoreState {
   tabs: ApiRequest[];
   activeTabId: string;
   activeResponse: ApiResponse | null;
+  tabResponses: Record<string, ApiResponse>;
   isLoading: boolean;
   collections: Collection[];
   history: HistoryItem[];
@@ -377,7 +418,7 @@ export interface ApiStoreState {
     targetId: string,
     position: 'before' | 'after' | 'inside'
   ) => Promise<{ success: boolean; error?: string }>;
-  openRequestInTab: (request: ApiRequest) => void;
+  openRequestInTab: (request: ApiRequest, initialResponse?: ApiResponse) => void;
   clearHistory: () => void;
   deleteHistoryItem: (id: string) => void;
 
@@ -611,6 +652,7 @@ export function createApiStore(
       tabs: [defaultRequest],
       activeTabId: defaultRequest.id,
       activeResponse: null,
+      tabResponses: {},
       isLoading: false,
       collections: [],
       history: [],
@@ -703,6 +745,7 @@ export function createApiStore(
             tabs: restoredTabs,
             activeTabId: restoredActiveTabId,
             activeResponse: null,
+            tabResponses: {},
             isLoading: false,
             history: restoredHistory,
             syncStatus: 'idle',
@@ -767,6 +810,7 @@ export function createApiStore(
             tabs: restoredTabs,
             activeTabId: restoredActiveTabId,
             activeResponse: null,
+            tabResponses: {},
             isLoading: false,
             history: cached?.history || [],
             lastSyncedAt: cached?.lastSyncedAt || null,
@@ -898,6 +942,7 @@ export function createApiStore(
           tabs: targetTabs,
           activeTabId: targetActiveTabId,
           activeResponse: null,
+          tabResponses: {},
           isLoading: false,
           history: targetCache?.history || [],
           lastSyncedAt: targetCache?.lastSyncedAt || null,
@@ -944,6 +989,7 @@ export function createApiStore(
           tabs: restoredTabs,
           activeTabId: restoredActiveTabId,
           activeResponse: null,
+          tabResponses: {},
           isLoading: false,
           history: localEntry.history || [],
           scopeCache: {},
@@ -1710,6 +1756,7 @@ export function createApiStore(
           tabs: restoredTabs,
           activeTabId: restoredActiveTabId,
           activeResponse: null,
+          tabResponses: {},
           isLoading: false,
           history: targetEntry.history || [],
           syncStatus: 'idle',
@@ -2324,7 +2371,10 @@ export function createApiStore(
       setSidebarTab: (sidebarTab) => set({ sidebarTab }),
 
       setActiveTabId: (activeTabId) => {
-        set({ activeTabId, activeResponse: null });
+        set((state) => ({
+          activeTabId,
+          activeResponse: state.tabResponses?.[activeTabId] || null,
+        }));
       },
 
       createTab: (initial) => {
@@ -2359,23 +2409,42 @@ export function createApiStore(
 
       closeTab: (id) => {
         set((state) => {
-          if (state.tabs.length <= 1) {
-            const resetTab = createInitialTab();
-            return { tabs: [resetTab], activeTabId: resetTab.id, activeResponse: null };
+          const closedResponse = state.tabResponses?.[id];
+          if (closedResponse?.blobUrl) {
+            const isReferencedInHistory = state.history.some((h) => h.response?.blobUrl === closedResponse.blobUrl);
+            const isReferencedInOtherTab = Object.entries(state.tabResponses || {}).some(
+              ([tabId, res]) => tabId !== id && res?.blobUrl === closedResponse.blobUrl
+            );
+            if (!isReferencedInHistory && !isReferencedInOtherTab) {
+              revokeBlobUrl(closedResponse.blobUrl);
+            }
           }
 
+          const nextTabResponses = { ...(state.tabResponses || {}) };
+          delete nextTabResponses[id];
+
           const filteredTabs = state.tabs.filter((t) => t.id !== id);
+          if (filteredTabs.length === 0) {
+            return {
+              tabs: [],
+              activeTabId: '',
+              activeResponse: null,
+              tabResponses: nextTabResponses,
+            };
+          }
+
           let newActiveId = state.activeTabId;
           if (state.activeTabId === id) {
             const closingIndex = state.tabs.findIndex((t) => t.id === id);
-            const nextTab = state.tabs[closingIndex + 1] || state.tabs[closingIndex - 1];
+            const nextTab = filteredTabs[closingIndex] || filteredTabs[closingIndex - 1] || filteredTabs[0];
             newActiveId = nextTab.id;
           }
 
           return {
             tabs: filteredTabs,
             activeTabId: newActiveId,
-            activeResponse: null,
+            activeResponse: nextTabResponses[newActiveId] || null,
+            tabResponses: nextTabResponses,
           };
         });
       },
@@ -2384,41 +2453,46 @@ export function createApiStore(
         set((state) => {
           const targetTab = state.tabs.find((t) => t.id === id);
           if (!targetTab) return state;
+
+          const nextTabResponses: Record<string, ApiResponse> = {};
+          if (state.tabResponses?.[id]) {
+            nextTabResponses[id] = state.tabResponses[id];
+          }
+
+          Object.entries(state.tabResponses || {}).forEach(([tabId, res]) => {
+            if (tabId !== id && res?.blobUrl) {
+              const isReferencedInHistory = state.history.some((h) => h.response?.blobUrl === res.blobUrl);
+              if (!isReferencedInHistory && nextTabResponses[id]?.blobUrl !== res.blobUrl) {
+                revokeBlobUrl(res.blobUrl);
+              }
+            }
+          });
+
           return {
             tabs: [targetTab],
             activeTabId: id,
-            activeResponse: state.activeTabId === id ? state.activeResponse : null,
+            activeResponse: nextTabResponses[id] || null,
+            tabResponses: nextTabResponses,
           };
         });
       },
 
       closeAllTabs: () => {
-        set(() => {
-          const resetTab: ApiRequest = {
-            id: generateId(),
-            name: 'New Request',
-            method: 'GET',
-            url: '',
-            params: [{ id: generateId(), key: '', value: '', enabled: true }],
-            headers: [{ id: generateId(), key: '', value: '', enabled: true }],
-            auth: { type: 'none' },
-            bodyType: 'none',
-            rawType: 'text',
-            bodyContent: '',
-            graphqlQuery: '',
-            graphqlVariables: '',
-            bodyFormData: [],
-            bodyBinaryFile: undefined,
-            bodyUrlEncoded: [{ id: generateId(), key: '', value: '', enabled: true }],
-            preRequestScript: '',
-            postResponseScript: '',
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-          };
+        set((state) => {
+          Object.values(state.tabResponses || {}).forEach((res) => {
+            if (res?.blobUrl) {
+              const isReferencedInHistory = state.history.some((h) => h.response?.blobUrl === res.blobUrl);
+              if (!isReferencedInHistory) {
+                revokeBlobUrl(res.blobUrl);
+              }
+            }
+          });
+
           return {
-            tabs: [resetTab],
-            activeTabId: resetTab.id,
+            tabs: [],
+            activeTabId: '',
             activeResponse: null,
+            tabResponses: {},
           };
         });
       },
@@ -2428,11 +2502,27 @@ export function createApiStore(
           const index = state.tabs.findIndex((t) => t.id === id);
           if (index === -1) return state;
           const remainingTabs = state.tabs.slice(0, index + 1);
+          const remainingIds = new Set(remainingTabs.map((t) => t.id));
           const wasActiveClosed = !remainingTabs.some((t) => t.id === state.activeTabId);
+          const nextActiveId = wasActiveClosed ? id : state.activeTabId;
+
+          const nextTabResponses: Record<string, ApiResponse> = {};
+          Object.entries(state.tabResponses || {}).forEach(([tabId, res]) => {
+            if (remainingIds.has(tabId)) {
+              nextTabResponses[tabId] = res;
+            } else if (res?.blobUrl) {
+              const isReferencedInHistory = state.history.some((h) => h.response?.blobUrl === res.blobUrl);
+              if (!isReferencedInHistory) {
+                revokeBlobUrl(res.blobUrl);
+              }
+            }
+          });
+
           return {
             tabs: remainingTabs,
-            activeTabId: wasActiveClosed ? id : state.activeTabId,
-            activeResponse: wasActiveClosed ? null : state.activeResponse,
+            activeTabId: nextActiveId,
+            activeResponse: nextTabResponses[nextActiveId] || null,
+            tabResponses: nextTabResponses,
           };
         });
       },
@@ -2466,8 +2556,15 @@ export function createApiStore(
       updateActiveRequest: (updates) => {
         set((state) => {
           const nextActiveTabId = updates.id !== undefined ? updates.id : state.activeTabId;
+          let nextTabResponses = state.tabResponses;
+          if (updates.id !== undefined && updates.id !== state.activeTabId && state.tabResponses?.[state.activeTabId]) {
+            nextTabResponses = { ...(state.tabResponses || {}) };
+            nextTabResponses[updates.id] = nextTabResponses[state.activeTabId];
+            delete nextTabResponses[state.activeTabId];
+          }
           return {
             activeTabId: nextActiveTabId,
+            tabResponses: nextTabResponses,
             tabs: state.tabs.map((tab) => {
               if (tab.id !== state.activeTabId) return tab;
               if (updates.url !== undefined && updates.params === undefined && updates.url !== tab.url) {
@@ -2804,7 +2901,15 @@ export function createApiStore(
 
         const operation = beginAsyncOperation();
         activeRequestOperation = operation;
-        set({ isLoading: true, activeResponse: null });
+        set((s) => {
+          const nextTabResponses = { ...(s.tabResponses || {}) };
+          delete nextTabResponses[activeReq.id];
+          return {
+            isLoading: true,
+            activeResponse: null,
+            tabResponses: nextTabResponses,
+          };
+        });
 
         try {
           // 1. Collect current active environment variables
@@ -2848,7 +2953,11 @@ export function createApiStore(
               timestamp: Date.now(),
             };
 
-            set({ activeResponse: scriptFailureResponse, isLoading: false });
+            set((s) => ({
+              activeResponse: scriptFailureResponse,
+              tabResponses: { ...(s.tabResponses || {}), [activeReq.id]: scriptFailureResponse },
+              isLoading: false,
+            }));
             return;
           }
 
@@ -2974,9 +3083,14 @@ export function createApiStore(
             const evictedHistory = s.history.slice(49);
             revokeBlobUrls(evictedHistory.map((entry) => entry.response?.blobUrl));
             const newHistory = [historyEntry, ...s.history].slice(0, 50);
+            const updatedTabResponses = {
+              ...(s.tabResponses || {}),
+              [activeReq.id]: finalResponse,
+            };
             if (s.workspaceMode === 'offline') {
               return {
                 activeResponse: finalResponse,
+                tabResponses: updatedTabResponses,
                 isLoading: false,
                 history: newHistory,
               };
@@ -3001,6 +3115,7 @@ export function createApiStore(
 
             return {
               activeResponse: finalResponse,
+              tabResponses: updatedTabResponses,
               isLoading: false,
               history: newHistory,
               scopeCache: updatedScopeCache,
@@ -3022,7 +3137,11 @@ export function createApiStore(
             timestamp: Date.now(),
           };
 
-          set({ activeResponse: fallbackResponse, isLoading: false });
+          set((s) => ({
+            activeResponse: fallbackResponse,
+            tabResponses: { ...(s.tabResponses || {}), [activeReq.id]: fallbackResponse },
+            isLoading: false,
+          }));
         } finally {
           if (activeRequestOperation === operation) activeRequestOperation = null;
           completeAsyncOperation(operation);
@@ -3034,9 +3153,8 @@ export function createApiStore(
         if (!operation || operation.controller.signal.aborted) return;
         operation.controller.abort();
         activeRequestOperation = null;
-        set((state) => ({
-          isLoading: false,
-          activeResponse: {
+        set((state) => {
+          const cancelledResponse: ApiResponse = {
             status: 0,
             statusText: 'Request Cancelled',
             timeMs: 0,
@@ -3047,8 +3165,13 @@ export function createApiStore(
             failureKind: 'cancelled',
             requestUrl: state.tabs.find((tab) => tab.id === state.activeTabId)?.url,
             timestamp: Date.now(),
-          },
-        }));
+          };
+          return {
+            isLoading: false,
+            activeResponse: cancelledResponse,
+            tabResponses: { ...(state.tabResponses || {}), [state.activeTabId]: cancelledResponse },
+          };
+        });
       },
 
       createCollection: (name, description = '') => {
@@ -4316,35 +4439,55 @@ export function createApiStore(
         }
       },
 
-      openRequestInTab: (request) => {
+      openRequestInTab: (request, initialResponse) => {
         set((state) => {
-          const existingTab = state.tabs.find(
-            (t) => t.id === request.id || (t.name === request.name && t.url === request.url && t.method === request.method)
-          );
+          const targetId = request.id;
+          const existingTab = targetId
+            ? state.tabs.find((t) => t.id === targetId)
+            : undefined;
+
           if (existingTab) {
+            const restoredResponse = state.tabResponses?.[existingTab.id] || initialResponse || null;
+            const nextTabResponses = initialResponse && !state.tabResponses?.[existingTab.id]
+              ? { ...(state.tabResponses || {}), [existingTab.id]: initialResponse }
+              : state.tabResponses;
             return {
               activeTabId: existingTab.id,
-              activeResponse: null,
+              activeResponse: restoredResponse,
+              tabResponses: nextTabResponses,
             };
           }
 
           const newTab: ApiRequest = {
             ...cloneRequestPreservingAttachments(request),
-            id: request.id || generateId(),
+            id: targetId || generateId(),
           };
+
+          const nextTabResponses = initialResponse
+            ? { ...(state.tabResponses || {}), [newTab.id]: initialResponse }
+            : state.tabResponses;
 
           return {
             tabs: [...state.tabs, newTab],
             activeTabId: newTab.id,
-            activeResponse: null,
+            activeResponse: initialResponse || null,
+            tabResponses: nextTabResponses,
           };
         });
       },
 
       clearHistory: () => {
         set((s) => {
+          const activeTabBlobUrls = new Set(
+            Object.values(s.tabResponses || {})
+              .map((r) => r?.blobUrl)
+              .filter(Boolean)
+          );
+          if (s.activeResponse?.blobUrl) {
+            activeTabBlobUrls.add(s.activeResponse.blobUrl);
+          }
           revokeBlobUrls(s.history
-            .filter((entry) => entry.response?.blobUrl !== s.activeResponse?.blobUrl)
+            .filter((entry) => !entry.response?.blobUrl || !activeTabBlobUrls.has(entry.response.blobUrl))
             .map((entry) => entry.response?.blobUrl));
           if (s.workspaceMode === 'offline') {
             return { history: [] };
@@ -4374,7 +4517,10 @@ export function createApiStore(
       deleteHistoryItem: (id) => {
         set((state) => {
           const deleted = state.history.find((item) => item.id === id);
-          if (deleted?.response?.blobUrl !== state.activeResponse?.blobUrl) {
+          const isReferencedInTabs = Object.values(state.tabResponses || {}).some(
+            (r) => r?.blobUrl === deleted?.response?.blobUrl
+          ) || state.activeResponse?.blobUrl === deleted?.response?.blobUrl;
+          if (!isReferencedInTabs) {
             revokeBlobUrl(deleted?.response?.blobUrl);
           }
           const newHistory = state.history.filter((h) => h.id !== id);
@@ -4482,14 +4628,14 @@ export function createApiStore(
         if (!state) return;
 
         state.tabs = (state.tabs || []).map(normalizePersistedRequestAttachments);
-        state.collections = (state.collections || []).map(normalizeCollectionAttachments);
+        state.collections = ensureUniqueCollectionItemIds((state.collections || []).map(normalizeCollectionAttachments));
         state.history = normalizeHistoryAttachments(state.history || []);
         state.offlineScopeCache = Object.fromEntries(Object.entries(state.offlineScopeCache || {}).map(([key, entry]) => [
           key,
           {
             ...entry,
             tabs: (entry.tabs || []).map(normalizePersistedRequestAttachments),
-            collections: (entry.collections || []).map(normalizeCollectionAttachments),
+            collections: ensureUniqueCollectionItemIds((entry.collections || []).map(normalizeCollectionAttachments)),
             history: normalizeHistoryAttachments(entry.history || []),
           },
         ]));
@@ -4498,7 +4644,7 @@ export function createApiStore(
           {
             ...entry,
             tabs: (entry.tabs || []).map(normalizePersistedRequestAttachments),
-            collections: (entry.collections || []).map(normalizeCollectionAttachments),
+            collections: ensureUniqueCollectionItemIds((entry.collections || []).map(normalizeCollectionAttachments)),
             history: normalizeHistoryAttachments(entry.history || []),
           },
         ]));
@@ -4557,13 +4703,14 @@ export function createApiStore(
           }
         }
 
-        // 5. Ensure state always has at least one valid tab and a valid activeTabId
-        if (!state.tabs || !Array.isArray(state.tabs) || state.tabs.length === 0) {
-          const initialTab = createInitialTab();
-          state.tabs = [initialTab];
-          state.activeTabId = initialTab.id;
-        } else if (!state.activeTabId || !state.tabs.some((t) => t.id === state.activeTabId)) {
+        // 5. Ensure valid tab state and activeTabId alignment
+        if (!state.tabs || !Array.isArray(state.tabs)) {
+          state.tabs = [];
+          state.activeTabId = '';
+        } else if (state.tabs.length > 0 && (!state.activeTabId || !state.tabs.some((t) => t.id === state.activeTabId))) {
           state.activeTabId = state.tabs[0].id;
+        } else if (state.tabs.length === 0) {
+          state.activeTabId = '';
         }
       },
     }

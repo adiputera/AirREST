@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.7] - 2026-10-30
+
+### Added
+- **Universal Collection & Request Search in Sidebar**:
+  - Upgraded sidebar collection search into an all-in-one universal search filtering across collections, folders, request names, HTTP methods (e.g. `GET`, `POST`), and URL endpoints.
+  - Added multi-token query parsing (`split(/\s+/)`), supporting composite queries such as `GET /users`, `POST login`, or specific endpoint paths.
+  - Automatically expands matching collections and folders recursively when search terms match.
+  - Added quick-clear button (`X`) and `Escape` keyboard shortcut to reset search immediately.
+  - Updated placeholder to `"Search collections or requests..."` in [`Sidebar.tsx`](packages/common/src/components/Sidebar.tsx) across `@airrest/common` and extension.
+  - Added unit test suite `test:sidebar-search` in [`scripts/sidebar-search.test.mjs`](scripts/sidebar-search.test.mjs).
+- **Collection Indicator & Visual Context in Editor & Tabs**:
+  - Added a collection badge indicator with folder icon next to the active request name in [`RequestEditor.tsx`](packages/common/src/components/RequestEditor.tsx).
+  - Enhanced tab hover tooltips in [`TabBar.tsx`](packages/common/src/components/TabBar.tsx) to display the request's parent collection: `${name} (${collection.name})`.
+- **In-Memory Tab Response Persistence**:
+  - Maintained runtime response cache (`tabResponses: Record<string, ApiResponse>`) mapped per tab ID in `useApiStore.ts`.
+  - Switching between tabs automatically restores each tab's executed response without re-sending the request.
+  - Closing a tab cleans up its cached response and automatically revokes binary `blobUrl` handles.
+  - Omitted `tabResponses` and `activeResponse` from `partialize` so responses remain session-only and never leak into persistent storage.
+  - Supported passing historical responses directly into tabs via `openRequestInTab(request, response)` when clicking History entries in [`Sidebar.tsx`](packages/common/src/components/Sidebar.tsx).
+  - Added unit test suite `test:tab-response-cache` in [`scripts/tab-response-cache.test.mjs`](scripts/tab-response-cache.test.mjs).
+- **Zero-Tabs Empty State Studio**:
+  - Allowed closing all open tabs via `closeTab` and `closeAllTabs`, transitioning to `tabs: []` instead of forcing a reset tab.
+  - Built [`EmptyStudioView.tsx`](packages/common/src/components/EmptyStudioView.tsx) displaying a clean, branded empty state when no tabs are open with quick actions to create a new tab or jump to collections/history.
+  - Added null-safe guards in [`RequestEditor.tsx`](packages/common/src/components/RequestEditor.tsx) and updated [`App.tsx`](packages/common/src/App.tsx) to switch between the active editor and the empty state.
+  - Added automated tests `T-SEMI-PERSIST-6`, `T-SEMI-PERSIST-7`, and `T-SEMI-PERSIST-8` in [`scripts/tab-response-cache.test.mjs`](scripts/tab-response-cache.test.mjs).
+- **Tauri Desktop Client Auto-Updater & Linux Packaging**:
+  - Integrated `@tauri-apps/plugin-updater` with in-app banner notification (`DesktopUpdateBanner.tsx`), background download staging, and clean restart prompt.
+  - Added automated test suite `T-UPDATER-1` through `T-UPDATER-6` in [`scripts/desktop-updater.test.mjs`](scripts/desktop-updater.test.mjs).
+  - Bumped desktop app release to `v0.1.2` across `apps/desktop/package.json`, `tauri.conf.json`, and `Cargo.toml`.
+
+### Fixed
+- **Multi-Tab Request Isolation & Tab Overwrite Elimination**:
+  - Resolved an issue where opening requests with identical names, methods, or URLs from different collections (e.g. `get token` from Collection A and `get token` from Collection B) reused the existing tab instead of opening a new tab.
+  - Replaced ambiguous name/method/URL matching in `openRequestInTab` with strict unique ID tab matching (`targetId ? state.tabs.find(t => t.id === targetId) : undefined`).
+  - Added `isTargetDifferentCollection` guard in [`SaveToCollectionModal.tsx`](packages/common/src/components/SaveToCollectionModal.tsx) to ensure saving a request to a different collection generates a new UUID, preventing cross-collection item ID collisions.
+  - Added `ensureUniqueCollectionItemIds` during storage hydration in `useApiStore.ts` to automatically de-duplicate any legacy colliding item IDs across collections.
+  - Added automated regression test `T-TAB-ISOLATION` in [`scripts/desktop-transport-lifecycle.test.mjs`](scripts/desktop-transport-lifecycle.test.mjs).
+
 ## [1.1.6] - 2026-10-30
 
 ### Added

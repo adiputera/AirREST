@@ -19,6 +19,7 @@ import {
   FileUp,
   RefreshCw,
   XCircle,
+  Folder,
 } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
 import { HttpMethod, BodyType, RawType, KeyValuePair } from '../types/api';
@@ -288,6 +289,10 @@ export const RequestEditor: React.FC = () => {
     setPostResponseScript(updated);
   };
 
+  if (!currentTab) {
+    return null;
+  }
+
   const methods: HttpMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
   const activeMethodColor = METHOD_COLORS[currentTab.method]?.text || 'text-zinc-200';
 
@@ -312,6 +317,16 @@ export const RequestEditor: React.FC = () => {
                 />
               )}
             </div>
+
+            {savedRequestInfo && (
+              <span
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-zinc-900 border border-zinc-800 text-zinc-400 shrink-0 truncate max-w-[160px]"
+                title={`Saved in collection: ${savedRequestInfo.collection.name}`}
+              >
+                <Folder className="h-3 w-3 text-amber-400 shrink-0" />
+                <span className="truncate">{savedRequestInfo.collection.name}</span>
+              </span>
+            )}
 
             <div className="flex items-center rounded-lg border border-zinc-800 bg-zinc-900 overflow-hidden shadow-sm">
               {isReadOnly ? (

@@ -182,7 +182,8 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
     }
 
     // Save As creates a new copy with a fresh unique ID, preserving the original request in its source collection
-    const shouldCreateCopy = isSaveAs || !savedInfo || !isSavedCollectionWritable;
+    const isTargetDifferentCollection = Boolean(savedInfo && savedInfo.collection.id !== targetCollectionId);
+    const shouldCreateCopy = isSaveAs || !savedInfo || !isSavedCollectionWritable || isTargetDifferentCollection;
     const newId = generateUUID();
 
     const targetRequest: ApiRequest = shouldCreateCopy

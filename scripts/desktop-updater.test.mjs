@@ -238,10 +238,11 @@ test('T-UPDATER-6: Tauri config, capabilities, and GitHub workflow contracts are
     'utf8',
   );
 
-  assert.equal(tauriConf.bundle.createUpdaterArtifacts, true);
+  assert.equal(tauriConf.bundle.createUpdaterArtifacts, false);
   assert.equal(tauriConf.bundle.macOS.signingIdentity, '-');
   assert.equal(tauriConf.plugins?.updater?.pubkey, '');
   assert.ok(libRs.includes('option_env!("TAURI_UPDATER_PUBLIC_KEY")'));
+  assert.ok(workflow.includes('conf.bundle.createUpdaterArtifacts = true'));
   assert.deepEqual(tauriConf.plugins?.updater?.endpoints, [
     'https://github.com/adiputera/AirREST/releases/latest/download/latest.json',
   ]);
