@@ -1,5 +1,6 @@
 import { ApiRequest, HttpMethod, KeyValuePair, AuthConfig, FormDataItem, BinaryFileData, RawType } from '@/types/api';
 import { interpolateVariables } from './fetcher';
+import { substitutePathVariables } from './urlParams';
 
 function generateId(): string {
   return Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
@@ -356,6 +357,15 @@ export function generateCurlCommand(
   variables: Record<string, string> = {}
 ): string {
   let url = interpolateVariables(request?.url || '', variables);
+
+  // Substitute path variables
+  if (request.pathVariables && request.pathVariables.length > 0) {
+    const interpolatedPathVars = request.pathVariables.map((pv) => ({
+      ...pv,
+      value: interpolateVariables(String(pv.value ?? ''), variables),
+    }));
+    url = substitutePathVariables(url, interpolatedPathVars);
+  }
 
   // Append query parameters
   if (request.params && request.params.length > 0) {

@@ -1,6 +1,7 @@
 import { ApiRequest, ApiResponse, NetworkErrorCategory } from '@/types/api';
 import { trackBlobUrl } from '@/lib/blobManager';
 import { hasHostPermission } from '@/lib/hostPermissions';
+import { substitutePathVariables } from '@/lib/urlParams';
 
 export const RESPONSE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024;
 export const REQUEST_TIMEOUT_MS = 30_000;
@@ -102,6 +103,15 @@ export function prepareRequest(
   finalBody?: BodyInit;
 } {
   let rawUrl = interpolateVariables((request?.url || '').trim(), variables);
+
+  // Substitute path variables if present
+  if (request.pathVariables && request.pathVariables.length > 0) {
+    const interpolatedPathVars = request.pathVariables.map((pv) => ({
+      ...pv,
+      value: interpolateVariables(String(pv.value ?? ''), variables),
+    }));
+    rawUrl = substitutePathVariables(rawUrl, interpolatedPathVars);
+  }
 
   // If no scheme provided, default to http:// for localhost/private network IPs or https:// for others
   if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//i.test(rawUrl)) {

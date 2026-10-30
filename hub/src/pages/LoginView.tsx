@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Cloud, Lock, Mail, Server, AlertCircle, Loader2, Eye, EyeOff } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Lock, Mail, Server, AlertCircle, Loader2, Eye, EyeOff } from 'lucide-react';
 import { useHubStore } from '../store/useHubStore';
 import { apiLogin, DEFAULT_API_URL } from '../lib/api';
 
@@ -17,6 +17,11 @@ export const LoginView: React.FC = () => {
 
   const [inputUrl, setInputUrl] = useState(apiUrl);
 
+  useEffect(() => {
+    setPassword('');
+    setShowPassword(false);
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
@@ -27,6 +32,8 @@ export const LoginView: React.FC = () => {
       setApiUrl(cleanUrl);
 
       const res = await apiLogin(cleanUrl, email, password);
+      setPassword('');
+      setShowPassword(false);
       setAuth(res.user, res.token, res.refresh_token, res.expires_at);
     } catch (err: any) {
       setErrorMsg(err.message || 'Authentication failed. Please verify credentials.');
@@ -46,9 +53,11 @@ export const LoginView: React.FC = () => {
       <div className="relative w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900/60 p-8 shadow-2xl backdrop-blur-xl">
         {/* Brand */}
         <div className="text-center mb-6">
-          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-tr from-sky-600 to-indigo-600 text-white shadow-lg shadow-sky-500/25">
-            <Cloud className="h-6 w-6" />
-          </div>
+          <img
+            src="/icons/logo-square.png"
+            alt="AirREST Logo"
+            className="mx-auto mb-3 h-12 w-12 rounded-2xl object-cover shadow-lg shadow-sky-500/25"
+          />
           <h1 className="text-xl font-bold tracking-tight text-zinc-100">AirREST Hub</h1>
           <p className="text-xs text-zinc-400 mt-1">Management Portal for Teams, Projects &amp; RBAC</p>
         </div>

@@ -639,7 +639,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"collection_id\": \"{{collectionId}}\",\n  \"type\": \"request\",\n  \"name\": \"Sample HTTPBin Request\",\n  \"method\": \"GET\",\n  \"url\": \"https://httpbin.org/get?user=tester&tag=api\",\n  \"sort_order\": 0,\n  \"params\": [],\n  \"headers\": [],\n  \"body_type\": \"none\"\n}"
+              "raw": "{\n  \"collection_id\": \"{{collectionId}}\",\n  \"type\": \"request\",\n  \"name\": \"Sample HTTPBin Request\",\n  \"method\": \"GET\",\n  \"url\": \"https://httpbin.org/get?user=tester&tag=api\",\n  \"sort_order\": 0,\n  \"params\": [],\n  \"path_variables\": [],\n  \"headers\": [],\n  \"body_type\": \"none\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/items",

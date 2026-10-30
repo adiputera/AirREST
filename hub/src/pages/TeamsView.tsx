@@ -116,6 +116,22 @@ export const TeamsView: React.FC = () => {
   const isTeamAdmin = user?.role === 'superadmin' || activeTeam?.user_role === 'admin';
 
   // Handle Create Team
+  const resetCreateTeamForm = () => {
+    setNewTeamName('');
+    setNewTeamDesc('');
+    setErrorMsg(null);
+  };
+
+  const handleOpenCreateTeam = () => {
+    resetCreateTeamForm();
+    setIsCreateTeamOpen(true);
+  };
+
+  const handleCloseCreateTeam = () => {
+    setIsCreateTeamOpen(false);
+    resetCreateTeamForm();
+  };
+
   const handleCreateTeam = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!token) return;
@@ -131,9 +147,7 @@ export const TeamsView: React.FC = () => {
       );
       setTeams((previous) => [newTeam, ...previous]);
       setSelectedTeamId(newTeam.id);
-      setIsCreateTeamOpen(false);
-      setNewTeamName('');
-      setNewTeamDesc('');
+      handleCloseCreateTeam();
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to create team');
     } finally {
@@ -147,6 +161,13 @@ export const TeamsView: React.FC = () => {
     setEditTeamDesc(team.description || '');
     setErrorMsg(null);
     setIsEditTeamOpen(true);
+  };
+
+  const handleCloseEditTeam = () => {
+    setIsEditTeamOpen(false);
+    setEditTeamName('');
+    setEditTeamDesc('');
+    setErrorMsg(null);
   };
 
   // Handle Update Team
@@ -165,7 +186,7 @@ export const TeamsView: React.FC = () => {
         refreshToken || undefined
       );
       setTeams((previous) => previous.map((t) => (t.id === selectedTeamId ? { ...t, ...updated } : t)));
-      setIsEditTeamOpen(false);
+      handleCloseEditTeam();
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to update team');
     } finally {
@@ -233,6 +254,24 @@ export const TeamsView: React.FC = () => {
   };
 
   // Handle Add Member(s)
+  const resetAddMemberForm = () => {
+    setUserQuery('');
+    setSearchResults([]);
+    setSelectedUsersToInvite([]);
+    setNewMemberRole('member');
+    setErrorMsg(null);
+  };
+
+  const handleOpenAddMember = () => {
+    resetAddMemberForm();
+    setIsAddMemberOpen(true);
+  };
+
+  const handleCloseAddMember = () => {
+    setIsAddMemberOpen(false);
+    resetAddMemberForm();
+  };
+
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!token || !selectedTeamId || selectedUsersToInvite.length === 0) return;
@@ -274,10 +313,7 @@ export const TeamsView: React.FC = () => {
       }
 
       if (failedUsers.length === 0) {
-        setIsAddMemberOpen(false);
-        setSelectedUsersToInvite([]);
-        setUserQuery('');
-        setSearchResults([]);
+        handleCloseAddMember();
       } else {
         // Keep failed users in selected state for retry
         setSelectedUsersToInvite((prev) => prev.filter((u) => !successfulIds.has(u.id)));
@@ -333,6 +369,18 @@ export const TeamsView: React.FC = () => {
   };
 
   // Handle Update Member Role
+  const handleOpenEditMember = (member: TeamMember) => {
+    setEditingMember(member);
+    setEditRole(member.role);
+    setErrorMsg(null);
+  };
+
+  const handleCloseEditMember = () => {
+    setEditingMember(null);
+    setEditRole('member');
+    setErrorMsg(null);
+  };
+
   const handleUpdateRole = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!token || !selectedTeamId || !editingMember) return;
@@ -344,7 +392,7 @@ export const TeamsView: React.FC = () => {
       const updatedMembers = await apiListTeamMembers(apiUrl, token, selectedTeamId, refreshToken || undefined);
       if (useHubStore.getState().selectedTeamId !== selectedTeamId) return;
       setMembers(updatedMembers);
-      setEditingMember(null);
+      handleCloseEditMember();
     } catch (err: any) {
       alert(err.message || 'Failed to update member role');
     } finally {
@@ -368,7 +416,7 @@ export const TeamsView: React.FC = () => {
             </h2>
             {user?.role === 'superadmin' && (
               <button
-                onClick={() => setIsCreateTeamOpen(true)}
+                onClick={handleOpenCreateTeam}
                 className="flex items-center gap-1 rounded-lg bg-sky-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-sky-500 transition shadow-sm"
               >
                 <Plus className="h-3.5 w-3.5" />
@@ -504,13 +552,7 @@ export const TeamsView: React.FC = () => {
 
                 {isTeamAdmin && (
                   <button
-                    onClick={() => {
-                      setUserQuery('');
-                      setSearchResults([]);
-                      setSelectedUsersToInvite([]);
-                      setNewMemberRole('member');
-                      setIsAddMemberOpen(true);
-                    }}
+                    onClick={handleOpenAddMember}
                     className="flex items-center gap-1.5 rounded-xl border border-sky-500/30 bg-sky-500/10 px-3.5 py-2 text-xs font-semibold text-sky-400 hover:bg-sky-500/20 transition shadow-sm shrink-0 whitespace-nowrap self-start sm:self-auto"
                   >
                     <UserPlus className="h-3.5 w-3.5" />
@@ -585,10 +627,7 @@ export const TeamsView: React.FC = () => {
                                 ) : (
                                   <div className="flex items-center justify-end gap-1">
                                     <button
-                                      onClick={() => {
-                                        setEditingMember(member);
-                                        setEditRole(member.role);
-                                      }}
+                                      onClick={() => handleOpenEditMember(member)}
                                       className="rounded p-1 text-zinc-500 hover:bg-sky-500/10 hover:text-sky-400 transition"
                                       title="Edit Role"
                                     >
@@ -625,7 +664,14 @@ export const TeamsView: React.FC = () => {
 
       {/* Modal: Create Team */}
       {isCreateTeamOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isCreatingTeam) {
+              handleCloseCreateTeam();
+            }
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+        >
           <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
@@ -633,7 +679,7 @@ export const TeamsView: React.FC = () => {
                 <span>Create New Team</span>
               </h3>
               <button
-                onClick={() => setIsCreateTeamOpen(false)}
+                onClick={handleCloseCreateTeam}
                 className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800"
               >
                 <X className="h-4 w-4" />
@@ -674,7 +720,7 @@ export const TeamsView: React.FC = () => {
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setIsCreateTeamOpen(false)}
+                  onClick={handleCloseCreateTeam}
                   className="rounded-lg border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900"
                 >
                   Cancel
@@ -694,7 +740,14 @@ export const TeamsView: React.FC = () => {
 
       {/* Modal: Add Member */}
       {isAddMemberOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isAddingMember) {
+              handleCloseAddMember();
+            }
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+        >
           <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl flex flex-col max-h-[90vh]">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
@@ -702,7 +755,7 @@ export const TeamsView: React.FC = () => {
                 <span>Add Team Members</span>
               </h3>
               <button
-                onClick={() => setIsAddMemberOpen(false)}
+                onClick={handleCloseAddMember}
                 className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800"
               >
                 <X className="h-4 w-4" />
@@ -881,7 +934,7 @@ export const TeamsView: React.FC = () => {
               <div className="flex justify-end gap-2 pt-2 border-t border-zinc-800">
                 <button
                   type="button"
-                  onClick={() => setIsAddMemberOpen(false)}
+                  onClick={handleCloseAddMember}
                   className="rounded-lg border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900"
                 >
                   Cancel
@@ -906,7 +959,14 @@ export const TeamsView: React.FC = () => {
       )}
       {/* Modal: Edit Team Member Role */}
       {editingMember && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isUpdatingRole) {
+              handleCloseEditMember();
+            }
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+        >
           <div className="w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
@@ -914,7 +974,7 @@ export const TeamsView: React.FC = () => {
                 <span>Edit Member Role</span>
               </h3>
               <button
-                onClick={() => setEditingMember(null)}
+                onClick={handleCloseEditMember}
                 className="text-zinc-500 hover:text-zinc-300"
               >
                 <X className="h-4 w-4" />
@@ -948,7 +1008,7 @@ export const TeamsView: React.FC = () => {
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setEditingMember(null)}
+                  onClick={handleCloseEditMember}
                   className="rounded-lg border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900"
                 >
                   Cancel
@@ -967,7 +1027,14 @@ export const TeamsView: React.FC = () => {
       )}
       {/* Modal: Edit Team */}
       {isEditTeamOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isUpdatingTeam) {
+              handleCloseEditTeam();
+            }
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+        >
           <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
@@ -975,7 +1042,7 @@ export const TeamsView: React.FC = () => {
                 <span>Edit Team</span>
               </h3>
               <button
-                onClick={() => setIsEditTeamOpen(false)}
+                onClick={handleCloseEditTeam}
                 className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800"
               >
                 <X className="h-4 w-4" />
@@ -1016,7 +1083,7 @@ export const TeamsView: React.FC = () => {
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setIsEditTeamOpen(false)}
+                  onClick={handleCloseEditTeam}
                   className="rounded-lg border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900"
                 >
                   Cancel

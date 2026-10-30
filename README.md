@@ -7,7 +7,7 @@
 > A fast, lightweight, and modern browser-based REST API testing studio packaged as a **Google Chrome Extension (Manifest V3)** and standalone web client with optional cloud team synchronization. Built with **React 19**, **Vite**, **Tailwind CSS v4**, **Zustand**, and a **Go + PostgreSQL** backend.
 
 [![GitHub Repository](https://img.shields.io/badge/GitHub-adiputera%2FAirREST-181717?logo=github)](https://github.com/adiputera/AirREST)
-[![Version](https://img.shields.io/badge/Version-1.1.8-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.1.9-blue.svg)](CHANGELOG.md)
 [![Manifest V3](https://img.shields.io/badge/Chrome%20Extension-Manifest%20V3-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=white)](https://vitejs.dev/)
@@ -329,8 +329,8 @@ npm run build:desktop
 
 #### Automated Multi-OS Releases & In-App Auto-Updater (GitHub Actions)
 The repository includes a cross-platform release workflow ([`.github/workflows/desktop-release.yml`](.github/workflows/desktop-release.yml)) powered by `tauri-apps/tauri-action` that builds native installers for **macOS** (`.dmg` / `.app` for Apple Silicon & Intel), **Linux** (`.deb`, `.rpm`, `.AppImage`), and **Windows** (`.msi`, `.exe` NSIS) and publishes them directly to **GitHub Releases**:
-- **Bumping Desktop Version**: Run `npm run version:desktop -- <version>` (e.g., `npm run version:desktop -- 0.1.3`) to synchronize version strings across `package.json`, `tauri.conf.json`, and `Cargo.toml`.
-- **Tag Trigger**: Push a version tag matching `desktop-v*` or `v*` (e.g., `git tag desktop-v0.1.3 && git push origin main --tags`).
+- **Bumping Desktop Version**: Run `npm run version:desktop -- <version>` (e.g., `npm run version:desktop -- 0.1.4`) to synchronize version strings across `package.json`, `tauri.conf.json`, and `Cargo.toml`.
+- **Tag Trigger**: Push a version tag matching `desktop-v*` or `v*` (e.g., `git tag desktop-v0.1.4 && git push origin main --tags`).
 - **Manual Trigger**: Run the **Release AirREST Desktop** workflow from the GitHub Actions tab (`workflow_dispatch`).
 - **In-App Auto-Updater**: Applications automatically check and download releases in the background via `@tauri-apps/plugin-updater`. On macOS, updates stage seamlessly on disk; on Windows and Linux, updates apply when the user restarts or closes the window (`onCloseRequested`). Releases are cryptographically signed and verified using the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_UPDATER_PUBLIC_KEY`.
 
