@@ -8,6 +8,7 @@ import {
   fetchUserWorkspaces,
   fetchUserTeams,
   fetchTeamProjects,
+  normalizeCloudApiUrl,
 } from '@/lib/cloudApi';
 import { ActiveScope, CloudUser } from '@/types/api';
 import { getRoleFromJwt } from '@/lib/jwt';
@@ -40,7 +41,7 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
   const localCols = offlineScopeCache?.[activeOfflineWorkspaceId || 'local-default']?.collections || collections;
   const localCount = localCols.length;
 
-  const [apiUrl, setApiUrl] = useState(cloudConfig.apiUrl || 'http://localhost:8080');
+  const [apiUrl, setApiUrl] = useState(normalizeCloudApiUrl(cloudConfig.apiUrl) || 'http://localhost:8080');
 
   if (!isOpen) return null;
 
@@ -50,7 +51,7 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
     setErrorMsg(null);
 
     try {
-      const cleanUrl = apiUrl.trim().replace(/\/+$/, '') || 'http://localhost:8080';
+      const cleanUrl = normalizeCloudApiUrl(apiUrl);
       const authResult = await loginUser(cleanUrl, email, password);
       const { user, token, refresh_token, expires_at } = authResult;
 
@@ -58,7 +59,7 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
       let initialScope: ActiveScope = {
         type: 'workspace',
         id: '',
-        name: 'Personal Workspace',
+        name: 'Default Workspace',
         role: 'owner',
       };
 
@@ -100,11 +101,11 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
       const localCols = localEntry?.collections || (currentStore.workspaceMode === 'offline' ? currentStore.collections : []);
       const localCount = localCols.length;
 
-      // 2. Commit auth to store with role derived from JWT token
+      // 2. Commit auth to store prioritizing verified server user role before jwt fallback
       const jwtRole = getRoleFromJwt(token);
       const effectiveUser: CloudUser = {
         ...user,
-        role: jwtRole || user.role,
+        role: user.role || jwtRole || 'reader',
       };
 
       setCloudConfig({

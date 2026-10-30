@@ -103,7 +103,7 @@ func (s *AuthService) Register(ctx context.Context, email, password, name string
 	}
 
 	// Create default private workspace
-	if _, err := s.userRepo.CreateDefaultWorkspace(ctx, newUser.ID, "My Workspace"); err != nil {
+	if _, err := s.userRepo.CreateDefaultWorkspace(ctx, newUser.ID, "Default Workspace"); err != nil {
 		slog.Error("failed to create default workspace for user", "user_id", newUser.ID, "error", err)
 	}
 
@@ -197,7 +197,7 @@ func (s *AuthService) BootstrapSuperadmin(ctx context.Context, email, password, 
 	}
 
 	// Create default workspace for superadmin
-	if _, err := s.userRepo.CreateDefaultWorkspace(ctx, superUser.ID, "Superadmin Workspace"); err != nil {
+	if _, err := s.userRepo.CreateDefaultWorkspace(ctx, superUser.ID, "Default Workspace"); err != nil {
 		slog.Error("failed to create superadmin default workspace", "error", err)
 	}
 

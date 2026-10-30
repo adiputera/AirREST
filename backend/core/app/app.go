@@ -91,7 +91,7 @@ func New(ctx context.Context) (*App, error) {
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   cfg.AllowedOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "Content-Encoding", "X-CSRF-Token"},
 		ExposedHeaders:   []string{"Link"},
 		AllowCredentials: true,
 		MaxAge:           300,
@@ -191,9 +191,9 @@ func New(ctx context.Context) (*App, error) {
 
 			// Collections
 			r.Route("/collections", func(r chi.Router) {
-				r.Get("/", collectionHandler.List)
+				r.With(middleware.GzipJSONResponse(middleware.MaxGzipResponseBytes, middleware.MaxIdentityResponseBytes)).Get("/", collectionHandler.List)
 				r.Post("/", collectionHandler.Create)
-				r.Get("/{id}", collectionHandler.Get)
+				r.With(middleware.GzipJSONResponse(middleware.MaxGzipResponseBytes, middleware.MaxIdentityResponseBytes)).Get("/{id}", collectionHandler.Get)
 				r.Put("/{id}", collectionHandler.Update)
 				r.Delete("/{id}", collectionHandler.Delete)
 				r.Post("/{id}/move", collectionHandler.Move)
@@ -220,9 +220,9 @@ func New(ctx context.Context) (*App, error) {
 
 			// Stateless Delta Sync
 			r.Route("/sync", func(r chi.Router) {
-				r.Get("/pull", syncHandler.Pull)
-				r.Post("/push", syncHandler.Push)
-				r.Post("/import-batch", syncHandler.ImportBatch)
+				r.With(middleware.GzipJSONResponse(middleware.MaxGzipResponseBytes, middleware.MaxIdentityResponseBytes)).Get("/pull", syncHandler.Pull)
+				r.With(middleware.DecodeGzipRequest(middleware.MaxGzipRequestBytes, middleware.MaxGzipDecodedRequestBytes), middleware.RequireSingleJSONDocument).Post("/push", syncHandler.Push)
+				r.With(middleware.DecodeGzipRequest(middleware.MaxGzipRequestBytes, middleware.MaxGzipDecodedRequestBytes), middleware.RequireSingleJSONDocument).Post("/import-batch", syncHandler.ImportBatch)
 			})
 
 			// Superadmin User Management

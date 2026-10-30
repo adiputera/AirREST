@@ -22,7 +22,7 @@ import {
   X,
 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
-import { ActiveScope, OfflineWorkspace, CloudProject } from '@/types/api';
+import { ActiveScope, OfflineWorkspace, CloudWorkspace, CloudProject } from '@/types/api';
 import { getRoleFromJwt } from '@/lib/jwt';
 import { isOfflineOnly } from '@/lib/edition';
 import { ConfirmModal } from './ConfirmModal';
@@ -58,6 +58,15 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
   const [editingWsName, setEditingWsName] = useState('');
   const [deletingWs, setDeletingWs] = useState<OfflineWorkspace | null>(null);
 
+  // Online / Cloud Workspace Management State
+  const [isCreatingCloudWs, setIsCreatingCloudWs] = useState(false);
+  const [newCloudWsName, setNewCloudWsName] = useState('');
+  const [editingCloudWsId, setEditingCloudWsId] = useState<string | null>(null);
+  const [editingCloudWsName, setEditingCloudWsName] = useState('');
+  const [deletingCloudWs, setDeletingCloudWs] = useState<CloudWorkspace | null>(null);
+  const [isSubmittingCloudWs, setIsSubmittingCloudWs] = useState(false);
+  const [cloudWsError, setCloudWsError] = useState<string | null>(null);
+
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const workspaceMode = useApiStore((state) => state.workspaceMode);
@@ -76,6 +85,10 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
   const deleteOfflineWorkspace = useApiStore((state) => state.deleteOfflineWorkspace);
   const duplicateOfflineWorkspace = useApiStore((state) => state.duplicateOfflineWorkspace);
 
+  const createCloudWorkspace = useApiStore((state) => state.createCloudWorkspace);
+  const renameCloudWorkspace = useApiStore((state) => state.renameCloudWorkspace);
+  const deleteCloudWorkspace = useApiStore((state) => state.deleteCloudWorkspace);
+
   const setActiveScope = useApiStore((state) => state.setActiveScope);
   const pullCloudDelta = useApiStore((state) => state.pullCloudDelta);
   const fetchScopes = useApiStore((state) => state.fetchScopes);
@@ -84,18 +97,19 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
 
   const [expandedTeams, setExpandedTeams] = useState<Record<string, boolean>>({});
   const [loadingTeams, setLoadingTeams] = useState<Record<string, boolean>>({});
+  const fetchedTeamsRef = React.useRef<Set<string>>(new Set());
 
   const workspaces = scopesCache?.workspaces || [];
   const teams = scopesCache?.teams || scopesCache?.teamsWithProjects?.map((tp) => tp.team) || [];
-  const teamProjects: Record<string, CloudProject[]> = React.useMemo(() => {
-    if (scopesCache?.teamProjects && Object.keys(scopesCache.teamProjects).length > 0) {
+  const teamProjects: Record<string, CloudProject[] | undefined> = React.useMemo(() => {
+    if (scopesCache?.teamProjects) {
       return scopesCache.teamProjects;
     }
     const map: Record<string, CloudProject[]> = {};
     if (scopesCache?.teamsWithProjects) {
       for (const tp of scopesCache.teamsWithProjects) {
-        if (tp.team?.id) {
-          map[tp.team.id] = tp.projects || [];
+        if (tp.team?.id && tp.projects && tp.projects.length > 0) {
+          map[tp.team.id] = tp.projects;
         }
       }
     }
@@ -137,13 +151,33 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
     }
   }, [cloudConfig.token]);
 
-  // Auto-expand the currently active team project accordion
+  // Auto-expand the currently active team project accordion and ensure projects are loaded
   useEffect(() => {
     if (activeScope?.type === 'project' && activeScope.teamId) {
+      const activeTeamId = activeScope.teamId;
       setExpandedTeams((prev) => ({
         ...prev,
-        [activeScope.teamId!]: true,
+        [activeTeamId]: true,
       }));
+
+      const isLoaded =
+        fetchedTeamsRef.current.has(activeTeamId) ||
+        Boolean(
+          scopesCache?.teamProjects &&
+            Object.prototype.hasOwnProperty.call(scopesCache.teamProjects, activeTeamId) &&
+            (scopesCache.teamProjects[activeTeamId]?.length ?? 0) > 0
+        );
+
+      if (!isLoaded && !isOfflineOnly && cloudConfig.token) {
+        setLoadingTeams((prev) => ({ ...prev, [activeTeamId]: true }));
+        fetchProjectsForTeam(activeTeamId, true)
+          .then(() => {
+            fetchedTeamsRef.current.add(activeTeamId);
+          })
+          .finally(() => {
+            setLoadingTeams((prev) => ({ ...prev, [activeTeamId]: false }));
+          });
+      }
     }
   }, [activeScope?.teamId, activeScope?.id]);
 
@@ -151,6 +185,9 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
     setIsOpen(false);
     setIsCreatingWs(false);
     setEditingWsId(null);
+    setIsCreatingCloudWs(false);
+    setEditingCloudWsId(null);
+    setCloudWsError(null);
     await setActiveScope(scope);
   };
 
@@ -159,6 +196,9 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
     setIsOpen(false);
     setIsCreatingWs(false);
     setEditingWsId(null);
+    setIsCreatingCloudWs(false);
+    setEditingCloudWsId(null);
+    setCloudWsError(null);
   };
 
   const handleCreateWorkspace = () => {
@@ -184,6 +224,49 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
     setDeletingWs(null);
   };
 
+  const handleCreateCloudWorkspace = async () => {
+    const trimmed = newCloudWsName.trim();
+    if (!trimmed) return;
+    setIsSubmittingCloudWs(true);
+    setCloudWsError(null);
+    const res = await createCloudWorkspace(trimmed);
+    setIsSubmittingCloudWs(false);
+    if (res.success) {
+      setNewCloudWsName('');
+      setIsCreatingCloudWs(false);
+      setIsOpen(false);
+    } else {
+      setCloudWsError(res.error || 'Failed to create cloud workspace');
+    }
+  };
+
+  const handleRenameCloudWorkspace = async (id: string) => {
+    const trimmed = editingCloudWsName.trim();
+    if (!trimmed) return;
+    setIsSubmittingCloudWs(true);
+    setCloudWsError(null);
+    const res = await renameCloudWorkspace(id, trimmed);
+    setIsSubmittingCloudWs(false);
+    if (res.success) {
+      setEditingCloudWsId(null);
+      setEditingCloudWsName('');
+    } else {
+      setCloudWsError(res.error || 'Failed to rename cloud workspace');
+    }
+  };
+
+  const handleDeleteCloudWorkspace = async () => {
+    if (!deletingCloudWs) return;
+    setIsSubmittingCloudWs(true);
+    const res = await deleteCloudWorkspace(deletingCloudWs.id);
+    setIsSubmittingCloudWs(false);
+    if (res.success) {
+      setDeletingCloudWs(null);
+    } else {
+      alert(res.error || 'Failed to delete workspace');
+    }
+  };
+
   const handleDuplicateWorkspace = (ws: OfflineWorkspace, e: React.MouseEvent) => {
     e.stopPropagation();
     duplicateOfflineWorkspace(ws.id);
@@ -194,8 +277,8 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
     await pullCloudDelta();
   };
 
-  const jwtRole = getRoleFromJwt(cloudConfig.token);
-  const scopeRole = (jwtRole === 'superadmin' || jwtRole === 'admin') ? 'admin' : activeScope?.role;
+  const effectiveUserRole = (cloudConfig.user?.role || getRoleFromJwt(cloudConfig.token) || '').toLowerCase();
+  const scopeRole = (effectiveUserRole === 'superadmin' || effectiveUserRole === 'admin') ? 'admin' : activeScope?.role;
 
   const scopeLabel = isOffline
     ? (activeOfflineWs ? activeOfflineWs.name : 'Offline Workspace')
@@ -243,10 +326,19 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
     const next = !isCurrentlyOpen;
     setExpandedTeams((prev) => ({ ...prev, [teamId]: next }));
 
-    if (next && !teamProjects[teamId]) {
+    const isLoaded =
+      fetchedTeamsRef.current.has(teamId) ||
+      Boolean(
+        scopesCache?.teamProjects &&
+          Object.prototype.hasOwnProperty.call(scopesCache.teamProjects, teamId) &&
+          (scopesCache.teamProjects[teamId]?.length ?? 0) > 0
+      );
+
+    if (next && !isLoaded) {
       setLoadingTeams((prev) => ({ ...prev, [teamId]: true }));
       try {
-        await fetchProjectsForTeam(teamId);
+        await fetchProjectsForTeam(teamId, true);
+        fetchedTeamsRef.current.add(teamId);
       } finally {
         setLoadingTeams((prev) => ({ ...prev, [teamId]: false }));
       }
@@ -258,6 +350,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
     setLoadingTeams((prev) => ({ ...prev, [teamId]: true }));
     try {
       await fetchProjectsForTeam(teamId, true);
+      fetchedTeamsRef.current.add(teamId);
     } finally {
       setLoadingTeams((prev) => ({ ...prev, [teamId]: false }));
     }
@@ -585,18 +678,124 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                     ) : (
                       <div className="space-y-3 mt-1">
                         {/* Personal Cloud Workspaces */}
-                        {filteredWorkspaces.length > 0 && (
-                          <div className="space-y-0.5">
-                            <div className="px-2 py-0.5 text-[10px] font-semibold text-zinc-400">
-                              Personal
+                        <div>
+                          <div className="px-2 py-0.5 text-[10px] font-semibold text-zinc-400 flex items-center justify-between">
+                            <div className="flex items-center gap-1.5">
+                              <span>Personal</span>
+                              <span className="rounded bg-sky-500/10 text-sky-400 border border-sky-500/20 px-1 py-0.2 text-[9px] font-medium lowercase">
+                                {workspaces.length}
+                              </span>
                             </div>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setIsCreatingCloudWs(true);
+                                setEditingCloudWsId(null);
+                                setCloudWsError(null);
+                              }}
+                              className="flex items-center gap-1 text-[10px] font-medium text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 px-1.5 py-0.5 rounded transition"
+                              title="Create new online workspace"
+                            >
+                              <Plus className="h-3 w-3" />
+                              <span>New</span>
+                            </button>
+                          </div>
+
+                          {/* Inline Create Input for Cloud Workspace */}
+                          {isCreatingCloudWs && (
+                            <div className="p-2 my-1 rounded-lg border border-sky-500/30 bg-sky-950/20 animate-in fade-in duration-100">
+                              <div className="text-[10px] text-sky-400/90 font-medium mb-1">
+                                New Online Workspace Name
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                <input
+                                  type="text"
+                                  autoFocus
+                                  placeholder="e.g. Project Beta, Personal Sandbox..."
+                                  value={newCloudWsName}
+                                  onChange={(e) => setNewCloudWsName(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') handleCreateCloudWorkspace();
+                                    if (e.key === 'Escape') {
+                                      setIsCreatingCloudWs(false);
+                                      setNewCloudWsName('');
+                                      setCloudWsError(null);
+                                    }
+                                  }}
+                                  className="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-100 placeholder-zinc-500 focus:border-sky-400 focus:outline-none"
+                                />
+                                <button
+                                  onClick={handleCreateCloudWorkspace}
+                                  disabled={!newCloudWsName.trim() || isSubmittingCloudWs}
+                                  className="flex items-center gap-1 rounded-md bg-sky-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-sky-400 disabled:opacity-40 transition"
+                                >
+                                  {isSubmittingCloudWs ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Add'}
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setIsCreatingCloudWs(false);
+                                    setNewCloudWsName('');
+                                    setCloudWsError(null);
+                                  }}
+                                  className="rounded-md p-1 text-zinc-400 hover:text-white transition"
+                                  title="Cancel"
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                              {cloudWsError && (
+                                <div className="text-[10px] text-rose-400 mt-1">{cloudWsError}</div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Workspaces List */}
+                          <div className="space-y-0.5 mt-1">
                             {filteredWorkspaces.map((ws) => {
                               const isSelected =
                                 !isOffline &&
                                 activeScope?.type === 'workspace' &&
                                 activeScope.id === ws.id;
+                              const isEditing = editingCloudWsId === ws.id;
+
+                              if (isEditing) {
+                                return (
+                                  <div
+                                    key={ws.id}
+                                    className="flex items-center gap-1.5 p-1 rounded-lg bg-zinc-900 border border-sky-500/30 my-0.5"
+                                  >
+                                    <input
+                                      type="text"
+                                      autoFocus
+                                      value={editingCloudWsName}
+                                      onChange={(e) => setEditingCloudWsName(e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') handleRenameCloudWorkspace(ws.id);
+                                        if (e.key === 'Escape') setEditingCloudWsId(null);
+                                      }}
+                                      className="flex-1 rounded px-1.5 py-0.5 text-xs bg-zinc-800 text-zinc-100 focus:outline-none focus:ring-1 focus:ring-sky-400"
+                                    />
+                                    <button
+                                      onClick={() => handleRenameCloudWorkspace(ws.id)}
+                                      disabled={isSubmittingCloudWs}
+                                      className="p-1 text-emerald-400 hover:text-emerald-300 transition"
+                                      title="Save name"
+                                    >
+                                      {isSubmittingCloudWs ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                                    </button>
+                                    <button
+                                      onClick={() => setEditingCloudWsId(null)}
+                                      className="p-1 text-zinc-400 hover:text-zinc-200 transition"
+                                      title="Cancel"
+                                    >
+                                      <X className="h-3.5 w-3.5" />
+                                    </button>
+                                  </div>
+                                );
+                              }
+
                               return (
-                                <button
+                                <div
                                   key={ws.id}
                                   onClick={() =>
                                     handleSelectScope({
@@ -606,27 +805,61 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                                       role: 'owner',
                                     })
                                   }
-                                  className={`w-full flex items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-xs transition ${
+                                  className={`group w-full flex items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-xs transition cursor-pointer ${
                                     isSelected
                                       ? 'bg-sky-500/10 text-sky-300 font-semibold border border-sky-500/20'
                                       : 'text-zinc-300 hover:bg-zinc-900 hover:text-white border border-transparent'
                                   }`}
                                 >
-                                  <div className="flex items-center gap-2 truncate">
+                                  <div className="flex items-center gap-2 truncate min-w-0 mr-2">
                                     <User className="h-3.5 w-3.5 text-sky-400 shrink-0" />
                                     <span className="truncate">{ws.name}</span>
+                                    {ws.is_default && (
+                                      <span className="rounded bg-sky-500/10 text-sky-400/80 border border-sky-500/20 px-1 py-0.2 text-[8px] font-semibold shrink-0">
+                                        Default
+                                      </span>
+                                    )}
                                   </div>
-                                  <div className="flex items-center gap-1.5 shrink-0">
-                                    <span className="rounded bg-sky-500/10 text-sky-400 border border-sky-500/20 px-1 py-0.2 text-[9px] uppercase font-bold">
+
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    {/* Hover Action Buttons */}
+                                    <div className="hidden group-hover:flex items-center gap-0.5">
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setEditingCloudWsId(ws.id);
+                                          setEditingCloudWsName(ws.name);
+                                          setCloudWsError(null);
+                                        }}
+                                        className="p-1 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 transition"
+                                        title="Rename workspace"
+                                      >
+                                        <Pencil className="h-3 w-3" />
+                                      </button>
+                                      {!ws.is_default && (
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setDeletingCloudWs(ws);
+                                          }}
+                                          className="p-1 rounded text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 transition"
+                                          title="Delete workspace"
+                                        >
+                                          <Trash2 className="h-3 w-3" />
+                                        </button>
+                                      )}
+                                    </div>
+
+                                    <span className="rounded bg-sky-500/10 text-sky-400 border border-sky-500/20 px-1 py-0.2 text-[9px] uppercase font-bold group-hover:hidden">
                                       Online
                                     </span>
-                                    {isSelected && <Check className="h-3.5 w-3.5 text-sky-400 shrink-0" />}
+                                    {isSelected && <Check className="h-3.5 w-3.5 text-sky-400 shrink-0 group-hover:hidden" />}
                                   </div>
-                                </button>
+                                </div>
                               );
                             })}
                           </div>
-                        )}
+                        </div>
 
                         {/* Team Projects 2-Level Accordion */}
                         {filteredTeams.length > 0 && (
@@ -683,7 +916,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                                       )}
                                       {isLoadingThisTeam ? (
                                         <Loader2 className="h-3 w-3 animate-spin text-indigo-400" />
-                                      ) : projs !== undefined ? (
+                                      ) : projs !== undefined && (projs.length > 0 || fetchedTeamsRef.current.has(team.id)) ? (
                                         <div className="flex items-center gap-1">
                                           <button
                                             type="button"
@@ -708,10 +941,20 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                                   {/* Accordion Content: Projects */}
                                   {isExpanded && (
                                     <div className="border-t border-zinc-800/60 bg-zinc-950/40 p-1 space-y-0.5 animate-in fade-in duration-100">
-                                      {isLoadingThisTeam && !projs ? (
+                                      {isLoadingThisTeam && (!projs || projs.length === 0) ? (
                                         <div className="flex items-center justify-center py-2.5 text-xs text-zinc-500 gap-1.5">
                                           <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-400" />
                                           <span>Loading projects...</span>
+                                        </div>
+                                      ) : !projs && !fetchedTeamsRef.current.has(team.id) ? (
+                                        <div className="py-2 text-center text-[11px] text-zinc-500 italic">
+                                          <button
+                                            type="button"
+                                            onClick={() => handleToggleTeam(team.id)}
+                                            className="text-indigo-400 hover:underline"
+                                          >
+                                            Click to load projects
+                                          </button>
                                         </div>
                                       ) : projs && projs.length === 0 ? (
                                         <div className="py-2 text-center text-[11px] text-zinc-500 italic">
@@ -831,7 +1074,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
         )}
       </div>
 
-      {/* Confirmation Modal for Workspace Deletion */}
+      {/* Confirmation Modal for Offline Workspace Deletion */}
       <ConfirmModal
         isOpen={Boolean(deletingWs)}
         onClose={() => setDeletingWs(null)}
@@ -845,6 +1088,23 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
         }
         confirmText="Delete Workspace"
         variant="danger"
+      />
+
+      {/* Confirmation Modal for Cloud Workspace Deletion */}
+      <ConfirmModal
+        isOpen={Boolean(deletingCloudWs)}
+        onClose={() => setDeletingCloudWs(null)}
+        onConfirm={handleDeleteCloudWorkspace}
+        title="Delete Cloud Workspace"
+        message={
+          <span>
+            Are you sure you want to delete <strong className="text-zinc-100">{deletingCloudWs?.name}</strong>?
+            All collections and environments inside this cloud workspace will be permanently removed.
+          </span>
+        }
+        confirmText="Delete Workspace"
+        variant="danger"
+        isLoading={isSubmittingCloudWs}
       />
     </>
   );

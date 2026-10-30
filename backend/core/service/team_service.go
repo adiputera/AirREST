@@ -107,7 +107,14 @@ func (s *TeamService) DeleteTeam(ctx context.Context, user *domain.User, id uuid
 
 // ListTeams returns teams accessible to user
 func (s *TeamService) ListTeams(ctx context.Context, user *domain.User) ([]*domain.Team, error) {
-	return s.teamRepo.ListForUser(ctx, user.ID, user.IsSuperadmin())
+	teams, err := s.teamRepo.ListForUser(ctx, user.ID, user.IsSuperadmin())
+	if err != nil {
+		return nil, err
+	}
+	if teams == nil {
+		teams = make([]*domain.Team, 0)
+	}
+	return teams, nil
 }
 
 // GetTeam returns team if user has access

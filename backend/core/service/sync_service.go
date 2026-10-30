@@ -265,6 +265,56 @@ type SyncPushResponse struct {
 	ServerTime time.Time            `json:"server_time"`
 }
 
+const (
+	// Leave space for the newline added by response.JSON and for future envelope
+	// fields while keeping the push result below the identity transfer limit.
+	MaxSyncPushResponseBytes    = 4<<20 - 1024
+	maxSyncConflictMessageBytes = 1024
+)
+
+type syncPushEnvelope struct {
+	Success bool              `json:"success"`
+	Data    *SyncPushResponse `json:"data"`
+}
+
+// boundSyncPushResponse guarantees that a completed changeset can report every
+// applied ID without requiring a post-write oversized-response error. Remote
+// conflict data is optional and is omitted first because the client can pull
+// the authoritative item again.
+func boundSyncPushResponse(result *SyncPushResponse) {
+	for index := range result.Conflicts {
+		result.Conflicts[index].Message = truncateUTF8(result.Conflicts[index].Message, maxSyncConflictMessageBytes)
+	}
+	if syncPushResponseSize(result) <= MaxSyncPushResponseBytes {
+		return
+	}
+	for index := range result.Conflicts {
+		result.Conflicts[index].ServerData = nil
+		if syncPushResponseSize(result) <= MaxSyncPushResponseBytes {
+			return
+		}
+	}
+}
+
+func syncPushResponseSize(result *SyncPushResponse) int {
+	encoded, err := json.Marshal(syncPushEnvelope{Success: true, Data: result})
+	if err != nil {
+		return MaxSyncPushResponseBytes + 1
+	}
+	return len(encoded)
+}
+
+func truncateUTF8(value string, maxBytes int) string {
+	if len(value) <= maxBytes {
+		return value
+	}
+	end := maxBytes
+	for end > 0 && value[end]&0xc0 == 0x80 {
+		end--
+	}
+	return value[:end]
+}
+
 // PushChangeset processes a batch of offline mutations, applying non-conflicting mutations
 // and returning detailed conflict reports for any stale updates.
 func (s *SyncService) PushChangeset(ctx context.Context, user *domain.User, req SyncPushRequest) (*SyncPushResponse, error) {
@@ -377,6 +427,7 @@ func (s *SyncService) PushChangeset(ctx context.Context, user *domain.User, req 
 		}
 	}
 
+	boundSyncPushResponse(resp)
 	return resp, nil
 }
 

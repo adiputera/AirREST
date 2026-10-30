@@ -77,7 +77,7 @@ func (r *ProjectRepository) ListForUser(ctx context.Context, teamID, userID uuid
 	}
 	defer rows.Close()
 
-	var projects []*domain.Project
+	projects := make([]*domain.Project, 0)
 	for rows.Next() {
 		var p domain.Project
 		var roleStr string
@@ -209,7 +209,7 @@ func (r *ProjectRepository) ListMembers(ctx context.Context, projectID uuid.UUID
 	}
 	defer rows.Close()
 
-	var members []*domain.ProjectMember
+	members := make([]*domain.ProjectMember, 0)
 	for rows.Next() {
 		var m domain.ProjectMember
 		var roleStr, userRoleStr string

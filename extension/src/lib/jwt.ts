@@ -117,14 +117,8 @@ export function getUserScopeRank(
   user?: { role?: string } | null
 ): number {
   if (workspaceMode === 'offline') return 4;
-  const jwtRole = getRoleFromJwt(token)?.toLowerCase();
-  const userRoleStr = user?.role?.toLowerCase();
-  if (
-    jwtRole === 'superadmin' ||
-    jwtRole === 'admin' ||
-    userRoleStr === 'superadmin' ||
-    userRoleStr === 'admin'
-  ) {
+  const effectiveUserRole = (user?.role || getRoleFromJwt(token) || '').toLowerCase();
+  if (effectiveUserRole === 'superadmin' || effectiveUserRole === 'admin') {
     return 4;
   }
   if (!activeScope || activeScope.type === 'workspace' || activeScope.type === 'offline_workspace') {

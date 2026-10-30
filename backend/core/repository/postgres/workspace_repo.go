@@ -56,7 +56,7 @@ func (r *WorkspaceRepository) ListByOwner(ctx context.Context, ownerID uuid.UUID
 	}
 	defer rows.Close()
 
-	var workspaces []*domain.Workspace
+	workspaces := make([]*domain.Workspace, 0)
 	for rows.Next() {
 		var ws domain.Workspace
 		if err := rows.Scan(&ws.ID, &ws.OwnerID, &ws.Name, &ws.Description, &ws.IsDefault, &ws.CreatedAt, &ws.UpdatedAt); err != nil {

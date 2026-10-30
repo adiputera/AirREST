@@ -7,6 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+## [1.1.6] - 2026-10-30
+
+### Fixed
+- **Empty Scope & Null Delta Response Resilience**:
+  - Resolved a cloud sync failure where switching to an empty workspace/project scope, or logging in as a user without assigned teams or collections, caused the sync button to change permanently to **Retry** with repeating failures despite receiving HTTP 200 success from the backend.
+  - Updated `fetchScopeCollections` in [`cloudApi.ts`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/packages/common/src/lib/cloudApi.ts) to gracefully treat `null` or missing response payloads as empty arrays (`[]`) instead of throwing validation exceptions.
+  - Hardened backend JSON serialization in [`response.go`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/backend/pkg/response/response.go) using reflection to automatically normalize `nil` slices into empty slices (`[]any{}`), ensuring list endpoints consistently serialize `"data": []` rather than `"data": null`.
+  - Initialized slice buffers with `make([]*Type, 0)` across all PostgreSQL repositories (`collection_repo.go`, `environment_repo.go`, `project_repo.go`, `team_repo.go`, `user_repo.go`, `workspace_repo.go`) and added fallback guards across all service list handlers.
+  - Added unit test suite in [`response_test.go`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/backend/pkg/response/response_test.go) verifying nil-slice array marshaling.
+- **Scope Switcher Team Projects Auto-Loading**:
+  - Fixed an issue in [`ScopeSwitcher.tsx`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/packages/common/src/components/ScopeSwitcher.tsx) and [`useApiStore.ts`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/packages/common/src/store/useApiStore.ts) where expanding a team accordion in the desktop app failed to auto-load projects from the backend.
+  - Corrected `fetchScopes` to prevent un-fetched teams from polluting `scopesCache.teamProjects` with empty arrays (`[]`), ensuring un-fetched teams remain `undefined` until loaded.
+  - Added robust loaded state tracking (`fetchedTeamsRef`) so that expanding a team triggers `fetchProjectsForTeam(teamId, true)` whenever its projects have not yet been populated.
+  - Added auto-fetch logic when the active scope is an un-fetched project team upon opening the Scope Switcher.
+  - Enhanced the team accordion UI to display a dedicated spinner while loading, an interactive "Click to load projects" fallback if unloaded, and project counts once loaded.
+- **File Picker & Import Dialog Flow**:
+  - Resolved an issue in [`ImportModal.tsx`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/packages/common/src/components/ImportModal.tsx) where clicking the file chooser button in non-desktop environments (Chrome extension, web) failed to open the file selection dialog due to unconditional native dialog interception.
+  - Guarded native dialog invocation against `adapter?.capabilities?.supportsNativeFileSystem`, falling back to standard HTML file inputs for browser and extension runtimes.
+  - Added drag-and-drop support (`onDragOver`, `onDragEnter`, `onDrop`) to the Postman import dropzone.
+  - Implemented DOM-based file input fallback in `chromeAdapter.openFile` and unified native/web import flows in [`EnvironmentModal.tsx`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/packages/common/src/components/EnvironmentModal.tsx).
+
+### Changed
+- **Standardized Default Workspace Naming**:
+  - Standardized the naming convention of default private workspaces to `Default Workspace` across all roles (including superadmin bootstrap and standard user registration in `auth_service.go`), replacing ambiguous role-based titles (`Superadmin Workspace`, `My Workspace`).
+  - Added database migration `006_standardize_default_workspaces.sql` migrating existing legacy private workspace names to `Default Workspace`.
+  - Updated API contract documentation in [`API_CONTRACT.md`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/backend/API_CONTRACT.md) and project documentation in [`README.md`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/README.md).
+- **Collection Transfer Compression**:
+  - Cloud collection import and sync push now gzip eligible JSON payloads, with separate encoded and decoded size budgets; identity remains available when it is the smaller valid representation.
+  - Collection list, detail, and delta pull responses support negotiated gzip with bounded identity, gzip, and decoded serialization sizes.
+  - Malformed gzip payloads and requests containing more than one JSON document are rejected before collection mutations; successful collection responses are parsed with a decoded-size cap.
+  - Enabled gzip support in the desktop HTTP transport and added browser/client, backend, and PostgreSQL integration coverage for compressed collection transfer.
+
+### Added
+- **Multiple Online Personal Workspaces UI & Full Management**:
+  - Implemented complete UI workflows for creating, renaming, and deleting multiple Online Personal Workspaces in [`ScopeSwitcher.tsx`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/packages/common/src/components/ScopeSwitcher.tsx) across `@airrest/common` and the Chrome Extension.
+  - Added inline workspace creation (`+ New`) with keyboard shortcuts (`Enter` to submit, `Escape` to cancel) and auto-focus input fields.
+  - Added contextual actions menu per personal workspace with inline rename support and delete protection.
+  - Guarded default workspaces against deletion with an explicit `Default` pill badge, while non-default personal workspaces prompt a styled confirmation modal ([`ConfirmModal.tsx`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/packages/common/src/components/ConfirmModal.tsx)) before deletion.
+  - Added `createCloudWorkspace`, `updateCloudWorkspace`, and `deleteCloudWorkspace` API transport methods and integrated store actions in `useApiStore.ts`.
+- **Monorepo Migration & Shared Core Architecture**:
+  - Re-architected the repository into a clean monorepo structure with `@airrest/common` (`packages/common/`), Chrome Extension (`extension/`), Hub Web Portal (`hub/`), and Desktop Client (`apps/desktop/`).
+  - Extracted shared domain models, Zustand state store, universal UI components, cURL/Postman transformers, and runtime factory into private ESM package `@airrest/common`.
+  - Added extensible `PlatformAdapter` contract decoupling UI and store layers from host platform APIs (`TestTransport`, `CloudTransport`, `ScriptExecutor`, native file system, and origin permission checks).
+- **Tauri v2 Desktop Application & Sandbox Hardening (`apps/desktop/`)**:
+  - Implemented standalone desktop client powered by Tauri v2 with Rust backend shell.
+  - Native HTTP transport via `@tauri-apps/plugin-http` with opt-in SSL verification bypass for local testing and full custom `Cookie`, `User-Agent`, and `Host` headers.
+  - Web Worker offloaded WebAssembly scripting engine (`quickjs.worker.ts` + `quickjsRunner.ts`), executing guest scripts off the main thread with 64 MiB heap and 512 KiB stack boundaries.
+  - Strict boundary validation via `scriptProtocol.ts`: 256 KiB script limit, 1 MiB serialized UTF-8 input/output bounds, prototype pollution guards (`__proto__`, `constructor`, `prototype`), and captured immutable primitives.
+  - Safe `console.log/info/warn/error/debug` stubs ensuring snippet compatibility without host leakage.
+  - Release CSP hardening in `tauri.conf.json` (`script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob;`).
+  - Native file system integration via `@tauri-apps/plugin-dialog` and `@tauri-apps/plugin-fs` with byte-for-byte binary parity and user cancellation differentiation.
+  - Cloud redirect protection (`maxRedirections: 0`, `redirect: 'manual'`) preventing credential forwarding on HTTP 3xx responses.
+  - State isolation through `createApiStore` store factory and `StoreContext` provider.
+- **Automated Monorepo Testing & Gated Spikes**:
+  - Added Gate P0.1 & P0.2 test suite (`scripts/desktop-transport-lifecycle.test.mjs`) verifying native transport, header echo, 10 MiB bounded streaming, cancellation, and runtime isolation.
+  - Added Gate P0.3 test suite (`scripts/desktop-quickjs-sandbox.test.mjs`) directly importing production runner modules and testing memory bounds, prototype defense, and interruption.
+  - Added `npm run test:all` consolidating 72 unit and integration tests across extension, hub, and desktop.
+
+---
+
+## [1.1.5] - 2026-10-28
+
+### Changed
+- **Chrome Web Store Permissions Alignment**:
+  - Removed unused `storage` permission from `extension/public/manifest.json` in accordance with the Chrome Web Store minimal permissions policy (Purple Potassium review guidance).
+  - All local collections, environments, tabs, and execution history continue to persist securely and durably via IndexedDB (`airrest-db`) with `unlimitedStorage` quota protection.
+
+---
+
 ## [1.1.4] - 2026-10-27
 
 ### Added

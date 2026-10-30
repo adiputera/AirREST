@@ -69,13 +69,13 @@ info:
     The backend MUST support CORS with:
     - Allowed Origins: `*` or user-configured hosts, including `chrome-extension://*`
     - Allowed Methods: `GET, POST, PUT, PATCH, DELETE, OPTIONS`
-    - Allowed Headers: `Accept, Authorization, Content-Type, X-CSRF-Token`
+    - Allowed Headers: `Accept, Authorization, Content-Type, Content-Encoding, X-CSRF-Token`
     - Exposed Headers: `Link`
     - Allow Credentials: `true`
 
     ### Session revocation and resource limits
      Both access and refresh JWTs carry a nonnegative integer token_version matching users.token_version. Missing or stale versions are rejected with 401. Password changes and administrator resets atomically increment the version and revoke existing sessions. A self-service password change returns a replacement token pair for the current device; administrator resets revoke every target-device session. Profile changes do not revoke sessions. Refresh tokens can be reused until expiry or account-wide revocation; they are not single-use. Clients clear tokens and sign in again after a rejected refresh.
-     Requests are limited to 4 MiB (including chunked bodies), 16 concurrent handlers per instance, and 30 seconds. Oversized bodies return 413 PAYLOAD_TOO_LARGE. Saturation returns 503 SERVER_BUSY with Retry-After: 1; timeouts return 503 REQUEST_TIMEOUT. Proxy limits may be smaller. Serverless initialization attempts are serialized with a 20-second deadline and retries after 1, 2, 4, 8, 16, then 30 seconds; requests during attempts/backoff receive 503 and Retry-After: 1, retaining the nested SERVICE_UNAVAILABLE envelope.
+     Requests are limited to 4 MiB (including chunked bodies), 16 concurrent handlers per instance, and 30 seconds. Oversized bodies return 413 PAYLOAD_TOO_LARGE. Collection sync push/import also accept a single `Content-Encoding: gzip` member: compressed bytes are limited to 3,000,000 and decoded JSON to 16 MiB; requests must contain exactly one JSON document. Collection list/detail and sync pull responses use identity up to 4 MiB or gzip up to 3,000,000 bytes, with a 16 MiB decoded serialization cap. If no accepted representation fits, the server returns 413 RESPONSE_PAYLOAD_TOO_LARGE; if identity and gzip are both excluded, it returns 406 NOT_ACCEPTABLE. Saturation returns 503 SERVER_BUSY with Retry-After: 1; timeouts return 503 REQUEST_TIMEOUT. Proxy limits may be smaller. Serverless initialization attempts are serialized with a 20-second deadline and retries after 1, 2, 4, 8, 16, then 30 seconds; requests during attempts/backoff receive 503 and Retry-After: 1, retaining the nested SERVICE_UNAVAILABLE envelope.
     Contributors cannot delete collections/environments or move collections. Request/folder deletion is collection:write authoring. Moves require collection:move and min_role access in both project scopes; private scopes require ownership (superadmins bypass role/ownership restrictions).
 servers:
   - url: http://localhost:8080
@@ -1021,7 +1021,8 @@ paths:
       summary: List collections
       description: |
         Retrieves collections in a workspace or project. Automatically filters out collections
-        whose `min_role` exceeds the caller's role in the project.
+        whose `min_role` exceeds the caller's role in the project. The JSON response may use
+        `Content-Encoding: gzip` when accepted by the client.
       security:
         - BearerAuth: []
       parameters:
@@ -1046,12 +1047,20 @@ paths:
       responses:
         '200':
           description: Collections list retrieved.
+          headers:
+            Content-Encoding:
+              description: gzip when accepted and the encoded representation fits the transfer limit.
+              schema:
+                type: string
+                enum: [gzip]
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/CollectionListEnvelope'
         '413':
-          $ref: '#/components/responses/PayloadTooLarge'
+          $ref: '#/components/responses/ResponsePayloadTooLarge'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '401':
@@ -1088,7 +1097,9 @@ paths:
       tags:
         - Collections
       summary: Get collection details with nested items
-      description: Retrieves collection and all non-deleted folder and request items in hierarchical order.
+      description: >
+        Retrieves collection and all non-deleted folder and request items in hierarchical order. The JSON response may use
+        `Content-Encoding: gzip` when accepted by the client; `Vary: Accept-Encoding` and `Cache-Control: private, no-store` are returned.
       security:
         - BearerAuth: []
       parameters:
@@ -1101,12 +1112,20 @@ paths:
       responses:
         '200':
           description: Collection details retrieved.
+          headers:
+            Content-Encoding:
+              description: gzip when accepted and the encoded representation fits the transfer limit.
+              schema:
+                type: string
+                enum: [gzip]
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/CollectionEnvelope'
         '413':
-          $ref: '#/components/responses/PayloadTooLarge'
+          $ref: '#/components/responses/ResponsePayloadTooLarge'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '401':
@@ -1654,7 +1673,7 @@ paths:
       summary: Pull delta updates (Stateless Delta Sync)
       description: |
         Fetches all additions, modifications, and tombstones (`deleted_at != null`) since a given timestamp.
-        Used on extension startup and manual sync to reconcile local storage with the cloud backend.
+        Used on extension startup and manual sync to reconcile local storage with the cloud backend. The JSON response may use `Content-Encoding: gzip` when accepted by the client.
       security:
         - BearerAuth: []
       parameters:
@@ -1677,13 +1696,21 @@ paths:
       responses:
         '200':
           description: Delta sync payload retrieved.
+          headers:
+            Content-Encoding:
+              description: gzip when accepted and the encoded representation fits the transfer limit.
+              schema:
+                type: string
+                enum: [gzip]
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SyncDeltaEnvelope'
 
         '413':
-          $ref: '#/components/responses/PayloadTooLarge'
+          $ref: '#/components/responses/ResponsePayloadTooLarge'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '401':
@@ -1712,7 +1739,7 @@ paths:
         - Stateless Delta Sync
       summary: Batch push offline mutations (Stateless Delta Sync)
       description: |
-        Processes at most 500 total collection, item, and environment mutations. Exactly one workspace_id or project_id is required. Mutations are applied independently, not as an atomic batch. Successful IDs appear in applied_ids; update failures appear in conflicts, while failed create/delete mutations are omitted from applied_ids. Contributor collection/environment deletes are denied by the same services as REST. Batch limits are checked before writes.
+        Processes at most 500 total collection, item, and environment mutations. Exactly one workspace_id or project_id is required. The request may be sent as a single gzip member with `Content-Encoding: gzip`; compressed bytes are limited to 3,000,000 and decoded JSON to 16 MiB. The body must contain exactly one JSON document. Mutations are applied independently, not as an atomic batch. Successful IDs appear in applied_ids; update failures appear in conflicts, while failed create/delete mutations are omitted from applied_ids. Contributor collection/environment deletes are denied by the same services as REST. Batch limits are checked before writes. The response always fits below 4 MiB; when required, oversized conflicts omit optional `server_data` while preserving applied_ids and conflict identity.
       security:
         - BearerAuth: []
       requestBody:
@@ -1731,12 +1758,18 @@ paths:
 
         '413':
           $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          description: Unsupported request content encoding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '400':
-          description: Exactly one valid scope is required.
+          description: Exactly one valid scope is required, or the request contains malformed gzip or anything other than one JSON document.
           content:
             application/json:
               schema:
@@ -1759,7 +1792,7 @@ paths:
         - Stateless Delta Sync
       summary: Claim and import offline LocalStorage collections
       description: |
-        Atomically imports into exactly one workspace or project. Limits: 100 collections, 5000 total nested items, 32 item levels, 4 MiB body. Existing same-scope collections must be active and satisfy min_role. Scope, membership and collection locks keep authorization stable through commit. Unauthorized imports return 403 with no partial writes. Cross-scope IDs are remapped to fresh UUIDs. Authorized imports update metadata/items and increment existing versions without base_version OCC. Concurrent new-ID collisions return 409; retry the complete import. Deleted collections cannot be imported into. Existing item IDs in an authorized collection can be restored. The frontend rejects oversized selections; split manually into separate atomic requests.
+        Atomically imports into exactly one workspace or project. Limits: 100 collections, 5000 total nested items, 32 item levels, 4 MiB identity body, or one gzip member of at most 3,000,000 bytes that decodes to at most 16 MiB. The body must contain exactly one JSON document. Existing same-scope collections must be active and satisfy min_role. Scope, membership and collection locks keep authorization stable through commit. Unauthorized imports return 403 with no partial writes. Cross-scope IDs are remapped to fresh UUIDs. Authorized imports update metadata/items and increment existing versions without base_version OCC. Concurrent new-ID collisions return 409; retry the complete import. Deleted collections cannot be imported into. Existing item IDs in an authorized collection can be restored. The frontend rejects oversized selections; split manually into separate atomic requests.
       security:
         - BearerAuth: []
       requestBody:
@@ -1778,12 +1811,18 @@ paths:
 
         '413':
           $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          description: Unsupported request content encoding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '400':
-          description: Exactly one valid scope is required.
+          description: Exactly one valid scope is required, or the request contains malformed gzip or anything other than one JSON document.
           content:
             application/json:
               schema:
@@ -3409,6 +3448,18 @@ components:
     PayloadTooLarge:
       description: 'PAYLOAD_TOO_LARGE: body exceeds 4194304 bytes. Sync/import may also return BATCH_LIMIT_EXCEEDED
         before writes.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ResponsePayloadTooLarge:
+      description: 'RESPONSE_PAYLOAD_TOO_LARGE: no JSON response representation fits its transfer budget (4 MiB identity, 3,000,000-byte gzip, or 16 MiB decoded serialization).'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    NotAcceptable:
+      description: 'NOT_ACCEPTABLE: both identity and gzip response encodings are excluded by Accept-Encoding.'
       content:
         application/json:
           schema:
