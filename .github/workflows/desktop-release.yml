@@ -15,7 +15,7 @@ on:
         description: 'Create as a draft release'
         required: false
         type: boolean
-        default: true
+        default: false
       prerelease:
         description: 'Mark as a pre-release'
         required: false
@@ -92,11 +92,28 @@ jobs:
             echo "tag_name=desktop-v__VERSION__" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Inject Updater Public Key into tauri.conf.json
+        if: env.TAURI_UPDATER_PUBLIC_KEY != ''
+        env:
+          TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
+        shell: bash
+        run: |
+          node -e '
+            const fs = require("fs");
+            const p = "apps/desktop/src-tauri/tauri.conf.json";
+            const conf = JSON.parse(fs.readFileSync(p, "utf8"));
+            conf.plugins.updater.pubkey = process.env.TAURI_UPDATER_PUBLIC_KEY.trim();
+            fs.writeFileSync(p, JSON.stringify(conf, null, 2) + "\n");
+          '
+
       - name: Build and Release Tauri Desktop App
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_SIGNING_IDENTITY: '-'
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+          TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
         with:
           projectPath: apps/desktop
           tagName: ${{ steps.release_meta.outputs.tag_name }}
@@ -104,5 +121,6 @@ jobs:
           releaseBody: 'Download the AirREST Desktop installer for your operating system below.'
           releaseDraft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || false }}
           prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
+          includeUpdaterJson: true
           args: ${{ matrix.args }}
 

@@ -1439,6 +1439,7 @@ async function setupRuntimeModules(customStorage = null) {
   return {
     runtimeModule: runModule('../packages/common/src/runtime.ts'),
     cloudApiModule: runModule('../packages/common/src/lib/cloudApi.ts'),
+    requestDiffModule: runModule('../packages/common/src/lib/requestDiff.ts'),
   };
 }
 
@@ -2010,4 +2011,267 @@ test('T-TEAM-EXPAND-1: fetchScopes does not pollute teamProjects with empty arra
   const afterTeam2Cache = runtime.store.getState().scopesCache;
   assert.deepEqual(afterTeam2Cache.teamProjects?.team2, []);
 });
+
+test('T-SAVE-AS-DUPLICATE: Save As duplicates request across collections and within same collection without moving or overwriting', async () => {
+  const { runtimeModule } = await setupRuntimeModules();
+  const adapter = {
+    id: 'test-adapter',
+    hasHostPermission: async () => true,
+    requestHostPermission: async () => true,
+    dispose: () => {},
+  };
+  const runtime = runtimeModule.createAirrestRuntime({ adapter });
+
+  const initialReqId = '11111111-1111-4111-8111-111111111111';
+  const initialReq = {
+    id: initialReqId,
+    name: 'get token',
+    method: 'POST',
+    url: 'https://api.example.com/v1/token',
+    params: [],
+    headers: [],
+    bodyType: 'none',
+    rawType: 'text',
+    bodyContent: '',
+    createdAt: 1000,
+    updatedAt: 1000,
+  };
+
+  runtime.store.setState({
+    workspaceMode: 'offline',
+    collections: [
+      {
+        id: 'coll-A',
+        name: 'Collection A',
+        items: [
+          {
+            id: initialReqId,
+            name: 'get token',
+            type: 'request',
+            request: { ...initialReq },
+          },
+        ],
+      },
+      {
+        id: 'coll-B',
+        name: 'Collection B',
+        items: [],
+      },
+    ],
+    tabs: [{ ...initialReq }],
+    activeTabId: initialReqId,
+  });
+
+  const state = runtime.store.getState();
+
+  // 1. Save As to Collection B (duplicate to another collection)
+  const copyReqBId = '22222222-2222-4222-8222-222222222222';
+  const copyReqB = {
+    ...initialReq,
+    id: copyReqBId,
+    name: 'get token',
+  };
+  state.saveRequestToCollection('coll-B', null, copyReqB);
+
+  const afterSaveB = runtime.store.getState();
+  const collAItems = afterSaveB.collections.find((c) => c.id === 'coll-A')?.items || [];
+  const collBItems = afterSaveB.collections.find((c) => c.id === 'coll-B')?.items || [];
+
+  // Coll A must still retain the original request
+  assert.equal(collAItems.length, 1, 'Collection A must retain original request (NOT moved)');
+  assert.equal(collAItems[0].id, initialReqId);
+  assert.equal(collAItems[0].name, 'get token');
+
+  // Coll B must contain the duplicate
+  assert.equal(collBItems.length, 1, 'Collection B must contain duplicated request');
+  assert.equal(collBItems[0].id, copyReqBId);
+  assert.equal(collBItems[0].name, 'get token');
+
+  // 2. Save As to the SAME Collection A (duplicate in same collection with same name)
+  const copyReqAId = '33333333-3333-4333-8333-333333333333';
+  const copyReqA = {
+    ...initialReq,
+    id: copyReqAId,
+    name: 'get token',
+  };
+  state.saveRequestToCollection('coll-A', null, copyReqA);
+
+  const afterSaveA = runtime.store.getState();
+  const collAItemsAfterA = afterSaveA.collections.find((c) => c.id === 'coll-A')?.items || [];
+
+  // Coll A must now have 2 requests, both named 'get token' but with distinct IDs
+  assert.equal(collAItemsAfterA.length, 2, 'Collection A must contain BOTH original and duplicate (NOT overwritten)');
+  assert.equal(collAItemsAfterA[0].id, initialReqId);
+  assert.equal(collAItemsAfterA[1].id, copyReqAId);
+
+  // 3. Normal Save in place updates the target without creating duplicates or overwriting other items
+  const updatedReq1 = {
+    ...initialReq,
+    id: initialReqId,
+    name: 'get token v1 updated',
+    url: 'https://api.example.com/v1/token-new',
+  };
+  state.saveRequestToCollection('coll-A', null, updatedReq1);
+
+  const afterNormalSave = runtime.store.getState();
+  const collAAfterNormal = afterNormalSave.collections.find((c) => c.id === 'coll-A')?.items || [];
+  assert.equal(collAAfterNormal.length, 2, 'Normal save in-place must not change item count');
+  assert.equal(collAAfterNormal[0].id, initialReqId);
+  assert.equal(collAAfterNormal[0].name, 'get token v1 updated');
+  assert.equal(collAAfterNormal[1].id, copyReqAId);
+  assert.equal(collAAfterNormal[1].name, 'get token');
+
+  // 4. Tab ID synchronization on updateActiveRequest
+  state.updateActiveRequest({ id: copyReqBId, name: 'get token' });
+  const afterTabUpdate = runtime.store.getState();
+  assert.equal(afterTabUpdate.activeTabId, copyReqBId, 'activeTabId must synchronize when updateActiveRequest changes id');
+  assert.equal(afterTabUpdate.tabs[0].id, copyReqBId);
+});
+
+test('T-SAVE-CONFLICT-DETECTION: Method and Name duplicate guard allows distinct methods but detects same method collisions', async () => {
+  const { runtimeModule, requestDiffModule } = await setupRuntimeModules();
+  const { generateCopyRequestName, flattenCollectionRequests } = requestDiffModule;
+
+  // 1. Copy name generation tests
+  assert.equal(generateCopyRequestName('token', []), 'token (Copy)');
+  assert.equal(generateCopyRequestName('token', ['token (Copy)']), 'token (Copy 2)');
+  assert.equal(generateCopyRequestName('token', ['token (Copy)', 'token (Copy 2)']), 'token (Copy 3)');
+
+  // 2. Setup collection with GET token
+  const adapter = {
+    id: 'test-adapter',
+    hasHostPermission: async () => true,
+    requestHostPermission: async () => true,
+    dispose: () => {},
+  };
+  const runtime = runtimeModule.createAirrestRuntime({ adapter });
+
+  const getReqId = '11111111-1111-4111-8111-111111111111';
+  const getReq = {
+    id: getReqId,
+    name: 'token',
+    method: 'GET',
+    url: 'https://api.example.com/token',
+    params: [],
+    headers: [],
+    bodyType: 'none',
+    rawType: 'text',
+    bodyContent: '',
+    createdAt: 1000,
+    updatedAt: 1000,
+  };
+
+  runtime.store.setState({
+    workspaceMode: 'offline',
+    collections: [
+      {
+        id: 'coll-1',
+        name: 'Auth Collection',
+        items: [
+          {
+            id: getReqId,
+            name: 'token',
+            type: 'request',
+            request: { ...getReq },
+          },
+        ],
+      },
+    ],
+    tabs: [{ ...getReq }],
+    activeTabId: getReqId,
+  });
+
+  const checkConflict = (incomingReq, isSaveAs = false) => {
+    const col = runtime.store.getState().collections.find((c) => c.id === 'coll-1');
+    const existing = flattenCollectionRequests(col?.items || []);
+    const incomingMethod = (incomingReq.method || 'GET').toUpperCase();
+    const incomingName = incomingReq.name.trim().toLowerCase();
+
+    return existing.find((r) => {
+      if (!isSaveAs && (r.id === incomingReq.id || r.request?.id === incomingReq.id)) {
+        return false; // not a conflict with self during direct edit
+      }
+      return (
+        r.name.trim().toLowerCase() === incomingName &&
+        (r.method || 'GET').toUpperCase() === incomingMethod
+      );
+    });
+  };
+
+  // Scenario A: POST token and GET token CAN coexist in the same collection
+  const postReqId = '22222222-2222-4222-8222-222222222222';
+  const postReq = {
+    ...getReq,
+    id: postReqId,
+    method: 'POST',
+    name: 'token',
+  };
+  const conflictForPost = checkConflict(postReq, false);
+  assert.equal(conflictForPost, undefined, 'POST token and GET token must NOT trigger conflict');
+
+  // Save POST token into coll-1
+  runtime.store.getState().saveRequestToCollection('coll-1', null, postReq);
+  const colAfterPost = runtime.store.getState().collections.find((c) => c.id === 'coll-1');
+  assert.equal(colAfterPost?.items?.length, 2, 'Collection now holds both GET token and POST token');
+
+  // Scenario B: Another POST token DOES trigger conflict
+  const duplicatePostReq = {
+    ...postReq,
+    id: '33333333-3333-4333-8333-333333333333',
+    name: 'token',
+    method: 'POST',
+  };
+  const conflictForSecondPost = checkConflict(duplicatePostReq, false);
+  assert.ok(conflictForSecondPost, 'POST token and POST token MUST trigger conflict');
+  assert.equal(conflictForSecondPost.id, postReqId);
+
+  // Scenario C: Case-insensitivity check (method 'post', name 'TOKEN')
+  const caseInsensitivePostReq = {
+    ...postReq,
+    id: '44444444-4444-4444-8444-444444444444',
+    name: 'TOKEN',
+    method: 'post',
+  };
+  const conflictCaseInsensitive = checkConflict(caseInsensitivePostReq, false);
+  assert.ok(conflictCaseInsensitive, 'Case-insensitive method and name MUST trigger conflict');
+
+  // Scenario D: Editing self directly does NOT trigger conflict
+  const selfEditReq = {
+    ...postReq,
+    url: 'https://api.example.com/token/v2',
+  };
+  const conflictSelf = checkConflict(selfEditReq, false);
+  assert.equal(conflictSelf, undefined, 'Editing request directly must NOT conflict with itself');
+
+  // Scenario E: Save As on existing request in same collection DOES trigger conflict with existing item
+  const saveAsSelfConflict = checkConflict(selfEditReq, true);
+  assert.ok(saveAsSelfConflict, 'Save As with same method and name MUST trigger conflict');
+
+  // Scenario F: Resolving via "Save Copy"
+  const copyName = generateCopyRequestName('token', ['token']);
+  assert.equal(copyName, 'token (Copy)');
+  const copyReq = {
+    ...postReq,
+    id: '55555555-5555-4555-8555-555555555555',
+    name: copyName,
+  };
+  runtime.store.getState().saveRequestToCollection('coll-1', null, copyReq);
+  const colAfterCopy = runtime.store.getState().collections.find((c) => c.id === 'coll-1');
+  assert.equal(colAfterCopy?.items?.length, 3, 'Save copy adds new item with copy name');
+  assert.ok(colAfterCopy?.items?.some((i) => i.name === 'token (Copy)'));
+
+  // Scenario G: Resolving via "Replace"
+  const replacedPostReq = {
+    ...postReq,
+    id: postReqId,
+    name: 'token',
+    url: 'https://api.example.com/token/replaced',
+  };
+  runtime.store.getState().saveRequestToCollection('coll-1', null, replacedPostReq);
+  const colAfterReplace = runtime.store.getState().collections.find((c) => c.id === 'coll-1');
+  assert.equal(colAfterReplace?.items?.length, 3, 'Replace does not change total item count');
+  const replacedItem = colAfterReplace?.items?.find((i) => i.id === postReqId);
+  assert.equal(replacedItem?.request?.url, 'https://api.example.com/token/replaced', 'Replaced item has updated payload');
+});
+
 

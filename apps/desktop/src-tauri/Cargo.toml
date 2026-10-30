@@ -23,6 +23,8 @@ tauri-plugin-opener = "2"
 tauri-plugin-http = { version = "2", features = ["dangerous-settings", "unsafe-headers", "gzip"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
