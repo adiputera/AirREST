@@ -211,6 +211,7 @@ A pre-configured collection is included: `backend/airrest_api_collection.json`.
 ## Security upgrade and limits
 
 - Apply `005_user_token_version.sql` before starting the updated backend when `SKIP_MIGRATIONS=true`. Automatic migrations otherwise apply it on startup. Existing sessions must sign in again after deployment.
+- Apply `006_standardize_default_workspaces.sql` to standardize legacy default private workspaces (`Superadmin Workspace`, `My Workspace`, `Personal Workspace`) to `Default Workspace` when `SKIP_MIGRATIONS=true`. Automatic migrations apply it on startup.
 - Password updates atomically increment `users.token_version`. Access and refresh tokens with an old or missing version return `401`; self-service password changes return replacement tokens for the current device, while administrator resets revoke every target-user session. Requests authenticated before a reset may finish.
 - If old default credentials were used, rotate both the signing key and administrator password. Startup validation does not repair existing credentials.
 - Requests are limited to 4 MiB, 16 concurrent handlers per instance, and 30 seconds. Oversize requests return `413`; saturation returns `503 SERVER_BUSY` with `Retry-After: 1`; expiration returns `503 REQUEST_TIMEOUT`. Proxy limits may be smaller.

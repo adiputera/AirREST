@@ -34,7 +34,7 @@ Every response from the backend (both success and error) MUST follow the Envelop
   "data": { ... }
 }
 ```
-*Note: In the client codebase (`cloudApi.ts`), `unwrapData(json)` specifically checks for `json.data`. Always nest your payload inside `"data"`.*
+*Note: In the client codebase (`cloudApi.ts`), `unwrapData(json)` specifically checks for `json.data`. Always nest your payload inside `"data"`. For list and collection endpoints, empty results MUST return an empty array `"data": []`, never `"data": null`.*
 
 #### Error Response (HTTP 400, 401, 403, 404, 500)
 ```json
@@ -120,6 +120,7 @@ Your server **must** implement CORS with the following settings:
    - Use the version from the same user snapshot whose password/token was validated. Never reread a newer version to stamp tokens authenticated using old credentials. Self-service password writes compare the validated version to prevent overwriting a concurrent reset (`400 INVALID_CURRENT_PASSWORD`).
    - A successful self-service password change returns a replacement access/refresh pair for the current device. The frontend atomically replaces its stored tokens. Every previously issued pair, including pairs on other devices, is revoked. Administrator resets do not issue a pair and revoke every target-device session. Profile edits do not revoke sessions. Requests authenticated before a reset may finish.
    - Legacy sessions require login after deployment. Apply migration `005_user_token_version.sql` explicitly if automatic migrations are disabled. Individual-device logout and refresh replay detection are not provided by account-wide versioning.
+   - Default private workspaces are standardized to `Default Workspace` across all roles (migration `006_standardize_default_workspaces.sql`). Automatic migrations apply it on startup.
 
 ---
 

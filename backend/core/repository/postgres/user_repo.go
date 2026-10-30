@@ -131,7 +131,7 @@ func (r *UserRepository) ListAll(ctx context.Context) ([]*domain.User, error) {
 	}
 	defer rows.Close()
 
-	var users []*domain.User
+	users := make([]*domain.User, 0)
 	for rows.Next() {
 		var u domain.User
 		var roleStr string
@@ -252,7 +252,7 @@ func (r *UserRepository) SearchUsers(ctx context.Context, queryStr string, limit
 	}
 	defer rows.Close()
 
-	var users []*domain.User
+	users := make([]*domain.User, 0)
 	for rows.Next() {
 		var u domain.User
 		var roleStr string

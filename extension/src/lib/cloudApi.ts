@@ -340,6 +340,72 @@ export async function fetchUserWorkspaces(apiUrl: string, token: string, refresh
   return (Array.isArray(data) ? data : []) as CloudWorkspace[];
 }
 
+export async function createCloudWorkspace(
+  apiUrl: string,
+  token: string,
+  workspace: { name: string; description?: string },
+  refreshToken?: string,
+  signal?: AbortSignal
+) {
+  const res = await fetchWithAuth('/api/v1/workspaces', {
+    method: 'POST',
+    apiUrl,
+    token,
+    refreshToken,
+    signal,
+    body: JSON.stringify(workspace),
+  });
+  const json = await safeJson(res);
+  if (!res.ok) {
+    throw new Error(extractError(json, 'Failed to create workspace', res.status));
+  }
+  return unwrapData<CloudWorkspace>(json);
+}
+
+export async function updateCloudWorkspace(
+  apiUrl: string,
+  token: string,
+  workspaceId: string,
+  workspace: { name: string; description?: string },
+  refreshToken?: string,
+  signal?: AbortSignal
+) {
+  const res = await fetchWithAuth(`/api/v1/workspaces/${workspaceId}`, {
+    method: 'PUT',
+    apiUrl,
+    token,
+    refreshToken,
+    signal,
+    body: JSON.stringify(workspace),
+  });
+  const json = await safeJson(res);
+  if (!res.ok) {
+    throw new Error(extractError(json, 'Failed to update workspace', res.status));
+  }
+  return unwrapData<CloudWorkspace>(json);
+}
+
+export async function deleteCloudWorkspace(
+  apiUrl: string,
+  token: string,
+  workspaceId: string,
+  refreshToken?: string,
+  signal?: AbortSignal
+) {
+  const res = await fetchWithAuth(`/api/v1/workspaces/${workspaceId}`, {
+    method: 'DELETE',
+    apiUrl,
+    token,
+    refreshToken,
+    signal,
+  });
+  const json = await safeJson(res);
+  if (!res.ok) {
+    throw new Error(extractError(json, 'Failed to delete workspace', res.status));
+  }
+  return true;
+}
+
 export async function fetchUserTeams(apiUrl: string, token: string, refreshToken?: string, signal?: AbortSignal) {
   const res = await fetchWithAuth('/api/v1/teams', { apiUrl, token, refreshToken, signal });
   const json = await safeJson(res);

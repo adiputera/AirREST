@@ -21,6 +21,7 @@ import {
   SyncStatus,
   ScopesCacheData,
   CloudProject,
+  CloudWorkspace,
   OfflineWorkspace,
 } from '@/types/api';
 import { executeApiRequest } from '@/lib/fetcher';
@@ -44,6 +45,9 @@ import {
   moveScopeCollection,
   reorderCollectionItems,
   fetchUserWorkspaces,
+  createCloudWorkspace,
+  updateCloudWorkspace,
+  deleteCloudWorkspace,
   fetchUserTeams,
   fetchTeamProjects,
   fetchScopeCollections,
@@ -404,6 +408,9 @@ interface ApiStoreState {
   setSyncStatus: (status: SyncStatus, error?: string | null) => void;
   pullCloudDelta: () => Promise<void>;
   importLocalToCloud: () => Promise<{ success: boolean; message: string }>;
+  createCloudWorkspace: (name: string, description?: string) => Promise<{ success: boolean; workspace?: CloudWorkspace; error?: string }>;
+  renameCloudWorkspace: (id: string, name: string) => Promise<{ success: boolean; error?: string }>;
+  deleteCloudWorkspace: (id: string) => Promise<{ success: boolean; error?: string }>;
 }
 
 export function sanitizeVariablesForUpstream(vars: EnvironmentVariable[]) {
@@ -1110,6 +1117,127 @@ export const useApiStore = create<ApiStoreState>()(
             : (err.message || 'Import failed');
           set({ syncStatus: 'error', syncError: failMsg });
           return { success: false, message: failMsg };
+        }
+      },
+      createCloudWorkspace: async (name, description) => {
+        const { cloudConfig, scopesCache } = get();
+        if (!cloudConfig.token) return { success: false, error: 'Not authenticated' };
+        const trimmed = name.trim();
+        if (!trimmed) return { success: false, error: 'Workspace name is required' };
+
+        try {
+          const newWs = await createCloudWorkspace(
+            cloudConfig.apiUrl,
+            cloudConfig.token,
+            { name: trimmed, description: description?.trim() },
+            cloudConfig.refreshToken
+          );
+
+          if (scopesCache) {
+            const updatedWorkspaces = [...(scopesCache.workspaces || []), newWs];
+            set({
+              scopesCache: {
+                ...scopesCache,
+                workspaces: updatedWorkspaces,
+              },
+            });
+          }
+
+          await get().setActiveScope({
+            type: 'workspace',
+            id: newWs.id,
+            name: newWs.name,
+            role: 'owner',
+          });
+
+          return { success: true, workspace: newWs };
+        } catch (err: any) {
+          return { success: false, error: err.message || 'Failed to create workspace' };
+        }
+      },
+      renameCloudWorkspace: async (id, name) => {
+        const { cloudConfig, scopesCache } = get();
+        if (!cloudConfig.token) return { success: false, error: 'Not authenticated' };
+        const trimmed = name.trim();
+        if (!trimmed) return { success: false, error: 'Workspace name is required' };
+
+        try {
+          const updatedWs = await updateCloudWorkspace(
+            cloudConfig.apiUrl,
+            cloudConfig.token,
+            id,
+            { name: trimmed },
+            cloudConfig.refreshToken
+          );
+
+          if (scopesCache) {
+            const updatedWorkspaces = (scopesCache.workspaces || []).map((w) =>
+              w.id === id ? { ...w, name: updatedWs.name } : w
+            );
+            set({
+              scopesCache: {
+                ...scopesCache,
+                workspaces: updatedWorkspaces,
+              },
+            });
+          }
+
+          if (cloudConfig.activeScope?.type === 'workspace' && cloudConfig.activeScope.id === id) {
+            set({
+              cloudConfig: {
+                ...cloudConfig,
+                activeScope: {
+                  ...cloudConfig.activeScope,
+                  name: updatedWs.name,
+                },
+              },
+            });
+          }
+
+          return { success: true };
+        } catch (err: any) {
+          return { success: false, error: err.message || 'Failed to rename workspace' };
+        }
+      },
+      deleteCloudWorkspace: async (id) => {
+        const { cloudConfig, scopesCache } = get();
+        if (!cloudConfig.token) return { success: false, error: 'Not authenticated' };
+
+        try {
+          await deleteCloudWorkspace(
+            cloudConfig.apiUrl,
+            cloudConfig.token,
+            id,
+            cloudConfig.refreshToken
+          );
+
+          const currentWorkspaces = scopesCache?.workspaces || [];
+          const remainingWorkspaces = currentWorkspaces.filter((w) => w.id !== id);
+
+          if (cloudConfig.activeScope?.type === 'workspace' && cloudConfig.activeScope.id === id) {
+            const fallbackWs = remainingWorkspaces.find((w) => w.is_default) || remainingWorkspaces[0];
+            if (fallbackWs) {
+              await get().setActiveScope({
+                type: 'workspace',
+                id: fallbackWs.id,
+                name: fallbackWs.name,
+                role: 'owner',
+              });
+            }
+          }
+
+          if (scopesCache) {
+            set({
+              scopesCache: {
+                ...scopesCache,
+                workspaces: remainingWorkspaces,
+              },
+            });
+          }
+
+          return { success: true };
+        } catch (err: any) {
+          return { success: false, error: err.message || 'Failed to delete workspace' };
         }
       },
       fetchScopes: async (force = false) => {

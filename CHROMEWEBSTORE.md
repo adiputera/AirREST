@@ -1,6 +1,6 @@
 # Chrome Web Store Listings — AirREST
 
-> Last Updated: 2026-10-29
+> Last Updated: 2026-10-30
 
 > Chrome Web Store release notes describe browser-extension changes only. Do not include backend, Hub, or desktop release notes here.
 
@@ -31,6 +31,7 @@ AirREST is a fast, lightweight, and modern in-browser REST API testing client de
 KEY FEATURES
 • Direct in-browser HTTP and HTTPS request dispatching with zero CORS limitations
 • Dual storage mode: 100% offline local workspace storage or optional self-hosted cloud team synchronization
+• Multi-workspace isolation: Multiple offline workspaces and online personal/team cloud workspaces
 • Supports all standard HTTP methods: GET, POST, PUT, PATCH, DELETE, HEAD, and OPTIONS
 • Native import and export compatibility with Postman Collection v2.1.0 and Environment files
 • Multi-tab workspace with unsaved change indicators, tab duplication, and keyboard shortcuts
@@ -62,6 +63,7 @@ SUPPORT
 For questions, bug reports, or feature suggestions, visit the project repository on GitHub:
 https://github.com/adiputera/AirREST
 
+Version 1.1.6 — Added multiple online personal workspaces management in Scope Switcher (create, rename, delete with default protection), resilient empty workspace cloud delta sync, team project auto-loading, and unified file picker flow.
 Version 1.1.5 — Removed unused storage permission to adhere to the Chrome Web Store minimal permissions policy; all workspaces, collections, and environments persist durably in IndexedDB.
 Version 1.1.4 — Added request lifecycle safeguards (pre-request aborts, cancellation, 30s timeout, 10 MiB stream caps), atomic item-collection versioning, side-by-side environment OCC conflict resolution, durable multi-window storage sync, and attachment recovery.
 Version 1.1.3 — Added seamless password change re-authentication, sequential cloud collection import with real-time progress, and aligned move collection capabilities.
@@ -118,6 +120,7 @@ AirREST Offline is a 100% offline, privacy-first in-browser REST API testing cli
 KEY FEATURES
 • 100% offline and standalone: No accounts, no telemetry, no cloud sync, and zero external tracking
 • Direct in-browser HTTP and HTTPS request dispatching with zero CORS limitations
+• Multi-workspace isolation: Multiple offline workspaces with isolated tabs, history, and environments
 • All collections, environments, and history stay strictly on your local computer
 • Supports all standard HTTP methods: GET, POST, PUT, PATCH, DELETE, HEAD, and OPTIONS
 • Native import and export compatibility with Postman Collection v2.1.0 and Environment files
@@ -146,6 +149,7 @@ SUPPORT
 For questions, bug reports, or feature suggestions, visit the project repository on GitHub:
 https://github.com/adiputera/AirREST
 
+Version 1.1.6 — Improved Scope Switcher offline workspace navigation, unified native and browser file picker flows, and enhanced local import stability.
 Version 1.1.5 — Removed unused storage permission to adhere to the Chrome Web Store minimal permissions policy; local collections and history persist durably in IndexedDB.
 Version 1.1.4 — Added request lifecycle safeguards (pre-request aborts, cancellation, 30s timeout, 10 MiB stream caps), attachment recovery, multi-window storage synchronization, and isolated memory cleanup.
 Version 1.1.3 — Client performance stability improvements, enhanced offline collection safeguards, and hardened memory management.

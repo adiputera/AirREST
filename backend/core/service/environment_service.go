@@ -96,6 +96,9 @@ func (s *EnvironmentService) List(ctx context.Context, user *domain.User, worksp
 	if err != nil {
 		return nil, err
 	}
+	if envs == nil {
+		envs = make([]*domain.Environment, 0)
+	}
 
 	// If project scoped and user is not superadmin, filter environments based on user's effective role
 	if projectID != nil && !user.IsSuperadmin() {
