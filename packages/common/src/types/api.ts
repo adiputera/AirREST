@@ -51,6 +51,7 @@ export interface ApiRequest {
   method: HttpMethod;
   url: string;
   params: KeyValuePair[];
+  pathVariables?: KeyValuePair[];
   headers: KeyValuePair[];
   auth: AuthConfig;
   bodyType: BodyType;

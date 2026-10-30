@@ -77,7 +77,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onOpenLogin }) => {
             }
           }}
           aria-label="Sign In"
-          title="Sign in to your Cloud Account"
+          title="Sign in to your Account"
           className="group flex items-center gap-1.5 rounded-full border border-zinc-800 bg-zinc-900/90 p-1 pr-2.5 hover:border-sky-500/40 hover:bg-zinc-850 transition shadow-sm focus:outline-none focus:ring-1 focus:ring-sky-500"
         >
           {/* Guest / Disconnected Avatar Graphic */}

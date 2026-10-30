@@ -7,6 +7,17 @@ import ts from 'typescript';
 
 const require = createRequire(import.meta.url);
 
+function loadUrlParams() {
+  const source = fs.readFileSync(new URL('../packages/common/src/lib/urlParams.ts', import.meta.url), 'utf8');
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const exports = {};
+  vm.runInNewContext(compiled, { exports, Math }, { filename: 'packages/common/src/lib/urlParams.ts' });
+  return exports;
+}
+const urlParams = loadUrlParams();
+
 function loadFetcher(fetchImpl, hostPermissionResult = null) {
   const source = fs.readFileSync(new URL('../extension/src/lib/fetcher.ts', import.meta.url), 'utf8');
   const compiled = ts.transpileModule(source, {
@@ -19,6 +30,8 @@ function loadFetcher(fetchImpl, hostPermissionResult = null) {
       ? { trackBlobUrl: (url) => url }
       : id === '@/lib/hostPermissions'
         ? { hasHostPermission: async () => hostPermissionResult }
+      : id === '@/lib/urlParams'
+        ? urlParams
       : require(id),
     fetch: fetchImpl,
     Response,

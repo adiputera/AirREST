@@ -1,6 +1,6 @@
 {
   "name": "airrest",
-  "version": "1.1.8",
+  "version": "1.1.9",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -38,8 +38,11 @@
     "test:desktop-updater": "node --test scripts/desktop-updater.test.mjs",
     "test:desktop": "npm run test:desktop-sandbox && npm run test:desktop-transport && npm run test:desktop-updater",
     "test:sidebar-search": "node --test scripts/sidebar-search.test.mjs",
+    "test:sidebar-dropdown-placement": "node --test scripts/sidebar-dropdown-placement.test.mjs",
     "test:tab-response-cache": "node --test scripts/tab-response-cache.test.mjs",
-    "test:all": "npm run test:security-clients && npm run test:extension-lifecycle && npm run test:extension-storage && npm run test:extension-fetcher && npm run test:cloud-compression && npm run test:feature-policy && npm run test:hub && npm run test:desktop && npm run test:sidebar-search && npm run test:tab-response-cache"
+    "test:path-variables": "node --test scripts/path-variables.test.mjs",
+    "test:request-collapse": "node --test scripts/request-collapse.test.mjs",
+    "test:all": "npm run test:security-clients && npm run test:extension-lifecycle && npm run test:extension-storage && npm run test:extension-fetcher && npm run test:cloud-compression && npm run test:feature-policy && npm run test:hub && npm run test:desktop && npm run test:sidebar-search && npm run test:sidebar-dropdown-placement && npm run test:tab-response-cache && npm run test:path-variables && npm run test:request-collapse"
   },
   "devDependencies": {
     "eslint": "^9",

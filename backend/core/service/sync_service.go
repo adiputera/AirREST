@@ -120,7 +120,7 @@ func (s *SyncService) PullDelta(
 	if workspaceID != nil {
 		itemQuery = `
 			SELECT ci.id, ci.collection_id, ci.parent_id, ci.type, ci.name, ci.sort_order,
-			       ci.method, ci.url, ci.params, ci.headers, ci.auth, ci.body_type, ci.raw_type,
+			       ci.method, ci.url, ci.params, ci.path_variables, ci.headers, ci.auth, ci.body_type, ci.raw_type,
 			       ci.body_content, ci.graphql_query, ci.graphql_variables, ci.body_form_data,
 			       ci.pre_request_script, ci.post_response_script, ci.version, ci.last_modified_by,
 			       ci.created_at, ci.updated_at, ci.deleted_at, c.min_role
@@ -131,7 +131,7 @@ func (s *SyncService) PullDelta(
 	} else {
 		itemQuery = `
 			SELECT ci.id, ci.collection_id, ci.parent_id, ci.type, ci.name, ci.sort_order,
-			       ci.method, ci.url, ci.params, ci.headers, ci.auth, ci.body_type, ci.raw_type,
+			       ci.method, ci.url, ci.params, ci.path_variables, ci.headers, ci.auth, ci.body_type, ci.raw_type,
 			       ci.body_content, ci.graphql_query, ci.graphql_variables, ci.body_form_data,
 			       ci.pre_request_script, ci.post_response_script, ci.version, ci.last_modified_by,
 			       ci.created_at, ci.updated_at, ci.deleted_at, c.min_role
@@ -153,7 +153,7 @@ func (s *SyncService) PullDelta(
 		var colMinRole domain.ProjectRole
 		if err := itemRows.Scan(
 			&item.ID, &item.CollectionID, &item.ParentID, &typeStr, &item.Name, &item.SortOrder,
-			&item.Method, &item.URL, &item.Params, &item.Headers, &item.Auth, &item.BodyType, &item.RawType,
+			&item.Method, &item.URL, &item.Params, &item.PathVariables, &item.Headers, &item.Auth, &item.BodyType, &item.RawType,
 			&item.BodyContent, &item.GraphQLQuery, &item.GraphQLVariables, &item.BodyFormData,
 			&item.PreRequestScript, &item.PostResponseScript, &item.Version, &item.LastModifiedBy,
 			&item.CreatedAt, &item.UpdatedAt, &item.DeletedAt, &colMinRole,
@@ -456,6 +456,7 @@ type ImportItemRequest struct {
 	Method             *string             `json:"method,omitempty"`
 	URL                *string             `json:"url,omitempty"`
 	Params             *json.RawMessage    `json:"params,omitempty"`
+	PathVariables      *json.RawMessage    `json:"path_variables,omitempty"`
 	Headers            *json.RawMessage    `json:"headers,omitempty"`
 	Auth               *json.RawMessage    `json:"auth,omitempty"`
 	BodyType           *string             `json:"body_type,omitempty"`
@@ -569,16 +570,16 @@ func (s *SyncService) insertImportItems(
 		insertItemQuery := `
 			INSERT INTO collection_items (
 				id, collection_id, parent_id, type, name, sort_order,
-				method, url, params, headers, auth, body_type, raw_type,
+				method, url, params, path_variables, headers, auth, body_type, raw_type,
 				body_content, graphql_query, graphql_variables, body_form_data,
 				pre_request_script, post_response_script, version, last_modified_by,
 				created_at, updated_at
 			) VALUES (
 				$1, $2, $3, $4, $5, $6,
-				$7, $8, $9, $10, $11, $12, $13,
-				$14, $15, $16, $17,
-				$18, $19, 1, $20,
-				$21, $21
+				$7, $8, $9, $10, $11, $12, $13, $14,
+				$15, $16, $17, $18,
+				$19, $20, 1, $21,
+				$22, $22
 			)
 			ON CONFLICT (id) DO UPDATE SET
 				collection_id = EXCLUDED.collection_id,
@@ -588,6 +589,7 @@ func (s *SyncService) insertImportItems(
 				method = EXCLUDED.method,
 				url = EXCLUDED.url,
 				params = EXCLUDED.params,
+				path_variables = EXCLUDED.path_variables,
 				headers = EXCLUDED.headers,
 				auth = EXCLUDED.auth,
 				body_type = EXCLUDED.body_type,
@@ -606,7 +608,7 @@ func (s *SyncService) insertImportItems(
 
 		result, err := tx.Exec(ctx, insertItemQuery,
 			itemID, colID, parentID, itemType, itemReq.Name, itemReq.SortOrder,
-			itemReq.Method, itemReq.URL, itemReq.Params, itemReq.Headers, itemReq.Auth,
+			itemReq.Method, itemReq.URL, itemReq.Params, itemReq.PathVariables, itemReq.Headers, itemReq.Auth,
 			itemReq.BodyType, itemReq.RawType, itemReq.BodyContent, itemReq.GraphQLQuery,
 			itemReq.GraphQLVariables, itemReq.BodyFormData, itemReq.PreRequestScript,
 			itemReq.PostResponseScript, userID, now,

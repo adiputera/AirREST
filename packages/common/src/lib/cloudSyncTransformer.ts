@@ -1,4 +1,5 @@
 import { Collection, CollectionItem, Environment, EnvironmentVariable, ApiRequest } from '../types/api';
+import { parsePathVariablesFromUrl } from './urlParams';
 
 
 /**
@@ -80,6 +81,7 @@ export function buildItemTree(
       method: (item.method || 'GET').toUpperCase() as any,
       url: item.url || '',
       params: safeJsonArray(item.params, [{ id: 'p1', key: '', value: '', enabled: true }]),
+      pathVariables: parsePathVariablesFromUrl(item.url || '', safeJsonArray(item.path_variables, [])),
       headers: safeJsonArray(item.headers, [{ id: 'h1', key: 'Accept', value: 'application/json', enabled: true }]),
       auth: safeJsonObject(item.auth, { type: 'none' }) as any,
       bodyType: item.body_type || 'none',
