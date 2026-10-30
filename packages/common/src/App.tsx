@@ -4,6 +4,7 @@ import { Sidebar } from './components/Sidebar';
 import { TabBar } from './components/TabBar';
 import { RequestEditor } from './components/RequestEditor';
 import { ResponseViewer } from './components/ResponseViewer';
+import { EmptyStudioView } from './components/EmptyStudioView';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { useApiStore } from './store/useApiStore';
 import { useStoreContext } from './store/storeContext';
@@ -14,7 +15,13 @@ export const App: React.FC = () => {
   const activeStore = contextStore || useApiStore;
   const [hasHydrated, setHasHydrated] = useState(() => activeStore.persist.hasHydrated());
   const [storageUpdateAvailable, setStorageUpdateAvailable] = useState(false);
+  const storageUpdateAvailableState = storageUpdateAvailable;
   const isSwitchingWorkspace = activeStore((state) => state.isSwitchingWorkspace);
+  const tabs = activeStore((state) => state.tabs);
+  const createTab = activeStore((state) => state.createTab);
+  const workspaceMode = activeStore((state) => state.workspaceMode);
+  const cloudToken = activeStore((state) => state.cloudConfig.token);
+  const refreshFeaturePolicy = activeStore((state) => state.refreshFeaturePolicy);
 
   useEffect(() => {
     if (activeStore.persist.hasHydrated()) {
@@ -30,6 +37,32 @@ export const App: React.FC = () => {
   useEffect(() => onStorageCommit((notice) => {
     if (notice.key === 'air-rest-storage') setStorageUpdateAvailable(true);
   }), []);
+
+  useEffect(() => {
+    if (workspaceMode !== 'cloud' || !cloudToken) return;
+
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const schedule = () => {
+      timer = setTimeout(() => {
+        void refreshFeaturePolicy(true).finally(() => {
+          if (!disposed) schedule();
+        });
+      }, 30 * 60 * 1000);
+    };
+    const refreshIfNeeded = () => {
+      void refreshFeaturePolicy(false);
+    };
+
+    refreshIfNeeded();
+    schedule();
+    window.addEventListener('focus', refreshIfNeeded);
+    return () => {
+      disposed = true;
+      if (timer) clearTimeout(timer);
+      window.removeEventListener('focus', refreshIfNeeded);
+    };
+  }, [workspaceMode, cloudToken, refreshFeaturePolicy]);
 
   if (!hasHydrated) {
     return (
@@ -61,10 +94,14 @@ export const App: React.FC = () => {
           <main className="flex flex-1 flex-col overflow-hidden bg-zinc-950">
             <ErrorBoundary fallbackTitle="Studio Panel Error">
               <TabBar />
-              <div className="flex flex-1 flex-col overflow-y-auto">
-                <RequestEditor />
-                <ResponseViewer />
-              </div>
+              {tabs && tabs.length > 0 ? (
+                <div className="flex flex-1 flex-col overflow-y-auto">
+                  <RequestEditor />
+                  <ResponseViewer />
+                </div>
+              ) : (
+                <EmptyStudioView onCreateTab={() => createTab()} />
+              )}
             </ErrorBoundary>
           </main>
         </div>

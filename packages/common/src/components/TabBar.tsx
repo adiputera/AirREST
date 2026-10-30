@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Plus, X, Layers, ArrowRight, Trash2, Copy } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
 import { MethodBadge } from './MethodBadge';
-import { isRequestModified } from '../lib/requestDiff';
+import { isRequestModified, findSavedRequestInCollections } from '../lib/requestDiff';
 
 interface ContextMenuPosition {
   x: number;
@@ -104,6 +104,10 @@ export const TabBar: React.FC = () => {
             const isActive = tab.id === activeTabId;
             const displayName = tab.name || tab.url || 'Untitled Request';
             const isDirty = isRequestModified(tab, collections);
+            const saved = findSavedRequestInCollections(collections, tab.id);
+            const tabTitle = saved
+              ? `${displayName} (${saved.collection.name})`
+              : displayName;
 
             return (
               <div
@@ -118,7 +122,7 @@ export const TabBar: React.FC = () => {
                 }`}
               >
                 <MethodBadge method={tab.method} size="sm" />
-                <span className="truncate max-w-[105px]" title={displayName}>
+                <span className="truncate max-w-[105px]" title={tabTitle}>
                   {displayName}
                 </span>
 

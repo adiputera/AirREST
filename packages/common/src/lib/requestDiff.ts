@@ -358,6 +358,23 @@ export function generateCopyCollectionName(baseName: string, existingNames: stri
   return candidate;
 }
 
+/**
+ * Generates an auto-incremented non-conflicting copy name for a request.
+ * e.g. "Get Token (Copy)", "Get Token (Copy 2)", etc.
+ */
+export function generateCopyRequestName(baseName: string, existingNames: string[]): string {
+  const lowerNames = (existingNames || []).map((n) => String(n ?? '').toLowerCase().trim());
+  let candidate = `${baseName.trim() || 'Untitled Request'} (Copy)`;
+  let counter = 2;
+
+  while (lowerNames.includes(candidate.toLowerCase().trim())) {
+    candidate = `${baseName.trim() || 'Untitled Request'} (Copy ${counter})`;
+    counter++;
+  }
+
+  return candidate;
+}
+
 export function cloneCollectionWithNewIds(col: Collection, newName: string): Collection {
   const cloneRequest = (request: ApiRequest): ApiRequest => ({
     ...request,

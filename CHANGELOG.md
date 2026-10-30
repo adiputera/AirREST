@@ -9,32 +9,125 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.1.6] - 2026-10-30
+## [1.1.8] - 2026-10-30
+
+### Added
+- **Hub-managed Collection Feature Controls**:
+  - Added global controls for moving, deleting, and exporting cloud collections: `collection.move`, `collection.delete`, and `collection.export`.
+  - Added a Superadmin Feature Controls panel with revision-aware saves, plus backend policy storage, audit records, and optimistic-concurrency protection.
+  - Enforced move and delete policy server-side, including sync deletions, so older clients cannot bypass a disabled control.
+  - Refreshed client policy on login, scope changes, manual Sync Online, every 30 minutes, and immediately after a `FEATURE_DISABLED` response.
+
+### Changed
+- **Collection Move Direction**:
+  - Personal offline or cloud collections can move into eligible team projects.
+  - Collections in a project cannot move into a personal cloud or offline workspace; the backend enforces the cloud restriction and the client omits personal targets.
+- **Desktop Release Metadata**:
+  - Bumped the desktop application to `v0.1.3` across its package, Tauri, and Cargo metadata.
+
+## [1.1.7] - 2026-10-30
+
+### Added
+- **Universal Collection & Request Search in Sidebar**:
+  - Upgraded sidebar collection search into an all-in-one universal search filtering across collections, folders, request names, HTTP methods (e.g. `GET`, `POST`), and URL endpoints.
+  - Added multi-token query parsing (`split(/\s+/)`), supporting composite queries such as `GET /users`, `POST login`, or specific endpoint paths.
+  - Automatically expands matching collections and folders recursively when search terms match.
+  - Added quick-clear button (`X`) and `Escape` keyboard shortcut to reset search immediately.
+  - Updated placeholder to `"Search collections or requests..."` in [`Sidebar.tsx`](packages/common/src/components/Sidebar.tsx) across `@airrest/common` and extension.
+  - Added unit test suite `test:sidebar-search` in [`scripts/sidebar-search.test.mjs`](scripts/sidebar-search.test.mjs).
+- **Collection Indicator & Visual Context in Editor & Tabs**:
+  - Added a collection badge indicator with folder icon next to the active request name in [`RequestEditor.tsx`](packages/common/src/components/RequestEditor.tsx).
+  - Enhanced tab hover tooltips in [`TabBar.tsx`](packages/common/src/components/TabBar.tsx) to display the request's parent collection: `${name} (${collection.name})`.
+- **In-Memory Tab Response Persistence**:
+  - Maintained runtime response cache (`tabResponses: Record<string, ApiResponse>`) mapped per tab ID in `useApiStore.ts`.
+  - Switching between tabs automatically restores each tab's executed response without re-sending the request.
+  - Closing a tab cleans up its cached response and automatically revokes binary `blobUrl` handles.
+  - Omitted `tabResponses` and `activeResponse` from `partialize` so responses remain session-only and never leak into persistent storage.
+  - Supported passing historical responses directly into tabs via `openRequestInTab(request, response)` when clicking History entries in [`Sidebar.tsx`](packages/common/src/components/Sidebar.tsx).
+  - Added unit test suite `test:tab-response-cache` in [`scripts/tab-response-cache.test.mjs`](scripts/tab-response-cache.test.mjs).
+- **Zero-Tabs Empty State Studio**:
+  - Allowed closing all open tabs via `closeTab` and `closeAllTabs`, transitioning to `tabs: []` instead of forcing a reset tab.
+  - Built [`EmptyStudioView.tsx`](packages/common/src/components/EmptyStudioView.tsx) displaying a clean, branded empty state when no tabs are open with quick actions to create a new tab or jump to collections/history.
+  - Added null-safe guards in [`RequestEditor.tsx`](packages/common/src/components/RequestEditor.tsx) and updated [`App.tsx`](packages/common/src/App.tsx) to switch between the active editor and the empty state.
+  - Added automated tests `T-SEMI-PERSIST-6`, `T-SEMI-PERSIST-7`, and `T-SEMI-PERSIST-8` in [`scripts/tab-response-cache.test.mjs`](scripts/tab-response-cache.test.mjs).
+- **Tauri Desktop Client Auto-Updater & Linux Packaging**:
+  - Integrated `@tauri-apps/plugin-updater` with in-app banner notification (`DesktopUpdateBanner.tsx`), background download staging, and clean restart prompt.
+  - Added automated test suite `T-UPDATER-1` through `T-UPDATER-6` in [`scripts/desktop-updater.test.mjs`](scripts/desktop-updater.test.mjs).
+  - Bumped desktop app release to `v0.1.2` across `apps/desktop/package.json`, `tauri.conf.json`, and `Cargo.toml`.
 
 ### Fixed
+- **Multi-Tab Request Isolation & Tab Overwrite Elimination**:
+  - Resolved an issue where opening requests with identical names, methods, or URLs from different collections (e.g. `get token` from Collection A and `get token` from Collection B) reused the existing tab instead of opening a new tab.
+  - Replaced ambiguous name/method/URL matching in `openRequestInTab` with strict unique ID tab matching (`targetId ? state.tabs.find(t => t.id === targetId) : undefined`).
+  - Added `isTargetDifferentCollection` guard in [`SaveToCollectionModal.tsx`](packages/common/src/components/SaveToCollectionModal.tsx) to ensure saving a request to a different collection generates a new UUID, preventing cross-collection item ID collisions.
+  - Added `ensureUniqueCollectionItemIds` during storage hydration in `useApiStore.ts` to automatically de-duplicate any legacy colliding item IDs across collections.
+  - Added automated regression test `T-TAB-ISOLATION` in [`scripts/desktop-transport-lifecycle.test.mjs`](scripts/desktop-transport-lifecycle.test.mjs).
+
+## [1.1.6] - 2026-10-30
+
+### Added
+- **Request Name & HTTP Method Duplicate Guard & Conflict Resolution**:
+  - Implemented intra-collection duplicate detection enforcing uniqueness on `(HTTP method, request name)` (case-insensitive for both method and trimmed name).
+  - Distinct HTTP methods with the same name (e.g. `POST token` and `GET token`) are allowed to coexist naturally within the same collection without prompt.
+  - When saving or saving-as a request that collides with an existing request's method and name in the target collection, a conflict dialog is displayed (*"Request already exists: replace or save copy?"*).
+  - Provides two distinct resolution actions:
+    - **Save Copy**: Auto-generates a non-conflicting incremented copy name (e.g. `token (Copy)` or `token (Copy 2)`) using `generateCopyRequestName`, assigns a fresh UUID, and preserves the existing request intact.
+    - **Replace**: In-place overwrites the existing conflicting request's payload while maintaining its ID and folder hierarchy.
+    - **Back**: Returns to the modal form allowing the user to modify the name or destination.
+  - Integrated duplicate collision detection in [`SaveToCollectionModal.tsx`](packages/common/src/components/SaveToCollectionModal.tsx) and [`RequestEditor.tsx`](packages/common/src/components/RequestEditor.tsx) across `packages/common` and `extension`.
+  - Added automated test suite `T-SAVE-CONFLICT-DETECTION` in [`scripts/desktop-transport-lifecycle.test.mjs`](scripts/desktop-transport-lifecycle.test.mjs).
+- **Multiple Online Personal Workspaces UI & Full Management**:
+  - Implemented complete UI workflows for creating, renaming, and deleting multiple Online Personal Workspaces in [`ScopeSwitcher.tsx`](packages/common/src/components/ScopeSwitcher.tsx) across `@airrest/common` and the Chrome Extension.
+  - Added inline workspace creation (`+ New`) with keyboard shortcuts (`Enter` to submit, `Escape` to cancel) and auto-focus input fields.
+  - Added contextual actions menu per personal workspace with inline rename support and delete protection.
+  - Guarded default workspaces against deletion with an explicit `Default` pill badge, while non-default personal workspaces prompt a styled confirmation modal ([`ConfirmModal.tsx`](packages/common/src/components/ConfirmModal.tsx)) before deletion.
+  - Added `createCloudWorkspace`, `updateCloudWorkspace`, and `deleteCloudWorkspace` API transport methods and integrated store actions in `useApiStore.ts`.
+- **Monorepo Migration & Shared Core Architecture**:
+  - Re-architected the repository into a clean monorepo structure with `@airrest/common` (`packages/common/`), Chrome Extension (`extension/`), Hub Web Portal (`hub/`), and Desktop Client (`apps/desktop/`).
+  - Extracted shared domain models, Zustand state store, universal UI components, cURL/Postman transformers, and runtime factory into private ESM package `@airrest/common`.
+  - Added extensible `PlatformAdapter` contract decoupling UI and store layers from host platform APIs (`TestTransport`, `CloudTransport`, `ScriptExecutor`, native file system, and origin permission checks).
+- **Tauri v2 Desktop Application & Sandbox Hardening (`apps/desktop/`)**:
+  - Implemented standalone desktop client powered by Tauri v2 with Rust backend shell.
+  - Native HTTP transport via `@tauri-apps/plugin-http` with opt-in SSL verification bypass for local testing and full custom `Cookie`, `User-Agent`, and `Host` headers.
+  - Web Worker offloaded WebAssembly scripting engine (`quickjs.worker.ts` + `quickjsRunner.ts`), executing guest scripts off the main thread with 64 MiB heap and 512 KiB stack boundaries.
+  - Strict boundary validation via `scriptProtocol.ts`: 256 KiB script limit, 1 MiB serialized UTF-8 input/output bounds, prototype pollution guards (`__proto__`, `constructor`, `prototype`), and captured immutable primitives.
+
+### Fixed
+- **Save As Duplicate Creation & Independence**:
+  - Resolved an issue where using **Save As** to save a request into another collection triggered a `moveRequest`, removing the original request from the source collection instead of duplicating it.
+  - Resolved an issue where saving a copy to the same collection overwritten the existing request due to `item.name === cleanReq.name` matching in `saveRequestToCollection`.
+  - Added explicit `isSaveAs` mode to [`SaveToCollectionModal.tsx`](packages/common/src/components/SaveToCollectionModal.tsx) and [`RequestEditor.tsx`](packages/common/src/components/RequestEditor.tsx), ensuring **Save As** always generates a new UUID and preserves the original item in the source collection.
+  - Removed name-based item matching in `saveRequestToCollection` across [`packages/common/src/store/useApiStore.ts`](packages/common/src/store/useApiStore.ts) and [`extension/src/store/useApiStore.ts`](extension/src/store/useApiStore.ts), allowing multiple requests with the same name to coexist safely with distinct IDs.
+  - Synchronized `activeTabId` in `updateActiveRequest` when `id` changes so that the active tab points to the new duplicated request without desynchronizing editor state.
+  - Added automated test suite `T-SAVE-AS-DUPLICATE` in [`scripts/desktop-transport-lifecycle.test.mjs`](scripts/desktop-transport-lifecycle.test.mjs).
+- **Reader Scope Save As & Read-Only Enforcement**:
+  - Fixed an issue where the **Save As** button remained visible in [`RequestEditor.tsx`](packages/common/src/components/RequestEditor.tsx) when the user had a `reader` role in project scope, causing an `insufficient permission` error upon attempting to save.
+  - Guarded the **Save As** button and `handleSave` in `RequestEditor` with `canWriteScope` (`hasScopePermission(activeScope, 'collection:write')`), ensuring read-only project scopes display the locked `Read-only` badge without offering `Save As` or allowing `Ctrl+S`/`Cmd+S` saves.
+  - In [`SaveToCollectionModal.tsx`](packages/common/src/components/SaveToCollectionModal.tsx), disabled collection creation and saving when the scope lacks `collection:write`, marked restricted collections as `(Read-only)` in the dropdown, and ensured saving a copy does not trigger relocation (`moveRequest`) on read-only source collections.
+  - Added unit test in [`security-client.test.mjs`](scripts/security-client.test.mjs) verifying reader capability boundaries in cloud project scopes.
 - **Empty Scope & Null Delta Response Resilience**:
   - Resolved a cloud sync failure where switching to an empty workspace/project scope, or logging in as a user without assigned teams or collections, caused the sync button to change permanently to **Retry** with repeating failures despite receiving HTTP 200 success from the backend.
-  - Updated `fetchScopeCollections` in [`cloudApi.ts`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/packages/common/src/lib/cloudApi.ts) to gracefully treat `null` or missing response payloads as empty arrays (`[]`) instead of throwing validation exceptions.
-  - Hardened backend JSON serialization in [`response.go`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/backend/pkg/response/response.go) using reflection to automatically normalize `nil` slices into empty slices (`[]any{}`), ensuring list endpoints consistently serialize `"data": []` rather than `"data": null`.
+  - Updated `fetchScopeCollections` in [`cloudApi.ts`](packages/common/src/lib/cloudApi.ts) to gracefully treat `null` or missing response payloads as empty arrays (`[]`) instead of throwing validation exceptions.
+  - Hardened backend JSON serialization in [`response.go`](backend/pkg/response/response.go) using reflection to automatically normalize `nil` slices into empty slices (`[]any{}`), ensuring list endpoints consistently serialize `"data": []` rather than `"data": null`.
   - Initialized slice buffers with `make([]*Type, 0)` across all PostgreSQL repositories (`collection_repo.go`, `environment_repo.go`, `project_repo.go`, `team_repo.go`, `user_repo.go`, `workspace_repo.go`) and added fallback guards across all service list handlers.
-  - Added unit test suite in [`response_test.go`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/backend/pkg/response/response_test.go) verifying nil-slice array marshaling.
+  - Added unit test suite in [`response_test.go`](backend/pkg/response/response_test.go) verifying nil-slice array marshaling.
 - **Scope Switcher Team Projects Auto-Loading**:
-  - Fixed an issue in [`ScopeSwitcher.tsx`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/packages/common/src/components/ScopeSwitcher.tsx) and [`useApiStore.ts`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/packages/common/src/store/useApiStore.ts) where expanding a team accordion in the desktop app failed to auto-load projects from the backend.
+  - Fixed an issue in [`ScopeSwitcher.tsx`](packages/common/src/components/ScopeSwitcher.tsx) and [`useApiStore.ts`](packages/common/src/store/useApiStore.ts) where expanding a team accordion in the desktop app failed to auto-load projects from the backend.
   - Corrected `fetchScopes` to prevent un-fetched teams from polluting `scopesCache.teamProjects` with empty arrays (`[]`), ensuring un-fetched teams remain `undefined` until loaded.
   - Added robust loaded state tracking (`fetchedTeamsRef`) so that expanding a team triggers `fetchProjectsForTeam(teamId, true)` whenever its projects have not yet been populated.
   - Added auto-fetch logic when the active scope is an un-fetched project team upon opening the Scope Switcher.
   - Enhanced the team accordion UI to display a dedicated spinner while loading, an interactive "Click to load projects" fallback if unloaded, and project counts once loaded.
 - **File Picker & Import Dialog Flow**:
-  - Resolved an issue in [`ImportModal.tsx`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/packages/common/src/components/ImportModal.tsx) where clicking the file chooser button in non-desktop environments (Chrome extension, web) failed to open the file selection dialog due to unconditional native dialog interception.
+  - Resolved an issue in [`ImportModal.tsx`](packages/common/src/components/ImportModal.tsx) where clicking the file chooser button in non-desktop environments (Chrome extension, web) failed to open the file selection dialog due to unconditional native dialog interception.
   - Guarded native dialog invocation against `adapter?.capabilities?.supportsNativeFileSystem`, falling back to standard HTML file inputs for browser and extension runtimes.
   - Added drag-and-drop support (`onDragOver`, `onDragEnter`, `onDrop`) to the Postman import dropzone.
-  - Implemented DOM-based file input fallback in `chromeAdapter.openFile` and unified native/web import flows in [`EnvironmentModal.tsx`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/packages/common/src/components/EnvironmentModal.tsx).
+  - Implemented DOM-based file input fallback in `chromeAdapter.openFile` and unified native/web import flows in [`EnvironmentModal.tsx`](packages/common/src/components/EnvironmentModal.tsx).
 
 ### Changed
 - **Standardized Default Workspace Naming**:
   - Standardized the naming convention of default private workspaces to `Default Workspace` across all roles (including superadmin bootstrap and standard user registration in `auth_service.go`), replacing ambiguous role-based titles (`Superadmin Workspace`, `My Workspace`).
   - Added database migration `006_standardize_default_workspaces.sql` migrating existing legacy private workspace names to `Default Workspace`.
-  - Updated API contract documentation in [`API_CONTRACT.md`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/backend/API_CONTRACT.md) and project documentation in [`README.md`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/README.md).
+  - Updated API contract documentation in [`API_CONTRACT.md`](backend/API_CONTRACT.md) and project documentation in [`README.md`](README.md).
 - **Collection Transfer Compression**:
   - Cloud collection import and sync push now gzip eligible JSON payloads, with separate encoded and decoded size budgets; identity remains available when it is the smaller valid representation.
   - Collection list, detail, and delta pull responses support negotiated gzip with bounded identity, gzip, and decoded serialization sizes.
@@ -43,10 +136,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Multiple Online Personal Workspaces UI & Full Management**:
-  - Implemented complete UI workflows for creating, renaming, and deleting multiple Online Personal Workspaces in [`ScopeSwitcher.tsx`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/packages/common/src/components/ScopeSwitcher.tsx) across `@airrest/common` and the Chrome Extension.
+  - Implemented complete UI workflows for creating, renaming, and deleting multiple Online Personal Workspaces in [`ScopeSwitcher.tsx`](packages/common/src/components/ScopeSwitcher.tsx) across `@airrest/common` and the Chrome Extension.
   - Added inline workspace creation (`+ New`) with keyboard shortcuts (`Enter` to submit, `Escape` to cancel) and auto-focus input fields.
   - Added contextual actions menu per personal workspace with inline rename support and delete protection.
-  - Guarded default workspaces against deletion with an explicit `Default` pill badge, while non-default personal workspaces prompt a styled confirmation modal ([`ConfirmModal.tsx`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/packages/common/src/components/ConfirmModal.tsx)) before deletion.
+  - Guarded default workspaces against deletion with an explicit `Default` pill badge, while non-default personal workspaces prompt a styled confirmation modal ([`ConfirmModal.tsx`](packages/common/src/components/ConfirmModal.tsx)) before deletion.
   - Added `createCloudWorkspace`, `updateCloudWorkspace`, and `deleteCloudWorkspace` API transport methods and integrated store actions in `useApiStore.ts`.
 - **Monorepo Migration & Shared Core Architecture**:
   - Re-architected the repository into a clean monorepo structure with `@airrest/common` (`packages/common/`), Chrome Extension (`extension/`), Hub Web Portal (`hub/`), and Desktop Client (`apps/desktop/`).

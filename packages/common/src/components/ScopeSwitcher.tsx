@@ -91,6 +91,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
 
   const setActiveScope = useApiStore((state) => state.setActiveScope);
   const pullCloudDelta = useApiStore((state) => state.pullCloudDelta);
+  const refreshFeaturePolicy = useApiStore((state) => state.refreshFeaturePolicy);
   const fetchScopes = useApiStore((state) => state.fetchScopes);
   const fetchProjectsForTeam = useApiStore((state) => state.fetchProjectsForTeam);
   const logoutCloud = useApiStore((state) => state.logoutCloud);
@@ -274,7 +275,10 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
   };
 
   const handleManualSync = async () => {
-    await pullCloudDelta();
+    await Promise.all([
+      refreshFeaturePolicy(true),
+      pullCloudDelta(),
+    ]);
   };
 
   const effectiveUserRole = (cloudConfig.user?.role || getRoleFromJwt(cloudConfig.token) || '').toLowerCase();

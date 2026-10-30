@@ -19,6 +19,7 @@ import {
   FileUp,
   RefreshCw,
   XCircle,
+  Folder,
 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
 import { HttpMethod, BodyType, RawType, KeyValuePair } from '@/types/api';
@@ -29,9 +30,13 @@ import { generateCurlCommand } from '@/lib/curl';
 import { VariableInput } from './VariableInput';
 import { interpolateVariables } from '@/lib/fetcher';
 import { beautifyXml, beautifyGraphQL, beautifyJson } from '@/lib/formatters';
-import { isRequestModified, findSavedRequestInCollections } from '@/lib/requestDiff';
+import {
+  isRequestModified,
+  findSavedRequestInCollections,
+  flattenCollectionRequests,
+} from '@/lib/requestDiff';
 import { handleCodeEditorKeyDown } from '@/lib/editorHelper';
-import { canModifyCollection } from '@/lib/jwt';
+import { canModifyCollection, hasScopePermission } from '@/lib/jwt';
 
 function formatFileSize(bytes: number): string {
   if (!bytes || bytes <= 0) return '0 B';
@@ -81,6 +86,7 @@ export const RequestEditor: React.FC = () => {
   const [graphqlQueryError, setGraphqlQueryError] = useState<string | null>(null);
   const [graphqlVariablesError, setGraphqlVariablesError] = useState<string | null>(null);
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
+  const [isSaveAsMode, setIsSaveAsMode] = useState(false);
   const [copiedCurl, setCopiedCurl] = useState(false);
   const [isUrlEncodedBulkEdit, setIsUrlEncodedBulkEdit] = useState(false);
   const [urlEncodedBulkText, setUrlEncodedBulkText] = useState('');
@@ -92,21 +98,46 @@ export const RequestEditor: React.FC = () => {
   const workspaceMode = useApiStore((state) => state.workspaceMode);
   const cloudConfig = useApiStore((state) => state.cloudConfig);
   const savedRequestInfo = currentTab ? findSavedRequestInCollections(collections, currentTab.id) : null;
-  const isReadOnly = savedRequestInfo ? !canModifyCollection(savedRequestInfo.collection.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role) : false;
+  const canWriteScope = hasScopePermission(cloudConfig.activeScope, 'collection:write', workspaceMode, cloudConfig.user?.role);
+  const isScopeReadOnly = !canWriteScope;
+  const isCollectionReadOnly = savedRequestInfo ? !canModifyCollection(savedRequestInfo.collection.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role) : false;
+  const isReadOnly = isScopeReadOnly || isCollectionReadOnly;
 
   const handleSave = useCallback(() => {
+    if (!canWriteScope) {
+      return;
+    }
     if (isReadOnly) {
+      setIsSaveAsMode(true);
       setIsSaveModalOpen(true);
       return;
+    }
+    if (savedRequestInfo && currentTab) {
+      const currentMethod = (currentTab.method || 'GET').toUpperCase();
+      const currentName = (currentTab.name || 'Untitled Request').trim().toLowerCase();
+      const existingReqs = flattenCollectionRequests(savedRequestInfo.collection.items || []);
+      const hasCollisionWithAnother = existingReqs.some(
+        (r) =>
+          r.id !== currentTab.id &&
+          r.request?.id !== currentTab.id &&
+          (r.method || 'GET').toUpperCase() === currentMethod &&
+          r.name.trim().toLowerCase() === currentName
+      );
+      if (hasCollisionWithAnother) {
+        setIsSaveAsMode(false);
+        setIsSaveModalOpen(true);
+        return;
+      }
     }
     const res = saveActiveRequest();
     if (res.isDirectSaved) {
       setJustSaved(true);
       setTimeout(() => setJustSaved(false), 1200);
     } else {
+      setIsSaveAsMode(false);
       setIsSaveModalOpen(true);
     }
-  }, [isReadOnly, saveActiveRequest]);
+  }, [canWriteScope, isReadOnly, savedRequestInfo, currentTab, saveActiveRequest]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -258,6 +289,10 @@ export const RequestEditor: React.FC = () => {
     setPostResponseScript(updated);
   };
 
+  if (!currentTab) {
+    return null;
+  }
+
   const methods: HttpMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
   const activeMethodColor = METHOD_COLORS[currentTab.method]?.text || 'text-zinc-200';
 
@@ -283,11 +318,25 @@ export const RequestEditor: React.FC = () => {
               )}
             </div>
 
+            {savedRequestInfo && (
+              <span
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-zinc-900 border border-zinc-800 text-zinc-400 shrink-0 truncate max-w-[160px]"
+                title={`Saved in collection: ${savedRequestInfo.collection.name}`}
+              >
+                <Folder className="h-3 w-3 text-amber-400 shrink-0" />
+                <span className="truncate">{savedRequestInfo.collection.name}</span>
+              </span>
+            )}
+
             <div className="flex items-center rounded-lg border border-zinc-800 bg-zinc-900 overflow-hidden shadow-sm">
               {isReadOnly ? (
                 <div
                   className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-zinc-500 bg-zinc-800/40 cursor-not-allowed select-none"
-                  title="This request belongs to a read-only collection. Use 'Save As' to save a copy."
+                  title={
+                    isScopeReadOnly
+                      ? "This project is read-only for your role (reader). Modifications cannot be saved."
+                      : "This request belongs to a read-only collection. Use 'Save As' to save a copy."
+                  }
                 >
                   <Lock className="h-3.5 w-3.5 text-zinc-500" />
                   <span>Read-only</span>
@@ -318,13 +367,18 @@ export const RequestEditor: React.FC = () => {
                   )}
                 </button>
               )}
-              <button
-                onClick={() => setIsSaveModalOpen(true)}
-                className="border-l border-zinc-800 px-1.5 py-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition text-[10px] font-medium"
-                title="Save As (save a copy to another collection)"
-              >
-                Save As
-              </button>
+              {canWriteScope && (
+                <button
+                  onClick={() => {
+                    setIsSaveAsMode(true);
+                    setIsSaveModalOpen(true);
+                  }}
+                  className="border-l border-zinc-800 px-1.5 py-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition text-[10px] font-medium"
+                  title="Save As (save a copy to another collection)"
+                >
+                  Save As
+                </button>
+              )}
             </div>
           </div>
 
@@ -1281,8 +1335,12 @@ export const RequestEditor: React.FC = () => {
 
       <SaveToCollectionModal
         isOpen={isSaveModalOpen}
-        onClose={() => setIsSaveModalOpen(false)}
+        onClose={() => {
+          setIsSaveModalOpen(false);
+          setIsSaveAsMode(false);
+        }}
         request={currentTab}
+        isSaveAs={isSaveAsMode}
       />
     </>
   );

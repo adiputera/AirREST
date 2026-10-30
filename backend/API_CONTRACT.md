@@ -194,7 +194,7 @@ Hierarchy: `admin` > `maintainer` > `contributor` > `reader`
 | Delete Collection / Environment Containers | ✅ | ✅ | ❌ | ❌ |
 | Move Collections | ✅ | ✅ | ❌ | ❌ |
 
-Every operation also requires scope access and the resource’s `min_role`. Moves require `collection:move` and `min_role` access in both project scopes; private scopes require ownership. Project-to-project moves remain within the same team. Superadministrators retain their universal bypass and have immutable root privileges: their roles cannot be modified, downgraded, or removed from teams and projects. Request/folder deletion uses `collection:write`, so contributors may remove items in accessible collections; it does not grant container deletion.
+Every operation also requires scope access and the resource’s `min_role`. Moves require `collection:move` and `min_role` access in both project scopes; private scopes require ownership. A collection may move from an offline or personal workspace into a project, but a project collection may not move into a personal workspace. Project-to-project moves remain within the same team. Superadministrators retain their universal bypass except for this scope-direction rule, and have immutable root privileges: their roles cannot be modified, downgraded, or removed from teams and projects. Request/folder deletion uses `collection:write`, so contributors may remove items in accessible collections; it does not grant container deletion.
 
 #### Granular Capability-Based Permissions (`permissions: string[]`)
 Starting in API v1.1.2+, `Project` and `ProjectMember` objects include a computed `permissions` string array. This decouples client capability checks from hardcoded integer rank comparisons while remaining 100% backward-compatible with database schemas and older client caches.
@@ -334,8 +334,8 @@ In addition to enums, the Frontend relies on specific primitive types and relati
 - `GET /api/v1/collections/{id}` *(Auth)* — Get collection with hierarchical nested items; response may be gzip encoded as above.
 - `PUT /api/v1/collections/{id}` *(Auth)* — Update collection (enforces `base_version` OCC).
   - Payload: `{ "name": string, "description"?: string, "min_role"?: ProjectRole, "base_version": int64 }`
-- `DELETE /api/v1/collections/{id}` *(Auth)* — Soft delete collection (tombstone).
-- `POST /api/v1/collections/{id}/move` *(Auth)* — Move collection across scopes.
+- `DELETE /api/v1/collections/{id}` *(Auth)* — Soft delete collection (tombstone). Requires both existing RBAC/min-role checks and global `collection.delete`; a disabled feature returns `403 FEATURE_DISABLED`.
+- `POST /api/v1/collections/{id}/move` *(Auth)* — Move collection across scopes. Personal/offline sources may move into a project; a project collection cannot move into a personal workspace. Requires both existing RBAC/min-role checks and global `collection.move`; a disabled feature returns `403 FEATURE_DISABLED`.
   - Payload: `{ "target_workspace_id"?: UUID, "target_project_id"?: UUID }`
 - `PUT /api/v1/collections/{id}/reorder` *(Auth)* — Batch reorder items and folder parentage.
   - Payload: `{ "items": [{ "id": UUID, "parent_id": UUID|null, "sort_order": int }] }`
@@ -365,7 +365,7 @@ In addition to enums, the Frontend relies on specific primitive types and relati
   - Response: `{ "collections": Collection[], "items": CollectionItem[], "environments": Environment[], "server_time": string }`
   - Response may be gzip encoded when the client accepts it. Identity is capped at 4 MiB, gzip at 3,000,000 bytes, and decoded serialization at 16 MiB. An accepted-but-oversized response returns `413 RESPONSE_PAYLOAD_TOO_LARGE`; excluding both identity and gzip returns `406 NOT_ACCEPTABLE`.
 - `POST /api/v1/sync/push` *(Auth)*
-  - Applies up to 500 total offline mutations across all three arrays; exactly one scope is required. This is not an atomic transaction across mutations. Denied create/delete mutations are absent from `applied_ids`; update failures are reported in `conflicts`.
+  - Applies up to 500 total offline mutations across all three arrays; exactly one scope is required. This is not an atomic transaction across mutations. Denied create/delete mutations are absent from `applied_ids`; update failures are reported in `conflicts`. A collection delete blocked by feature policy is returned in `conflicts` with `code: "FEATURE_DISABLED"` or `"FEATURE_POLICY_UNAVAILABLE"`.
   - Evaluates OCC per mutation and returns conflict reports for stale entities without aborting valid ones.
   - Accepts identity JSON up to 4 MiB or one `Content-Encoding: gzip` member up to 3,000,000 bytes and 16 MiB after decoding. The body must contain exactly one JSON document. Unsupported content encoding returns `415 UNSUPPORTED_CONTENT_ENCODING`; malformed gzip or trailing JSON returns `400 BAD_REQUEST` before any mutation.
   - Response: `{ "applied_ids": UUID[], "conflicts": SyncConflictReport[], "server_time": string }`, bounded below 4 MiB. If needed, optional conflict `server_data` is omitted while `applied_ids`, conflict ID/type, and message remain available.
@@ -397,6 +397,22 @@ Serverless initialization permits one attempt at a time, with a 20-second deadli
 - `PUT /api/v1/admin/users/{userId}/password` *(Auth, Superadmin)* — Reset user password directly.
   - Payload: `{ "password": string }`
 - `DELETE /api/v1/admin/users/{userId}` *(Auth, Superadmin)* — Permanently remove user account, delete private workspaces, and safely reassign shared teams/projects to executing superadmin.
+
+### 11. Global Feature Controls
+
+The backend stores one global policy per installation. It has no team/project/user override and affects all cloud workspaces and projects. The flags are permanent operational controls owned by the superadmin:
+
+| Key | Applies to | Enforcement |
+|---|---|---|
+| `collection.move` | Cloud collection move API | Backend plus supported client UI |
+| `collection.delete` | Direct cloud delete and sync delete mutation | Backend plus supported client UI |
+| `collection.export` | Export in supported cloud clients | Client only; it cannot revoke data already received by a client |
+
+- `GET /api/v1/feature-policy` *(Auth)* — Returns `{ revision, flags, updated_at, updated_by? }` with `Cache-Control: private, no-store`. Cloud clients fail closed for controlled UI actions if this snapshot cannot be loaded or is older than 30 minutes.
+- `GET /api/v1/admin/feature-policy` *(Auth, Superadmin)* — Reads the same global policy for Hub administration.
+- `PUT /api/v1/admin/feature-policy` *(Auth, Superadmin)* — Atomically replaces all three boolean flags with `{ "base_revision": int64, "flags": FeatureFlags }`. A stale revision returns `409 CONFLICT`; unknown, omitted, non-boolean, or null flags return `400 BAD_REQUEST`.
+
+Supported cloud clients fetch on login/session/server change, every cloud scope switch, and manual Sync Online; they also refresh after 30 minutes while active and immediately after `FEATURE_DISABLED`. They must not retry a denied mutation automatically. The backend is authoritative for move/delete on every request; `403 FORBIDDEN` from RBAC does not imply a policy refresh.
 
 ---
 

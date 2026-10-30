@@ -7,7 +7,7 @@
 > A fast, lightweight, and modern browser-based REST API testing studio packaged as a **Google Chrome Extension (Manifest V3)** and standalone web client with optional cloud team synchronization. Built with **React 19**, **Vite**, **Tailwind CSS v4**, **Zustand**, and a **Go + PostgreSQL** backend.
 
 [![GitHub Repository](https://img.shields.io/badge/GitHub-adiputera%2FAirREST-181717?logo=github)](https://github.com/adiputera/AirREST)
-[![Version](https://img.shields.io/badge/Version-1.1.5-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.1.8-blue.svg)](CHANGELOG.md)
 [![Manifest V3](https://img.shields.io/badge/Chrome%20Extension-Manifest%20V3-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=white)](https://vitejs.dev/)
@@ -66,7 +66,10 @@ AirREST is an API testing client that runs directly inside Google Chrome as a Ma
   - Move between nested subfolders within the same collection.
   - Move from one collection to another collection's root or any nested subfolder.
   - Interactive **Move Request Modal** with current location badges and hierarchical folder selector paths.
-  - Smart re-saving in **Save to Collection Modal** automatically moves already-saved requests to the new destination instead of duplicating them.
+- **Request Saving, Save As & Duplicate Conflict Guard**:
+  - **Save & Save As**: Save requests directly or create standalone duplicates across collections or within the same collection using **Save As**, preserving original requests in source collections.
+  - **HTTP Method & Name Collision Guard**: Allows distinct HTTP methods with the same name (e.g. `POST token` and `GET token`) to coexist in the same collection without prompt, while guarding against identical method+name collisions (e.g. `POST token` and `POST token`).
+  - **Interactive Conflict Dialog**: When a collision is detected, prompts the user with *"Request already exists, replace or save copy?"* with actions for **Save Copy** (generates incremented copy name such as `token (Copy)` with a new UUID) or **Replace** (overwrites the existing request in-place while keeping its ID and folder location).
 - **Drag-and-Drop Tree Reordering**: Organize requests and nested folders seamlessly within any collection:
   - Drag items up or down to reorder siblings with dynamic blue drop line indicators (`before` / `after`).
   - Drop requests or folders directly into a target folder with folder highlighting (`inside`).
@@ -74,10 +77,13 @@ AirREST is an API testing client that runs directly inside Google Chrome as a Ma
   - **Circular Dependency Guard**: Dropping a folder into itself or any of its nested children is strictly blocked with a `not-allowed` pointer.
   - Automatic synchronization: Updates positions in local storage and dispatches batch reordering (`PUT /api/v1/collections/{id}/reorder`) in Cloud mode.
 - **Auto-Sync on Import**: Importing collections in Cloud mode automatically syncs all endpoints and folders directly to the backend.
-- **Search & Filter**: Real-time filtering across collections, folders, and individual endpoints.
+- **Unified Collection & Request Search**: Real-time multi-token search across collections, folders, request names, HTTP methods (e.g. GET, POST), and URL endpoints with quick-clear button and automatic tree expansion.
 - **Hierarchical Tree Navigation**:
   - **1-Level Default Expansion**: Expanding any collection or folder defaults to 1 level only—child subfolders remain collapsed until explicitly opened, preventing tree clutter.
   - **Expand All & Collapse All**: Quick actions in each collection and folder dropdown menu to recursively expand all nested items or fold them back to a tidy 1-level view.
+- **Multi-Tab Request Isolation & Collection Association**: Requests from different collections (even with identical names or endpoints) open in separate dedicated tabs without colliding or overwriting, complete with collection badges in the editor header and collection names in tab tooltips.
+- **In-Memory Tab Response Persistence**: Executed request responses are cached per-tab in runtime memory throughout the active session. Switching between tabs preserves each tab's latest response viewer state without re-executing. Closing a tab purges its response and releases binary blob memory, and responses are omitted from persistent storage so tabs start fresh upon relaunch.
+- **Zero-Tabs Empty State Studio**: Tabs can be closed completely (`closeTab`, `closeAllTabs`), leaving 0 tabs open. When no tabs are open, the studio renders an elegant empty state with quick actions to create a new request or browse collections and history.
 - **Consolidated 3-Dots Action Menu & In-Place Renaming**:
   - Replaced cluttered action icon buttons with a clean, unified 3-dots (`MoreVertical`) dropdown menu on collections, folders, and requests.
   - In-place inline renaming for collections, folders, and requests with keyboard shortcuts (`Enter` to save, `Escape` to cancel) and `<Check>`/`<X>` action buttons.
@@ -321,10 +327,12 @@ npm run dev:desktop
 npm run build:desktop
 ```
 
-#### Automated Multi-OS Releases (GitHub Actions)
+#### Automated Multi-OS Releases & In-App Auto-Updater (GitHub Actions)
 The repository includes a cross-platform release workflow ([`.github/workflows/desktop-release.yml`](.github/workflows/desktop-release.yml)) powered by `tauri-apps/tauri-action` that builds native installers for **macOS** (`.dmg` / `.app` for Apple Silicon & Intel), **Linux** (`.deb`, `.rpm`, `.AppImage`), and **Windows** (`.msi`, `.exe` NSIS) and publishes them directly to **GitHub Releases**:
-- **Tag Trigger**: Push a version tag matching `desktop-v*` or `v*` (e.g., `git tag desktop-v0.1.0 && git push origin desktop-v0.1.0`).
+- **Bumping Desktop Version**: Run `npm run version:desktop -- <version>` (e.g., `npm run version:desktop -- 0.1.3`) to synchronize version strings across `package.json`, `tauri.conf.json`, and `Cargo.toml`.
+- **Tag Trigger**: Push a version tag matching `desktop-v*` or `v*` (e.g., `git tag desktop-v0.1.3 && git push origin main --tags`).
 - **Manual Trigger**: Run the **Release AirREST Desktop** workflow from the GitHub Actions tab (`workflow_dispatch`).
+- **In-App Auto-Updater**: Applications automatically check and download releases in the background via `@tauri-apps/plugin-updater`. On macOS, updates stage seamlessly on disk; on Windows and Linux, updates apply when the user restarts or closes the window (`onCloseRequested`). Releases are cryptographically signed and verified using the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_UPDATER_PUBLIC_KEY`.
 
 ### 3. Run the AirREST Hub Portal (Optional)
 
