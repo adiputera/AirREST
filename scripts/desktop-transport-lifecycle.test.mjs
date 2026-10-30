@@ -1366,7 +1366,7 @@ test('R2 (P2): debounced environment cloud sync pending in transport is aborted 
   assert.equal(storageWrites - writesBeforeResolve, 0, 'No persistence writes allowed after store disposal');
 });
 
-async function setupRuntimeModules(customStorage = null) {
+export async function setupRuntimeModules(customStorage = null) {
   const { createRequire } = await import('node:module');
   const nodeRequire = createRequire(import.meta.url);
   const zustand = nodeRequire('zustand');
@@ -2273,5 +2273,114 @@ test('T-SAVE-CONFLICT-DETECTION: Method and Name duplicate guard allows distinct
   const replacedItem = colAfterReplace?.items?.find((i) => i.id === postReqId);
   assert.equal(replacedItem?.request?.url, 'https://api.example.com/token/replaced', 'Replaced item has updated payload');
 });
+
+test('T-TAB-ISOLATION: Requests with identical names/methods/urls from different collections open in separate tabs and do not overwrite', async () => {
+  const { runtimeModule } = await setupRuntimeModules();
+  const adapter = {
+    id: 'test-adapter',
+    hasHostPermission: async () => true,
+    requestHostPermission: async () => true,
+    dispose: () => {},
+  };
+  const runtime = runtimeModule.createAirrestRuntime({ adapter });
+
+  const reqAId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const reqBId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+
+  const reqA = {
+    id: reqAId,
+    name: 'get token',
+    method: 'POST',
+    url: 'https://api.example.com/oauth/token',
+    params: [],
+    headers: [],
+    bodyType: 'none',
+    rawType: 'text',
+    bodyContent: 'token_a',
+    createdAt: 1000,
+    updatedAt: 1000,
+  };
+
+  const reqB = {
+    id: reqBId,
+    name: 'get token',
+    method: 'POST',
+    url: 'https://api.example.com/oauth/token',
+    params: [],
+    headers: [],
+    bodyType: 'none',
+    rawType: 'text',
+    bodyContent: 'token_b',
+    createdAt: 2000,
+    updatedAt: 2000,
+  };
+
+  runtime.store.setState({
+    workspaceMode: 'offline',
+    collections: [
+      {
+        id: 'coll-A',
+        name: 'Collection A',
+        items: [
+          {
+            id: reqAId,
+            name: 'get token',
+            type: 'request',
+            request: { ...reqA },
+          },
+        ],
+      },
+      {
+        id: 'coll-B',
+        name: 'Collection B',
+        items: [
+          {
+            id: reqBId,
+            name: 'get token',
+            type: 'request',
+            request: { ...reqB },
+          },
+        ],
+      },
+    ],
+    tabs: [],
+    activeTabId: '',
+  });
+
+  const state = runtime.store.getState();
+
+  // 1. Open "get token" from Collection A
+  state.openRequestInTab(reqA);
+  const afterOpenA = runtime.store.getState();
+  assert.equal(afterOpenA.tabs.length, 1);
+  assert.equal(afterOpenA.activeTabId, reqAId);
+  assert.equal(afterOpenA.tabs[0].id, reqAId);
+  assert.equal(afterOpenA.tabs[0].bodyContent, 'token_a');
+
+  // 2. Open "get token" from Collection B (same name, url, and method, but different collection item)
+  state.openRequestInTab(reqB);
+  const afterOpenB = runtime.store.getState();
+
+  // MUST open as a second separate tab, not overwrite or reuse tab A
+  assert.equal(afterOpenB.tabs.length, 2, 'Must have 2 tabs open simultaneously');
+  assert.equal(afterOpenB.activeTabId, reqBId, 'Active tab must be switched to Collection B');
+  assert.equal(afterOpenB.tabs[0].id, reqAId);
+  assert.equal(afterOpenB.tabs[0].bodyContent, 'token_a');
+  assert.equal(afterOpenB.tabs[1].id, reqBId);
+  assert.equal(afterOpenB.tabs[1].bodyContent, 'token_b');
+
+  // 3. Clicking "get token" from Collection A again should switch back to tab A without creating a 3rd tab
+  state.openRequestInTab(reqA);
+  const afterReclickA = runtime.store.getState();
+  assert.equal(afterReclickA.tabs.length, 2);
+  assert.equal(afterReclickA.activeTabId, reqAId);
+
+  // 4. Clicking "get token" from Collection B again should switch to tab B without creating a 3rd tab
+  state.openRequestInTab(reqB);
+  const afterReclickB = runtime.store.getState();
+  assert.equal(afterReclickB.tabs.length, 2);
+  assert.equal(afterReclickB.activeTabId, reqBId);
+});
+
 
 
