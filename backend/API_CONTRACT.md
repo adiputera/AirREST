@@ -462,6 +462,7 @@ interface CollectionItem {
   method?: string; // 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | etc.
   url?: string;
   params?: Array<{ id: string; key: string; value: string; enabled: boolean; description?: string }>;
+  path_variables?: Array<{ id: string; key: string; value: string; enabled: boolean; description?: string }>;
   headers?: Array<{ id: string; key: string; value: string; enabled: boolean; description?: string }>;
   auth?: {
     type: 'none' | 'bearer' | 'basic' | 'apikey';

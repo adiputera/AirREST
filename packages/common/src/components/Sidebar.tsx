@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import {
   Folder,
   FolderOpen,
@@ -95,6 +95,36 @@ function getAllFolderIdsInCollection(collection: Collection): string[] {
   return ids;
 }
 
+export function calculateOpenUpward(element: HTMLElement | null, menuHeight = 150): boolean {
+  if (!element || typeof window === 'undefined' || !element.getBoundingClientRect) return false;
+  const rect = element.getBoundingClientRect();
+
+  let containerBottom = window.innerHeight || 800;
+  let containerTop = 0;
+
+  let parent = element.parentElement;
+  while (parent) {
+    if (typeof window.getComputedStyle === 'function') {
+      const style = window.getComputedStyle(parent);
+      if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+        if (parent.getBoundingClientRect) {
+          const parentRect = parent.getBoundingClientRect();
+          containerBottom = Math.min(containerBottom, parentRect.bottom);
+          containerTop = Math.max(containerTop, parentRect.top);
+        }
+        break;
+      }
+    }
+    parent = parent.parentElement;
+  }
+
+  const marginBuffer = 8;
+  const spaceBelow = containerBottom - rect.bottom - marginBuffer;
+  const spaceAbove = rect.top - containerTop - marginBuffer;
+
+  return spaceBelow < menuHeight && spaceAbove > spaceBelow;
+}
+
 interface FolderItemProps {
   item: CollectionItem;
   collectionId: string;
@@ -139,10 +169,23 @@ const FolderItem: React.FC<FolderItemProps> = ({
 }) => {
   const isOpen = isSearching ? true : !!openFolders[item.id];
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [openUpward, setOpenUpward] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const [isCreatingSubfolder, setIsCreatingSubfolder] = useState(false);
   const [subfolderName, setSubfolderName] = useState('');
   const [isEditing, setIsEditing] = useState(false);
   const [editingName, setEditingName] = useState(item.name);
+
+  useLayoutEffect(() => {
+    if (isMenuOpen && buttonRef.current && menuRef.current) {
+      const actualHeight = menuRef.current.offsetHeight;
+      const upward = calculateOpenUpward(buttonRef.current, actualHeight);
+      if (upward !== openUpward) {
+        setOpenUpward(upward);
+      }
+    }
+  }, [isMenuOpen, openUpward]);
 
   const [dropPosition, setDropPosition] = useState<'before' | 'after' | 'inside' | null>(null);
   const [isForbidden, setIsForbidden] = useState(false);
@@ -424,9 +467,13 @@ const FolderItem: React.FC<FolderItemProps> = ({
               {/* Folder Options 3-Dots Button */}
               <div className="relative">
                 <button
+                  ref={buttonRef}
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
+                    if (!isMenuOpen) {
+                      setOpenUpward(calculateOpenUpward(buttonRef.current, 200));
+                    }
                     setIsMenuOpen(!isMenuOpen);
                   }}
                   className="rounded p-0.5 text-zinc-400 hover:text-sky-400 hover:bg-zinc-800 transition"
@@ -445,8 +492,11 @@ const FolderItem: React.FC<FolderItemProps> = ({
                       }}
                     />
                     <div
+                      ref={menuRef}
                       onClick={(e) => e.stopPropagation()}
-                      className="absolute right-0 top-full mt-1 z-50 w-44 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-xl animate-in fade-in zoom-in-95 duration-100"
+                      className={`absolute right-0 ${
+                        openUpward ? 'bottom-full mb-1 origin-bottom-right' : 'top-full mt-1 origin-top-right'
+                      } z-50 w-44 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-xl animate-in fade-in zoom-in-95 duration-100`}
                     >
                       {canEdit && (
                         <>
@@ -734,9 +784,13 @@ const FolderItem: React.FC<FolderItemProps> = ({
         >
         <div className="relative">
           <button
+            ref={buttonRef}
             type="button"
             onClick={(e) => {
               e.stopPropagation();
+              if (!isMenuOpen) {
+                setOpenUpward(calculateOpenUpward(buttonRef.current, 140));
+              }
               setIsMenuOpen(!isMenuOpen);
             }}
             className="rounded p-0.5 text-zinc-500 hover:text-sky-400 hover:bg-zinc-800 transition"
@@ -755,8 +809,11 @@ const FolderItem: React.FC<FolderItemProps> = ({
                 }}
               />
               <div
+                ref={menuRef}
                 onClick={(e) => e.stopPropagation()}
-                className="absolute right-0 top-full mt-1 z-50 w-40 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-xl animate-in fade-in zoom-in-95 duration-100"
+                className={`absolute right-0 ${
+                  openUpward ? 'bottom-full mb-1 origin-bottom-right' : 'top-full mt-1 origin-top-right'
+                } z-50 w-40 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-xl animate-in fade-in zoom-in-95 duration-100`}
               >
                 <button
                   type="button"
@@ -860,6 +917,19 @@ export const Sidebar: React.FC = () => {
   };
 
   const [activeAddMenuColId, setActiveAddMenuColId] = useState<string | null>(null);
+  const [colMenuOpenUpward, setColMenuOpenUpward] = useState(false);
+  const colButtonRef = useRef<HTMLButtonElement>(null);
+  const colMenuRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (activeAddMenuColId && colButtonRef.current && colMenuRef.current) {
+      const actualHeight = colMenuRef.current.offsetHeight;
+      const upward = calculateOpenUpward(colButtonRef.current, actualHeight);
+      if (upward !== colMenuOpenUpward) {
+        setColMenuOpenUpward(upward);
+      }
+    }
+  }, [activeAddMenuColId, colMenuOpenUpward]);
   const [creatingFolderInCol, setCreatingFolderInCol] = useState<string | null>(null);
   const [newFolderName, setNewFolderName] = useState('');
   const [requestToMove, setRequestToMove] = useState<{
@@ -1339,10 +1409,16 @@ export const Sidebar: React.FC = () => {
                             {/* Collection Options 3-Dots Button */}
                             <div className="relative">
                               <button
+                                ref={activeAddMenuColId === col.id ? colButtonRef : undefined}
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  setActiveAddMenuColId(activeAddMenuColId === col.id ? null : col.id);
+                                  if (activeAddMenuColId === col.id) {
+                                    setActiveAddMenuColId(null);
+                                  } else {
+                                    setColMenuOpenUpward(calculateOpenUpward(e.currentTarget, 220));
+                                    setActiveAddMenuColId(col.id);
+                                  }
                                 }}
                                 className="rounded p-1 text-zinc-500 hover:text-sky-400 hover:bg-zinc-800 transition"
                                 title="Collection options"
@@ -1360,8 +1436,11 @@ export const Sidebar: React.FC = () => {
                                     }}
                                   />
                                   <div
+                                    ref={colMenuRef}
                                     onClick={(e) => e.stopPropagation()}
-                                    className="absolute right-0 top-full mt-1 z-50 w-48 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-xl animate-in fade-in zoom-in-95 duration-100"
+                                    className={`absolute right-0 ${
+                                      colMenuOpenUpward ? 'bottom-full mb-1 origin-bottom-right' : 'top-full mt-1 origin-top-right'
+                                    } z-50 w-48 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-xl animate-in fade-in zoom-in-95 duration-100`}
                                   >
                                     {canEditCol && (
                                       <>

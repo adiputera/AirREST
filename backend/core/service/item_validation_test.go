@@ -192,4 +192,18 @@ func TestValidateImportItem(t *testing.T) {
 	if err := ValidateImportItem(&invalidHeadersImport); !errors.Is(err, ErrInvalidItemPayload) {
 		t.Fatalf("expected ErrInvalidItemPayload for import with object headers, got: %v", err)
 	}
+
+	// Valid path variables in import
+	validPathVarsImport := *validImport
+	validPathVarsImport.PathVariables = rawJSON(`[{"id":"pv1","key":"id","value":"550e8400","enabled":true,"description":"Rule ID"}]`)
+	if err := ValidateImportItem(&validPathVarsImport); err != nil {
+		t.Fatalf("expected valid path variables to pass, got: %v", err)
+	}
+
+	// Invalid path variables in import (not an array)
+	invalidPathVarsImport := *validImport
+	invalidPathVarsImport.PathVariables = rawJSON(`{"id":"not-an-array"}`)
+	if err := ValidateImportItem(&invalidPathVarsImport); !errors.Is(err, ErrInvalidItemPayload) {
+		t.Fatalf("expected ErrInvalidItemPayload for non-array path variables, got: %v", err)
+	}
 }

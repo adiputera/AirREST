@@ -256,6 +256,18 @@ export const ProjectsView: React.FC = () => {
     return isSuper || isTeamAdm || role === 'admin' || role === 'maintainer';
   });
 
+  const handleOpenMoveCollection = (col: { id: string; name: string }) => {
+    setMoveColItem(col);
+    setTargetMoveProjectId('');
+    setErrorMsg(null);
+  };
+
+  const handleCloseMoveCollection = () => {
+    setMoveColItem(null);
+    setTargetMoveProjectId('');
+    setErrorMsg(null);
+  };
+
   const handleConfirmMoveCollection = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!token || !moveColItem || !targetMoveProjectId) return;
@@ -263,7 +275,7 @@ export const ProjectsView: React.FC = () => {
     setErrorMsg(null);
     try {
       await apiMoveCollection(apiUrl, token, moveColItem.id, targetMoveProjectId, undefined, refreshToken || undefined);
-      setMoveColItem(null);
+      handleCloseMoveCollection();
       if (useHubStore.getState().selectedProjectId !== selectedProjectId) return;
       if (selectedProjectId) {
         const colList = await apiListProjectCollections(apiUrl, token, selectedProjectId, refreshToken || undefined);
@@ -295,6 +307,12 @@ export const ProjectsView: React.FC = () => {
   ) => {
     setPermModalItem({ type, id, name, currentRole, version });
     setSelectedPermRole(currentRole);
+    setErrorMsg(null);
+  };
+
+  const handleClosePermModal = () => {
+    setPermModalItem(null);
+    setSelectedPermRole('reader');
     setErrorMsg(null);
   };
 
@@ -338,7 +356,7 @@ export const ProjectsView: React.FC = () => {
           )
         );
       }
-      setPermModalItem(null);
+      handleClosePermModal();
     } catch (err: any) {
       alert(err.message || 'Failed to update permission');
     } finally {
@@ -406,6 +424,13 @@ export const ProjectsView: React.FC = () => {
     }
 
     const rootItems = items.filter((i) => !i.parent_id);
+    if (rootItems.length === 0 && items.length > 0) {
+      return (
+        <div className="px-3 py-2 text-xs text-amber-400">
+          Folder hierarchy cannot be displayed: cycle or excessive depth.
+        </div>
+      );
+    }
     const childMap = new Map<string, CollectionItem[]>();
     for (const item of items) {
       if (item.parent_id) {
@@ -416,7 +441,7 @@ export const ProjectsView: React.FC = () => {
     }
 
     const renderItem = (item: CollectionItem, depth = 0, ancestors = new Set<string>()): React.ReactNode => {
-      if (ancestors.has(item.id) || depth >= 128) {
+      if (ancestors.has(item.id) || depth >= 32) {
         return <div key={item.id} className="px-3 py-2 text-xs text-amber-400">Folder hierarchy cannot be displayed: cycle or excessive depth.</div>;
       }
       const path = new Set(ancestors);
@@ -494,6 +519,13 @@ export const ProjectsView: React.FC = () => {
     setIsEditProjOpen(true);
   };
 
+  const handleCloseEditProject = () => {
+    setIsEditProjOpen(false);
+    setEditProjName('');
+    setEditProjDesc('');
+    setErrorMsg(null);
+  };
+
   // Handle Update Project
   const handleUpdateProject = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -510,7 +542,7 @@ export const ProjectsView: React.FC = () => {
         refreshToken || undefined
       );
       setProjects((previous) => previous.map((p) => (p.id === selectedProjectId ? { ...p, ...updated } : p)));
-      setIsEditProjOpen(false);
+      handleCloseEditProject();
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to update project');
     } finally {
@@ -519,6 +551,22 @@ export const ProjectsView: React.FC = () => {
   };
 
   // Handle Create Project
+  const resetCreateProjForm = () => {
+    setNewProjName('');
+    setNewProjDesc('');
+    setErrorMsg(null);
+  };
+
+  const handleOpenCreateProj = () => {
+    resetCreateProjForm();
+    setIsCreateProjOpen(true);
+  };
+
+  const handleCloseCreateProj = () => {
+    setIsCreateProjOpen(false);
+    resetCreateProjForm();
+  };
+
   const handleCreateProject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!token) return;
@@ -540,9 +588,7 @@ export const ProjectsView: React.FC = () => {
       if (useHubStore.getState().selectedTeamId !== selectedTeamId) return;
       setProjects((previous) => [newProj, ...previous]);
       setSelectedProjectId(newProj.id);
-      setIsCreateProjOpen(false);
-      setNewProjName('');
-      setNewProjDesc('');
+      handleCloseCreateProj();
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to create project');
     } finally {
@@ -572,6 +618,23 @@ export const ProjectsView: React.FC = () => {
   };
 
   // Handle Assign Member(s)
+  const resetAssignMemberForm = () => {
+    setMemberFilterQuery('');
+    setSelectedUserIdsToAssign([]);
+    setAssignedRole('contributor');
+    setErrorMsg(null);
+  };
+
+  const handleOpenAssignMember = () => {
+    resetAssignMemberForm();
+    setIsAssignMemberOpen(true);
+  };
+
+  const handleCloseAssignMember = () => {
+    setIsAssignMemberOpen(false);
+    resetAssignMemberForm();
+  };
+
   const handleAssignMember = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!token || !selectedProjectId || selectedUserIdsToAssign.length === 0) return;
@@ -613,9 +676,7 @@ export const ProjectsView: React.FC = () => {
       }
 
       if (failedAssignments.length === 0) {
-        setIsAssignMemberOpen(false);
-        setSelectedUserIdsToAssign([]);
-        setMemberFilterQuery('');
+        handleCloseAssignMember();
       } else {
         setSelectedUserIdsToAssign((prev) => prev.filter((id) => !successfulIds.has(id)));
         const errorList = failedAssignments
@@ -713,6 +774,18 @@ export const ProjectsView: React.FC = () => {
   };
 
   // Handle Update Member Role
+  const handleOpenEditMember = (member: ProjectMember) => {
+    setEditingMember(member);
+    setEditRole(member.role);
+    setErrorMsg(null);
+  };
+
+  const handleCloseEditMember = () => {
+    setEditingMember(null);
+    setEditRole('contributor');
+    setErrorMsg(null);
+  };
+
   const handleUpdateRole = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!token || !selectedProjectId || !editingMember) return;
@@ -731,7 +804,7 @@ export const ProjectsView: React.FC = () => {
       const updated = await apiListProjectMembers(apiUrl, token, selectedProjectId, refreshToken || undefined);
       if (useHubStore.getState().selectedProjectId !== selectedProjectId) return;
       setProjectMembers(updated);
-      setEditingMember(null);
+      handleCloseEditMember();
     } catch (err: any) {
       alert(err.message || 'Failed to update project member role');
     } finally {
@@ -803,7 +876,7 @@ export const ProjectsView: React.FC = () => {
             </h2>
             {isTeamAdmin && selectedTeamId && (
               <button
-                onClick={() => setIsCreateProjOpen(true)}
+                onClick={handleOpenCreateProj}
                 className="flex items-center gap-1 rounded-lg bg-sky-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-sky-500 transition shadow-sm"
               >
                 <Plus className="h-3.5 w-3.5" />
@@ -1000,12 +1073,7 @@ export const ProjectsView: React.FC = () => {
 
                   {canEditProject && (
                     <button
-                      onClick={() => {
-                        setMemberFilterQuery('');
-                        setSelectedUserIdsToAssign([]);
-                        setAssignedRole('contributor');
-                        setIsAssignMemberOpen(true);
-                      }}
+                      onClick={handleOpenAssignMember}
                       className="flex items-center gap-2 rounded-xl border border-sky-500/30 bg-sky-500/10 px-3.5 py-2 text-xs font-semibold text-sky-400 hover:bg-sky-500/20 transition shadow-sm shrink-0 whitespace-nowrap self-start sm:self-auto"
                     >
                       <UserCheck className="h-4 w-4" />
@@ -1084,10 +1152,7 @@ export const ProjectsView: React.FC = () => {
                                   ) : (
                                     <div className="flex items-center justify-end gap-1">
                                       <button
-                                        onClick={() => {
-                                          setEditingMember(member);
-                                          setEditRole(member.role);
-                                        }}
+                                        onClick={() => handleOpenEditMember(member)}
                                         className="rounded p-1 text-zinc-500 hover:bg-sky-500/10 hover:text-sky-400 transition"
                                         title="Edit Role"
                                       >
@@ -1223,11 +1288,7 @@ export const ProjectsView: React.FC = () => {
                                   {canMoveCollection && (
                                     <button
                                       type="button"
-                                      onClick={() => {
-                                        setMoveColItem({ id: col.id, name: col.name });
-                                        setTargetMoveProjectId(eligibleTargetProjects[0]?.id || '');
-                                        setErrorMsg(null);
-                                      }}
+                                      onClick={() => handleOpenMoveCollection({ id: col.id, name: col.name })}
                                       className="flex items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-800/80 px-2.5 py-1 text-xs font-semibold text-zinc-300 hover:text-white hover:bg-zinc-700 transition"
                                       title="Move Collection to Another Project"
                                     >
@@ -1429,7 +1490,14 @@ export const ProjectsView: React.FC = () => {
 
       {/* Modal: Create Project */}
       {isCreateProjOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isCreatingProj) {
+              handleCloseCreateProj();
+            }
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+        >
           <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
@@ -1437,7 +1505,7 @@ export const ProjectsView: React.FC = () => {
                 <span>Create New Project</span>
               </h3>
               <button
-                onClick={() => setIsCreateProjOpen(false)}
+                onClick={handleCloseCreateProj}
                 className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800"
               >
                 <X className="h-4 w-4" />
@@ -1471,7 +1539,7 @@ export const ProjectsView: React.FC = () => {
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setIsCreateProjOpen(false)}
+                  onClick={handleCloseCreateProj}
                   className="rounded-lg border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900"
                 >
                   Cancel
@@ -1491,7 +1559,14 @@ export const ProjectsView: React.FC = () => {
 
       {/* Modal: Assign Team Member to Project */}
       {isAssignMemberOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isAssigningMember) {
+              handleCloseAssignMember();
+            }
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+        >
           <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl flex flex-col max-h-[90vh]">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
@@ -1499,7 +1574,7 @@ export const ProjectsView: React.FC = () => {
                 <span>Assign Members to Project</span>
               </h3>
               <button
-                onClick={() => setIsAssignMemberOpen(false)}
+                onClick={handleCloseAssignMember}
                 className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800"
               >
                 <X className="h-4 w-4" />
@@ -1701,7 +1776,7 @@ export const ProjectsView: React.FC = () => {
               <div className="flex justify-end gap-2 pt-2 border-t border-zinc-800">
                 <button
                   type="button"
-                  onClick={() => setIsAssignMemberOpen(false)}
+                  onClick={handleCloseAssignMember}
                   className="rounded-lg border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900"
                 >
                   Cancel
@@ -1726,7 +1801,14 @@ export const ProjectsView: React.FC = () => {
       )}
       {/* Modal: Edit Project Member Role */}
       {editingMember && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isUpdatingRole) {
+              handleCloseEditMember();
+            }
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+        >
           <div className="w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
@@ -1734,7 +1816,7 @@ export const ProjectsView: React.FC = () => {
                 <span>Edit Project Role (RBAC)</span>
               </h3>
               <button
-                onClick={() => setEditingMember(null)}
+                onClick={handleCloseEditMember}
                 className="text-zinc-500 hover:text-zinc-300"
               >
                 <X className="h-4 w-4" />
@@ -1770,7 +1852,7 @@ export const ProjectsView: React.FC = () => {
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setEditingMember(null)}
+                  onClick={handleCloseEditMember}
                   className="rounded-lg border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900"
                 >
                   Cancel
@@ -1789,7 +1871,14 @@ export const ProjectsView: React.FC = () => {
       )}
       {/* Modal: Edit Project */}
       {isEditProjOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isUpdatingProj) {
+              handleCloseEditProject();
+            }
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+        >
           <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
@@ -1797,7 +1886,7 @@ export const ProjectsView: React.FC = () => {
                 <span>Edit Project</span>
               </h3>
               <button
-                onClick={() => setIsEditProjOpen(false)}
+                onClick={handleCloseEditProject}
                 className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800"
               >
                 <X className="h-4 w-4" />
@@ -1838,7 +1927,7 @@ export const ProjectsView: React.FC = () => {
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setIsEditProjOpen(false)}
+                  onClick={handleCloseEditProject}
                   className="rounded-lg border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900"
                 >
                   Cancel
@@ -1929,7 +2018,14 @@ export const ProjectsView: React.FC = () => {
 
       {/* Modal: Change Permission for Collection or Environment */}
       {permModalItem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isUpdatingPerm) {
+              handleClosePermModal();
+            }
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+        >
           <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
@@ -1940,7 +2036,7 @@ export const ProjectsView: React.FC = () => {
               </h3>
               <button
                 type="button"
-                onClick={() => setPermModalItem(null)}
+                onClick={handleClosePermModal}
                 className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800 transition"
               >
                 <X className="h-4 w-4" />
@@ -2025,7 +2121,7 @@ export const ProjectsView: React.FC = () => {
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setPermModalItem(null)}
+                  onClick={handleClosePermModal}
                   className="rounded-lg border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900 transition"
                 >
                   Cancel
@@ -2045,7 +2141,14 @@ export const ProjectsView: React.FC = () => {
 
       {/* Move Collection Modal */}
       {moveColItem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isMovingCol) {
+              handleCloseMoveCollection();
+            }
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+        >
           <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
             <div className="flex items-center justify-between pb-4 border-b border-zinc-800/80 mb-4">
               <div className="flex items-center gap-3">
@@ -2061,7 +2164,7 @@ export const ProjectsView: React.FC = () => {
               </div>
               <button
                 type="button"
-                onClick={() => setMoveColItem(null)}
+                onClick={handleCloseMoveCollection}
                 className="rounded-lg p-1 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900 transition"
               >
                 <X className="h-4 w-4" />
@@ -2109,7 +2212,7 @@ export const ProjectsView: React.FC = () => {
               <div className="flex justify-end gap-2 pt-2 border-t border-zinc-800/80">
                 <button
                   type="button"
-                  onClick={() => setMoveColItem(null)}
+                  onClick={handleCloseMoveCollection}
                   className="rounded-lg border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900 transition"
                 >
                   Cancel

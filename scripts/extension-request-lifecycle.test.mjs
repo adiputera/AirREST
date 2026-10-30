@@ -27,7 +27,7 @@ function loadStore({ executePreRequestScript, executeApiRequest, cloudApi = {}, 
     '@/lib/fetcher': { executeApiRequest },
     '@/lib/scriptRunner': { executePreRequestScript, executePostResponseScript: async () => ({ success: true, environment: {}, variables: {} }) },
     '@/lib/postman': { importPostmanCollection: noop, importPostmanEnvironment: noop, detectPostmanJsonType: noop },
-    '@/lib/urlParams': { parseQueryParamsFromUrl: noop, buildUrlWithParams: noop },
+    '@/lib/urlParams': { parseQueryParamsFromUrl: noop, parsePathVariablesFromUrl: () => [], buildUrlWithParams: noop },
     '@/lib/cloudApi': {
       batchImportToScope: noop,
       registerTokenRefreshCallback: noop,

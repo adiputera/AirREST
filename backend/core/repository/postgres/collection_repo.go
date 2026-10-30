@@ -244,21 +244,21 @@ func (r *CollectionRepository) CreateItem(ctx context.Context, item *domain.Coll
 	query := `
 		INSERT INTO collection_items (
 			id, collection_id, parent_id, type, name, sort_order,
-			method, url, params, headers, auth, body_type, raw_type,
+			method, url, params, path_variables, headers, auth, body_type, raw_type,
 			body_content, graphql_query, graphql_variables, body_form_data,
 			pre_request_script, post_response_script, version, last_modified_by,
 			created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
-			$7, $8, $9, $10, $11, $12, $13,
-			$14, $15, $16, $17,
-			$18, $19, 1, $20,
-			$21, $22
+			$7, $8, $9, $10, $11, $12, $13, $14,
+			$15, $16, $17, $18,
+			$19, $20, 1, $21,
+			$22, $23
 		)
 	`
 	_, err = tx.Exec(ctx, query,
 		item.ID, item.CollectionID, item.ParentID, string(item.Type), item.Name, item.SortOrder,
-		item.Method, item.URL, item.Params, item.Headers, item.Auth, item.BodyType, item.RawType,
+		item.Method, item.URL, item.Params, item.PathVariables, item.Headers, item.Auth, item.BodyType, item.RawType,
 		item.BodyContent, item.GraphQLQuery, item.GraphQLVariables, item.BodyFormData,
 		item.PreRequestScript, item.PostResponseScript, item.LastModifiedBy,
 		item.CreatedAt, item.UpdatedAt,
@@ -274,7 +274,7 @@ func (r *CollectionRepository) CreateItem(ctx context.Context, item *domain.Coll
 func (r *CollectionRepository) GetItemByID(ctx context.Context, id uuid.UUID) (*domain.CollectionItem, error) {
 	query := `
 		SELECT id, collection_id, parent_id, type, name, sort_order,
-		       method, url, params, headers, auth, body_type, raw_type,
+		       method, url, params, path_variables, headers, auth, body_type, raw_type,
 		       body_content, graphql_query, graphql_variables, body_form_data,
 		       pre_request_script, post_response_script, version, last_modified_by,
 		       created_at, updated_at, deleted_at
@@ -285,7 +285,7 @@ func (r *CollectionRepository) GetItemByID(ctx context.Context, id uuid.UUID) (*
 	var typeStr string
 	err := r.pool.QueryRow(ctx, query, id).Scan(
 		&item.ID, &item.CollectionID, &item.ParentID, &typeStr, &item.Name, &item.SortOrder,
-		&item.Method, &item.URL, &item.Params, &item.Headers, &item.Auth, &item.BodyType, &item.RawType,
+		&item.Method, &item.URL, &item.Params, &item.PathVariables, &item.Headers, &item.Auth, &item.BodyType, &item.RawType,
 		&item.BodyContent, &item.GraphQLQuery, &item.GraphQLVariables, &item.BodyFormData,
 		&item.PreRequestScript, &item.PostResponseScript, &item.Version, &item.LastModifiedBy,
 		&item.CreatedAt, &item.UpdatedAt, &item.DeletedAt,
@@ -328,16 +328,16 @@ func (r *CollectionRepository) UpdateItem(ctx context.Context, item *domain.Coll
 	query := `
 		UPDATE collection_items
 		SET parent_id = $1, name = $2, sort_order = $3,
-		    method = $4, url = $5, params = $6, headers = $7, auth = $8,
-		    body_type = $9, raw_type = $10, body_content = $11, graphql_query = $12,
-		    graphql_variables = $13, body_form_data = $14, pre_request_script = $15,
-		    post_response_script = $16, version = version + 1, last_modified_by = $17,
-		    updated_at = $18
-		WHERE id = $19 AND version = $20 AND deleted_at IS NULL
+		    method = $4, url = $5, params = $6, path_variables = $7, headers = $8, auth = $9,
+		    body_type = $10, raw_type = $11, body_content = $12, graphql_query = $13,
+		    graphql_variables = $14, body_form_data = $15, pre_request_script = $16,
+		    post_response_script = $17, version = version + 1, last_modified_by = $18,
+		    updated_at = $19
+		WHERE id = $20 AND version = $21 AND deleted_at IS NULL
 	`
 	result, err := tx.Exec(ctx, query,
 		item.ParentID, item.Name, item.SortOrder,
-		item.Method, item.URL, item.Params, item.Headers, item.Auth,
+		item.Method, item.URL, item.Params, item.PathVariables, item.Headers, item.Auth,
 		item.BodyType, item.RawType, item.BodyContent, item.GraphQLQuery,
 		item.GraphQLVariables, item.BodyFormData, item.PreRequestScript,
 		item.PostResponseScript, item.LastModifiedBy,
@@ -435,7 +435,7 @@ func (r *CollectionRepository) SoftDeleteItem(ctx context.Context, id uuid.UUID,
 func (r *CollectionRepository) ListActiveItemsByCollection(ctx context.Context, collectionID uuid.UUID) ([]*domain.CollectionItem, error) {
 	query := `
 		SELECT id, collection_id, parent_id, type, name, sort_order,
-		       method, url, params, headers, auth, body_type, raw_type,
+		       method, url, params, path_variables, headers, auth, body_type, raw_type,
 		       body_content, graphql_query, graphql_variables, body_form_data,
 		       pre_request_script, post_response_script, version, last_modified_by,
 		       created_at, updated_at, deleted_at
@@ -455,7 +455,7 @@ func (r *CollectionRepository) ListActiveItemsByCollection(ctx context.Context, 
 		var typeStr string
 		err := rows.Scan(
 			&item.ID, &item.CollectionID, &item.ParentID, &typeStr, &item.Name, &item.SortOrder,
-			&item.Method, &item.URL, &item.Params, &item.Headers, &item.Auth, &item.BodyType, &item.RawType,
+			&item.Method, &item.URL, &item.Params, &item.PathVariables, &item.Headers, &item.Auth, &item.BodyType, &item.RawType,
 			&item.BodyContent, &item.GraphQLQuery, &item.GraphQLVariables, &item.BodyFormData,
 			&item.PreRequestScript, &item.PostResponseScript, &item.Version, &item.LastModifiedBy,
 			&item.CreatedAt, &item.UpdatedAt, &item.DeletedAt,

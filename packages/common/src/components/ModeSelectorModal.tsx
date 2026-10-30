@@ -51,7 +51,7 @@ export const ModeSelectorModal: React.FC<ModeSelectorModalProps> = ({
             How would you like to use AirREST?
           </h2>
           <p className="text-xs text-zinc-400 mt-1 max-w-md mx-auto">
-            Choose your storage mode. You can switch between offline and cloud sync at any time from the top header.
+            Choose your storage mode. You can switch between offline and self-hosted sync at any time from the top header.
           </p>
         </div>
 
@@ -132,11 +132,11 @@ export const ModeSelectorModal: React.FC<ModeSelectorModalProps> = ({
               </div>
 
               <h3 className="text-sm font-semibold text-zinc-100 flex items-center gap-1.5">
-                Cloud Sync Mode
+                Self-Hosted Sync Mode
                 {workspaceMode === 'cloud' && <Check className="h-4 w-4 text-indigo-400" />}
               </h3>
               <p className="text-xs text-zinc-400 mt-1.5 leading-relaxed">
-                Connect to AirREST Cloud or self-hosted backend. Sync collections, share environments, and collaborate with your team.
+                Connect to self-hosted AirREST backend. Sync collections, share environments, and collaborate with your team.
               </p>
 
               <div className="mt-4 space-y-1.5 border-t border-zinc-800/80 pt-3 text-[11px] text-zinc-300">
@@ -162,7 +162,7 @@ export const ModeSelectorModal: React.FC<ModeSelectorModalProps> = ({
               }}
               className="mt-5 w-full flex items-center justify-center gap-1.5 rounded-lg bg-gradient-to-r from-sky-600 to-indigo-600 py-2 text-xs font-semibold text-white shadow-md shadow-sky-500/20 hover:from-sky-500 hover:to-indigo-500 transition"
             >
-              <span>Connect Cloud Sync</span>
+              <span>Connect Self-Hosted Sync</span>
               <ArrowRight className="h-3.5 w-3.5" />
             </button>
           </div>
@@ -170,7 +170,7 @@ export const ModeSelectorModal: React.FC<ModeSelectorModalProps> = ({
 
         {/* Footer Note */}
         <p className="text-center text-[11px] text-zinc-500 mt-5">
-          You can toggle between Offline and Cloud mode at any time using the header badge.
+          You can toggle between Offline and Self-Hosted mode at any time using the header badge.
         </p>
       </div>
     </div>

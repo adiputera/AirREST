@@ -12,7 +12,7 @@ import {
   RawType,
   FormDataItem,
 } from '@/types/api';
-import { parseQueryParamsFromUrl } from '@/lib/urlParams';
+import { parseQueryParamsFromUrl, parsePathVariablesFromUrl } from '@/lib/urlParams';
 
 export interface PostmanHeader {
   key?: string;
@@ -28,6 +28,13 @@ export interface PostmanQueryParam {
   description?: string;
 }
 
+export interface PostmanVariable {
+  key?: string;
+  value?: string;
+  disabled?: boolean;
+  description?: string;
+}
+
 export interface PostmanUrlObject {
   raw?: string;
   protocol?: string;
@@ -35,6 +42,7 @@ export interface PostmanUrlObject {
   port?: string;
   path?: string[] | string;
   query?: PostmanQueryParam[];
+  variable?: PostmanVariable[];
 }
 
 interface PostmanRequestBody {
@@ -179,6 +187,29 @@ function parseQueryParams(url?: string | PostmanUrlObject, rawUrl?: string): Key
   }
 
   return [{ id: generateId(), key: '', value: '', enabled: true }];
+}
+
+function parsePathVariables(url?: string | PostmanUrlObject, rawUrl?: string): KeyValuePair[] {
+  const targetUrl = typeof url === 'string' ? url : (url?.raw || rawUrl || '');
+  const extractedFromUrl = parsePathVariablesFromUrl(targetUrl);
+
+  if (url && typeof url === 'object' && Array.isArray(url.variable)) {
+    const fromVariables: KeyValuePair[] = url.variable
+      .filter((v) => String(v?.key ?? '').trim() !== '')
+      .map((v) => ({
+        id: generateId(),
+        key: String(v?.key ?? '').trim(),
+        value: String(v?.value ?? ''),
+        enabled: !v?.disabled,
+        description: v?.description,
+      }));
+
+    if (fromVariables.length > 0) {
+      return parsePathVariablesFromUrl(targetUrl, fromVariables);
+    }
+  }
+
+  return extractedFromUrl;
 }
 
 function extractRawUrl(url?: string | PostmanUrlObject): string {
@@ -437,6 +468,7 @@ export function convertPostmanItem(item: PostmanRawItem, inheritedAuth?: AuthCon
 
   const rawUrl = extractRawUrl(rawReq.url);
   const params = parseQueryParams(rawReq.url);
+  const pathVariables = parsePathVariables(rawReq.url, rawUrl);
   const headers = parseHeaders(rawReq.header);
 
   let bodyType: BodyType = 'none';
@@ -631,6 +663,7 @@ export function convertPostmanItem(item: PostmanRawItem, inheritedAuth?: AuthCon
     method: safeMethod,
     url: rawUrl,
     params,
+    pathVariables,
     headers: finalHeaders,
     auth,
     bodyType,
@@ -867,7 +900,7 @@ function itemToPostmanJson(item: CollectionItem): PostmanRawItem {
     };
   }
 
-  const postmanUrl = buildPostmanUrl(req.url, req.params);
+  const postmanUrl = buildPostmanUrl(req.url, req.params, req.pathVariables);
 
   return {
     name: req.name || item.name,
@@ -886,7 +919,11 @@ function itemToPostmanJson(item: CollectionItem): PostmanRawItem {
  * Builds a standard Postman v2.1 URL object from a raw URL string and query parameters.
  * Accurately extracts protocol, host, port, path, and non-empty query parameters.
  */
-export function buildPostmanUrl(rawUrl: string, params: KeyValuePair[] = []): PostmanUrlObject {
+export function buildPostmanUrl(
+  rawUrl: string,
+  params: KeyValuePair[] = [],
+  pathVariables: KeyValuePair[] = []
+): PostmanUrlObject {
   const trimmedUrl = (rawUrl || '').trim();
 
   // 1. Filter out completely empty placeholder rows from params
@@ -1010,6 +1047,19 @@ export function buildPostmanUrl(rawUrl: string, params: KeyValuePair[] = []): Po
   }
   if (validParams.length > 0) {
     urlObj.query = validParams;
+  }
+
+  const validVariables: PostmanVariable[] = (pathVariables || [])
+    .filter((v) => v && String(v.key ?? '').trim() !== '')
+    .map((v) => ({
+      key: String(v.key).trim(),
+      value: String(v.value ?? ''),
+      ...(v.enabled === false ? { disabled: true } : {}),
+      ...(v.description ? { description: v.description } : {}),
+    }));
+
+  if (validVariables.length > 0) {
+    urlObj.variable = validVariables;
   }
 
   return urlObj;
