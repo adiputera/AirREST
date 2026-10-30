@@ -1,5 +1,18 @@
 export type SystemRole = 'superadmin' | 'user';
 
+export interface FeatureFlags {
+  'collection.move': boolean;
+  'collection.delete': boolean;
+  'collection.export': boolean;
+}
+
+export interface FeaturePolicy {
+  flags: FeatureFlags;
+  revision: number;
+  updated_by?: string;
+  updated_at: string;
+}
+
 export interface User {
   id: string;
   email: string;
@@ -124,4 +137,3 @@ export interface Environment {
   created_at?: string;
   updated_at?: string;
 }
-

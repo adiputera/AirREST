@@ -12,7 +12,8 @@ import (
 )
 
 var (
-	ErrReaderCannotModify = errors.New("reader role does not have permission to create or modify collections/requests")
+	ErrReaderCannotModify                   = errors.New("reader role does not have permission to create or modify collections/requests")
+	ErrProjectCollectionMoveToPersonalScope = errors.New("collections in projects cannot be moved to personal workspaces")
 )
 
 type CollectionService struct {
@@ -20,6 +21,7 @@ type CollectionService struct {
 	workspaceRepo  *postgres.WorkspaceRepository
 	projectRepo    *postgres.ProjectRepository
 	projectService *ProjectService
+	featurePolicy  *FeaturePolicyService
 }
 
 func NewCollectionService(
@@ -27,12 +29,18 @@ func NewCollectionService(
 	workspaceRepo *postgres.WorkspaceRepository,
 	projectRepo *postgres.ProjectRepository,
 	projectService *ProjectService,
+	featurePolicies ...*FeaturePolicyService,
 ) *CollectionService {
+	var featurePolicy *FeaturePolicyService
+	if len(featurePolicies) > 0 {
+		featurePolicy = featurePolicies[0]
+	}
 	return &CollectionService{
 		collectionRepo: collectionRepo,
 		workspaceRepo:  workspaceRepo,
 		projectRepo:    projectRepo,
 		projectService: projectService,
+		featurePolicy:  featurePolicy,
 	}
 }
 
@@ -276,6 +284,11 @@ func (s *CollectionService) DeleteCollection(ctx context.Context, user *domain.U
 	if err := s.CheckOperationPermission(ctx, user, col.WorkspaceID, col.ProjectID, domain.PermissionCollectionDelete); err != nil {
 		return err
 	}
+	if s.featurePolicy != nil {
+		if err := s.featurePolicy.RequireEnabled(ctx, domain.FeatureCollectionDelete); err != nil {
+			return err
+		}
+	}
 	return s.collectionRepo.SoftDeleteCollection(ctx, id, user.ID)
 }
 
@@ -345,6 +358,11 @@ func (s *CollectionService) MoveCollection(ctx context.Context, user *domain.Use
 			}
 		}
 
+		if s.featurePolicy != nil {
+			if err := s.featurePolicy.RequireEnabled(ctx, domain.FeatureCollectionMove); err != nil {
+				return err
+			}
+		}
 		return s.collectionRepo.MoveCollection(ctx, collectionID, nil, targetProjectID, user.ID)
 	}
 
@@ -374,8 +392,14 @@ func (s *CollectionService) MoveCollection(ctx context.Context, user *domain.Use
 			if err != nil || !domain.HasPermission(domain.GetPermissionsForRole(sourceRole), domain.PermissionCollectionMove) || !CanAccessCollection(sourceRole, col.MinRole) {
 				return ErrForbidden
 			}
+			return ErrProjectCollectionMoveToPersonalScope
 		}
 
+		if s.featurePolicy != nil {
+			if err := s.featurePolicy.RequireEnabled(ctx, domain.FeatureCollectionMove); err != nil {
+				return err
+			}
+		}
 		return s.collectionRepo.MoveCollection(ctx, collectionID, targetWorkspaceID, nil, user.ID)
 	}
 

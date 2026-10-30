@@ -256,6 +256,7 @@ type SyncConflictReport struct {
 	ID         uuid.UUID `json:"id"`
 	Type       string    `json:"type"` // "collection", "item", "environment"
 	Message    string    `json:"message"`
+	Code       string    `json:"code,omitempty"`
 	ServerData any       `json:"server_data,omitempty"`
 }
 
@@ -361,6 +362,14 @@ func (s *SyncService) PushChangeset(ctx context.Context, user *domain.User, req 
 		case "delete":
 			if err := s.collectionService.DeleteCollection(ctx, user, m.Collection.ID); err == nil {
 				resp.AppliedIDs = append(resp.AppliedIDs, m.Collection.ID)
+			} else {
+				conflict := SyncConflictReport{ID: m.Collection.ID, Type: "collection", Message: err.Error()}
+				if errors.Is(err, ErrFeatureDisabled) {
+					conflict.Code = "FEATURE_DISABLED"
+				} else if errors.Is(err, ErrFeaturePolicyUnavailable) {
+					conflict.Code = "FEATURE_POLICY_UNAVAILABLE"
+				}
+				resp.Conflicts = append(resp.Conflicts, conflict)
 			}
 		}
 	}

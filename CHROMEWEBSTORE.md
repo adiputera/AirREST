@@ -34,7 +34,7 @@ KEY FEATURES
 • Multi-workspace isolation: Multiple offline workspaces and online personal/team cloud workspaces
 • Supports all standard HTTP methods: GET, POST, PUT, PATCH, DELETE, HEAD, and OPTIONS
 • Native import and export compatibility with Postman Collection v2.1.0 and Environment files
-• Multi-tab workspace with unsaved change indicators, tab duplication, and keyboard shortcuts
+• Multi-tab workspace with in-memory response persistence, zero-tabs empty studio state, unsaved change indicators, tab duplication, and keyboard shortcuts
 • Comprehensive request body support: JSON (with beautifier & syntax check), GraphQL (query & variables), XML, URL-encoded, Form-Data (file uploads), and raw binary
 • Parameter and header editors with dynamic variable interpolation ({{$guid}}, {{$timestamp}}, custom variables)
 • Sandboxed scripting engine supporting pre-request scripts and post-response test assertions
@@ -63,7 +63,9 @@ SUPPORT
 For questions, bug reports, or feature suggestions, visit the project repository on GitHub:
 https://github.com/adiputera/AirREST
 
-Version 1.1.6 — Added multiple online personal workspaces management in Scope Switcher (create, rename, delete with default protection), resilient empty workspace cloud delta sync, team project auto-loading, and unified file picker flow.
+Version 1.1.8 — Added Hub-managed controls for moving, deleting, and exporting cloud collections. The extension refreshes these controls when changing cloud scope or using Sync Online, and prevents moving project collections into personal workspaces.
+Version 1.1.7 — Added universal sidebar collection and request search with multi-token parsing, multi-tab request isolation eliminating collisions across collections, in-memory per-tab response persistence, zero-tabs empty state studio, and collection badges in editor and tab hover tooltips.
+Version 1.1.6 — Added Save As duplicate request independence, HTTP method and name duplicate collision guard with interactive conflict resolution (Save Copy / Replace), reader scope read-only enforcement, Scope Switcher personal workspaces management, resilient empty workspace cloud delta sync, team project auto-loading, and unified file picker flow.
 Version 1.1.5 — Removed unused storage permission to adhere to the Chrome Web Store minimal permissions policy; all workspaces, collections, and environments persist durably in IndexedDB.
 Version 1.1.4 — Added request lifecycle safeguards (pre-request aborts, cancellation, 30s timeout, 10 MiB stream caps), atomic item-collection versioning, side-by-side environment OCC conflict resolution, durable multi-window storage sync, and attachment recovery.
 Version 1.1.3 — Added seamless password change re-authentication, sequential cloud collection import with real-time progress, and aligned move collection capabilities.
@@ -124,7 +126,7 @@ KEY FEATURES
 • All collections, environments, and history stay strictly on your local computer
 • Supports all standard HTTP methods: GET, POST, PUT, PATCH, DELETE, HEAD, and OPTIONS
 • Native import and export compatibility with Postman Collection v2.1.0 and Environment files
-• Multi-tab workspace with unsaved change tracking and keyboard shortcuts
+• Multi-tab workspace with in-memory response persistence, zero-tabs empty studio state, unsaved change tracking and keyboard shortcuts
 • Comprehensive request body support: JSON (with beautifier & syntax check), GraphQL, XML, URL-encoded, Form-Data (file uploads), and raw binary
 • Parameter and header editors with dynamic variable interpolation ({{$guid}}, {{$timestamp}}, custom variables)
 • Sandboxed scripting engine supporting pre-request scripts and post-response test assertions
@@ -149,7 +151,9 @@ SUPPORT
 For questions, bug reports, or feature suggestions, visit the project repository on GitHub:
 https://github.com/adiputera/AirREST
 
-Version 1.1.6 — Improved Scope Switcher offline workspace navigation, unified native and browser file picker flows, and enhanced local import stability.
+Version 1.1.8 — Updated release metadata. Offline mode remains local-only and does not connect to Hub feature controls.
+Version 1.1.7 — Added universal sidebar collection and request search with multi-token parsing, multi-tab request isolation eliminating collisions across collections, in-memory per-tab response persistence, zero-tabs empty state studio, and collection badges in editor and tab hover tooltips.
+Version 1.1.6 — Added Save As duplicate request independence, HTTP method and name duplicate collision guard with interactive conflict resolution (Save Copy / Replace), Scope Switcher offline workspace navigation, unified native and browser file picker flows, and enhanced local collection management.
 Version 1.1.5 — Removed unused storage permission to adhere to the Chrome Web Store minimal permissions policy; local collections and history persist durably in IndexedDB.
 Version 1.1.4 — Added request lifecycle safeguards (pre-request aborts, cancellation, 30s timeout, 10 MiB stream caps), attachment recovery, multi-window storage synchronization, and isolated memory cleanup.
 Version 1.1.3 — Client performance stability improvements, enhanced offline collection safeguards, and hardened memory management.

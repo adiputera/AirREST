@@ -1,4 +1,4 @@
-import { User, Team, TeamMember, Project, ProjectMember, Collection, Environment, ProjectRole } from '../types';
+import { User, Team, TeamMember, Project, ProjectMember, Collection, Environment, ProjectRole, FeaturePolicy, FeatureFlags } from '../types';
 
 export interface TokenRefreshCallback {
   (tokens: { token: string; refreshToken: string; expiresAt: string; previousRefreshToken: string }): void;
@@ -402,6 +402,32 @@ export async function apiListAllUsers(apiUrl: string, token: string, refreshToke
   if (!res.ok) throw new Error(extractError(json, 'Failed to list users'));
   const data = unwrapData<any>(json);
   return (Array.isArray(data) ? data : []) as User[];
+}
+
+export async function apiGetFeaturePolicy(apiUrl: string, token: string, refreshToken?: string): Promise<FeaturePolicy> {
+  const res = await fetchWithAuth('/api/v1/admin/feature-policy', { apiUrl, token, refreshToken });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(extractError(json, 'Failed to load feature controls'));
+  return unwrapData<FeaturePolicy>(json);
+}
+
+export async function apiUpdateFeaturePolicy(
+  apiUrl: string,
+  token: string,
+  baseRevision: number,
+  flags: FeatureFlags,
+  refreshToken?: string
+): Promise<FeaturePolicy> {
+  const res = await fetchWithAuth('/api/v1/admin/feature-policy', {
+    method: 'PUT',
+    apiUrl,
+    token,
+    refreshToken,
+    body: JSON.stringify({ base_revision: baseRevision, flags }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(extractError(json, 'Failed to save feature controls'));
+  return unwrapData<FeaturePolicy>(json);
 }
 
 export async function apiProvisionUser(

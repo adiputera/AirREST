@@ -39,13 +39,17 @@ import { canModifyCollection, hasScopePermission } from '../lib/jwt';
 import { getDefaultPlatformAdapter } from '../lib/fetcher';
 
 function filterCollectionItems(items: CollectionItem[], query: string): CollectionItem[] {
+  const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return items || [];
+
   return (items || [])
     .map((item) => {
       if (!item) return null;
       const itemName = String(item.name || '').toLowerCase();
       if (item.type === 'folder') {
         const matchingChildren = item.items ? filterCollectionItems(item.items, query) : [];
-        if (matchingChildren.length > 0 || itemName.includes(query)) {
+        const folderMatches = tokens.every((token) => itemName.includes(token));
+        if (matchingChildren.length > 0 || folderMatches) {
           return {
             ...item,
             items: matchingChildren.length > 0 ? matchingChildren : item.items,
@@ -54,12 +58,8 @@ function filterCollectionItems(items: CollectionItem[], query: string): Collecti
         return null;
       }
       if (item.type === 'request') {
-        const reqUrl = String(item.request?.url || '').toLowerCase();
-        const reqMethod = String(item.request?.method || '').toLowerCase();
-        const matches =
-          itemName.includes(query) ||
-          reqUrl.includes(query) ||
-          reqMethod.includes(query);
+        const fullText = `${item.name || ''} ${item.request?.method || ''} ${item.request?.url || ''}`.toLowerCase();
+        const matches = tokens.every((token) => fullText.includes(token));
         return matches ? item : null;
       }
       return null;
@@ -686,7 +686,14 @@ const FolderItem: React.FC<FolderItemProps> = ({
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      onClick={() => onSelectRequest(item.request!)}
+      onClick={() => {
+        const resolvedId = item.request?.id || item.id;
+        onSelectRequest({
+          ...item.request!,
+          id: resolvedId,
+          name: item.name || item.request?.name || 'Untitled Request',
+        });
+      }}
       className={`group relative flex items-center gap-2 py-1.5 px-2 rounded-md transition text-xs ${
         isForbidden
           ? 'cursor-not-allowed bg-rose-500/10 text-rose-300'
@@ -815,12 +822,19 @@ export const Sidebar: React.FC = () => {
   const openRequestInTab = useApiStore((state) => state.openRequestInTab);
   const workspaceMode = useApiStore((state) => state.workspaceMode);
   const cloudConfig = useApiStore((state) => state.cloudConfig);
+  const featurePolicy = useApiStore((state) => state.featurePolicy);
+  const featurePolicyStatus = useApiStore((state) => state.featurePolicyStatus);
+  const refreshFeaturePolicy = useApiStore((state) => state.refreshFeaturePolicy);
   const pullCloudDelta = useApiStore((state) => state.pullCloudDelta);
   const syncStatus = useApiStore((state) => state.syncStatus);
 
   const canWriteScope = hasScopePermission(cloudConfig.activeScope, 'collection:write', workspaceMode, cloudConfig.user?.role);
   const canMoveScope = hasScopePermission(cloudConfig.activeScope, 'collection:move', workspaceMode, cloudConfig.user?.role);
   const canDeleteScope = hasScopePermission(cloudConfig.activeScope, 'collection:delete', workspaceMode, cloudConfig.user?.role);
+  const isCloudPolicyReady = workspaceMode !== 'cloud' || featurePolicyStatus === 'ready';
+  const isMoveEnabled = workspaceMode !== 'cloud' || (isCloudPolicyReady && featurePolicy?.flags['collection.move'] === true);
+  const isDeleteEnabled = workspaceMode !== 'cloud' || (isCloudPolicyReady && featurePolicy?.flags['collection.delete'] === true);
+  const isExportEnabled = workspaceMode !== 'cloud' || (isCloudPolicyReady && featurePolicy?.flags['collection.export'] === true);
   const isProjectReadOnly = workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project' && !canWriteScope;
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -831,6 +845,8 @@ export const Sidebar: React.FC = () => {
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [collectionToDelete, setCollectionToDelete] = useState<Collection | null>(null);
   const [collectionToMove, setCollectionToMove] = useState<Collection | null>(null);
+  const [collectionActionError, setCollectionActionError] = useState<string | null>(null);
+  const [isDeletingCollection, setIsDeletingCollection] = useState(false);
   const [showClearHistoryConfirm, setShowClearHistoryConfirm] = useState(false);
   const [collapsedCollections, setCollapsedCollections] = useState<Record<string, boolean>>({});
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({});
@@ -975,38 +991,44 @@ export const Sidebar: React.FC = () => {
     }));
   };
 
+  const queryTokens = trimmedQuery.split(/\s+/).filter(Boolean);
+
   const filteredCollections = !trimmedQuery
     ? (collections || [])
     : (collections || [])
         .map((col) => {
           if (!col) return null;
-          const nameMatches = String(col.name || '').toLowerCase().includes(trimmedQuery);
+          const colText = `${col.name || ''} ${col.description || ''}`.toLowerCase();
+          const nameMatches = queryTokens.length > 0 && queryTokens.every((token) => colText.includes(token));
           const matchedItems = filterCollectionItems(col.items || [], trimmedQuery);
           if (nameMatches || matchedItems.length > 0) {
             return {
               ...col,
-              items: nameMatches ? col.items : matchedItems,
+              items: matchedItems.length > 0 ? matchedItems : col.items,
             };
           }
           return null;
         })
         .filter((col): col is Collection => col !== null);
 
-  const filteredHistory = (history || []).filter((h) => {
-    if (!h || !h.request) return false;
-    const url = String(h.request.url || '').toLowerCase();
-    const name = String(h.request.name || '').toLowerCase();
-    const method = String(h.request.method || '').toLowerCase();
-    return (
-      url.includes(trimmedQuery) ||
-      name.includes(trimmedQuery) ||
-      method.includes(trimmedQuery)
-    );
-  });
+  const filteredHistory = !trimmedQuery
+    ? (history || [])
+    : (history || []).filter((h) => {
+        if (!h || !h.request) return false;
+        const fullText = `${h.request.name || ''} ${h.request.method || ''} ${h.request.url || ''}`.toLowerCase();
+        return queryTokens.every((token) => fullText.includes(token));
+      });
 
   const handleExportCollection = async (e: React.MouseEvent, col: Collection) => {
     e.stopPropagation();
     try {
+      if (workspaceMode === 'cloud') {
+        const policy = await refreshFeaturePolicy(true);
+        if (!policy?.flags['collection.export']) {
+          setCollectionActionError('Collection export is disabled or feature policy is unavailable.');
+          return;
+        }
+      }
       const json = exportPostmanCollection(col);
       const filename = `${col.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-postman-v2.1.json`;
       const adapter = getDefaultPlatformAdapter();
@@ -1069,16 +1091,32 @@ export const Sidebar: React.FC = () => {
       {/* Search Input and Add Collection Bar */}
       <div className="p-2 border-b border-zinc-850 space-y-1.5">
         <div className="relative flex items-center">
-          <Search className="absolute left-2.5 h-3.5 w-3.5 text-zinc-500" />
+          <Search className="absolute left-2.5 h-3.5 w-3.5 text-zinc-500 pointer-events-none" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape' && searchQuery) {
+                setSearchQuery('');
+              }
+            }}
             placeholder={
-              sidebarTab === 'collections' ? 'Filter collections...' : 'Filter history...'
+              sidebarTab === 'collections' ? 'Search collections or requests...' : 'Filter history...'
             }
-            className="w-full rounded-lg border border-zinc-800 bg-zinc-900/90 py-1.5 pl-8 pr-3 text-xs text-zinc-200 placeholder-zinc-500 focus:border-sky-500 focus:outline-none"
+            className="w-full rounded-lg border border-zinc-800 bg-zinc-900/90 py-1.5 pl-8 pr-7 text-xs text-zinc-200 placeholder-zinc-500 focus:border-sky-500 focus:outline-none"
           />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2 text-zinc-500 hover:text-zinc-300 transition p-0.5 rounded"
+              title="Clear search"
+              aria-label="Clear search"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
 
         {sidebarTab === 'collections' && (
@@ -1181,10 +1219,19 @@ export const Sidebar: React.FC = () => {
             ) : filteredCollections.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-8 px-4 text-center">
                 <Search className="h-6 w-6 text-zinc-600" />
-                <h4 className="mt-2 text-xs font-semibold text-zinc-300">No Matching Collections</h4>
+                <h4 className="mt-2 text-xs font-semibold text-zinc-300">No Matching Results</h4>
                 <p className="mt-1 text-[11px] text-zinc-500">
                   No collection or request matched &ldquo;{searchQuery}&rdquo;.
                 </p>
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="mt-2 text-[11px] text-sky-400 hover:text-sky-300 underline"
+                  >
+                    Clear search
+                  </button>
+                )}
               </div>
             ) : (
               <div className="space-y-2">
@@ -1358,11 +1405,14 @@ export const Sidebar: React.FC = () => {
                                         {canMoveScope && (
                                           <button
                                             type="button"
+                                            disabled={!isMoveEnabled}
                                             onClick={() => {
+                                              if (!isMoveEnabled) return;
                                               setActiveAddMenuColId(null);
                                               setCollectionToMove(col);
                                             }}
-                                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-amber-400 transition"
+                                            title={!isMoveEnabled ? 'Move Collection is disabled by Hub policy' : undefined}
+                                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-amber-400 transition disabled:cursor-not-allowed disabled:opacity-45"
                                           >
                                             <FolderInput className="h-3.5 w-3.5 text-amber-400" />
                                             <span>Move Collection</span>
@@ -1372,11 +1422,14 @@ export const Sidebar: React.FC = () => {
                                     )}
                                     <button
                                       type="button"
+                                      disabled={!isExportEnabled}
                                       onClick={(e) => {
+                                        if (!isExportEnabled) return;
                                         setActiveAddMenuColId(null);
                                         handleExportCollection(e, col);
                                       }}
-                                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition"
+                                      title={!isExportEnabled ? 'Export Collection is disabled by Hub policy' : undefined}
+                                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition disabled:cursor-not-allowed disabled:opacity-45"
                                     >
                                       <Download className="h-3.5 w-3.5 text-sky-400" />
                                       <span>Export Collection</span>
@@ -1409,11 +1462,15 @@ export const Sidebar: React.FC = () => {
                                         <div className="my-1 border-t border-zinc-800/80" />
                                         <button
                                           type="button"
+                                          disabled={!isDeleteEnabled}
                                           onClick={() => {
+                                            if (!isDeleteEnabled) return;
                                             setActiveAddMenuColId(null);
+                                            setCollectionActionError(null);
                                             setCollectionToDelete(col);
                                           }}
-                                          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-rose-400 hover:bg-rose-500/10 transition"
+                                          title={!isDeleteEnabled ? 'Delete Collection is disabled by Hub policy' : undefined}
+                                          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-rose-400 hover:bg-rose-500/10 transition disabled:cursor-not-allowed disabled:opacity-45"
                                         >
                                           <Trash2 className="h-3.5 w-3.5 text-rose-400" />
                                           <span>Delete Collection</span>
@@ -1538,10 +1595,23 @@ export const Sidebar: React.FC = () => {
             {filteredHistory.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
                 <Clock className="h-8 w-8 text-zinc-600" />
-                <h3 className="mt-3 text-xs font-semibold text-zinc-300">No History</h3>
+                <h3 className="mt-3 text-xs font-semibold text-zinc-300">
+                  {history.length === 0 ? 'No History' : 'No Matching History'}
+                </h3>
                 <p className="mt-1 text-[11px] text-zinc-500">
-                  Requests sent will automatically appear here.
+                  {history.length === 0
+                    ? 'Requests sent will automatically appear here.'
+                    : `No history item matched "${searchQuery}".`}
                 </p>
+                {history.length > 0 && searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="mt-2 text-[11px] text-sky-400 hover:text-sky-300 underline"
+                  >
+                    Clear search
+                  </button>
+                )}
               </div>
             ) : (
               <div className="space-y-1">
@@ -1552,7 +1622,7 @@ export const Sidebar: React.FC = () => {
                   return (
                     <div
                       key={item.id}
-                      onClick={() => openRequestInTab(item.request)}
+                      onClick={() => openRequestInTab(item.request, item.response)}
                       className="group flex flex-col gap-1 rounded-lg border border-zinc-850/80 bg-zinc-900/40 p-2 hover:bg-zinc-850 hover:border-zinc-700 cursor-pointer transition"
                     >
                       <div className="flex items-center justify-between gap-1.5">
@@ -1588,22 +1658,34 @@ export const Sidebar: React.FC = () => {
 
       <ConfirmModal
         isOpen={!!collectionToDelete}
-        onClose={() => setCollectionToDelete(null)}
+        onClose={() => {
+          if (!isDeletingCollection) setCollectionToDelete(null);
+        }}
         onConfirm={() => {
-          if (collectionToDelete) {
-            deleteCollection(collectionToDelete.id);
-            setCollectionToDelete(null);
-          }
+          if (!collectionToDelete) return;
+          setIsDeletingCollection(true);
+          void deleteCollection(collectionToDelete.id).then((result) => {
+            if (result.success) {
+              setCollectionToDelete(null);
+              setCollectionActionError(null);
+            } else {
+              setCollectionActionError(result.error || 'Failed to delete collection.');
+            }
+          }).finally(() => {
+            setIsDeletingCollection(false);
+          });
         }}
         title="Delete Collection"
         message={
           <span>
             Are you sure you want to delete collection{' '}
             <strong className="text-zinc-200">"{collectionToDelete?.name}"</strong>? This will permanently remove the collection and all its requests.
+            {collectionActionError && <span className="mt-2 block text-rose-300">{collectionActionError}</span>}
           </span>
         }
         confirmText="Delete Collection"
         variant="danger"
+        isLoading={isDeletingCollection}
       />
 
       <ConfirmModal

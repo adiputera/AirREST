@@ -187,6 +187,14 @@ func (h *CollectionHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.collectionService.DeleteCollection(r.Context(), user, id); err != nil {
+		if errors.Is(err, service.ErrFeatureDisabled) {
+			response.Error(w, http.StatusForbidden, err.Error(), "FEATURE_DISABLED")
+			return
+		}
+		if errors.Is(err, service.ErrFeaturePolicyUnavailable) {
+			response.Error(w, http.StatusServiceUnavailable, "feature policy unavailable", "FEATURE_POLICY_UNAVAILABLE")
+			return
+		}
 		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
 		return
 	}
@@ -228,6 +236,14 @@ func (h *CollectionHandler) Move(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.collectionService.MoveCollection(r.Context(), user, id, targetWsID, targetProjID); err != nil {
+		if errors.Is(err, service.ErrFeatureDisabled) {
+			response.Error(w, http.StatusForbidden, err.Error(), "FEATURE_DISABLED")
+			return
+		}
+		if errors.Is(err, service.ErrFeaturePolicyUnavailable) {
+			response.Error(w, http.StatusServiceUnavailable, "feature policy unavailable", "FEATURE_POLICY_UNAVAILABLE")
+			return
+		}
 		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
 		return
 	}
@@ -362,4 +378,3 @@ func (h *CollectionHandler) ReorderItems(w http.ResponseWriter, r *http.Request)
 		"items":   updatedItems,
 	})
 }
-

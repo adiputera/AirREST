@@ -208,6 +208,21 @@ export interface ActiveScope {
 
 export type SyncStatus = 'idle' | 'syncing' | 'synced' | 'error' | 'offline';
 
+export interface FeatureFlags {
+  'collection.move': boolean;
+  'collection.delete': boolean;
+  'collection.export': boolean;
+}
+
+export interface FeaturePolicy {
+  flags: FeatureFlags;
+  revision: number;
+  updated_by?: string;
+  updated_at: string;
+}
+
+export type FeaturePolicyStatus = 'idle' | 'loading' | 'ready' | 'stale' | 'error';
+
 export interface CloudConfig {
   apiUrl: string;
   hubUrl?: string;
