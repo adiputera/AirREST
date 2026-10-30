@@ -80,9 +80,11 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
         const options: TargetOption[] = [];
 
         // 1. Offline Workspaces (available in all editions)
-        const otherOfflineWorkspaces = (offlineWorkspaces || []).filter(
-          (w) => !(workspaceMode === 'offline' && w.id === activeOfflineWorkspaceId)
-        );
+        const otherOfflineWorkspaces = isSourceProject
+          ? []
+          : (offlineWorkspaces || []).filter(
+            (w) => !(workspaceMode === 'offline' && w.id === activeOfflineWorkspaceId)
+          );
 
         for (const ws of otherOfflineWorkspaces) {
           options.push({

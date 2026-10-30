@@ -26,6 +26,9 @@ import {
   CloudProject,
   CloudWorkspace,
   OfflineWorkspace,
+  FeaturePolicy,
+  FeaturePolicyStatus,
+  FeatureFlags,
 } from '../types/api';
 import { executeApiRequest } from '../lib/fetcher';
 import type { PlatformAdapter } from '../types/platform';
@@ -57,6 +60,8 @@ import {
   fetchScopeCollections,
   fetchCollectionById,
   fetchScopeEnvironments,
+  fetchFeaturePolicy,
+  CloudApiError,
   normalizeCloudApiUrl,
 } from '../lib/cloudApi';
 import { reorderItemInTree } from '../lib/treeHelper';
@@ -72,6 +77,8 @@ import {
   alignEnvironmentVariableIds,
 } from '../lib/requestDiff';
 import { canModifyCollection, canModifyEnvironment, hasScopePermission } from '../lib/jwt';
+
+const FEATURE_POLICY_TTL_MS = 30 * 60 * 1000;
 
 function generateId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -404,7 +411,7 @@ export interface ApiStoreState {
   addCollection: (collection: Collection) => Promise<void> | void;
   replaceCollection: (existingId: string, newCollection: Collection) => Promise<void>;
   importCollectionFromJson: (jsonStr: string) => Promise<{ success: boolean; error?: string }>;
-  deleteCollection: (id: string) => void;
+  deleteCollection: (id: string) => Promise<{ success: boolean; error?: string }>;
   moveCollection: (collectionId: string, targetScope: ActiveScope) => Promise<{ success: boolean; error?: string }>;
   moveRequest: (
     sourceCollectionId: string,
@@ -436,6 +443,9 @@ export interface ApiStoreState {
   workspaceMode: WorkspaceMode;
   hasConfiguredMode: boolean;
   cloudConfig: CloudConfig;
+  featurePolicy: FeaturePolicy | null;
+  featurePolicyStatus: FeaturePolicyStatus;
+  featurePolicyFetchedAt: number | null;
   syncStatus: SyncStatus;
   lastSyncedAt: number | null;
   syncError: string | null;
@@ -446,6 +456,8 @@ export interface ApiStoreState {
   setWorkspaceMode: (mode: WorkspaceMode) => void;
   setHasConfiguredMode: (configured: boolean) => void;
   setCloudConfig: (config: Partial<CloudConfig>) => void;
+  refreshFeaturePolicy: (force?: boolean) => Promise<FeaturePolicy | null>;
+  isFeatureEnabled: (feature: keyof FeatureFlags) => boolean;
   setActiveScope: (scope: ActiveScope, forceSync?: boolean) => Promise<void>;
   fetchScopes: (force?: boolean) => Promise<void>;
   fetchProjectsForTeam: (teamId: string, force?: boolean) => Promise<CloudProject[]>;
@@ -680,6 +692,9 @@ export function createApiStore(
       cloudConfig: {
         apiUrl: 'http://localhost:8080',
       },
+      featurePolicy: null,
+      featurePolicyStatus: 'idle',
+      featurePolicyFetchedAt: null,
       syncStatus: 'idle',
       lastSyncedAt: null,
       syncError: null,
@@ -848,7 +863,45 @@ export function createApiStore(
         if (isNewSession) invalidateAsyncOperations({ session: true });
         set((state) => ({
           cloudConfig: { ...state.cloudConfig, ...normalizedUpdates },
+          ...(isNewSession
+            ? { featurePolicy: null, featurePolicyStatus: 'idle' as FeaturePolicyStatus, featurePolicyFetchedAt: null }
+            : {}),
         }));
+        if (!isOfflineOnly && get().cloudConfig.token) {
+          void get().refreshFeaturePolicy(isNewSession);
+        }
+      },
+      refreshFeaturePolicy: async (force = false) => {
+        if (isOfflineOnly) return null;
+        const state = get();
+        const { cloudConfig, featurePolicyFetchedAt, featurePolicyStatus } = state;
+        if (!cloudConfig.token) return null;
+        const isFresh = featurePolicyFetchedAt !== null && Date.now() - featurePolicyFetchedAt < FEATURE_POLICY_TTL_MS;
+        if (!force && isFresh && featurePolicyStatus === 'ready') return state.featurePolicy;
+        if (featurePolicyStatus === 'loading') return null;
+
+        const requestToken = cloudConfig.token;
+        const requestApiUrl = cloudConfig.apiUrl;
+        set({ featurePolicyStatus: 'loading' });
+        try {
+          const policy = await fetchFeaturePolicy(requestApiUrl, requestToken, cloudConfig.refreshToken);
+          const current = get().cloudConfig;
+          if (current.token !== requestToken || current.apiUrl !== requestApiUrl) return null;
+          set({ featurePolicy: policy, featurePolicyStatus: 'ready', featurePolicyFetchedAt: Date.now() });
+          return policy;
+        } catch (err) {
+          const current = get().cloudConfig;
+          if (current.token !== requestToken || current.apiUrl !== requestApiUrl) return null;
+          console.error('Failed to refresh feature policy:', err);
+          set({ featurePolicyStatus: 'error' });
+          return null;
+        }
+      },
+      isFeatureEnabled: (feature) => {
+        const state = get();
+        if (isOfflineOnly || state.workspaceMode === 'offline') return true;
+        const isFresh = state.featurePolicyFetchedAt !== null && Date.now() - state.featurePolicyFetchedAt < FEATURE_POLICY_TTL_MS;
+        return state.featurePolicyStatus === 'ready' && isFresh && state.featurePolicy?.flags[feature] === true;
       },
       setActiveScope: async (scope, forceSync = false) => {
         const {
@@ -950,6 +1003,10 @@ export function createApiStore(
           syncError: null,
         }));
 
+        // The policy is global, but refresh it on every cloud scope change so
+        // a user does not keep an old capability snapshot while navigating.
+        void get().refreshFeaturePolicy(true);
+
         if (!isFresh) {
           set({ isSwitchingWorkspace: true });
           try {
@@ -997,6 +1054,9 @@ export function createApiStore(
           cloudConfig: {
             apiUrl: state.cloudConfig.apiUrl || 'http://localhost:8080',
           },
+          featurePolicy: null,
+          featurePolicyStatus: 'idle',
+          featurePolicyFetchedAt: null,
           syncStatus: 'idle',
           syncError: null,
           lastSyncedAt: null,
@@ -3977,39 +4037,50 @@ export function createApiStore(
         }
       },
 
-      deleteCollection: (id) => {
+      deleteCollection: async (id) => {
         const { workspaceMode, cloudConfig, collections } = get();
         const col = collections.find((c) => c.id === id);
+        if (workspaceMode === 'cloud' && !get().isFeatureEnabled('collection.delete')) {
+          void get().refreshFeaturePolicy(true);
+          return { success: false, error: 'Collection deletion is disabled or feature policy is unavailable.' };
+        }
         if (col) {
           if (!hasScopePermission(cloudConfig.activeScope, 'collection:delete', workspaceMode, cloudConfig.user?.role)) {
             console.warn(`User lacks permission to delete collection "${col.name}"`);
-            return;
+            return { success: false, error: 'You do not have permission to delete this collection.' };
           }
           if (!canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
             console.warn(`User lacks permission to delete collection "${col.name}"`);
-            return;
+            return { success: false, error: 'You do not have permission to delete this collection.' };
           }
         }
 
-        set((state) => ({
-          collections: state.collections.filter((c) => c.id !== id),
-        }));
-
         if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token) {
           const operation = beginAsyncOperation();
-          deleteScopeCollection(
-            cloudConfig.apiUrl,
-            cloudConfig.token,
-            id,
-            cloudConfig.refreshToken,
-            operation.controller.signal
-          ).catch((err) => {
-            if (!isAsyncOperationCurrent(operation)) return;
+          try {
+            await deleteScopeCollection(
+              cloudConfig.apiUrl,
+              cloudConfig.token,
+              id,
+              cloudConfig.refreshToken,
+              operation.controller.signal
+            );
+            if (!isAsyncOperationCurrent(operation)) return { success: false, error: 'Operation cancelled.' };
+            set((state) => ({ collections: state.collections.filter((c) => c.id !== id) }));
+            return { success: true };
+          } catch (err) {
+            if (err instanceof CloudApiError && err.code === 'FEATURE_DISABLED') {
+              void get().refreshFeaturePolicy(true);
+            }
+            if (!isAsyncOperationCurrent(operation)) return { success: false, error: 'Operation cancelled.' };
             console.error('Failed to delete collection from cloud:', err);
-          }).finally(() => {
+            return { success: false, error: err instanceof Error ? err.message : 'Failed to delete collection.' };
+          } finally {
             completeAsyncOperation(operation);
-          });
+          }
         }
+        set((state) => ({ collections: state.collections.filter((c) => c.id !== id) }));
+        return { success: true };
       },
 
       moveRequest: async (sourceCollectionId, requestId, targetCollectionId, targetFolderId) => {
@@ -4247,15 +4318,20 @@ export function createApiStore(
             return { success: false, error: 'Collection not found' };
           }
 
-          if (workspaceMode === 'offline' && targetScope.id === activeOfflineWorkspaceId) {
-            return { success: false, error: 'Cannot move to the current active workspace' };
-          }
-
-          if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
-            if (!hasScopePermission(cloudConfig.activeScope, 'collection:move', workspaceMode, cloudConfig.user?.role) ||
-                !canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+          if (workspaceMode === 'cloud') {
+            if (cloudConfig.activeScope?.type === 'project' &&
+                (!hasScopePermission(cloudConfig.activeScope, 'collection:move', workspaceMode, cloudConfig.user?.role) ||
+                  !canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role))) {
               return { success: false, error: 'Insufficient permission to move collection from this project' };
             }
+            if (cloudConfig.activeScope?.type === 'project') {
+              return { success: false, error: 'Collections in projects cannot be moved to personal workspaces.' };
+            }
+            return { success: false, error: 'Moving cloud collections to offline workspaces is unavailable.' };
+          }
+
+          if (workspaceMode === 'offline' && targetScope.id === activeOfflineWorkspaceId) {
+            return { success: false, error: 'Cannot move to the current active workspace' };
           }
 
           const remainingActive = collections.filter((c) => c.id !== collectionId);
@@ -4290,22 +4366,6 @@ export function createApiStore(
             offlineScopeCache: updatedOfflineCache,
           });
 
-          if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token) {
-            const operation = beginAsyncOperation();
-            deleteScopeCollection(
-              cloudConfig.apiUrl,
-              cloudConfig.token,
-              collectionId,
-              cloudConfig.refreshToken,
-              operation.controller.signal
-            ).catch((err) => {
-              if (!isAsyncOperationCurrent(operation)) return;
-              console.error('Failed to delete moved collection from cloud project:', err);
-            }).finally(() => {
-              completeAsyncOperation(operation);
-            });
-          }
-
           return { success: true };
         }
 
@@ -4321,6 +4381,11 @@ export function createApiStore(
           }
           if (!cloudConfig.token) {
             return { success: false, error: 'Cloud authentication required to move collection to an online workspace' };
+          }
+
+          const policy = await get().refreshFeaturePolicy();
+          if (!policy?.flags['collection.move']) {
+            return { success: false, error: 'Collection move is disabled or feature policy is unavailable.' };
           }
 
           const operation = beginAsyncOperation();
@@ -4382,6 +4447,10 @@ export function createApiStore(
           if (!cloudConfig.token || !cloudConfig.activeScope) {
             return { success: false, error: 'Not connected to cloud' };
           }
+          if (!get().isFeatureEnabled('collection.move')) {
+            void get().refreshFeaturePolicy(true);
+            return { success: false, error: 'Collection move is disabled or feature policy is unavailable.' };
+          }
           if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
             if (!hasScopePermission(cloudConfig.activeScope, 'collection:move', workspaceMode, cloudConfig.user?.role) ||
                 !canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
@@ -4431,6 +4500,9 @@ export function createApiStore(
             return { success: true };
           } catch (err: any) {
             if (!isAsyncOperationCurrent(operation)) return { success: false, error: 'Operation cancelled' };
+            if (err instanceof CloudApiError && err.code === 'FEATURE_DISABLED') {
+              void get().refreshFeaturePolicy(true);
+            }
             set({ syncStatus: 'error', syncError: err.message || 'Failed to move collection' });
             return { success: false, error: err.message || 'Failed to move collection' };
           } finally {
@@ -4789,4 +4861,3 @@ Object.defineProperty(useApiStore, 'persist', {
   get: () => resolveCurrentStore().persist,
   configurable: true,
 });
-

@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldAlert, Plus, Search, Loader2, UserCheck, X, Eye, EyeOff, KeyRound, AlertCircle, Trash2, AlertTriangle } from 'lucide-react';
+import { ShieldAlert, Plus, Search, Loader2, UserCheck, X, Eye, EyeOff, KeyRound, AlertCircle, Trash2, AlertTriangle, Save } from 'lucide-react';
 import { useHubStore } from '../store/useHubStore';
-import { apiListAllUsers, apiProvisionUser, apiResetUserPassword, apiDeleteUser } from '../lib/api';
-import { User } from '../types';
+import { apiListAllUsers, apiProvisionUser, apiResetUserPassword, apiDeleteUser, apiGetFeaturePolicy, apiUpdateFeaturePolicy } from '../lib/api';
+import { FeatureFlags, FeaturePolicy, User } from '../types';
 
 export const SuperadminView: React.FC = () => {
   const apiUrl = useHubStore((state) => state.apiUrl);
@@ -36,6 +36,11 @@ export const SuperadminView: React.FC = () => {
   const [isDeletingUser, setIsDeletingUser] = useState(false);
   const [deleteErrorMsg, setDeleteErrorMsg] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [featurePolicy, setFeaturePolicy] = useState<FeaturePolicy | null>(null);
+  const [featureFlags, setFeatureFlags] = useState<FeatureFlags | null>(null);
+  const [featurePolicyError, setFeaturePolicyError] = useState<string | null>(null);
+  const [isLoadingFeaturePolicy, setIsLoadingFeaturePolicy] = useState(false);
+  const [isSavingFeaturePolicy, setIsSavingFeaturePolicy] = useState(false);
 
   const loadUsers = async () => {
     if (!token) return;
@@ -51,9 +56,41 @@ export const SuperadminView: React.FC = () => {
     }
   };
 
+  const loadFeaturePolicy = async (clearError = true) => {
+    if (!token) return;
+    setIsLoadingFeaturePolicy(true);
+    if (clearError) setFeaturePolicyError(null);
+    try {
+      const policy = await apiGetFeaturePolicy(apiUrl, token, refreshToken || undefined);
+      setFeaturePolicy(policy);
+      setFeatureFlags(policy.flags);
+    } catch (err: unknown) {
+      setFeaturePolicyError(err instanceof Error ? err.message : 'Failed to load feature controls');
+    } finally {
+      setIsLoadingFeaturePolicy(false);
+    }
+  };
+
   useEffect(() => {
     loadUsers();
+    loadFeaturePolicy();
   }, [apiUrl, token]);
+
+  const saveFeaturePolicy = async () => {
+    if (!token || !featurePolicy || !featureFlags) return;
+    setIsSavingFeaturePolicy(true);
+    setFeaturePolicyError(null);
+    try {
+      const policy = await apiUpdateFeaturePolicy(apiUrl, token, featurePolicy.revision, featureFlags, refreshToken || undefined);
+      setFeaturePolicy(policy);
+      setFeatureFlags(policy.flags);
+    } catch (err: unknown) {
+      setFeaturePolicyError(err instanceof Error ? err.message : 'Failed to save feature controls');
+      await loadFeaturePolicy(false);
+    } finally {
+      setIsSavingFeaturePolicy(false);
+    }
+  };
 
   const handleProvision = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -160,6 +197,51 @@ export const SuperadminView: React.FC = () => {
             <span>Provision New User</span>
           </button>
         </div>
+
+        <section className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h2 className="text-sm font-bold text-zinc-100">Global Feature Controls</h2>
+              <p className="mt-1 text-xs text-zinc-400">Applies to every cloud workspace, team, and project. Role permissions still apply.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void saveFeaturePolicy()}
+              disabled={!featurePolicy || !featureFlags || isLoadingFeaturePolicy || isSavingFeaturePolicy}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-sky-500 px-4 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isSavingFeaturePolicy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+              Save controls
+            </button>
+          </div>
+
+          {featurePolicyError && <p className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 p-2.5 text-xs text-rose-300">{featurePolicyError}</p>}
+          {isLoadingFeaturePolicy ? (
+            <p className="mt-4 text-xs text-zinc-400"><Loader2 className="mr-2 inline h-3.5 w-3.5 animate-spin" />Loading feature controls…</p>
+          ) : featureFlags ? (
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
+              {([
+                ['collection.move', 'Move Collection', 'Allow moving cloud collections between eligible scopes.'],
+                ['collection.delete', 'Delete Collection', 'Allow deleting cloud collections, including sync deletions.'],
+                ['collection.export', 'Export Collection', 'Allow supported clients to export cloud collections.'],
+              ] as const).map(([key, label, description]) => (
+                <label key={key} className="flex cursor-pointer items-start justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
+                  <span>
+                    <span className="block text-xs font-semibold text-zinc-200">{label}</span>
+                    <span className="mt-1 block text-[11px] leading-relaxed text-zinc-500">{description}</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={featureFlags[key]}
+                    onChange={(event) => setFeatureFlags((current) => current ? { ...current, [key]: event.target.checked } : current)}
+                    className="mt-0.5 h-4 w-4 accent-sky-500"
+                  />
+                </label>
+              ))}
+            </div>
+          ) : null}
+          {featurePolicy && <p className="mt-3 text-[11px] text-zinc-500">Policy revision {featurePolicy.revision} · last updated {new Date(featurePolicy.updated_at).toLocaleString()}</p>}
+        </section>
 
         {/* Directory Controls */}
         <div className="flex items-center justify-between gap-4">
@@ -549,4 +631,3 @@ export const SuperadminView: React.FC = () => {
     </div>
   );
 };
-
