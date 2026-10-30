@@ -92,6 +92,25 @@ export const SuperadminView: React.FC = () => {
     }
   };
 
+  const resetProvisionForm = () => {
+    setNewEmail('');
+    setNewPassword('');
+    setShowNewPassword(false);
+    setNewName('');
+    setNewRole('user');
+    setErrorMsg(null);
+  };
+
+  const handleOpenProvision = () => {
+    resetProvisionForm();
+    setIsProvisionOpen(true);
+  };
+
+  const handleCloseProvision = () => {
+    setIsProvisionOpen(false);
+    resetProvisionForm();
+  };
+
   const handleProvision = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!token) return;
@@ -107,10 +126,7 @@ export const SuperadminView: React.FC = () => {
         newRole,
         refreshToken || undefined
       );
-      setIsProvisionOpen(false);
-      setNewEmail('');
-      setNewPassword('');
-      setNewName('');
+      handleCloseProvision();
       loadUsers();
     } catch (err: any) {
       setErrorMsg(err.message || 'Provisioning failed');
@@ -121,6 +137,14 @@ export const SuperadminView: React.FC = () => {
 
   const handleOpenResetPassword = (u: User) => {
     setResetUser(u);
+    setResetPassword('');
+    setShowResetPassword(false);
+    setErrorMsg(null);
+    setResetSuccessMsg(null);
+  };
+
+  const handleCloseResetPassword = () => {
+    setResetUser(null);
     setResetPassword('');
     setShowResetPassword(false);
     setErrorMsg(null);
@@ -141,8 +165,7 @@ export const SuperadminView: React.FC = () => {
       }
       setResetSuccessMsg(`Password for ${resetUser.email} has been updated. All of their sessions are signed out.`);
       setTimeout(() => {
-        setResetUser(null);
-        setResetSuccessMsg(null);
+        handleCloseResetPassword();
       }, 1500);
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to reset password');
@@ -151,13 +174,23 @@ export const SuperadminView: React.FC = () => {
     }
   };
 
+  const handleOpenDeleteUser = (u: User) => {
+    setUserToDelete(u);
+    setDeleteErrorMsg(null);
+  };
+
+  const handleCloseDeleteUser = () => {
+    setUserToDelete(null);
+    setDeleteErrorMsg(null);
+  };
+
   const handleConfirmDelete = async () => {
     if (!token || !userToDelete) return;
     setIsDeletingUser(true);
     setDeleteErrorMsg(null);
     try {
       await apiDeleteUser(apiUrl, token, userToDelete.id, refreshToken || undefined);
-      setUserToDelete(null);
+      handleCloseDeleteUser();
       loadUsers();
     } catch (err: any) {
       setDeleteErrorMsg(err.message || 'Failed to delete user');
@@ -190,7 +223,7 @@ export const SuperadminView: React.FC = () => {
           </div>
 
           <button
-            onClick={() => setIsProvisionOpen(true)}
+            onClick={handleOpenProvision}
             className="flex items-center gap-1.5 rounded-xl bg-amber-500 px-4 py-2 text-xs font-semibold text-zinc-950 hover:bg-amber-400 transition shadow-md shadow-amber-500/20 shrink-0"
           >
             <Plus className="h-4 w-4" />
@@ -340,10 +373,7 @@ export const SuperadminView: React.FC = () => {
                           </button>
                         ) : (
                           <button
-                            onClick={() => {
-                              setUserToDelete(u);
-                              setDeleteErrorMsg(null);
-                            }}
+                            onClick={() => handleOpenDeleteUser(u)}
                             className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs font-semibold text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/40 hover:text-rose-300 transition"
                             title="Permanently remove user"
                           >
@@ -363,7 +393,14 @@ export const SuperadminView: React.FC = () => {
 
       {/* Provision User Modal */}
       {isProvisionOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isProvisioning) {
+              handleCloseProvision();
+            }
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+        >
           <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
@@ -371,7 +408,7 @@ export const SuperadminView: React.FC = () => {
                 <span>Provision User Account</span>
               </h3>
               <button
-                onClick={() => setIsProvisionOpen(false)}
+                onClick={handleCloseProvision}
                 className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800"
               >
                 <X className="h-4 w-4" />
@@ -448,7 +485,7 @@ export const SuperadminView: React.FC = () => {
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setIsProvisionOpen(false)}
+                  onClick={handleCloseProvision}
                   className="rounded-lg border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900"
                 >
                   Cancel
@@ -467,7 +504,14 @@ export const SuperadminView: React.FC = () => {
       )}
       {/* Reset Password Modal */}
       {resetUser && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isResetting) {
+              handleCloseResetPassword();
+            }
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+        >
           <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
@@ -475,7 +519,7 @@ export const SuperadminView: React.FC = () => {
                 <span>Change User Password</span>
               </h3>
               <button
-                onClick={() => setResetUser(null)}
+                onClick={handleCloseResetPassword}
                 className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800"
               >
                 <X className="h-4 w-4" />
@@ -536,7 +580,7 @@ export const SuperadminView: React.FC = () => {
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setResetUser(null)}
+                  onClick={handleCloseResetPassword}
                   className="rounded-lg border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900"
                 >
                   Cancel
@@ -556,7 +600,14 @@ export const SuperadminView: React.FC = () => {
 
       {/* Delete User Confirmation Modal */}
       {userToDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isDeletingUser) {
+              handleCloseDeleteUser();
+            }
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+        >
           <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
@@ -566,7 +617,7 @@ export const SuperadminView: React.FC = () => {
                 <span>Delete User Account</span>
               </h3>
               <button
-                onClick={() => setUserToDelete(null)}
+                onClick={handleCloseDeleteUser}
                 disabled={isDeletingUser}
                 className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800 transition"
               >
@@ -601,7 +652,7 @@ export const SuperadminView: React.FC = () => {
               <button
                 type="button"
                 disabled={isDeletingUser}
-                onClick={() => setUserToDelete(null)}
+                onClick={handleCloseDeleteUser}
                 className="rounded-lg px-3 py-1.5 text-xs font-semibold text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition"
               >
                 Cancel

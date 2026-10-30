@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.9] - 2026-10-31
+
+### Added
+- **Dynamic URL Path Variables Support (`:param` and `{param}`)**:
+  - Added native detection, extraction, and bidirectional synchronization between URL template path variables (e.g. `https://api.example.com/users/:id/posts/{postId}`) and a dedicated **Path Variables** table in the Params tab.
+  - Live replacement of path parameters with their configured values during HTTP/HTTPS request dispatching and cURL command generation.
+  - Full Postman v2.1 import and export parity, preserving path parameter keys, values, and descriptions.
+  - Backend item domain model update, JSON schema validation, and PostgreSQL migration (`008_add_path_variables.sql`) ensuring seamless cloud workspace synchronization.
+- **Collapsible Request Editor Panels**:
+  - Added collapsible accordion controls across request editor panels (Headers, Params, Body, Auth, Scripts, Settings) to optimize workspace real estate on compact screens.
+
+### Fixed
+- **Hub Form State Lifecycle & Sticky Role Reset**:
+  - Resolved an issue where modal forms across AirREST Hub retained previous state, entries, or elevated roles when reopening modals or provisioning consecutive entities.
+  - **Superadmin View**: Provision User modal now resets role back to default (`'user'`), clears name, email, password, resets `showNewPassword` to `false`, and clears error messages on modal open, close, cancel, and submission. Reset password and delete user modals also reset state on dismiss.
+  - **Teams View**: Add Team Member modal resets role back to default (`'member'`), clears member search query, search results, selected invitees, and error messages on open, close, cancel, and submission. Create team, edit team, and edit member role modals now clean up state on dismiss.
+  - **Projects View**: Assign Member modal resets role back to default (`'contributor'`), clears member filter query, selected member IDs, and errors on open, close, cancel, and submission. Create project, edit project, move collection modal (resets target destination project ID), and item permissions modal now reset state on dismiss.
+- **Password Visibility & Login Form Security Lifecycle**:
+  - Resolved an issue in Hub `LoginView` and Extension/Desktop `CloudAuthModal` where the "see password" visibility toggle (`showPassword`) and entered password remained cached when reopening modals or returning to login screens.
+  - Forms now automatically clear entered passwords, reset `showPassword` to `false`, and dismiss error banners upon modal close, backdrop dismiss, cancel, page mount, and successful login.
+  - Configured server API endpoint URLs are explicitly retained across sessions so users never have to re-enter their self-hosted server address.
+- **Sidebar Action Menu Dropdown Placement**:
+  - Fixed action dropdown placement and boundary detection in the collection tree sidebar, preventing menus from clipping or overflowing outside the viewport.
+
+### Changed
+- **Desktop Release Metadata**:
+  - Bumped the desktop application to `v0.1.4` across its package (`apps/desktop/package.json`), Tauri (`apps/desktop/src-tauri/tauri.conf.json`), and Cargo (`apps/desktop/src-tauri/Cargo.toml`) metadata.
+
 ## [1.1.8] - 2026-10-30
 
 ### Added

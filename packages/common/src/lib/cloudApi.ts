@@ -759,6 +759,7 @@ function formatImportItem(item: any): any {
     method: item.request?.method || 'GET',
     url: item.request?.url || '',
     params: item.request?.params || [],
+    path_variables: item.request?.pathVariables || [],
     headers: item.request?.headers || [],
     auth: item.request?.auth || { type: 'none' },
     body_type: item.request?.bodyType || 'none',

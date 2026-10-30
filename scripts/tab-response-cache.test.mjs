@@ -30,7 +30,7 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
       executePostResponseScript: async () => ({ success: true, environment: {}, variables: {} }),
     },
     '@/lib/postman': { importPostmanCollection: noop, importPostmanEnvironment: noop, detectPostmanJsonType: noop },
-    '@/lib/urlParams': { parseQueryParamsFromUrl: () => [], buildUrlWithParams: (u) => u },
+    '@/lib/urlParams': { parseQueryParamsFromUrl: () => [], parsePathVariablesFromUrl: () => [], buildUrlWithParams: (u) => u },
     '@/lib/cloudApi': {
       batchImportToScope: noop,
       registerTokenRefreshCallback: noop,

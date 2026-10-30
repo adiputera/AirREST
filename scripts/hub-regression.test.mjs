@@ -228,6 +228,8 @@ function component(file, exportName, initialState = {}, api = {}) {
   const store = { apiUrl: 'https://example.com', token: 'access', refreshToken: 'refresh', user, selectedTeamId: 't', selectedProjectId: 'p', activeTab: 'teams',
     setSelectedTeamId(id) { store.selectedTeamId = id; store.selectedProjectId = null; },
     setSelectedProjectId(id) { store.selectedProjectId = id; },
+    setApiUrl(url) { store.apiUrl = url; },
+    setAuth(user, token, refreshToken, tokenExpiresAt) { store.user = user; store.token = token; store.refreshToken = refreshToken; store.tokenExpiresAt = tokenExpiresAt; },
   };
   const useHubStore = Object.assign((selector) => selector(store), { getState: () => store });
   const stub = (name) => ({ [name]: () => React.createElement('span', null, name) });
@@ -402,4 +404,143 @@ test('failed resource load clears prior project data and reports the error', asy
   assert.equal(h.state.environments.length, 0);
   assert.equal(h.state.isLoadingCollections, false);
   assert.equal(h.state.errorMsg, 'Unavailable');
+});
+
+function findElements(node, predicate, acc = []) {
+  if (!node || typeof node !== 'object') return acc;
+  if (predicate(node)) acc.push(node);
+  const children = Array.isArray(node.props?.children) ? node.props.children : [node.props?.children];
+  for (const child of children) {
+    findElements(child, predicate, acc);
+  }
+  return acc;
+}
+
+test('SuperadminView resets provision form state on close, reopen, and submit', async () => {
+  let provisionCalls = 0;
+  const h = component('hub/src/pages/SuperadminView.tsx', 'SuperadminView', {
+    isProvisionOpen: true,
+    newRole: 'superadmin',
+    showNewPassword: true,
+    newEmail: 'dirty@example.com',
+    newPassword: 'dirtypassword123',
+    newName: 'Dirty Name',
+  }, {
+    apiListAllUsers: async () => [],
+    apiGetFeaturePolicy: async () => ({ revision: 1, flags: {} }),
+    apiProvisionUser: async () => { provisionCalls++; return { id: 'new-user' }; },
+  });
+
+  const form = findElements(h.render(), (n) => n.type === 'form')[0];
+  assert.ok(form, 'provision modal must contain a form');
+  await form.props.onSubmit({ preventDefault() {} });
+
+  assert.equal(provisionCalls, 1);
+  assert.equal(h.state.isProvisionOpen, false);
+  assert.equal(h.state.newRole, 'user');
+  assert.equal(h.state.showNewPassword, false);
+  assert.equal(h.state.newEmail, '');
+  assert.equal(h.state.newPassword, '');
+  assert.equal(h.state.newName, '');
+
+  // Simulate dirty state again and clicking cancel
+  h.state.isProvisionOpen = true;
+  h.state.newRole = 'superadmin';
+  h.state.showNewPassword = true;
+  h.state.newEmail = 'cancel@example.com';
+  const cancelButton = findElements(h.render(), (n) => n.type === 'button' && n.props?.children === 'Cancel')[0];
+  assert.ok(cancelButton, 'must have cancel button');
+  cancelButton.props.onClick();
+
+  assert.equal(h.state.isProvisionOpen, false);
+  assert.equal(h.state.newRole, 'user');
+  assert.equal(h.state.showNewPassword, false);
+  assert.equal(h.state.newEmail, '');
+});
+
+test('TeamsView resets add member form and role on open, cancel, and success', async () => {
+  let addCalls = 0;
+  const h = component('hub/src/pages/TeamsView.tsx', 'TeamsView', {
+    teams: base.teams,
+    isAddMemberOpen: true,
+    newMemberRole: 'admin',
+    userQuery: 'test query',
+    selectedUsersToInvite: [{ id: 'u1', name: 'User 1' }],
+  }, {
+    apiListTeamMembers: async () => [],
+    apiAddTeamMember: async () => { addCalls++; return {}; },
+  });
+
+  const form = findElements(h.render(), (n) => n.type === 'form')[0];
+  await form.props.onSubmit({ preventDefault() {} });
+
+  assert.equal(addCalls, 1);
+  assert.equal(h.state.isAddMemberOpen, false);
+  assert.equal(h.state.newMemberRole, 'member');
+  assert.equal(h.state.userQuery, '');
+  assert.equal(h.state.selectedUsersToInvite.length, 0);
+
+  // Cancel also resets
+  h.state.isAddMemberOpen = true;
+  h.state.newMemberRole = 'admin';
+  h.state.userQuery = 'another query';
+  const cancelButton = findElements(h.render(), (n) => n.type === 'button' && n.props?.children === 'Cancel')[0];
+  cancelButton.props.onClick();
+  assert.equal(h.state.isAddMemberOpen, false);
+  assert.equal(h.state.newMemberRole, 'member');
+  assert.equal(h.state.userQuery, '');
+});
+
+test('ProjectsView resets assign member form and role on open, cancel, and success', async () => {
+  let assignCalls = 0;
+  const h = projects({
+    isAssignMemberOpen: true,
+    assignedRole: 'admin',
+    memberFilterQuery: 'filter',
+    selectedUserIdsToAssign: ['u1'],
+  }, {
+    apiListProjectMembers: async () => [],
+    apiAddProjectMember: async () => { assignCalls++; return {}; },
+  });
+
+  const form = findElements(h.render(), (n) => n.type === 'form')[0];
+  await form.props.onSubmit({ preventDefault() {} });
+
+  assert.equal(assignCalls, 1);
+  assert.equal(h.state.isAssignMemberOpen, false);
+  assert.equal(h.state.assignedRole, 'contributor');
+  assert.equal(h.state.memberFilterQuery, '');
+  assert.equal(h.state.selectedUserIdsToAssign.length, 0);
+
+  // Cancel also resets
+  h.state.isAssignMemberOpen = true;
+  h.state.assignedRole = 'admin';
+  h.state.memberFilterQuery = 'filter 2';
+  const cancelButton = findElements(h.render(), (n) => n.type === 'button' && n.props?.children === 'Cancel')[0];
+  cancelButton.props.onClick();
+  assert.equal(h.state.isAssignMemberOpen, false);
+  assert.equal(h.state.assignedRole, 'contributor');
+  assert.equal(h.state.memberFilterQuery, '');
+});
+
+test('LoginView clears password and resets showPassword on mount and submit', async () => {
+  let loginCalls = 0;
+  const h = component('hub/src/pages/LoginView.tsx', 'LoginView', {
+    password: 'dirtypassword123',
+    showPassword: true,
+  }, {
+    apiLogin: async () => { loginCalls++; return { user: { id: 'u' }, token: 't', refresh_token: 'r', expires_at: '2030' }; },
+  });
+  h.render();
+  h.effects[0]();
+  assert.equal(h.state.password, '');
+  assert.equal(h.state.showPassword, false);
+
+  h.state.password = 'mysecret';
+  h.state.showPassword = true;
+  const form = findElements(h.render(), (n) => n.type === 'form')[0];
+  await form.props.onSubmit({ preventDefault() {} });
+  assert.equal(loginCalls, 1);
+  assert.equal(h.state.password, '');
+  assert.equal(h.state.showPassword, false);
 });

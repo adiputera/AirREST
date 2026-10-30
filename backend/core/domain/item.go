@@ -24,6 +24,7 @@ type CollectionItem struct {
 	Method             *string          `json:"method,omitempty"`
 	URL                *string          `json:"url,omitempty"`
 	Params             *json.RawMessage `json:"params,omitempty"`
+	PathVariables      *json.RawMessage `json:"path_variables,omitempty"`
 	Headers            *json.RawMessage `json:"headers,omitempty"`
 	Auth               *json.RawMessage `json:"auth,omitempty"`
 	BodyType           *string          `json:"body_type,omitempty"`

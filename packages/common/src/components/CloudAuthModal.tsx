@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
-import { Cloud, Lock, Mail, Server, AlertCircle, Loader2, CheckCircle2, X, Eye, EyeOff } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Lock, Mail, Server, AlertCircle, Loader2, CheckCircle2, X, Eye, EyeOff } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
 import { useStoreContext } from '../store/storeContext';
 import {
@@ -26,7 +26,7 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [showServerConfig, setShowServerConfig] = useState(false);
+  const [showServerConfig, setShowServerConfig] = useState(true);
 
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -46,6 +46,27 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
   const localCount = localCols.length;
 
   const [apiUrl, setApiUrl] = useState(normalizeCloudApiUrl(cloudConfig.apiUrl) || 'http://localhost:8080');
+
+  const handleClose = () => {
+    setPassword('');
+    setShowPassword(false);
+    setErrorMsg(null);
+    setImportPrompt(false);
+    onClose();
+  };
+
+  useEffect(() => {
+    if (isOpen) {
+      setShowServerConfig(true);
+      setErrorMsg(null);
+      setPassword('');
+      setShowPassword(false);
+      setImportPrompt(false);
+      if (cloudConfig?.apiUrl) {
+        setApiUrl(normalizeCloudApiUrl(cloudConfig.apiUrl) || 'http://localhost:8080');
+      }
+    }
+  }, [isOpen, cloudConfig?.apiUrl]);
 
   if (!isOpen) return null;
 
@@ -131,10 +152,12 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
       }
 
       // 4. Check if local collections exist to prompt for one-click migration
+      setPassword('');
+      setShowPassword(false);
       if (localCount > 0) {
         setImportPrompt(true);
       } else {
-        onClose();
+        handleClose();
       }
     } catch (err: any) {
       setErrorMsg(err.message || 'Authentication failed. Please verify credentials.');
@@ -149,16 +172,22 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
       await importLocalToCloud();
       setIsLoading(false);
     }
-    setImportPrompt(false);
-    onClose();
+    handleClose();
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in duration-150">
+    <div
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !isLoading) {
+          handleClose();
+        }
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in duration-150"
+    >
       <div className="relative w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl shadow-black/90">
         {/* Close Button */}
         <button
-          onClick={onClose}
+          onClick={handleClose}
           className="absolute right-4 top-4 rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white transition"
           title="Close"
         >
@@ -174,7 +203,7 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
             <h3 className="text-base font-bold text-zinc-100">Successfully Signed In!</h3>
             <p className="text-xs text-zinc-400 mt-2 leading-relaxed">
               We detected <strong className="text-sky-400">{localCount} collection(s)</strong> in your local offline workspace.
-              Would you like to import them into your active cloud workspace?
+              Would you like to import them into your active workspace?
             </p>
 
             <div className="mt-6 flex flex-col gap-2">
@@ -183,14 +212,14 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
                 onClick={() => handleImportDecision(true)}
                 className="w-full flex items-center justify-center gap-2 rounded-lg bg-sky-600 py-2.5 text-xs font-semibold text-white hover:bg-sky-500 transition shadow-md shadow-sky-600/20 disabled:opacity-50"
               >
-                {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Yes, Import Local Collections to Cloud'}
+                {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Yes, Import Local Collections'}
               </button>
               <button
                 disabled={isLoading}
                 onClick={() => handleImportDecision(false)}
                 className="w-full rounded-lg border border-zinc-800 bg-zinc-900 py-2.5 text-xs font-medium text-zinc-300 hover:bg-zinc-800 hover:text-white transition disabled:opacity-50"
               >
-                Start with a Clean Cloud Workspace
+                Start with a Clean Workspace
               </button>
             </div>
           </div>
@@ -198,11 +227,13 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
           /* Main Auth Form */
           <>
             <div className="flex items-center gap-3 mb-5">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-tr from-sky-600 to-indigo-600 text-white shadow-md shadow-sky-500/20">
-                <Cloud className="h-5 w-5" />
-              </div>
+              <img
+                src="/icons/logo-square.png"
+                alt="AirREST"
+                className="h-10 w-10 rounded-xl object-cover shadow-md shadow-sky-500/20"
+              />
               <div>
-                <h3 className="text-base font-bold text-zinc-100">Connect to AirREST Cloud</h3>
+                <h3 className="text-base font-bold text-zinc-100">Connect to Self-Hosted AirREST</h3>
                 <p className="text-xs text-zinc-400">Collaborate with teams &amp; sync collections</p>
               </div>
             </div>
@@ -280,7 +311,7 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
                       className="w-full rounded border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-200 focus:border-sky-500 focus:outline-none font-mono"
                     />
                     <p className="text-[10px] text-zinc-500 mt-1">
-                      Defaults to local Go server. Point to your Vercel or cloud endpoint in production.
+                      Input your self-hosted AirREST backend URL.
                     </p>
                   </div>
                 )}

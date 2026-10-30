@@ -274,6 +274,9 @@ func ValidateCollectionItem(item *domain.CollectionItem) error {
 	if err := validateKeyValueArray(item.Params, "params"); err != nil {
 		return err
 	}
+	if err := validateKeyValueArray(item.PathVariables, "path_variables"); err != nil {
+		return err
+	}
 	if err := validateKeyValueArray(item.Headers, "headers"); err != nil {
 		return err
 	}
@@ -310,6 +313,9 @@ func ValidateImportItem(item *ImportItemRequest) error {
 		return err
 	}
 	if err := validateKeyValueArray(item.Params, "params"); err != nil {
+		return err
+	}
+	if err := validateKeyValueArray(item.PathVariables, "path_variables"); err != nil {
 		return err
 	}
 	if err := validateKeyValueArray(item.Headers, "headers"); err != nil {

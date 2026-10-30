@@ -4362,6 +4362,12 @@
               "$ref": "#/components/schemas/KeyValuePair"
             }
           },
+          "path_variables": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KeyValuePair"
+            }
+          },
           "headers": {
             "type": "array",
             "items": {
@@ -4792,6 +4798,12 @@
             "example": "https://httpbin.org/get"
           },
           "params": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KeyValuePair"
+            }
+          },
+          "path_variables": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/KeyValuePair"

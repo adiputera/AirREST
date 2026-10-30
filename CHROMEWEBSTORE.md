@@ -1,6 +1,6 @@
 # Chrome Web Store Listings — AirREST
 
-> Last Updated: 2026-10-30
+> Last Updated: 2026-10-31
 
 > Chrome Web Store release notes describe browser-extension changes only. Do not include backend, Hub, or desktop release notes here.
 
@@ -63,6 +63,7 @@ SUPPORT
 For questions, bug reports, or feature suggestions, visit the project repository on GitHub:
 https://github.com/adiputera/AirREST
 
+Version 1.1.9 — Added dynamic URL path variables (:param and {param}) with automatic URL parsing, parameter editing, and live dispatch substitution; collapsible request editor sections; improved sidebar dropdown positioning; and Cloud Auth modal lifecycle resets for password and visibility state.
 Version 1.1.8 — Added Hub-managed controls for moving, deleting, and exporting cloud collections. The extension refreshes these controls when changing cloud scope or using Sync Online, and prevents moving project collections into personal workspaces.
 Version 1.1.7 — Added universal sidebar collection and request search with multi-token parsing, multi-tab request isolation eliminating collisions across collections, in-memory per-tab response persistence, zero-tabs empty state studio, and collection badges in editor and tab hover tooltips.
 Version 1.1.6 — Added Save As duplicate request independence, HTTP method and name duplicate collision guard with interactive conflict resolution (Save Copy / Replace), reader scope read-only enforcement, Scope Switcher personal workspaces management, resilient empty workspace cloud delta sync, team project auto-loading, and unified file picker flow.
@@ -151,6 +152,7 @@ SUPPORT
 For questions, bug reports, or feature suggestions, visit the project repository on GitHub:
 https://github.com/adiputera/AirREST
 
+Version 1.1.9 — Added dynamic URL path variables (:param and {param}) with automatic URL parsing, parameter editing, and live dispatch substitution; collapsible request editor sections; and improved sidebar dropdown positioning.
 Version 1.1.8 — Updated release metadata. Offline mode remains local-only and does not connect to Hub feature controls.
 Version 1.1.7 — Added universal sidebar collection and request search with multi-token parsing, multi-tab request isolation eliminating collisions across collections, in-memory per-tab response persistence, zero-tabs empty state studio, and collection badges in editor and tab hover tooltips.
 Version 1.1.6 — Added Save As duplicate request independence, HTTP method and name duplicate collision guard with interactive conflict resolution (Save Copy / Replace), Scope Switcher offline workspace navigation, unified native and browser file picker flows, and enhanced local collection management.

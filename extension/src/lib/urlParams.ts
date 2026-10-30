@@ -127,3 +127,109 @@ export function buildUrlWithParams(
 
   return `${baseUrl}?${queryString}`;
 }
+
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Extracts path string (excluding domain, port, query string, and hash) from a URL.
+ */
+export function extractPathFromUrl(url?: string | null): string {
+  if (!url) return '';
+  let str = url.trim();
+  const qIdx = str.search(/[?#]/);
+  if (qIdx !== -1) {
+    str = str.substring(0, qIdx);
+  }
+  const protoIdx = str.indexOf('://');
+  if (protoIdx !== -1) {
+    const slashAfterHost = str.indexOf('/', protoIdx + 3);
+    if (slashAfterHost === -1) return '';
+    return str.substring(slashAfterHost);
+  }
+  const firstSlash = str.indexOf('/');
+  if (firstSlash !== -1) {
+    return str.substring(firstSlash);
+  }
+  return '';
+}
+
+/**
+ * Parses path variable names from a URL string (e.g. /rules/:id -> ['id']),
+ * synchronizing them with existing path variables to preserve values and descriptions.
+ */
+export function parsePathVariablesFromUrl(
+  url?: string | null,
+  existingVars: KeyValuePair[] = []
+): KeyValuePair[] {
+  const path = extractPathFromUrl(url);
+  if (!path) {
+    return [];
+  }
+
+  const regex = /(?:^|\/):([a-zA-Z0-9_]+)(?=\/|$)/g;
+  const matchedKeys: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(path)) !== null) {
+    const key = match[1];
+    if (key && !matchedKeys.includes(key)) {
+      matchedKeys.push(key);
+    }
+  }
+
+  if (matchedKeys.length === 0) {
+    return [];
+  }
+
+  const existingMap = new Map<string, KeyValuePair>();
+  for (const v of existingVars || []) {
+    if (v && v.key && !existingMap.has(v.key)) {
+      existingMap.set(v.key, v);
+    }
+  }
+
+  return matchedKeys.map((key) => {
+    const existing = existingMap.get(key);
+    if (existing) {
+      return {
+        id: existing.id || generateId(),
+        key,
+        value: existing.value ?? '',
+        enabled: existing.enabled !== false,
+        description: existing.description,
+      };
+    }
+    return {
+      id: generateId(),
+      key,
+      value: '',
+      enabled: true,
+    };
+  });
+}
+
+/**
+ * Replaces :variable tokens in the URL path with their assigned values.
+ */
+export function substitutePathVariables(
+  url?: string | null,
+  pathVariables: KeyValuePair[] = []
+): string {
+  if (!url) return '';
+  let result = url;
+
+  const activeVars = (pathVariables || []).filter(
+    (v) => v && v.enabled !== false && String(v.key ?? '').trim() !== ''
+  );
+
+  for (const pv of activeVars) {
+    const key = String(pv.key).trim();
+    const val = pv.value !== undefined ? String(pv.value) : '';
+    const regex = new RegExp(`(^|/):${escapeRegex(key)}(?=/|\\?|#|$)`, 'g');
+    result = result.replace(regex, `$1${val}`);
+  }
+
+  return result;
+}
+

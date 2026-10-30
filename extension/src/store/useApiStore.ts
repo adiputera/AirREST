@@ -32,7 +32,7 @@ import {
   detectPostmanJsonType,
 } from '@/lib/postman';
 import { executePreRequestScript, executePostResponseScript } from '@/lib/scriptRunner';
-import { parseQueryParamsFromUrl, buildUrlWithParams } from '@/lib/urlParams';
+import { parseQueryParamsFromUrl, parsePathVariablesFromUrl, buildUrlWithParams } from '@/lib/urlParams';
 import {
   batchImportToScope,
   registerTokenRefreshCallback,
@@ -86,6 +86,7 @@ const defaultRequest: ApiRequest = {
   method: 'GET',
   url: '',
   params: [{ id: 'p1', key: '', value: '', enabled: true }],
+  pathVariables: [],
   headers: [{ id: 'h1', key: 'Accept', value: 'application/json', enabled: true }],
   auth: { type: 'none' },
   bodyType: 'none',
@@ -108,6 +109,7 @@ function createInitialTab(): ApiRequest {
     method: 'GET',
     url: '',
     params: [{ id: generateId(), key: '', value: '', enabled: true }],
+    pathVariables: [],
     headers: [{ id: generateId(), key: '', value: '', enabled: true }],
     auth: { type: 'none' },
     bodyType: 'none',
@@ -130,9 +132,11 @@ function hasLiveFile(value: unknown): value is File {
 }
 
 function cloneRequestPreservingAttachments(request: ApiRequest): ApiRequest {
+  const pathVariables = parsePathVariablesFromUrl(request.url, request.pathVariables);
   return {
     ...request,
     params: (request.params || []).map((item) => ({ ...item })),
+    pathVariables: pathVariables.map((item) => ({ ...item })),
     headers: (request.headers || []).map((item) => ({ ...item })),
     bodyFormData: request.bodyFormData?.map((item) => ({ ...item })),
     bodyUrlEncoded: request.bodyUrlEncoded?.map((item) => ({ ...item })),
@@ -358,6 +362,7 @@ interface ApiStoreState {
   updateParam: (id: string, updates: Partial<KeyValuePair>) => void;
   addParam: () => void;
   removeParam: (id: string) => void;
+  updatePathVariable: (id: string, updates: Partial<KeyValuePair>) => void;
 
   updateHeader: (id: string, updates: Partial<KeyValuePair>) => void;
   addHeader: () => void;
@@ -2456,9 +2461,10 @@ export const useApiStore = create<ApiStoreState>()(
             tabResponses: nextTabResponses,
             tabs: state.tabs.map((tab) => {
               if (tab.id !== state.activeTabId) return tab;
-              if (updates.url !== undefined && updates.params === undefined && updates.url !== tab.url) {
-                const syncedParams = parseQueryParamsFromUrl(updates.url, tab.params);
-                return { ...tab, ...updates, params: syncedParams, updatedAt: Date.now() };
+              if (updates.url !== undefined && updates.url !== tab.url) {
+                const syncedParams = updates.params !== undefined ? updates.params : parseQueryParamsFromUrl(updates.url, tab.params);
+                const syncedPathVars = updates.pathVariables !== undefined ? updates.pathVariables : parsePathVariablesFromUrl(updates.url, tab.pathVariables);
+                return { ...tab, ...updates, params: syncedParams, pathVariables: syncedPathVars, updatedAt: Date.now() };
               }
               return { ...tab, ...updates, updatedAt: Date.now() };
             }),
@@ -2503,6 +2509,22 @@ export const useApiStore = create<ApiStoreState>()(
               ...tab,
               params: updatedParams,
               url: updatedUrl,
+              updatedAt: Date.now(),
+            };
+          }),
+        }));
+      },
+
+      updatePathVariable: (id, updates) => {
+        set((state) => ({
+          tabs: state.tabs.map((tab) => {
+            if (tab.id !== state.activeTabId) return tab;
+            const updatedPathVars = (tab.pathVariables || []).map((pv) =>
+              pv.id === id ? { ...pv, ...updates } : pv
+            );
+            return {
+              ...tab,
+              pathVariables: updatedPathVars,
               updatedAt: Date.now(),
             };
           }),

@@ -97,7 +97,7 @@ export const TabBar: React.FC = () => {
     <>
       <div
         onContextMenu={handleBarContextMenu}
-        className="flex h-10 w-full items-center border-b border-zinc-800 bg-zinc-950 px-2 overflow-x-auto scrollbar-none"
+        className="flex h-8 w-full items-center border-b border-zinc-800 bg-zinc-950 px-2 overflow-x-auto scrollbar-none"
       >
         <div className="flex items-center gap-1.5 flex-1 min-w-0">
           {safeTabs.filter(Boolean).map((tab) => {
@@ -115,11 +115,10 @@ export const TabBar: React.FC = () => {
                 onClick={() => setActiveTabId(tab.id)}
                 onContextMenu={(e) => handleTabContextMenu(e, tab.id)}
                 onAuxClick={(e) => handleTabAuxClick(e, tab.id)}
-                className={`group flex items-center gap-2 max-w-[205px] cursor-pointer rounded-t-lg border-t-2 px-3 py-1.5 text-xs font-medium transition-all select-none ${
-                  isActive
+                className={`group flex items-center gap-1.5 max-w-[205px] cursor-pointer rounded-t-md border-t-2 px-2.5 py-1 text-xs font-medium transition-all select-none ${isActive
                     ? 'border-sky-500 bg-zinc-900 text-zinc-100 shadow-sm'
                     : 'border-transparent bg-zinc-950/40 text-zinc-400 hover:bg-zinc-900/60 hover:text-zinc-200'
-                }`}
+                  }`}
               >
                 <MethodBadge method={tab.method} size="sm" />
                 <span className="truncate max-w-[105px]" title={tabTitle}>
@@ -149,10 +148,10 @@ export const TabBar: React.FC = () => {
 
           <button
             onClick={() => createTab()}
-            className="flex h-7 w-7 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200 transition"
+            className="flex h-6 w-6 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200 transition"
             title="Create New Request Tab"
           >
-            <Plus className="h-4 w-4" />
+            <Plus className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>
