@@ -9,7 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.6] - 2026-10-30
+
 ### Fixed
+- **Empty Scope & Null Delta Response Resilience**:
+  - Resolved a cloud sync failure where switching to an empty workspace/project scope, or logging in as a user without assigned teams or collections, caused the sync button to change permanently to **Retry** with repeating failures despite receiving HTTP 200 success from the backend.
+  - Updated `fetchScopeCollections` in [`cloudApi.ts`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/packages/common/src/lib/cloudApi.ts) to gracefully treat `null` or missing response payloads as empty arrays (`[]`) instead of throwing validation exceptions.
+  - Hardened backend JSON serialization in [`response.go`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/backend/pkg/response/response.go) using reflection to automatically normalize `nil` slices into empty slices (`[]any{}`), ensuring list endpoints consistently serialize `"data": []` rather than `"data": null`.
+  - Initialized slice buffers with `make([]*Type, 0)` across all PostgreSQL repositories (`collection_repo.go`, `environment_repo.go`, `project_repo.go`, `team_repo.go`, `user_repo.go`, `workspace_repo.go`) and added fallback guards across all service list handlers.
+  - Added unit test suite in [`response_test.go`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/backend/pkg/response/response_test.go) verifying nil-slice array marshaling.
 - **Scope Switcher Team Projects Auto-Loading**:
   - Fixed an issue in [`ScopeSwitcher.tsx`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/packages/common/src/components/ScopeSwitcher.tsx) and [`useApiStore.ts`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/packages/common/src/store/useApiStore.ts) where expanding a team accordion in the desktop app failed to auto-load projects from the backend.
   - Corrected `fetchScopes` to prevent un-fetched teams from polluting `scopesCache.teamProjects` with empty arrays (`[]`), ensuring un-fetched teams remain `undefined` until loaded.
@@ -23,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Implemented DOM-based file input fallback in `chromeAdapter.openFile` and unified native/web import flows in [`EnvironmentModal.tsx`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/packages/common/src/components/EnvironmentModal.tsx).
 
 ### Changed
+- **Standardized Default Workspace Naming**:
+  - Standardized the naming convention of default private workspaces to `Default Workspace` across all roles (including superadmin bootstrap and standard user registration in `auth_service.go`), replacing ambiguous role-based titles (`Superadmin Workspace`, `My Workspace`).
+  - Added database migration `006_standardize_default_workspaces.sql` migrating existing legacy private workspace names to `Default Workspace`.
+  - Updated API contract documentation in [`API_CONTRACT.md`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/backend/API_CONTRACT.md) and project documentation in [`README.md`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/README.md).
 - **Collection Transfer Compression**:
   - Cloud collection import and sync push now gzip eligible JSON payloads, with separate encoded and decoded size budgets; identity remains available when it is the smaller valid representation.
   - Collection list, detail, and delta pull responses support negotiated gzip with bounded identity, gzip, and decoded serialization sizes.
@@ -30,6 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Enabled gzip support in the desktop HTTP transport and added browser/client, backend, and PostgreSQL integration coverage for compressed collection transfer.
 
 ### Added
+- **Multiple Online Personal Workspaces UI & Full Management**:
+  - Implemented complete UI workflows for creating, renaming, and deleting multiple Online Personal Workspaces in [`ScopeSwitcher.tsx`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/packages/common/src/components/ScopeSwitcher.tsx) across `@airrest/common` and the Chrome Extension.
+  - Added inline workspace creation (`+ New`) with keyboard shortcuts (`Enter` to submit, `Escape` to cancel) and auto-focus input fields.
+  - Added contextual actions menu per personal workspace with inline rename support and delete protection.
+  - Guarded default workspaces against deletion with an explicit `Default` pill badge, while non-default personal workspaces prompt a styled confirmation modal ([`ConfirmModal.tsx`](file:///home/yusuff066603@corp.ai.astra.co.id/master_git/api-tester/packages/common/src/components/ConfirmModal.tsx)) before deletion.
+  - Added `createCloudWorkspace`, `updateCloudWorkspace`, and `deleteCloudWorkspace` API transport methods and integrated store actions in `useApiStore.ts`.
 - **Monorepo Migration & Shared Core Architecture**:
   - Re-architected the repository into a clean monorepo structure with `@airrest/common` (`packages/common/`), Chrome Extension (`extension/`), Hub Web Portal (`hub/`), and Desktop Client (`apps/desktop/`).
   - Extracted shared domain models, Zustand state store, universal UI components, cURL/Postman transformers, and runtime factory into private ESM package `@airrest/common`.

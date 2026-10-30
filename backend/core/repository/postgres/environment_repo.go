@@ -97,7 +97,7 @@ func (r *EnvironmentRepository) List(ctx context.Context, workspaceID, projectID
 	}
 	defer rows.Close()
 
-	var envs []*domain.Environment
+	envs := make([]*domain.Environment, 0)
 	for rows.Next() {
 		var env domain.Environment
 		if err := rows.Scan(

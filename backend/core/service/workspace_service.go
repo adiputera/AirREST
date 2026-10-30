@@ -44,7 +44,14 @@ func (s *WorkspaceService) Create(ctx context.Context, user *domain.User, name, 
 }
 
 func (s *WorkspaceService) List(ctx context.Context, user *domain.User) ([]*domain.Workspace, error) {
-	return s.workspaceRepo.ListByOwner(ctx, user.ID)
+	workspaces, err := s.workspaceRepo.ListByOwner(ctx, user.ID)
+	if err != nil {
+		return nil, err
+	}
+	if workspaces == nil {
+		workspaces = make([]*domain.Workspace, 0)
+	}
+	return workspaces, nil
 }
 
 func (s *WorkspaceService) Get(ctx context.Context, user *domain.User, id uuid.UUID) (*domain.Workspace, error) {

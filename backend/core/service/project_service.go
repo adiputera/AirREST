@@ -84,7 +84,14 @@ func (s *ProjectService) ListProjects(ctx context.Context, user *domain.User, te
 		}
 	}
 	isTeamAdmin, _ := s.teamService.CheckIfTeamAdmin(ctx, user, teamID)
-	return s.projectRepo.ListForUser(ctx, teamID, user.ID, user.IsSuperadmin(), isTeamAdmin)
+	projects, err := s.projectRepo.ListForUser(ctx, teamID, user.ID, user.IsSuperadmin(), isTeamAdmin)
+	if err != nil {
+		return nil, err
+	}
+	if projects == nil {
+		projects = make([]*domain.Project, 0)
+	}
+	return projects, nil
 }
 
 // GetProject returns project details if the user has visibility

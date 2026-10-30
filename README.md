@@ -24,7 +24,7 @@ AirREST is an API testing client that runs directly inside Google Chrome as a Ma
 ### Core Highlights
 - ⚡ **Direct In-Browser Dispatching**: Chrome host permissions enable unrestricted HTTP and HTTPS requests directly from the client without CORS or mixed-content limitations.
 - 💾 **Dual Storage Modes**: Works in 100% Offline Mode with local storage, or connects to Cloud Sync Mode for multi-device backup and team collaboration.
-- 🗂️ **Multi Offline Workspaces & Cloud Scopes**: Create, rename, clone, and switch between multiple isolated Offline Workspaces, or connect to Cloud Workspaces (Personal & Team Projects) with per-scope tab/history isolation.
+- 🗂️ **Multi Workspaces & Cloud Scopes**: Create, rename, clone, and switch between multiple isolated Offline Workspaces as well as multiple Online Personal Workspaces and Team Projects with per-scope tab/history isolation.
 - 📁 **Postman v2.1 Native Compatibility**: Full import and export support for Postman Collections and Environments with duplicate resolution and diff inspector.
 - 📜 **Sandboxed Scripting Engine**: Pre-request automation and post-response test scripting (`pm.*` & legacy `postman.*`) running inside an isolated sandbox with automated token chaining.
 - 🏢 **AirREST Hub**: Dedicated web portal for managing teams, project permissions, and user administration.
@@ -257,11 +257,11 @@ pm.environment.set("lastRequestTimestamp", now);
 - **IndexedDB Storage**: Uses IndexedDB with the `unlimitedStorage` permission to support large collections and environments without 5MB storage limits.
 - **Local Persistence**: Restores open tabs, unsaved modifications, and active configuration across browser reloads.
 
-### 10. 👥 Multi Offline Workspaces, Teams & Cloud Synchronization
-- **Multi Offline Workspaces**:
-  - Create and manage multiple isolated offline workspaces (e.g., per client or local project).
-  - Rename, duplicate/clone, or delete offline workspaces safely.
-  - Each offline workspace maintains its own isolated tabs, collections, environments, and history.
+### 10. 👥 Multi Workspaces, Teams & Cloud Synchronization
+- **Multi Workspaces (Offline & Online Personal)**:
+  - Create and manage multiple isolated offline workspaces as well as online personal cloud workspaces.
+  - Rename, duplicate/clone, or delete workspaces safely (default workspace is guarded against deletion).
+  - Each workspace maintains its own isolated tabs, collections, environments, and history.
 - **Scope Switcher**: Seamlessly switch between Offline Workspaces and Cloud Workspaces (Personal & Team Projects) with RBAC role badges (`Admin`, `Maintainer`, `Contributor`, `Reader`).
 - **Scoped Data Isolation**: Separate tabs, history, and active environments per workspace scope.
 - **Smart Client Caching**: 12-hour cache enables instant project switching without redundant network fetches.

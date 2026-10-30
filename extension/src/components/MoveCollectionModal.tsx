@@ -126,10 +126,10 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
               options.push({
                 scope: {
                   id: ws.id,
-                  name: ws.name || 'Personal Workspace',
+                  name: ws.name || 'Default Workspace',
                   type: 'workspace',
                 },
-                label: ws.name || 'Personal Workspace',
+                label: ws.name || 'Default Workspace',
                 subLabel: 'Private Cloud Workspace',
                 role: 'Owner',
               });
@@ -244,7 +244,7 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
       };
     }
     return {
-      title: activeScope?.name || 'Personal Workspace',
+      title: activeScope?.name || 'Default Workspace',
       subtitle: 'Cloud Private Workspace',
       badge: 'Owner',
     };

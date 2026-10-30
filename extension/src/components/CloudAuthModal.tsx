@@ -59,7 +59,7 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
       let initialScope: ActiveScope = {
         type: 'workspace',
         id: '',
-        name: 'Personal Workspace',
+        name: 'Default Workspace',
         role: 'owner',
       };
 
