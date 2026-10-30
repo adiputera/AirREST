@@ -207,3 +207,65 @@ test('T-VN3 (V-NEW-3): getUserScopeRank strictly prioritizes user.role over untr
     assert.equal(fallbackRank, 4, `${jwtPath}: absence of user.role should fall back to JWT claim`);
   }
 });
+
+test('T-READER-PERMS: reader level has read-only capability and cannot write collections in project scope', () => {
+  for (const jwtPath of ['packages/common/src/lib/jwt.ts', 'extension/src/lib/jwt.ts']) {
+    const { hasScopePermission, canModifyCollection } = loadCommonModule(jwtPath);
+
+    const readerProjectScope = { type: 'project', role: 'reader' };
+    const contributorProjectScope = { type: 'project', role: 'contributor' };
+    const personalScope = { type: 'workspace', role: 'owner' };
+    const offlineScope = { type: 'offline_workspace', role: 'admin' };
+
+    // 1. Reader in project scope: collection:read is allowed, but collection:write is denied
+    assert.equal(
+      hasScopePermission(readerProjectScope, 'collection:read', 'cloud', 'reader'),
+      true,
+      `${jwtPath}: reader must have collection:read permission`
+    );
+    assert.equal(
+      hasScopePermission(readerProjectScope, 'collection:write', 'cloud', 'reader'),
+      false,
+      `${jwtPath}: reader must NOT have collection:write permission`
+    );
+    assert.equal(
+      canModifyCollection('reader', readerProjectScope, 'cloud', 'reader'),
+      false,
+      `${jwtPath}: reader must not be able to modify collection in project scope`
+    );
+
+    // 2. Contributor in project scope: collection:write is allowed for reader/contributor collections
+    assert.equal(
+      hasScopePermission(contributorProjectScope, 'collection:write', 'cloud', 'contributor'),
+      true,
+      `${jwtPath}: contributor must have collection:write permission`
+    );
+    assert.equal(
+      canModifyCollection('reader', contributorProjectScope, 'cloud', 'contributor'),
+      true,
+      `${jwtPath}: contributor can modify reader-level collection`
+    );
+    assert.equal(
+      canModifyCollection('maintainer', contributorProjectScope, 'cloud', 'contributor'),
+      false,
+      `${jwtPath}: contributor cannot modify maintainer-restricted collection`
+    );
+
+    // 3. Personal workspace / offline mode always bypasses project role restrictions
+    assert.equal(
+      hasScopePermission(personalScope, 'collection:write', 'cloud', 'reader'),
+      true,
+      `${jwtPath}: personal workspace must allow collection:write even for reader account`
+    );
+    assert.equal(
+      hasScopePermission(offlineScope, 'collection:write', 'offline', 'reader'),
+      true,
+      `${jwtPath}: offline workspace must allow collection:write`
+    );
+    assert.equal(
+      canModifyCollection('admin', offlineScope, 'offline', 'reader'),
+      true,
+      `${jwtPath}: offline workspace allows modifying any collection`
+    );
+  }
+});

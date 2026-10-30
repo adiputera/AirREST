@@ -11,7 +11,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.1.6] - 2026-10-30
 
+### Added
+- **Request Name & HTTP Method Duplicate Guard & Conflict Resolution**:
+  - Implemented intra-collection duplicate detection enforcing uniqueness on `(HTTP method, request name)` (case-insensitive for both method and trimmed name).
+  - Distinct HTTP methods with the same name (e.g. `POST token` and `GET token`) are allowed to coexist naturally within the same collection without prompt.
+  - When saving or saving-as a request that collides with an existing request's method and name in the target collection, a conflict dialog is displayed (*"Request already exists: replace or save copy?"*).
+  - Provides two distinct resolution actions:
+    - **Save Copy**: Auto-generates a non-conflicting incremented copy name (e.g. `token (Copy)` or `token (Copy 2)`) using `generateCopyRequestName`, assigns a fresh UUID, and preserves the existing request intact.
+    - **Replace**: In-place overwrites the existing conflicting request's payload while maintaining its ID and folder hierarchy.
+    - **Back**: Returns to the modal form allowing the user to modify the name or destination.
+  - Integrated duplicate collision detection in [`SaveToCollectionModal.tsx`](packages/common/src/components/SaveToCollectionModal.tsx) and [`RequestEditor.tsx`](packages/common/src/components/RequestEditor.tsx) across `packages/common` and `extension`.
+  - Added automated test suite `T-SAVE-CONFLICT-DETECTION` in [`scripts/desktop-transport-lifecycle.test.mjs`](scripts/desktop-transport-lifecycle.test.mjs).
+- **Multiple Online Personal Workspaces UI & Full Management**:
+  - Implemented complete UI workflows for creating, renaming, and deleting multiple Online Personal Workspaces in [`ScopeSwitcher.tsx`](packages/common/src/components/ScopeSwitcher.tsx) across `@airrest/common` and the Chrome Extension.
+  - Added inline workspace creation (`+ New`) with keyboard shortcuts (`Enter` to submit, `Escape` to cancel) and auto-focus input fields.
+  - Added contextual actions menu per personal workspace with inline rename support and delete protection.
+  - Guarded default workspaces against deletion with an explicit `Default` pill badge, while non-default personal workspaces prompt a styled confirmation modal ([`ConfirmModal.tsx`](packages/common/src/components/ConfirmModal.tsx)) before deletion.
+  - Added `createCloudWorkspace`, `updateCloudWorkspace`, and `deleteCloudWorkspace` API transport methods and integrated store actions in `useApiStore.ts`.
+- **Monorepo Migration & Shared Core Architecture**:
+  - Re-architected the repository into a clean monorepo structure with `@airrest/common` (`packages/common/`), Chrome Extension (`extension/`), Hub Web Portal (`hub/`), and Desktop Client (`apps/desktop/`).
+  - Extracted shared domain models, Zustand state store, universal UI components, cURL/Postman transformers, and runtime factory into private ESM package `@airrest/common`.
+  - Added extensible `PlatformAdapter` contract decoupling UI and store layers from host platform APIs (`TestTransport`, `CloudTransport`, `ScriptExecutor`, native file system, and origin permission checks).
+- **Tauri v2 Desktop Application & Sandbox Hardening (`apps/desktop/`)**:
+  - Implemented standalone desktop client powered by Tauri v2 with Rust backend shell.
+  - Native HTTP transport via `@tauri-apps/plugin-http` with opt-in SSL verification bypass for local testing and full custom `Cookie`, `User-Agent`, and `Host` headers.
+  - Web Worker offloaded WebAssembly scripting engine (`quickjs.worker.ts` + `quickjsRunner.ts`), executing guest scripts off the main thread with 64 MiB heap and 512 KiB stack boundaries.
+  - Strict boundary validation via `scriptProtocol.ts`: 256 KiB script limit, 1 MiB serialized UTF-8 input/output bounds, prototype pollution guards (`__proto__`, `constructor`, `prototype`), and captured immutable primitives.
+
 ### Fixed
+- **Save As Duplicate Creation & Independence**:
+  - Resolved an issue where using **Save As** to save a request into another collection triggered a `moveRequest`, removing the original request from the source collection instead of duplicating it.
+  - Resolved an issue where saving a copy to the same collection overwritten the existing request due to `item.name === cleanReq.name` matching in `saveRequestToCollection`.
+  - Added explicit `isSaveAs` mode to [`SaveToCollectionModal.tsx`](packages/common/src/components/SaveToCollectionModal.tsx) and [`RequestEditor.tsx`](packages/common/src/components/RequestEditor.tsx), ensuring **Save As** always generates a new UUID and preserves the original item in the source collection.
+  - Removed name-based item matching in `saveRequestToCollection` across [`packages/common/src/store/useApiStore.ts`](packages/common/src/store/useApiStore.ts) and [`extension/src/store/useApiStore.ts`](extension/src/store/useApiStore.ts), allowing multiple requests with the same name to coexist safely with distinct IDs.
+  - Synchronized `activeTabId` in `updateActiveRequest` when `id` changes so that the active tab points to the new duplicated request without desynchronizing editor state.
+  - Added automated test suite `T-SAVE-AS-DUPLICATE` in [`scripts/desktop-transport-lifecycle.test.mjs`](scripts/desktop-transport-lifecycle.test.mjs).
+- **Reader Scope Save As & Read-Only Enforcement**:
+  - Fixed an issue where the **Save As** button remained visible in [`RequestEditor.tsx`](packages/common/src/components/RequestEditor.tsx) when the user had a `reader` role in project scope, causing an `insufficient permission` error upon attempting to save.
+  - Guarded the **Save As** button and `handleSave` in `RequestEditor` with `canWriteScope` (`hasScopePermission(activeScope, 'collection:write')`), ensuring read-only project scopes display the locked `Read-only` badge without offering `Save As` or allowing `Ctrl+S`/`Cmd+S` saves.
+  - In [`SaveToCollectionModal.tsx`](packages/common/src/components/SaveToCollectionModal.tsx), disabled collection creation and saving when the scope lacks `collection:write`, marked restricted collections as `(Read-only)` in the dropdown, and ensured saving a copy does not trigger relocation (`moveRequest`) on read-only source collections.
+  - Added unit test in [`security-client.test.mjs`](scripts/security-client.test.mjs) verifying reader capability boundaries in cloud project scopes.
 - **Empty Scope & Null Delta Response Resilience**:
   - Resolved a cloud sync failure where switching to an empty workspace/project scope, or logging in as a user without assigned teams or collections, caused the sync button to change permanently to **Retry** with repeating failures despite receiving HTTP 200 success from the backend.
   - Updated `fetchScopeCollections` in [`cloudApi.ts`](packages/common/src/lib/cloudApi.ts) to gracefully treat `null` or missing response payloads as empty arrays (`[]`) instead of throwing validation exceptions.

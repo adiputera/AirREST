@@ -2353,16 +2353,20 @@ export const useApiStore = create<ApiStoreState>()(
       },
 
       updateActiveRequest: (updates) => {
-        set((state) => ({
-          tabs: state.tabs.map((tab) => {
-            if (tab.id !== state.activeTabId) return tab;
-            if (updates.url !== undefined && updates.params === undefined && updates.url !== tab.url) {
-              const syncedParams = parseQueryParamsFromUrl(updates.url, tab.params);
-              return { ...tab, ...updates, params: syncedParams, updatedAt: Date.now() };
-            }
-            return { ...tab, ...updates, updatedAt: Date.now() };
-          }),
-        }));
+        set((state) => {
+          const nextActiveTabId = updates.id !== undefined ? updates.id : state.activeTabId;
+          return {
+            activeTabId: nextActiveTabId,
+            tabs: state.tabs.map((tab) => {
+              if (tab.id !== state.activeTabId) return tab;
+              if (updates.url !== undefined && updates.params === undefined && updates.url !== tab.url) {
+                const syncedParams = parseQueryParamsFromUrl(updates.url, tab.params);
+                return { ...tab, ...updates, params: syncedParams, updatedAt: Date.now() };
+              }
+              return { ...tab, ...updates, updatedAt: Date.now() };
+            }),
+          };
+        });
       },
 
       updateParam: (id, updates) => {
@@ -3364,7 +3368,7 @@ export const useApiStore = create<ApiStoreState>()(
 
           const insertOrUpdateInList = (items: CollectionItem[]): CollectionItem[] => {
             const existingIdx = items.findIndex(
-              (item) => item.type === 'request' && (item.id === cleanReq.id || item.request?.id === cleanReq.id || item.name === cleanReq.name)
+              (item) => item.type === 'request' && (item.id === cleanReq.id || item.request?.id === cleanReq.id)
             );
 
             if (existingIdx >= 0) {
@@ -3431,15 +3435,18 @@ export const useApiStore = create<ApiStoreState>()(
           });
 
           const tabs = state.tabs.map((tab) => {
-            if (tab.id === request.id || tab.name === request.name) {
+            if (tab.id === request.id) {
               return { ...tab, id: assignedReqId, name: cleanReq.name };
             }
             return tab;
           });
 
+          const nextActiveTabId = state.activeTabId === request.id ? assignedReqId : state.activeTabId;
+
           return {
             collections,
             tabs,
+            activeTabId: nextActiveTabId,
           };
         });
 
