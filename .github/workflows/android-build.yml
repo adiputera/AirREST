@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - 'apps/desktop/**'
+      - 'apps/native/**'
       - 'packages/common/**'
       - 'scripts/android-back-navigation.test.mjs'
       - 'scripts/tauri-file-adapter.test.mjs'
@@ -39,7 +39,7 @@ jobs:
           targets: x86_64-linux-android
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: './apps/desktop/src-tauri -> target'
+          workspaces: './apps/native/src-tauri -> target'
       - uses: gradle/actions/setup-gradle@v4
       - run: npm ci
       - name: Test Android navigation and file adapter
@@ -51,7 +51,7 @@ jobs:
       - name: Check 16 KiB native and APK alignment
         run: >-
           python3 scripts/check-android-page-size.py
-          apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+          apps/native/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
           --readelf "$ANDROID_HOME/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
           --zipalign "$ANDROID_HOME/build-tools/36.0.0/zipalign"
       - name: Enable emulator acceleration
@@ -66,9 +66,9 @@ jobs:
           arch: x86_64
           target: google_apis
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
-          script: python3 scripts/android-emulator-smoke.py apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+          script: python3 scripts/android-emulator-smoke.py apps/native/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
       - uses: actions/upload-artifact@v4
         with:
           name: airrest-android-x86_64-debug
-          path: apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/debug/*.apk
+          path: apps/native/src-tauri/gen/android/app/build/outputs/apk/universal/debug/*.apk
           if-no-files-found: error

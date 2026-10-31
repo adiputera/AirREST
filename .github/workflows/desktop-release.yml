@@ -76,7 +76,7 @@ jobs:
       - name: Rust Cargo cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: './apps/desktop/src-tauri -> target'
+          workspaces: './apps/native/src-tauri -> target'
 
       - name: Install workspace dependencies
         run: npm ci
@@ -108,7 +108,7 @@ jobs:
         run: |
           node -e '
             const fs = require("fs");
-            const p = "apps/desktop/src-tauri/tauri.conf.json";
+            const p = "apps/native/src-tauri/tauri.conf.json";
             const conf = JSON.parse(fs.readFileSync(p, "utf8"));
             conf.bundle.createUpdaterArtifacts = true;
             conf.plugins.updater.pubkey = process.env.TAURI_UPDATER_PUBLIC_KEY.trim();
@@ -124,7 +124,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
           TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
         with:
-          projectPath: apps/desktop
+          projectPath: apps/native
           tagName: ${{ steps.release_meta.outputs.tag_name }}
           releaseName: 'AirREST v__VERSION__'
           releaseBody: ${{ steps.changelog.outputs.release_notes }}
@@ -167,7 +167,7 @@ jobs:
       - name: Rust Cargo cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: './apps/desktop/src-tauri -> target'
+          workspaces: './apps/native/src-tauri -> target'
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -179,7 +179,7 @@ jobs:
         id: release_meta
         shell: bash
         run: |
-          VERSION=$(node -p "require('./apps/desktop/package.json').version")
+          VERSION=$(node -p "require('./apps/native/package.json').version")
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag_name }}" ]; then
             echo "tag_name=${{ inputs.tag_name }}" >> "$GITHUB_OUTPUT"
@@ -216,30 +216,30 @@ jobs:
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
         run: |
-          npm run --prefix apps/desktop tauri -- android build --apk --aab --target aarch64 --ci
-          mkdir -p apps/desktop/src-tauri/target/release-assets
-          cp apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk \
-            "apps/desktop/src-tauri/target/release-assets/airrest-${{ steps.release_meta.outputs.version }}-android-arm64.apk"
-          cp apps/desktop/src-tauri/gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab \
-            "apps/desktop/src-tauri/target/release-assets/airrest-${{ steps.release_meta.outputs.version }}-android-universal.aab"
+          npm run --prefix apps/native tauri -- android build --apk --aab --target aarch64 --ci
+          mkdir -p apps/native/src-tauri/target/release-assets
+          cp apps/native/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk \
+            "apps/native/src-tauri/target/release-assets/airrest-${{ steps.release_meta.outputs.version }}-android-arm64.apk"
+          cp apps/native/src-tauri/gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab \
+            "apps/native/src-tauri/target/release-assets/airrest-${{ steps.release_meta.outputs.version }}-android-universal.aab"
 
       - name: Build x86_64 Release APK
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
         run: |
-          npm run --prefix apps/desktop tauri -- android build --apk --target x86_64 --ci
-          cp apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk \
-            "apps/desktop/src-tauri/target/release-assets/airrest-${{ steps.release_meta.outputs.version }}-android-x86_64.apk"
+          npm run --prefix apps/native tauri -- android build --apk --target x86_64 --ci
+          cp apps/native/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk \
+            "apps/native/src-tauri/target/release-assets/airrest-${{ steps.release_meta.outputs.version }}-android-x86_64.apk"
 
       - name: Verify APK Signatures and 16 KiB Alignment
         run: |
-          $ANDROID_HOME/build-tools/36.0.0/apksigner verify --verbose apps/desktop/src-tauri/target/release-assets/*.apk
+          $ANDROID_HOME/build-tools/36.0.0/apksigner verify --verbose apps/native/src-tauri/target/release-assets/*.apk
           python3 scripts/check-android-page-size.py \
-            "apps/desktop/src-tauri/target/release-assets/airrest-${{ steps.release_meta.outputs.version }}-android-arm64.apk" \
+            "apps/native/src-tauri/target/release-assets/airrest-${{ steps.release_meta.outputs.version }}-android-arm64.apk" \
             --readelf "$ANDROID_HOME/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" \
             --zipalign "$ANDROID_HOME/build-tools/36.0.0/zipalign"
           python3 scripts/check-android-page-size.py \
-            "apps/desktop/src-tauri/target/release-assets/airrest-${{ steps.release_meta.outputs.version }}-android-x86_64.apk" \
+            "apps/native/src-tauri/target/release-assets/airrest-${{ steps.release_meta.outputs.version }}-android-x86_64.apk" \
             --readelf "$ANDROID_HOME/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" \
             --zipalign "$ANDROID_HOME/build-tools/36.0.0/zipalign"
 
@@ -247,7 +247,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: airrest-android-release
-          path: apps/desktop/src-tauri/target/release-assets/*
+          path: apps/native/src-tauri/target/release-assets/*
           if-no-files-found: error
 
       - name: Extract Release Notes from CHANGELOG.md
@@ -265,4 +265,4 @@ jobs:
           tag_name: ${{ steps.release_meta.outputs.tag_name }}
           body: ${{ steps.changelog.outputs.release_notes }}
           generate_release_notes: true
-          files: apps/desktop/src-tauri/target/release-assets/*
+          files: apps/native/src-tauri/target/release-assets/*

@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 
 function loadAdapter(android, selection) {
-  const source = fs.readFileSync(new URL('../apps/desktop/src/adapters/tauriAdapter.ts', import.meta.url), 'utf8')
+  const source = fs.readFileSync(new URL('../apps/native/src/adapters/tauriAdapter.ts', import.meta.url), 'utf8')
     .replaceAll('import.meta.url', '"file:///adapter.ts"');
   const compiled = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },

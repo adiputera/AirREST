@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 
 function loadStorage(transactionOutcome) {
-  const source = fs.readFileSync(new URL('../extension/src/lib/storage.ts', import.meta.url), 'utf8');
+  const source = fs.readFileSync(new URL('../apps/extension/src/lib/storage.ts', import.meta.url), 'utf8');
   const compiled = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
@@ -53,7 +53,7 @@ function loadStorage(transactionOutcome) {
     Promise,
     Error,
     queueMicrotask,
-  }, { filename: 'extension/src/lib/storage.ts' });
+  }, { filename: 'apps/extension/src/lib/storage.ts' });
   return exports;
 }
 

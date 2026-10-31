@@ -9,7 +9,7 @@ const require = createRequire(import.meta.url);
 
 function loadStore({ executeApiRequest = async () => ({ status: 200, statusText: 'OK', data: '{"ok":true}', timeMs: 50, sizeBytes: 10, headers: {} }) } = {}) {
   const source = fs
-    .readFileSync(new URL('../extension/src/store/useApiStore.ts', import.meta.url), 'utf8')
+    .readFileSync(new URL('../apps/extension/src/store/useApiStore.ts', import.meta.url), 'utf8')
     .replaceAll('import.meta.env', '({})');
   const compiled = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -86,7 +86,7 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
     URLSearchParams,
     TextEncoder,
     TextDecoder,
-  }, { filename: 'extension/src/store/useApiStore.ts' });
+  }, { filename: 'apps/extension/src/store/useApiStore.ts' });
 
   return exports.useApiStore;
 }
