@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { useBackHandler } from '../lib/backNavigation';
 import { Lock, Mail, Server, AlertCircle, Loader2, CheckCircle2, X, Eye, EyeOff } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
 import { useStoreContext } from '../store/storeContext';
@@ -54,6 +55,7 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
     setImportPrompt(false);
     onClose();
   };
+  useBackHandler(isOpen, () => { if (!isLoading) handleClose(); }, 20);
 
   useEffect(() => {
     if (isOpen) {
@@ -184,7 +186,7 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
       }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in duration-150"
     >
-      <div className="relative w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl shadow-black/90">
+      <div className="relative max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-4 shadow-2xl shadow-black/90 md:p-6">
         {/* Close Button */}
         <button
           onClick={handleClose}

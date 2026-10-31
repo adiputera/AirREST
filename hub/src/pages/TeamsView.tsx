@@ -12,6 +12,7 @@ import {
   AlertCircle,
   X,
   Pencil,
+  ArrowLeft,
 } from 'lucide-react';
 import { useHubStore } from '../store/useHubStore';
 import {
@@ -41,6 +42,7 @@ export const TeamsView: React.FC = () => {
   const [isLoadingTeams, setIsLoadingTeams] = useState(false);
   const [isLoadingMembers, setIsLoadingMembers] = useState(false);
   const [searchTeam, setSearchTeam] = useState('');
+  const [mobileView, setMobileView] = useState<'list' | 'detail'>('list');
 
   // Modals
   const [isCreateTeamOpen, setIsCreateTeamOpen] = useState(false);
@@ -147,6 +149,7 @@ export const TeamsView: React.FC = () => {
       );
       setTeams((previous) => [newTeam, ...previous]);
       setSelectedTeamId(newTeam.id);
+      setMobileView('detail');
       handleCloseCreateTeam();
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to create team');
@@ -358,7 +361,11 @@ export const TeamsView: React.FC = () => {
       const updatedTeams = teams.filter((t) => t.id !== teamToDelete.id);
       setTeams(updatedTeams);
       if (useHubStore.getState().selectedTeamId === teamToDelete.id) {
-        setSelectedTeamId(updatedTeams[0]?.id || null);
+        const nextId = updatedTeams[0]?.id || null;
+        setSelectedTeamId(nextId);
+        if (!nextId) {
+          setMobileView('list');
+        }
       }
       setTeamToDelete(null);
     } catch (err: any) {
@@ -404,10 +411,17 @@ export const TeamsView: React.FC = () => {
     t.name.toLowerCase().includes(searchTeam.toLowerCase())
   );
 
+  const showListOnMobile = mobileView === 'list' || !activeTeam;
+  const showDetailOnMobile = mobileView === 'detail' && !!activeTeam;
+
   return (
     <div className="flex flex-1 overflow-hidden">
       {/* Left Column: Teams List */}
-      <div className="w-80 shrink-0 border-r border-zinc-800 bg-zinc-950/50 flex flex-col justify-between">
+      <div
+        className={`w-full md:w-72 lg:w-80 shrink-0 border-r border-zinc-800 bg-zinc-950/50 flex flex-col justify-between ${
+          showListOnMobile ? 'flex' : 'hidden md:flex'
+        }`}
+      >
         <div className="p-4 border-b border-zinc-800">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
@@ -454,7 +468,10 @@ export const TeamsView: React.FC = () => {
               return (
                 <button
                   key={team.id}
-                  onClick={() => setSelectedTeamId(team.id)}
+                  onClick={() => {
+                    setSelectedTeamId(team.id);
+                    setMobileView('detail');
+                  }}
                   className={`w-full text-left rounded-xl p-3 transition border ${
                     isSelected
                       ? 'border-indigo-500/50 bg-indigo-950/20 text-white shadow-sm'
@@ -480,11 +497,27 @@ export const TeamsView: React.FC = () => {
       </div>
 
       {/* Right Column: Selected Team Management */}
-      <div className="flex-1 overflow-y-auto p-8 bg-zinc-950">
+      <div
+        className={`flex-1 overflow-y-auto p-4 sm:p-6 md:p-8 bg-zinc-950 ${
+          showDetailOnMobile ? 'block' : 'hidden md:block'
+        }`}
+      >
         {activeTeam ? (
-          <div className="max-w-5xl mx-auto space-y-8 animate-in fade-in duration-150">
+          <div className="max-w-5xl mx-auto space-y-6 sm:space-y-8 animate-in fade-in duration-150">
+            {/* Mobile Back Button */}
+            <div className="md:hidden">
+              <button
+                type="button"
+                onClick={() => setMobileView('list')}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-zinc-800 bg-zinc-900/90 px-3 py-1.5 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 hover:text-white transition shadow-sm"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                <span>Back to Teams</span>
+              </button>
+            </div>
+
             {/* Team Banner */}
-            <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4 sm:p-6 flex flex-col xl:flex-row xl:items-center justify-between gap-4 sm:gap-6">
               <div className="min-w-0 flex-1 space-y-2">
                 <h1 className="text-xl md:text-2xl font-bold text-zinc-100 tracking-tight">
                   {activeTeam.name}
@@ -500,7 +533,7 @@ export const TeamsView: React.FC = () => {
                 </p>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2.5 shrink-0 self-start lg:self-auto">
+              <div className="flex flex-wrap items-center gap-2 shrink-0 self-start xl:self-auto">
                 {user?.role === 'superadmin' && (
                   <>
                     <button
@@ -537,7 +570,7 @@ export const TeamsView: React.FC = () => {
 
             {/* Team Members Section */}
             <div>
-              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 mb-4">
+              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 sm:gap-4 mb-4">
                 <div className="space-y-1 min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <h3 className="text-base font-bold text-zinc-100">Team Members</h3>
@@ -563,95 +596,97 @@ export const TeamsView: React.FC = () => {
 
               {/* Members Table */}
               <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 overflow-hidden shadow-sm">
-                <table className="w-full text-left text-xs">
-                  <thead className="border-b border-zinc-800 bg-zinc-950/80 text-zinc-400 uppercase text-[10px] font-semibold">
-                    <tr>
-                      <th className="px-4 py-3">Member</th>
-                      <th className="px-4 py-3">Email</th>
-                      <th className="px-4 py-3">Team Role</th>
-                      {isTeamAdmin && <th className="px-4 py-3 text-right">Actions</th>}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-zinc-800/60 text-zinc-200">
-                    {isLoadingMembers ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[500px] sm:min-w-full text-left text-xs">
+                    <thead className="border-b border-zinc-800 bg-zinc-950/80 text-zinc-400 uppercase text-[10px] font-semibold">
                       <tr>
-                        <td colSpan={isTeamAdmin ? 4 : 3} className="py-8 text-center text-zinc-500">
-                          <Loader2 className="h-4 w-4 animate-spin inline mr-2 text-sky-400" />
-                          Loading members...
-                        </td>
+                        <th className="px-4 py-3">Member</th>
+                        <th className="px-4 py-3">Email</th>
+                        <th className="px-4 py-3">Team Role</th>
+                        {isTeamAdmin && <th className="px-4 py-3 text-right">Actions</th>}
                       </tr>
-                    ) : members.length === 0 ? (
-                      <tr>
-                        <td colSpan={isTeamAdmin ? 4 : 3} className="py-8 text-center text-zinc-500">
-                          No members in this team yet.
-                        </td>
-                      </tr>
-                    ) : (
-                      members.map((member) => {
-                        const mName = member.user?.name || member.name || 'Member';
-                        const mEmail = member.user?.email || member.email || '';
-                        const isSuper = member.user?.role === 'superadmin';
-                        return (
-                          <tr key={member.user_id} className="hover:bg-zinc-800/30 transition">
-                            <td className="px-4 py-3 font-medium flex items-center gap-2">
-                              <div className="h-7 w-7 rounded-full bg-zinc-800 flex items-center justify-center font-bold text-[11px] text-zinc-300 border border-zinc-700/50">
-                                {mName[0].toUpperCase()}
-                              </div>
-                              <span>{mName}</span>
-                            </td>
-                            <td className="px-4 py-3 text-zinc-400">{mEmail}</td>
-                            <td className="px-4 py-3">
-                              {isSuper ? (
-                                <span className="rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider inline-flex items-center gap-1">
-                                  <Shield className="h-3 w-3" />
-                                  Superadmin
-                                </span>
-                              ) : (
-                                <span
-                                  className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
-                                    member.role === 'admin'
-                                      ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                                      : 'bg-zinc-800 text-zinc-300'
-                                  }`}
-                                >
-                                  {member.role}
-                                </span>
-                              )}
-                            </td>
-                            {isTeamAdmin && (
-                              <td className="px-4 py-3 text-right">
+                    </thead>
+                    <tbody className="divide-y divide-zinc-800/60 text-zinc-200">
+                      {isLoadingMembers ? (
+                        <tr>
+                          <td colSpan={isTeamAdmin ? 4 : 3} className="py-8 text-center text-zinc-500">
+                            <Loader2 className="h-4 w-4 animate-spin inline mr-2 text-sky-400" />
+                            Loading members...
+                          </td>
+                        </tr>
+                      ) : members.length === 0 ? (
+                        <tr>
+                          <td colSpan={isTeamAdmin ? 4 : 3} className="py-8 text-center text-zinc-500">
+                            No members in this team yet.
+                          </td>
+                        </tr>
+                      ) : (
+                        members.map((member) => {
+                          const mName = member.user?.name || member.name || 'Member';
+                          const mEmail = member.user?.email || member.email || '';
+                          const isSuper = member.user?.role === 'superadmin';
+                          return (
+                            <tr key={member.user_id} className="hover:bg-zinc-800/30 transition">
+                              <td className="px-4 py-3 font-medium flex items-center gap-2">
+                                <div className="h-7 w-7 rounded-full bg-zinc-800 flex items-center justify-center font-bold text-[11px] text-zinc-300 border border-zinc-700/50">
+                                  {mName[0].toUpperCase()}
+                                </div>
+                                <span>{mName}</span>
+                              </td>
+                              <td className="px-4 py-3 text-zinc-400">{mEmail}</td>
+                              <td className="px-4 py-3">
                                 {isSuper ? (
-                                  <span className="text-[10px] text-zinc-500 italic pr-1" title="Superadmin permissions are system-wide and cannot be modified">
-                                    Permanent
+                                  <span className="rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider inline-flex items-center gap-1">
+                                    <Shield className="h-3 w-3" />
+                                    Superadmin
                                   </span>
                                 ) : (
-                                  <div className="flex items-center justify-end gap-1">
-                                    <button
-                                      onClick={() => handleOpenEditMember(member)}
-                                      className="rounded p-1 text-zinc-500 hover:bg-sky-500/10 hover:text-sky-400 transition"
-                                      title="Edit Role"
-                                    >
-                                      <Pencil className="h-3.5 w-3.5" />
-                                    </button>
-                                    {member.user_id !== user?.id && (
-                                      <button
-                                        onClick={() => setMemberToRemove(member)}
-                                        className="rounded p-1 text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400 transition"
-                                        title="Remove Member"
-                                      >
-                                        <Trash2 className="h-3.5 w-3.5" />
-                                      </button>
-                                    )}
-                                  </div>
+                                  <span
+                                    className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                                      member.role === 'admin'
+                                        ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                                        : 'bg-zinc-800 text-zinc-300'
+                                    }`}
+                                  >
+                                    {member.role}
+                                  </span>
                                 )}
                               </td>
-                            )}
-                          </tr>
-                        );
-                      })
-                  )}
-                  </tbody>
-                </table>
+                              {isTeamAdmin && (
+                                <td className="px-4 py-3 text-right">
+                                  {isSuper ? (
+                                    <span className="text-[10px] text-zinc-500 italic pr-1" title="Superadmin permissions are system-wide and cannot be modified">
+                                      Permanent
+                                    </span>
+                                  ) : (
+                                    <div className="flex items-center justify-end gap-1">
+                                      <button
+                                        onClick={() => handleOpenEditMember(member)}
+                                        className="rounded p-1 text-zinc-500 hover:bg-sky-500/10 hover:text-sky-400 transition"
+                                        title="Edit Role"
+                                      >
+                                        <Pencil className="h-3.5 w-3.5" />
+                                      </button>
+                                      {member.user_id !== user?.id && (
+                                        <button
+                                          onClick={() => setMemberToRemove(member)}
+                                          className="rounded p-1 text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400 transition"
+                                          title="Remove Member"
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5" />
+                                        </button>
+                                      )}
+                                    </div>
+                                  )}
+                                </td>
+                              )}
+                            </tr>
+                          );
+                        })
+                    )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           </div>
@@ -672,7 +707,7 @@ export const TeamsView: React.FC = () => {
           }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
         >
-          <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+          <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-5 sm:p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
                 <Users className="h-5 w-5 text-indigo-400" />
@@ -748,7 +783,7 @@ export const TeamsView: React.FC = () => {
           }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
         >
-          <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl flex flex-col max-h-[90vh]">
+          <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 p-4 sm:p-6 shadow-2xl flex flex-col max-h-[90dvh]">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
                 <UserPlus className="h-5 w-5 text-sky-400" />
@@ -967,7 +1002,7 @@ export const TeamsView: React.FC = () => {
           }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
         >
-          <div className="w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+          <div className="w-full max-w-sm max-h-[90dvh] overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-5 sm:p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
                 <Shield className="h-4 w-4 text-sky-400" />
@@ -1035,7 +1070,7 @@ export const TeamsView: React.FC = () => {
           }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
         >
-          <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+          <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-5 sm:p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
                 <Pencil className="h-5 w-5 text-indigo-400" />

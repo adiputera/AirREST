@@ -33,6 +33,11 @@ type AdminResetPasswordRequest struct {
 	Password string `json:"password"`
 }
 
+type AdminUpdateUserRequest struct {
+	Name      string  `json:"name"`
+	AvatarURL *string `json:"avatar_url,omitempty"`
+}
+
 // ListUsers lists all registered users in the platform
 func (h *AdminHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := h.authService.ListUsers(r.Context())
@@ -103,6 +108,38 @@ func (h *AdminHandler) ResetUserPassword(w http.ResponseWriter, r *http.Request)
 	}
 
 	response.JSON(w, http.StatusOK, map[string]string{"message": "user password reset successfully"})
+}
+
+// UpdateUser allows superadmin to update a user's details (such as display name)
+func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
+	userIdStr := chi.URLParam(r, "userId")
+	targetUserID, err := uuid.Parse(userIdStr)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "invalid user id", "BAD_REQUEST")
+		return
+	}
+
+	var req AdminUpdateUserRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.Error(w, http.StatusBadRequest, "invalid request body", "BAD_REQUEST")
+		return
+	}
+
+	updatedUser, err := h.authService.UpdateProfile(r.Context(), targetUserID, req.Name, req.AvatarURL)
+	if err != nil {
+		if errors.Is(err, service.ErrNameRequired) {
+			response.Error(w, http.StatusBadRequest, err.Error(), "VALIDATION_ERROR")
+			return
+		}
+		if errors.Is(err, postgres.ErrUserNotFound) {
+			response.Error(w, http.StatusNotFound, "user not found", "NOT_FOUND")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, "failed to update user", "SERVER_ERROR")
+		return
+	}
+
+	response.JSON(w, http.StatusOK, updatedUser)
 }
 
 // DeleteUser allows superadmin to permanently remove a user account

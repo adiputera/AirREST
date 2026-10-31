@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/android-schema.json",
+  "identifier": "android-back",
+  "description": "Allow Android Back to close the activity when no overlay is open",
+  "platforms": ["android"],
+  "windows": ["main"],
+  "permissions": ["core:app:allow-exit"]
+}

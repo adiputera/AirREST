@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 import { KeyRound, Lock, Eye, EyeOff, AlertCircle, Loader2, X } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
 import { changeUserPassword } from '../lib/cloudApi';
+import { useBackHandler } from '../lib/backNavigation';
 
 interface ChangePasswordModalProps {
   isOpen: boolean;
@@ -21,6 +22,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
   const [showConfirm, setShowConfirm] = useState(false);
 
   const [isLoading, setIsLoading] = useState(false);
+  useBackHandler(isOpen, () => { if (!isLoading) onClose(); }, 20);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const cloudConfig = useApiStore((state) => state.cloudConfig);

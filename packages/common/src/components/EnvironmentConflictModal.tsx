@@ -15,6 +15,7 @@ import {
   generateCopyEnvironmentName,
 } from '../lib/requestDiff';
 import { useApiStore } from '../store/useApiStore';
+import { useBackHandler } from '../lib/backNavigation';
 
 export interface EnvironmentConflictModalProps {
   isOpen: boolean;
@@ -38,6 +39,7 @@ export const EnvironmentConflictModal: React.FC<EnvironmentConflictModalProps> =
   isResolving = false,
 }) => {
   const environments = useApiStore((state) => state.environments);
+  useBackHandler(isOpen, () => { if (!isResolving) onClose(); }, 30);
 
   useEffect(() => {
     if (!isOpen) return;

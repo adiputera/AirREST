@@ -24,6 +24,7 @@ import {
   Check,
   X,
   Lock,
+  Shield,
   AlertTriangle,
 } from 'lucide-react';
 import { useApiStore } from '@/store/useApiStore';
@@ -32,10 +33,16 @@ import { MethodBadge } from './MethodBadge';
 import { exportPostmanCollection } from '@/lib/postman';
 import { ConfirmModal } from './ConfirmModal';
 import { MoveCollectionModal } from './MoveCollectionModal';
+import { CollectionPermissionModal } from './CollectionPermissionModal';
 import { MoveRequestModal } from './MoveRequestModal';
 import { ImportModal } from './ImportModal';
 import { isDescendantOf } from '@/lib/treeHelper';
 import { canModifyCollection, hasScopePermission } from '@/lib/jwt';
+import { ScopeSwitcher } from './ScopeSwitcher';
+import { UserMenu } from './UserMenu';
+import { ModeSelectorModal } from './ModeSelectorModal';
+import { CloudAuthModal } from './CloudAuthModal';
+import { isOfflineOnly } from '@/lib/edition';
 
 function filterCollectionItems(items: CollectionItem[], query: string): CollectionItem[] {
   const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -863,7 +870,11 @@ const FolderItem: React.FC<FolderItemProps> = ({
   );
 };
 
-export const Sidebar: React.FC = () => {
+export interface SidebarProps {
+  onClose?: () => void;
+}
+
+export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
   const sidebarTab = useApiStore((state) => state.sidebarTab);
   const setSidebarTab = useApiStore((state) => state.setSidebarTab);
   const collections = useApiStore((state) => state.collections);
@@ -885,6 +896,10 @@ export const Sidebar: React.FC = () => {
   const canMoveScope = hasScopePermission(cloudConfig.activeScope, 'collection:move', workspaceMode, cloudConfig.user?.role);
   const canDeleteScope = hasScopePermission(cloudConfig.activeScope, 'collection:delete', workspaceMode, cloudConfig.user?.role);
   const isProjectReadOnly = workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project' && !canWriteScope;
+  const isProjectScope = workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project';
+  const isProjectAdmin = hasScopePermission(cloudConfig.activeScope, '*', workspaceMode, cloudConfig.user?.role);
+  const isProjectMaintainer = hasScopePermission(cloudConfig.activeScope, 'collection:delete', workspaceMode, cloudConfig.user?.role);
+  const canManageCollectionPermission = isProjectScope && (isProjectAdmin || isProjectMaintainer);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [isCreatingCol, setIsCreatingCol] = useState(false);
@@ -892,8 +907,11 @@ export const Sidebar: React.FC = () => {
   const [editingColId, setEditingColId] = useState<string | null>(null);
   const [editingColName, setEditingColName] = useState('');
   const [isImportOpen, setIsImportOpen] = useState(false);
+  const [isModeSelectorOpen, setIsModeSelectorOpen] = useState(false);
+  const [isCloudAuthOpen, setIsCloudAuthOpen] = useState(false);
   const [collectionToDelete, setCollectionToDelete] = useState<Collection | null>(null);
   const [collectionToMove, setCollectionToMove] = useState<Collection | null>(null);
+  const [collectionForPermission, setCollectionForPermission] = useState<Collection | null>(null);
   const [showClearHistoryConfirm, setShowClearHistoryConfirm] = useState(false);
   const [collapsedCollections, setCollapsedCollections] = useState<Record<string, boolean>>({});
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({});
@@ -1096,7 +1114,37 @@ export const Sidebar: React.FC = () => {
   };
 
   return (
-    <aside className="flex h-full w-72 flex-col border-r border-zinc-800 bg-zinc-950/70 select-none">
+    <aside className="flex h-full w-80 max-w-[85vw] md:w-72 flex-col border-r border-zinc-800 bg-zinc-950/70 select-none">
+      {/* Workspace Switcher, Sync & Account Section (Mobile only) */}
+      <div className="md:hidden border-b border-zinc-800 p-2 pt-[max(env(safe-area-inset-top),10px)] bg-zinc-900/40">
+        <div className="flex items-center gap-1.5 w-full">
+          {/* Workspace Switcher */}
+          <div className="flex-1 min-w-0">
+            <ScopeSwitcher
+              onOpenModeSelector={() => setIsModeSelectorOpen(true)}
+              onOpenCloudAuth={() => setIsCloudAuthOpen(true)}
+            />
+          </div>
+
+          {/* User Account Menu */}
+          <div className="shrink-0">
+            <UserMenu onOpenLogin={() => setIsCloudAuthOpen(true)} />
+          </div>
+
+          {/* Close Sidebar Drawer Button */}
+          {onClose && (
+            <button
+              type="button"
+              aria-label="Close collections panel"
+              onClick={onClose}
+              className="rounded-lg p-1.5 text-zinc-400 hover:text-white hover:bg-zinc-800 transition shrink-0"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* Switcher Tabs */}
       <div className="flex border-b border-zinc-800 p-2 gap-1.5">
         <button
@@ -1466,6 +1514,19 @@ export const Sidebar: React.FC = () => {
                                             <span>Move Collection</span>
                                           </button>
                                         )}
+                                        {canManageCollectionPermission && (
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setActiveAddMenuColId(null);
+                                              setCollectionForPermission(col);
+                                            }}
+                                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition"
+                                          >
+                                            <Shield className="h-3.5 w-3.5 text-sky-400" />
+                                            <span>Permission</span>
+                                          </button>
+                                        )}
                                       </>
                                     )}
                                     <button
@@ -1757,6 +1818,12 @@ export const Sidebar: React.FC = () => {
         collection={collectionToMove}
       />
 
+      <CollectionPermissionModal
+        isOpen={!!collectionForPermission}
+        onClose={() => setCollectionForPermission(null)}
+        collection={collectionForPermission}
+      />
+
       <MoveRequestModal
         isOpen={!!requestToMove}
         onClose={() => setRequestToMove(null)}
@@ -1768,6 +1835,20 @@ export const Sidebar: React.FC = () => {
         isOpen={isImportOpen}
         onClose={() => setIsImportOpen(false)}
       />
+
+      {!isOfflineOnly && (
+        <>
+          <ModeSelectorModal
+            isOpen={isModeSelectorOpen}
+            onClose={() => setIsModeSelectorOpen(false)}
+            onSelectCloud={() => setIsCloudAuthOpen(true)}
+          />
+          <CloudAuthModal
+            isOpen={isCloudAuthOpen}
+            onClose={() => setIsCloudAuthOpen(false)}
+          />
+        </>
+      )}
     </aside>
   );
 };
