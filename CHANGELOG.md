@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-01
+
+### Added
+- **User Profile Display Name Editing (Frontend, Hub, & Backend)**:
+  - **Extension & Desktop Client**: Added "Edit Profile" option in the user avatar dropdown menu ([`UserMenu.tsx`](packages/common/src/components/UserMenu.tsx)) and created [`EditProfileModal.tsx`](packages/common/src/components/EditProfileModal.tsx) to update user display names via `PUT /api/v1/auth/profile`, with email displayed as an immutable read-only field.
+  - **AirREST Hub (Superadmin Management)**: Added "Edit" action button in the Superadmin user provisioning table ([`SuperadminView.tsx`](hub/src/pages/SuperadminView.tsx)) allowing superadministrators to edit user display names via a dedicated modal, with instant store synchronization for the currently active session.
+  - **Backend API & Contract**: Added `PUT /api/v1/admin/users/:userId` endpoint in [`admin_handler.go`](backend/core/handler/admin_handler.go) and [`app.go`](backend/core/app/app.go) with non-empty validation and unit tests ([`admin_handler_test.go`](backend/core/handler/admin_handler_test.go)). Synchronized OpenAPI 3.1 specifications (`openapi.yaml`, `openapi.json`), API contract guide (`API_CONTRACT.md`), and Postman collection (`airrest_api_collection.json`).
+- **Resource Permission Management in Frontend (Desktop & Extension)**:
+  - Added "Permission" option to the collection 3-dots menu in the Sidebar within project scopes for Maintainers and Admins.
+  - Implemented `CollectionPermissionModal` to configure minimum project role requirements (`All Members (Reader+)`, `Contributor+`, `Maintainer+`, and `Admin Only`) with role escalation safeguards.
+  - Connected frontend client store to `PUT /api/v1/collections/:id` via `updateScopeCollectionPermission`.
+  - Replaced plain native select dropdowns in [`EnvironmentModal.tsx`](packages/common/src/components/EnvironmentModal.tsx) with [`EnvironmentPermissionModal.tsx`](packages/common/src/components/EnvironmentPermissionModal.tsx), offering rich descriptions and role badges when configuring environment access.
+- **Android Mobile Platform Support (Tauri 2)**:
+  - First-class Android client build pipeline supporting ARM64 (`aarch64-linux-android`) for physical devices and x86_64 for emulators and Chromebooks.
+  - Custom branded adaptive and round app launcher icons (`res/mipmap-anydpi-v26/ic_launcher.xml` and `ic_launcher_round.xml`) matching AirREST slate dark UI palette (`#0f172a`).
+  - Mobile UX optimizations: collapsible drawer sidebar, compact responsive header, touch-friendly tab actions, and Android Safe Area system insets integration.
+  - Native Back navigation handler hierarchy (`backNavigation.ts`) prioritizing modal/dialog dismissal before drawer collapse and application exit.
+  - Android Content URI file handling (`extractFilename`) for seamless collection import and binary/text response exports.
+  - 16 KiB ELF alignment and zip alignment compatibility across all native binaries for Android 15+.
+  - Automated Release pipeline in GitHub Actions with dual-mode APK signing (production repository secrets with fail-safe CI fallback).
+- **Responsive & Mobile View Layout (Chrome Extension & Web)**:
+  - Upgraded shared UI in `@airrest/common` to smoothly adapt to narrow viewports and Chrome Side Panel mode (`chrome.sidePanel`).
+  - Automatically switches sidebar to a collapsible touch-friendly drawer on screens narrower than 768px, ensuring comfortable API testing on split-screen desktop layouts and mobile devices.
+  - Responsive tab and panel navigation preventing interface overflow on compact widths.
+- **Unified Cross-Platform Versioning**:
+  - Aligned release versioning across Chrome Extension, Desktop (macOS, Windows, Linux), and Android to `1.2.0`.
+
 ## [1.1.9] - 2026-10-31
 
 ### Added

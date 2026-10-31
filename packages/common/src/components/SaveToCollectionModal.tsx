@@ -12,6 +12,7 @@ import {
 } from '../lib/requestDiff';
 import { canModifyCollection, hasScopePermission } from '../lib/jwt';
 import { MethodBadge } from './MethodBadge';
+import { useBackHandler } from '../lib/backNavigation';
 
 interface SaveToCollectionModalProps {
   isOpen: boolean;
@@ -80,6 +81,10 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
   const [savedActionText, setSavedActionText] = useState('Saved!');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [conflict, setConflict] = useState<RequestConflictState | null>(null);
+  useBackHandler(isOpen, () => {
+    if (conflict) setConflict(null);
+    else onClose();
+  }, 20);
 
   useEffect(() => {
     if (isOpen) {

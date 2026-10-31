@@ -43,14 +43,14 @@ export const LoginView: React.FC = () => {
   };
 
   return (
-    <div className="flex min-h-screen w-full items-center justify-center bg-zinc-950 p-4">
+    <div className="flex min-h-[100dvh] w-full items-center justify-center bg-zinc-950 p-4 sm:p-6">
       {/* Background Glow */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-40 -left-40 h-96 w-96 rounded-full bg-sky-500/10 blur-3xl"></div>
         <div className="absolute -bottom-40 -right-40 h-96 w-96 rounded-full bg-indigo-500/10 blur-3xl"></div>
       </div>
 
-      <div className="relative w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900/60 p-8 shadow-2xl backdrop-blur-xl">
+      <div className="relative w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900/60 p-6 sm:p-8 shadow-2xl backdrop-blur-xl">
         {/* Brand */}
         <div className="text-center mb-6">
           <img

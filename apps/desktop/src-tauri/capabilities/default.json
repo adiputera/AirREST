@@ -8,16 +8,13 @@
     "opener:default",
     {
       "identifier": "http:default",
-      "allow": [{ "url": "http://*/*" }, { "url": "https://*/*" }]
+      "allow": [{ "url": "http://*:*/*" }, { "url": "https://*:*/*" }]
     },
     "dialog:allow-open",
     "dialog:allow-save",
     "fs:allow-read-text-file",
     "fs:allow-read-file",
     "fs:allow-write-text-file",
-    "fs:allow-write-file",
-    "updater:default",
-    "process:allow-restart",
-    "core:window:allow-destroy"
+    "fs:allow-write-file"
   ]
 }

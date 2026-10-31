@@ -24,12 +24,43 @@ import type {
 import { SCRIPT_LIMITS, validateScriptInput } from '@airrest/common/protocol';
 import { runQuickJsGuest } from '../scripts/quickjsRunner';
 
+export function extractFilename(filePath: string): string {
+  if (filePath.startsWith('content:')) {
+    try {
+      const decoded = decodeURIComponent(filePath);
+      const segments = decoded.split(/[/?&#]/).filter(Boolean);
+      for (let i = segments.length - 1; i >= 0; i--) {
+        const seg = segments[i].split(/[:/\\]/).pop();
+        if (seg && /\.[a-z0-9]+$/i.test(seg) && !seg.includes('%')) {
+          return seg;
+        }
+      }
+    } catch {
+      // fallback
+    }
+    return 'import.json';
+  }
+  return filePath.split(/[/\\]/).pop() || 'file';
+}
+
 export function classifyTauriNetworkError(error: unknown): {
   category: NetworkErrorCategory;
   code?: string;
   detail: string;
 } {
-  const detail = error instanceof Error ? error.message : String(error);
+  let detail = '';
+  if (error instanceof Error) {
+    detail = error.message;
+    if (error.cause) {
+      detail += ` (${String(error.cause)})`;
+    }
+  } else if (typeof error === 'object' && error !== null) {
+    const errObj = error as Record<string, unknown>;
+    detail = String(errObj.message || errObj.error || errObj.detail || JSON.stringify(error));
+  } else {
+    detail = String(error);
+  }
+
   const upper = detail.toUpperCase();
 
   let category: NetworkErrorCategory = 'other';
@@ -38,12 +69,18 @@ export function classifyTauriNetworkError(error: unknown): {
     upper.includes('AUTHORITY') ||
     upper.includes('SSL') ||
     upper.includes('TLS') ||
-    upper.includes('INVALID_CERT')
+    upper.includes('INVALID_CERT') ||
+    upper.includes('HANDSHAKE') ||
+    upper.includes('TRUST ANCHOR') ||
+    upper.includes('PKIX') ||
+    upper.includes('ISSUER') ||
+    upper.includes('X509')
   ) {
     category = 'ssl';
   } else if (
     upper.includes('CONNECTION REFUSED') ||
     upper.includes('REFUSED') ||
+    upper.includes('ECONNREFUSED') ||
     upper.includes('CONNECT')
   ) {
     category = 'connection_refused';
@@ -51,7 +88,8 @@ export function classifyTauriNetworkError(error: unknown): {
     upper.includes('RESOLVE') ||
     upper.includes('DNS') ||
     upper.includes('NAME_NOT_RESOLVED') ||
-    upper.includes('NO SUCH HOST')
+    upper.includes('NO SUCH HOST') ||
+    upper.includes('FAILED TO LOOKUP ADDRESS')
   ) {
     category = 'dns';
   } else if (
@@ -104,6 +142,17 @@ interface ActiveWorkerRecord {
 }
 
 const activeWorkerRecords = new Set<ActiveWorkerRecord>();
+
+function dialogFilters(options?: FileOptions): FileOptions['filters'] {
+  if (!__AIRREST_ANDROID__) return options?.filters;
+  // Android's document picker filters by MIME type rather than extension.
+  return options?.filters?.map((filter) => ({
+    ...filter,
+    extensions: filter.extensions.map((extension) =>
+      extension.toLowerCase() === 'json' ? 'application/json' : extension,
+    ),
+  }));
+}
 
 export const tauriScriptExecutor: ScriptExecutor = {
   execute: async (input: ScriptInput, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<ScriptResult> => {
@@ -308,7 +357,7 @@ export const tauriAdapter: PlatformAdapter = {
   saveFile: async (filename: string, content: string | Uint8Array, options?: FileOptions) => {
     const selectedPath = await tauriSave({
       defaultPath: filename,
-      filters: options?.filters,
+      filters: dialogFilters(options),
     });
     if (!selectedPath) return false;
 
@@ -328,14 +377,14 @@ export const tauriAdapter: PlatformAdapter = {
     const selected = await tauriOpen({
       multiple: false,
       directory: false,
-      filters: options?.filters,
+      filters: dialogFilters(options),
     });
     if (!selected) return null;
 
     try {
       const filePath = Array.isArray(selected) ? selected[0] : selected;
       const content = await tauriReadTextFile(filePath);
-      const filename = filePath.split(/[/\\]/).pop() || 'file';
+      const filename = extractFilename(filePath);
       return { filename, content };
     } catch (err) {
       console.error('Failed to read file via native dialog:', err);

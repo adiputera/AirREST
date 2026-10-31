@@ -36,6 +36,7 @@ import { MethodBadge } from './MethodBadge';
 import { handleCodeEditorKeyDown } from '../lib/editorHelper';
 import { canModifyCollection, canModifyEnvironment, hasScopePermission } from '../lib/jwt';
 import { getDefaultPlatformAdapter } from '../lib/fetcher';
+import { useBackHandler } from '../lib/backNavigation';
 
 interface ImportModalProps {
   isOpen: boolean;
@@ -77,6 +78,17 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
   >(null);
   const [isResolvingConflict, setIsResolvingConflict] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  useBackHandler(isOpen, () => {
+    if (isImporting || isResolvingConflict) return;
+    if (conflict) {
+      setConflict(null);
+      setErrorMsg(null);
+      return;
+    }
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    onClose();
+  }, 20);
 
   if (!isOpen) return null;
 
@@ -342,7 +354,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-      <div className="w-full max-w-2xl rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+      <div className="max-h-[90dvh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-4 shadow-2xl md:p-6">
         {conflict ? (
           conflict.type === 'environment' ? (
             /* Environment Conflict Resolution View */

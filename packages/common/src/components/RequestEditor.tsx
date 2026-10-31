@@ -344,8 +344,8 @@ export const RequestEditor: React.FC = () => {
     <>
       <div className="flex flex-col border-b border-zinc-800 bg-zinc-950 px-3.5 pt-2 pb-1.5">
         {/* Request Name and Actions Bar */}
-        <div className="mb-1.5 flex items-center justify-between">
-          <div className="flex items-center gap-2 flex-1 mr-4">
+        <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2 flex-1 mr-4">
             <div className="relative flex items-center flex-1 max-w-sm">
               <input
                 type="text"
@@ -467,7 +467,7 @@ export const RequestEditor: React.FC = () => {
           </div>
 
           {/* URL Input */}
-          <div className="relative flex-1">
+          <div className="relative min-w-0 flex-1">
             <VariableInput
               value={currentTab.url}
               onChange={(url) => updateActiveRequest({ url })}

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
+import { useBackHandler } from '../lib/backNavigation';
 import {
   ChevronDown,
   ChevronRight,
@@ -48,6 +49,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
   onOpenCloudAuth,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
+  useBackHandler(isOpen, () => setIsOpen(false), 15);
   const [search, setSearch] = useState('');
   const [isLoadingScopes, setIsLoadingScopes] = useState(false);
 
@@ -122,7 +124,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
 
   // Close dropdown when clicking outside
   useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
+    function handleClickOutside(event: MouseEvent | TouchEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setIsOpen(false);
         setIsCreatingWs(false);
@@ -131,8 +133,12 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
     }
     if (isOpen) {
       document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('touchstart', handleClickOutside);
     }
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+    };
   }, [isOpen]);
 
   // Load accessible workspaces and teams (uses 12-hour cache unless forced)
@@ -362,48 +368,50 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
 
   return (
     <>
-      <div className="relative z-30" ref={dropdownRef}>
+      <div className="relative z-30 w-full" ref={dropdownRef}>
         {/* Switcher Header Button */}
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 w-full">
           <button
             onClick={() => {
               const next = !isOpen;
               setIsOpen(next);
               if (next && !isOfflineOnly && cloudConfig.token) loadScopes(false);
             }}
-            className="group flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/90 px-2.5 py-1 text-xs text-zinc-200 hover:border-zinc-700 hover:bg-zinc-800 hover:text-white transition shadow-sm max-w-[280px]"
+            className="group flex flex-1 min-w-0 items-center justify-between gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/90 px-2.5 py-1.5 text-xs text-zinc-200 hover:border-zinc-700 hover:bg-zinc-800 hover:text-white transition shadow-sm"
             title="Switch Workspace"
           >
-            {isOffline ? (
-              <Laptop className="h-3.5 w-3.5 text-amber-400 shrink-0" />
-            ) : activeScope?.type === 'project' ? (
-              <Users className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
-            ) : (
-              <User className="h-3.5 w-3.5 text-sky-400 shrink-0" />
-            )}
+            <div className="flex items-center gap-2 min-w-0">
+              {isOffline ? (
+                <Laptop className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+              ) : activeScope?.type === 'project' ? (
+                <Users className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
+              ) : (
+                <User className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+              )}
 
-            <span className="font-semibold truncate max-w-[170px]">{scopeLabel}</span>
+              <span className="font-semibold truncate max-w-[80px] sm:max-w-[100px] xl:max-w-[140px]">{scopeLabel}</span>
 
-            {isOffline ? (
-              <span className="rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 px-1 py-0.2 text-[9px] font-bold uppercase tracking-wider">
-                Offline
-              </span>
-            ) : scopeRole ? (
-              <span
-                className={`rounded px-1 py-0.2 text-[9px] font-bold uppercase tracking-wider ${
-                  scopeRole === 'admin' || scopeRole === 'owner'
-                    ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                    : scopeRole === 'reader'
-                    ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-                    : 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
-                }`}
-              >
-                {scopeRole}
-              </span>
-            ) : null}
+              {isOffline ? (
+                <span className="rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 px-1 py-0.2 text-[9px] font-bold uppercase tracking-wider shrink-0">
+                  Offline
+                </span>
+              ) : scopeRole ? (
+                <span
+                  className={`rounded px-1 py-0.2 text-[9px] font-bold uppercase tracking-wider shrink-0 ${
+                    scopeRole === 'admin' || scopeRole === 'owner'
+                      ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                      : scopeRole === 'reader'
+                      ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                      : 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
+                  }`}
+                >
+                  {scopeRole}
+                </span>
+              ) : null}
+            </div>
 
             <ChevronDown
-              className={`h-3.5 w-3.5 text-zinc-400 transition-transform ${
+              className={`h-3.5 w-3.5 text-zinc-400 transition-transform shrink-0 ${
                 isOpen ? 'rotate-180' : ''
               }`}
             />
@@ -432,17 +440,17 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
               {syncStatus === 'syncing' ? (
                 <>
                   <RefreshCw className="h-3 w-3 animate-spin text-sky-400" />
-                  <span className="hidden sm:inline">Syncing</span>
+                  <span className="hidden xl:inline">Syncing</span>
                 </>
               ) : syncStatus === 'error' ? (
                 <>
                   <AlertTriangle className="h-3 w-3 text-rose-400" />
-                  <span className="hidden sm:inline">Retry</span>
+                  <span className="hidden xl:inline">Retry</span>
                 </>
               ) : (
                 <>
                   <RefreshCw className="h-3 w-3 text-emerald-400" />
-                  <span className="hidden sm:inline text-emerald-400">Sync Online</span>
+                  <span className="hidden xl:inline text-emerald-400">Sync Online</span>
                 </>
               )}
             </button>
@@ -452,14 +460,14 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
               title="Currently in Offline Workspace"
             >
               <span className="h-1.5 w-1.5 rounded-full bg-amber-400"></span>
-              <span className="hidden sm:inline">Offline</span>
+              <span className="hidden xl:inline">Offline</span>
             </div>
           ) : null}
         </div>
 
         {/* Floating Scope Switcher Dropdown */}
         {isOpen && (
-          <div className="absolute left-0 top-full mt-2 w-84 rounded-xl border border-zinc-800 bg-zinc-950 p-2 shadow-2xl shadow-black/90 z-50 animate-in fade-in zoom-in-95 duration-100">
+          <div className="absolute left-0 top-full mt-2 w-72 sm:w-80 max-w-[calc(100vw-1.5rem)] rounded-xl border border-zinc-800 bg-zinc-950 p-2 shadow-2xl shadow-black/90 z-50 animate-in fade-in zoom-in-95 duration-100">
             {/* Search Scope */}
             <div className="relative mb-2">
               <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-zinc-500" />
@@ -472,7 +480,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
               />
             </div>
 
-            <div className="max-h-80 overflow-y-auto space-y-3 pr-1">
+            <div className="max-h-[calc(100dvh-7rem)] md:max-h-80 overflow-y-auto space-y-3 pr-1">
               {/* Section 1: Offline Workspaces */}
               <div>
                 <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-amber-400 flex items-center justify-between">
