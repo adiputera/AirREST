@@ -394,6 +394,9 @@ Serverless initialization permits one attempt at a time, with a 20-second deadli
 - `GET /api/v1/admin/users` *(Auth, Superadmin)* — List all registered users.
 - `POST /api/v1/admin/users` *(Auth, Superadmin)* — Provision new user with role (`superadmin` or `user`).
   - Payload: `{ "email": string, "password": string, "name": string, "role": SystemRole }`
+- `PUT /api/v1/admin/users/{userId}` *(Auth, Superadmin)* — Update user profile details (display name and optional avatar URL).
+  - Payload: `{ "name": string, "avatar_url"?: string }`
+  - Response: `User`
 - `PUT /api/v1/admin/users/{userId}/password` *(Auth, Superadmin)* — Reset user password directly.
   - Payload: `{ "password": string }`
 - `DELETE /api/v1/admin/users/{userId}` *(Auth, Superadmin)* — Permanently remove user account, delete private workspaces, and safely reassign shared teams/projects to executing superadmin.

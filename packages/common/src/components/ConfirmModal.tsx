@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, Trash2, X, Loader2 } from 'lucide-react';
+import { useBackHandler } from '../lib/backNavigation';
 
 export interface ConfirmModalProps {
   isOpen: boolean;
@@ -25,6 +26,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
   variant = 'danger',
   isLoading = false,
 }) => {
+  useBackHandler(isOpen, () => { if (!isLoading) onClose(); }, 30);
   useEffect(() => {
     if (!isOpen) return;
 

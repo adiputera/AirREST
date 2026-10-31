@@ -30,8 +30,10 @@ import { Environment } from '../types/api';
 import { hasScopePermission, canModifyEnvironment } from '../lib/jwt';
 import { ConfirmModal } from './ConfirmModal';
 import { EnvironmentConflictModal } from './EnvironmentConflictModal';
+import { EnvironmentPermissionModal } from './EnvironmentPermissionModal';
 import { handleCodeEditorKeyDown } from '../lib/editorHelper';
 import { getDefaultPlatformAdapter } from '../lib/fetcher';
+import { useBackHandler } from '../lib/backNavigation';
 
 interface EnvironmentModalProps {
   isOpen: boolean;
@@ -82,8 +84,14 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
     diff: EnvironmentDiffSummary;
   } | null>(null);
   const [isResolvingConflict, setIsResolvingConflict] = useState(false);
+  const [isPermModalOpen, setIsPermModalOpen] = useState(false);
+  const [isNewEnvPermModalOpen, setIsNewEnvPermModalOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  useBackHandler(isOpen, () => {
+    if (isPasteModalOpen) setIsPasteModalOpen(false);
+    else onClose();
+  }, 20);
 
   if (!isOpen) return null;
 
@@ -110,10 +118,11 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
       const adapter = getDefaultPlatformAdapter();
 
       if (adapter?.saveFile) {
-        await adapter.saveFile(filename, jsonStr, {
+        const saved = await adapter.saveFile(filename, jsonStr, {
           filters: [{ name: 'Postman Environment', extensions: ['json'] }],
           mimeType: 'application/json',
         });
+        if (!saved) return;
       } else {
         const blob = new Blob([jsonStr], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
@@ -289,7 +298,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-      <div className="flex h-[580px] w-full max-w-5xl overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950 shadow-2xl">
+      <div className="flex h-[min(580px,90dvh)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950 shadow-2xl md:flex-row">
         {/* Hidden File Picker for Import */}
         <input
           type="file"
@@ -300,7 +309,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
         />
 
         {/* Left Side: Environment List */}
-        <div className="flex w-64 flex-col border-r border-zinc-850 bg-zinc-900/40 p-4">
+        <div className="flex max-h-[35%] w-full flex-col border-b border-zinc-850 bg-zinc-900/40 p-3 md:max-h-none md:w-64 md:border-b-0 md:border-r md:p-4">
           <div className="flex items-center justify-between pb-3 border-b border-zinc-850">
             <div className="flex items-center gap-2">
               <Globe className="h-4 w-4 text-sky-400" />
@@ -344,16 +353,23 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
               {isProjectScope && (
                 <div className="flex items-center gap-1.5 text-[10px] text-zinc-400">
                   <Shield className="h-3 w-3 text-zinc-400 shrink-0" />
-                  <select
-                    value={newEnvMinRole}
-                    onChange={(e) => setNewEnvMinRole(e.target.value as any)}
-                    className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-0.5 text-[11px] text-zinc-300 focus:outline-none"
+                  <button
+                    type="button"
+                    onClick={() => setIsNewEnvPermModalOpen(true)}
+                    className="flex items-center justify-between w-full rounded border border-zinc-800 bg-zinc-950 px-2 py-1 text-[11px] text-zinc-300 hover:border-zinc-700 transition"
                   >
-                    <option value="reader">🟢 All Members</option>
-                    {canWriteEnv && <option value="contributor">🟡 Contributor+</option>}
-                    {canDeleteEnv && <option value="maintainer">🔵 Maintainer+ (Production)</option>}
-                    {isProjectAdmin && <option value="admin">🔴 Admin Only</option>}
-                  </select>
+                    <span>
+                      Access:{' '}
+                      {newEnvMinRole === 'admin'
+                        ? '🔴 Admin Only'
+                        : newEnvMinRole === 'maintainer'
+                          ? '🔵 Maintainer+'
+                          : newEnvMinRole === 'contributor'
+                            ? '🟡 Contributor+'
+                            : '🟢 All Members (Reader+)'}
+                    </span>
+                    <span className="text-[10px] text-sky-400 font-semibold">Change</span>
+                  </button>
                 </div>
               )}
               <div className="flex justify-end gap-1.5 pt-1">
@@ -382,11 +398,10 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                 <div
                   key={env.id}
                   onClick={() => setSelectedEnvId(env.id)}
-                  className={`group flex items-center justify-between rounded-xl px-3 py-2 text-xs cursor-pointer transition ${
-                    isSelected
+                  className={`group flex items-center justify-between rounded-xl px-3 py-2 text-xs cursor-pointer transition ${isSelected
                       ? 'bg-zinc-800/90 text-white font-semibold'
                       : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
-                  }`}
+                    }`}
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <Layers className="h-3.5 w-3.5 shrink-0 text-zinc-500 group-hover:text-sky-400" />
@@ -401,7 +416,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                       </span>
                     )}
                     {env.minRole === 'maintainer' && (
-                      <span className="flex items-center gap-0.5 text-[9px] text-sky-400 bg-sky-500/10 px-1.5 py-0.5 rounded border border-sky-500/30 font-medium shrink-0" title="Maintainer and Admin access (Production)">
+                      <span className="flex items-center gap-0.5 text-[9px] text-sky-400 bg-sky-500/10 px-1.5 py-0.5 rounded border border-sky-500/30 font-medium shrink-0" title="Maintainer and Admin access">
                         <Shield className="h-2.5 w-2.5" />
                         Maintainer
                       </span>
@@ -446,7 +461,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
         </div>
 
         {/* Right Side: Variable Table & Edit */}
-        <div className="flex flex-1 flex-col overflow-hidden bg-zinc-950 p-6">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-zinc-950 p-3 md:p-6">
           <div className="flex items-center justify-between border-b border-zinc-850 pb-4">
             {currentEnv ? (
               <div className="flex flex-wrap items-center gap-3">
@@ -463,62 +478,49 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                       activeEnvironmentId === currentEnv.id ? null : currentEnv.id
                     )
                   }
-                  className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
-                    activeEnvironmentId === currentEnv.id
+                  className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition ${activeEnvironmentId === currentEnv.id
                       ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                       : 'border border-zinc-800 bg-zinc-900 text-zinc-400 hover:text-white'
-                  }`}
+                    }`}
                 >
                   {activeEnvironmentId === currentEnv.id ? 'Active Environment' : 'Set as Active'}
                 </button>
 
                 {isProjectScope && (
-                  <div className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/80 px-2.5 py-1 text-xs">
-                    <Shield
-                      className={`h-3.5 w-3.5 shrink-0 ${
-                        currentEnv.minRole === 'admin'
-                          ? 'text-rose-400'
-                          : currentEnv.minRole === 'maintainer'
-                          ? 'text-sky-400'
-                          : currentEnv.minRole === 'contributor'
-                          ? 'text-amber-400'
-                          : 'text-emerald-400'
-                      }`}
-                    />
-                    <span className="text-zinc-400 text-[11px]">Access:</span>
-                    <select
-                      value={currentEnv.minRole || 'reader'}
-                      disabled={isEnvReadOnly}
-                      onChange={(e) => updateEnvironment(currentEnv.id, { minRole: e.target.value as any })}
-                      className="bg-transparent text-xs text-zinc-200 focus:outline-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 font-medium"
-                      title={
-                        !canWriteEnv
-                          ? 'Contributor, Maintainer, or Admin access required to change access restrictions'
-                          : isEnvReadOnly
+                  <button
+                    type="button"
+                    disabled={isEnvReadOnly || !canWriteEnv}
+                    onClick={() => setIsPermModalOpen(true)}
+                    className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/80 px-2.5 py-1 text-xs hover:border-zinc-700 hover:bg-zinc-850 transition disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+                    title={
+                      !canWriteEnv
+                        ? 'Contributor, Maintainer, or Admin access required to change access restrictions'
+                        : isEnvReadOnly
                           ? 'Higher permission required to edit this restricted environment'
                           : 'Change minimum required role'
-                      }
-                    >
-                      <option value="reader" className="bg-zinc-900 text-zinc-200">
-                        🟢 All Members (Reader+)
-                      </option>
-                      {canWriteEnv && (
-                        <option value="contributor" className="bg-zinc-900 text-zinc-200">
-                          🟡 Contributor+
-                        </option>
-                      )}
-                      {canDeleteEnv && (
-                        <option value="maintainer" className="bg-zinc-900 text-zinc-200">
-                          🔵 Maintainer+ (Production / Release)
-                        </option>
-                      )}
-                      {isProjectAdmin && (
-                        <option value="admin" className="bg-zinc-900 text-zinc-200">
-                          🔴 Admin Only (Restricted)
-                        </option>
-                      )}
-                    </select>
-                  </div>
+                    }
+                  >
+                    <Shield
+                      className={`h-3.5 w-3.5 shrink-0 ${currentEnv.minRole === 'admin'
+                          ? 'text-rose-400'
+                          : currentEnv.minRole === 'maintainer'
+                            ? 'text-sky-400'
+                            : currentEnv.minRole === 'contributor'
+                              ? 'text-amber-400'
+                              : 'text-emerald-400'
+                        }`}
+                    />
+                    <span className="text-zinc-400 text-[11px]">Access:</span>
+                    <span className="font-semibold text-zinc-200">
+                      {currentEnv.minRole === 'admin'
+                        ? '🔴 Admin Only'
+                        : currentEnv.minRole === 'maintainer'
+                          ? '🔵 Maintainer+'
+                          : currentEnv.minRole === 'contributor'
+                            ? '🟡 Contributor+'
+                            : '🟢 All Members (Reader+)'}
+                    </span>
+                  </button>
                 )}
 
                 {isEnvReadOnly && (
@@ -848,6 +850,28 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
           isResolving={isResolvingConflict}
         />
       )}
+
+      {currentEnv && (
+        <EnvironmentPermissionModal
+          isOpen={isPermModalOpen}
+          onClose={() => setIsPermModalOpen(false)}
+          environmentName={currentEnv.name}
+          currentRole={currentEnv.minRole || 'reader'}
+          onSave={(role) => {
+            updateEnvironment(currentEnv.id, { minRole: role });
+          }}
+        />
+      )}
+
+      <EnvironmentPermissionModal
+        isOpen={isNewEnvPermModalOpen}
+        onClose={() => setIsNewEnvPermModalOpen(false)}
+        environmentName={newEnvName.trim() || 'New Environment'}
+        currentRole={newEnvMinRole}
+        onSave={(role) => {
+          setNewEnvMinRole(role);
+        }}
+      />
     </div>
   );
 };

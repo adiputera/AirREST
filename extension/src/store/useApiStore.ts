@@ -23,6 +23,7 @@ import {
   CloudProject,
   CloudWorkspace,
   OfflineWorkspace,
+  ProjectRole,
 } from '@/types/api';
 import { executeApiRequest } from '@/lib/fetcher';
 import { revokeBlobUrl, revokeBlobUrls } from '@/lib/blobManager';
@@ -41,6 +42,7 @@ import {
   updateScopeEnvironment,
   deleteScopeEnvironment,
   deleteScopeCollection,
+  updateScopeCollectionPermission,
   deleteScopeItem,
   moveScopeCollection,
   reorderCollectionItems,
@@ -67,7 +69,7 @@ import {
   flattenCollectionRequests,
   alignEnvironmentVariableIds,
 } from '@/lib/requestDiff';
-import { canModifyCollection, canModifyEnvironment, hasScopePermission } from '@/lib/jwt';
+import { canModifyCollection, canModifyEnvironment, hasScopePermission, getUserScopeRank } from '@/lib/jwt';
 
 function generateId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -406,6 +408,10 @@ interface ApiStoreState {
   replaceCollection: (existingId: string, newCollection: Collection) => Promise<void>;
   importCollectionFromJson: (jsonStr: string) => Promise<{ success: boolean; error?: string }>;
   deleteCollection: (id: string) => void;
+  updateCollectionPermission: (
+    collectionId: string,
+    minRole: ProjectRole
+  ) => Promise<{ success: boolean; error?: string }>;
   moveCollection: (collectionId: string, targetScope: ActiveScope) => Promise<{ success: boolean; error?: string }>;
   moveRequest: (
     sourceCollectionId: string,
@@ -3869,6 +3875,61 @@ export const useApiStore = create<ApiStoreState>()(
             console.error('Failed to delete collection from cloud:', err);
           });
         }
+      },
+
+      updateCollectionPermission: async (collectionId, minRole) => {
+        const { workspaceMode, cloudConfig, collections } = get();
+        const col = collections.find((c) => c.id === collectionId);
+        if (!col) return { success: false, error: 'Collection not found' };
+
+        if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
+          const isProjectAdmin = hasScopePermission(cloudConfig.activeScope, '*', workspaceMode, cloudConfig.user?.role);
+          const isProjectMaintainer = hasScopePermission(cloudConfig.activeScope, 'collection:delete', workspaceMode, cloudConfig.user?.role);
+          if (!isProjectAdmin && !isProjectMaintainer) {
+            return { success: false, error: 'You do not have permission to manage permissions for this collection.' };
+          }
+          const userRank = getUserScopeRank(workspaceMode, cloudConfig.activeScope, cloudConfig.token, cloudConfig.user);
+          const roleRanks: Record<string, number> = { admin: 4, maintainer: 3, contributor: 2, reader: 1 };
+          if ((roleRanks[minRole] || 1) > userRank) {
+            return { success: false, error: 'You cannot set a minimum role higher than your own role.' };
+          }
+        }
+
+        if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope?.type === 'project') {
+          try {
+            const updated = await updateScopeCollectionPermission(
+              cloudConfig.apiUrl,
+              cloudConfig.token,
+              collectionId,
+              minRole,
+              col.version || 1,
+              cloudConfig.refreshToken
+            );
+            set((state) => ({
+              collections: state.collections.map((c) =>
+                c.id === collectionId
+                  ? {
+                      ...c,
+                      minRole,
+                      version: typeof updated?.version === 'number' ? updated.version : (c.version || 1) + 1,
+                      updatedAt: Date.now(),
+                    }
+                  : c
+              ),
+            }));
+            return { success: true };
+          } catch (err: any) {
+            console.error('Failed to update collection permission:', err);
+            return { success: false, error: err.message || 'Failed to update collection permission.' };
+          }
+        }
+
+        set((state) => ({
+          collections: state.collections.map((c) =>
+            c.id === collectionId ? { ...c, minRole, updatedAt: Date.now() } : c
+          ),
+        }));
+        return { success: true };
       },
 
       moveRequest: async (sourceCollectionId, requestId, targetCollectionId, targetFolderId) => {

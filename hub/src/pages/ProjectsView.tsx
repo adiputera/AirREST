@@ -16,8 +16,8 @@ import {
   Layers,
   ChevronDown,
   ChevronRight,
-  Lock,
   FolderInput,
+  ArrowLeft,
 } from 'lucide-react';
 import { useHubStore } from '../store/useHubStore';
 import {
@@ -70,6 +70,7 @@ export const ProjectsView: React.FC = () => {
   const [isLoadingProjects, setIsLoadingProjects] = useState(false);
   const [isLoadingMembers, setIsLoadingMembers] = useState(false);
   const [searchProject, setSearchProject] = useState('');
+  const [mobileView, setMobileView] = useState<'list' | 'detail'>('list');
 
   // Modals
   const [isCreateProjOpen, setIsCreateProjOpen] = useState(false);
@@ -588,6 +589,7 @@ export const ProjectsView: React.FC = () => {
       if (useHubStore.getState().selectedTeamId !== selectedTeamId) return;
       setProjects((previous) => [newProj, ...previous]);
       setSelectedProjectId(newProj.id);
+      setMobileView('detail');
       handleCloseCreateProj();
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to create project');
@@ -733,7 +735,11 @@ export const ProjectsView: React.FC = () => {
       const updatedProjects = projects.filter((p) => p.id !== projectToDelete.id);
       setProjects(updatedProjects);
       if (useHubStore.getState().selectedProjectId === projectToDelete.id) {
-        setSelectedProjectId(updatedProjects[0]?.id || null);
+        const nextId = updatedProjects[0]?.id || null;
+        setSelectedProjectId(nextId);
+        if (!nextId) {
+          setMobileView('list');
+        }
       }
       setProjectToDelete(null);
     } catch (err: any) {
@@ -836,10 +842,17 @@ export const ProjectsView: React.FC = () => {
     );
   });
 
+  const showListOnMobile = mobileView === 'list' || !activeProject;
+  const showDetailOnMobile = mobileView === 'detail' && !!activeProject;
+
   return (
     <div className="flex flex-1 overflow-hidden">
       {/* Left Column: Team Switcher & Projects List */}
-      <div className="w-80 shrink-0 border-r border-zinc-800 bg-zinc-950/50 flex flex-col justify-between">
+      <div
+        className={`w-full md:w-72 lg:w-80 shrink-0 border-r border-zinc-800 bg-zinc-950/50 flex flex-col justify-between ${
+          showListOnMobile ? 'flex' : 'hidden md:flex'
+        }`}
+      >
         <div className="p-4 border-b border-zinc-800 space-y-3">
           {/* Team Switcher */}
           <div>
@@ -850,7 +863,10 @@ export const ProjectsView: React.FC = () => {
               <Users className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
               <select
                 value={selectedTeamId || ''}
-                onChange={(e) => setSelectedTeamId(e.target.value)}
+                onChange={(e) => {
+                  setSelectedTeamId(e.target.value);
+                  setMobileView('list');
+                }}
                 disabled={teams.length === 0}
                 className="w-full bg-transparent text-xs font-semibold text-zinc-200 focus:outline-none cursor-pointer truncate disabled:opacity-50"
               >
@@ -914,7 +930,10 @@ export const ProjectsView: React.FC = () => {
               return (
                 <button
                   key={proj.id}
-                  onClick={() => setSelectedProjectId(proj.id)}
+                  onClick={() => {
+                    setSelectedProjectId(proj.id);
+                    setMobileView('detail');
+                  }}
                   className={`w-full text-left rounded-xl p-3 transition border ${
                     isSelected
                       ? 'border-sky-500/50 bg-sky-950/20 text-white shadow-sm'
@@ -940,11 +959,32 @@ export const ProjectsView: React.FC = () => {
       </div>
 
       {/* Right Column: Selected Project & RBAC Members */}
-      <div className="flex-1 overflow-y-auto p-8 bg-zinc-950">
+      <div
+        className={`flex-1 overflow-y-auto p-4 sm:p-6 md:p-8 bg-zinc-950 ${
+          showDetailOnMobile ? 'block' : 'hidden md:block'
+        }`}
+      >
         {activeProject ? (
-          <div className="max-w-5xl mx-auto space-y-8 animate-in fade-in duration-150">
+          <div className="max-w-5xl mx-auto space-y-6 sm:space-y-8 animate-in fade-in duration-150">
+            {/* Mobile Back Button */}
+            <div className="md:hidden flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setMobileView('list')}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-zinc-800 bg-zinc-900/90 px-3 py-1.5 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 hover:text-white transition shadow-sm"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                <span>Back to Projects</span>
+              </button>
+              {activeTeam && (
+                <span className="text-[11px] text-zinc-400 truncate max-w-[140px]">
+                  {activeTeam.name}
+                </span>
+              )}
+            </div>
+
             {/* Project Banner */}
-            <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4 sm:p-6 flex flex-col xl:flex-row xl:items-center justify-between gap-4 sm:gap-6">
               <div className="min-w-0 flex-1 space-y-2">
                 <h1 className="text-xl md:text-2xl font-bold text-zinc-100 tracking-tight">
                   {activeProject.name}
@@ -960,7 +1000,7 @@ export const ProjectsView: React.FC = () => {
                 </p>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2.5 shrink-0 self-start lg:self-auto">
+              <div className="flex flex-wrap items-center gap-2 shrink-0 self-start xl:self-auto">
                 {canEditProject && (
                   <>
                     <button
@@ -1001,11 +1041,11 @@ export const ProjectsView: React.FC = () => {
             </div>
 
             {/* Project Sub-Navigation Tabs */}
-            <div className="flex items-center gap-1.5 border-b border-zinc-800 pb-3">
+            <div className="flex items-center gap-1.5 border-b border-zinc-800 pb-3 overflow-x-auto no-scrollbar">
               <button
                 type="button"
                 onClick={() => setProjectSubTab('members')}
-                className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold transition ${
+                className={`flex items-center gap-2 rounded-xl px-3.5 sm:px-4 py-2 text-xs font-semibold shrink-0 transition ${
                   projectSubTab === 'members'
                     ? 'bg-zinc-800 text-white shadow-sm border border-zinc-700/60'
                     : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/60'
@@ -1021,7 +1061,7 @@ export const ProjectsView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setProjectSubTab('collections')}
-                className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold transition ${
+                className={`flex items-center gap-2 rounded-xl px-3.5 sm:px-4 py-2 text-xs font-semibold shrink-0 transition ${
                   projectSubTab === 'collections'
                     ? 'bg-zinc-800 text-white shadow-sm border border-zinc-700/60'
                     : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/60'
@@ -1037,7 +1077,7 @@ export const ProjectsView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setProjectSubTab('environments')}
-                className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold transition ${
+                className={`flex items-center gap-2 rounded-xl px-3.5 sm:px-4 py-2 text-xs font-semibold shrink-0 transition ${
                   projectSubTab === 'environments'
                     ? 'bg-zinc-800 text-white shadow-sm border border-zinc-700/60'
                     : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/60'
@@ -1084,99 +1124,101 @@ export const ProjectsView: React.FC = () => {
 
                 {/* Members Table */}
                 <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 overflow-hidden shadow-sm">
-                  <table className="w-full text-left text-xs">
-                    <thead className="border-b border-zinc-800 bg-zinc-950/80 text-zinc-400 uppercase text-[10px] font-semibold">
-                      <tr>
-                        <th className="px-4 py-3">Member</th>
-                        <th className="px-4 py-3">Email</th>
-                        <th className="px-4 py-3">Access Level (RBAC)</th>
-                        {canEditProject && <th className="px-4 py-3 text-right">Actions</th>}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-zinc-800/60 text-zinc-200">
-                      {isLoadingMembers ? (
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[540px] sm:min-w-full text-left text-xs">
+                      <thead className="border-b border-zinc-800 bg-zinc-950/80 text-zinc-400 uppercase text-[10px] font-semibold">
                         <tr>
-                          <td colSpan={canEditProject ? 4 : 3} className="py-8 text-center text-zinc-500">
-                            <Loader2 className="h-4 w-4 animate-spin inline mr-2 text-sky-400" />
-                            Loading project members...
-                          </td>
+                          <th className="px-4 py-3">Member</th>
+                          <th className="px-4 py-3">Email</th>
+                          <th className="px-4 py-3">Access Level (RBAC)</th>
+                          {canEditProject && <th className="px-4 py-3 text-right">Actions</th>}
                         </tr>
-                      ) : projectMembers.length === 0 ? (
-                        <tr>
-                          <td colSpan={canEditProject ? 4 : 3} className="py-8 text-center text-zinc-500">
-                            No members assigned to this project yet. Assign team members to grant access.
-                          </td>
-                        </tr>
-                      ) : (
-                        projectMembers.map((member) => {
-                          const mName = member.user?.name || member.name || 'Member';
-                          const mEmail = member.user?.email || member.email || '';
-                          const isSuper = member.user?.role === 'superadmin';
-                          return (
-                            <tr key={member.user_id} className="hover:bg-zinc-800/30 transition">
-                              <td className="px-4 py-3 font-medium flex items-center gap-2">
-                                <div className="h-7 w-7 rounded-full bg-zinc-800 flex items-center justify-center font-bold text-[11px] text-zinc-300 border border-zinc-700/50">
-                                  {mName[0].toUpperCase()}
-                                </div>
-                                <span>{mName}</span>
-                              </td>
-                              <td className="px-4 py-3 text-zinc-400">{mEmail}</td>
-                              <td className="px-4 py-3">
-                                {isSuper ? (
-                                  <span className="rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider inline-flex items-center gap-1">
-                                    <Shield className="h-3 w-3" />
-                                    Superadmin
-                                  </span>
-                                ) : (
-                                  <span
-                                    className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
-                                      member.role === 'admin'
-                                        ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                                        : member.role === 'maintainer'
-                                        ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
-                                        : member.role === 'contributor'
-                                        ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
-                                        : 'bg-zinc-800 text-zinc-300'
-                                    }`}
-                                  >
-                                    {member.role}
-                                  </span>
-                                )}
-                              </td>
-                              {canEditProject && (
-                                <td className="px-4 py-3 text-right">
+                      </thead>
+                      <tbody className="divide-y divide-zinc-800/60 text-zinc-200">
+                        {isLoadingMembers ? (
+                          <tr>
+                            <td colSpan={canEditProject ? 4 : 3} className="py-8 text-center text-zinc-500">
+                              <Loader2 className="h-4 w-4 animate-spin inline mr-2 text-sky-400" />
+                              Loading project members...
+                            </td>
+                          </tr>
+                        ) : projectMembers.length === 0 ? (
+                          <tr>
+                            <td colSpan={canEditProject ? 4 : 3} className="py-8 text-center text-zinc-500">
+                              No members assigned to this project yet. Assign team members to grant access.
+                            </td>
+                          </tr>
+                        ) : (
+                          projectMembers.map((member) => {
+                            const mName = member.user?.name || member.name || 'Member';
+                            const mEmail = member.user?.email || member.email || '';
+                            const isSuper = member.user?.role === 'superadmin';
+                            return (
+                              <tr key={member.user_id} className="hover:bg-zinc-800/30 transition">
+                                <td className="px-4 py-3 font-medium flex items-center gap-2">
+                                  <div className="h-7 w-7 rounded-full bg-zinc-800 flex items-center justify-center font-bold text-[11px] text-zinc-300 border border-zinc-700/50">
+                                    {mName[0].toUpperCase()}
+                                  </div>
+                                  <span>{mName}</span>
+                                </td>
+                                <td className="px-4 py-3 text-zinc-400">{mEmail}</td>
+                                <td className="px-4 py-3">
                                   {isSuper ? (
-                                    <span className="text-[10px] text-zinc-500 italic pr-1" title="Superadmin permissions are system-wide and cannot be modified">
-                                      Permanent
+                                    <span className="rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider inline-flex items-center gap-1">
+                                      <Shield className="h-3 w-3" />
+                                      Superadmin
                                     </span>
                                   ) : (
-                                    <div className="flex items-center justify-end gap-1">
-                                      <button
-                                        onClick={() => handleOpenEditMember(member)}
-                                        className="rounded p-1 text-zinc-500 hover:bg-sky-500/10 hover:text-sky-400 transition"
-                                        title="Edit Role"
-                                      >
-                                        <Pencil className="h-3.5 w-3.5" />
-                                      </button>
-                                      {member.user_id !== user?.id && (
-                                        <button
-                                          onClick={() => setMemberToRemove(member)}
-                                          className="rounded p-1 text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400 transition"
-                                          title="Unassign Member"
-                                        >
-                                          <Trash2 className="h-3.5 w-3.5" />
-                                        </button>
-                                      )}
-                                    </div>
+                                    <span
+                                      className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                                        member.role === 'admin'
+                                          ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                                          : member.role === 'maintainer'
+                                          ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
+                                          : member.role === 'contributor'
+                                          ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
+                                          : 'bg-zinc-800 text-zinc-300'
+                                      }`}
+                                    >
+                                      {member.role}
+                                    </span>
                                   )}
                                 </td>
-                              )}
-                            </tr>
-                          );
-                        })
-                      )}
-                    </tbody>
-                  </table>
+                                {canEditProject && (
+                                  <td className="px-4 py-3 text-right">
+                                    {isSuper ? (
+                                      <span className="text-[10px] text-zinc-500 italic pr-1" title="Superadmin permissions are system-wide and cannot be modified">
+                                        Permanent
+                                      </span>
+                                    ) : (
+                                      <div className="flex items-center justify-end gap-1">
+                                        <button
+                                          onClick={() => handleOpenEditMember(member)}
+                                          className="rounded p-1 text-zinc-500 hover:bg-sky-500/10 hover:text-sky-400 transition"
+                                          title="Edit Role"
+                                        >
+                                          <Pencil className="h-3.5 w-3.5" />
+                                        </button>
+                                        {member.user_id !== user?.id && (
+                                          <button
+                                            onClick={() => setMemberToRemove(member)}
+                                            className="rounded p-1 text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400 transition"
+                                            title="Unassign Member"
+                                          >
+                                            <Trash2 className="h-3.5 w-3.5" />
+                                          </button>
+                                        )}
+                                      </div>
+                                    )}
+                                  </td>
+                                )}
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               </div>
             )}
@@ -1233,7 +1275,7 @@ export const ProjectsView: React.FC = () => {
                           key={col.id}
                           className="rounded-2xl border border-zinc-800 bg-zinc-900/40 overflow-hidden shadow-sm transition hover:border-zinc-700/80"
                         >
-                          <div className="p-4 flex items-center justify-between gap-3 bg-zinc-950/60">
+                          <div className="p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-zinc-950/60">
                             <button
                               type="button"
                               onClick={() => toggleCollectionCollapse(col.id)}
@@ -1264,7 +1306,7 @@ export const ProjectsView: React.FC = () => {
                               </div>
                             </button>
 
-                            <div className="flex items-center gap-2 shrink-0">
+                            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 shrink-0 self-start sm:self-auto">
                               <span
                                 className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${roleBadge.badgeClass}`}
                                 title={`Minimum role required: ${minRole}`}
@@ -1370,9 +1412,9 @@ export const ProjectsView: React.FC = () => {
                           key={env.id}
                           className="rounded-2xl border border-zinc-800 bg-zinc-900/40 overflow-hidden shadow-sm"
                         >
-                          <div className="p-4 flex items-center justify-between gap-3 bg-zinc-950/60">
+                          <div className="p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-zinc-950/60">
                             <div className="flex items-center gap-3">
-                              <div className="h-8 w-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+                              <div className="h-8 w-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 shrink-0">
                                 <Layers className="h-4 w-4" />
                               </div>
                               <div>
@@ -1385,7 +1427,7 @@ export const ProjectsView: React.FC = () => {
                               </div>
                             </div>
 
-                            <div className="flex items-center gap-2 shrink-0">
+                            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 shrink-0 self-start sm:self-auto">
                               <span
                                 className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${roleBadge.badgeClass}`}
                                 title={`Minimum role required: ${minRole}`}
@@ -1412,7 +1454,7 @@ export const ProjectsView: React.FC = () => {
                                     className="flex items-center gap-1 rounded-lg border border-red-500/20 bg-red-500/10 px-2.5 py-1 text-xs font-semibold text-red-400 hover:text-red-300 hover:bg-red-500/20 transition"
                                     title="Delete Environment"
                                   >
-                                    <Trash2 className="h-3 w-3" />
+                                    <Trash2 className="h-3.5 w-3.5" />
                                     <span>Delete</span>
                                   </button>
                                 </>
@@ -1422,7 +1464,7 @@ export const ProjectsView: React.FC = () => {
 
                           {/* Variables Table */}
                           <div className="overflow-x-auto border-t border-zinc-800/80">
-                            <table className="w-full text-left text-xs">
+                            <table className="w-full min-w-[460px] sm:min-w-full text-left text-xs">
                               <thead className="border-b border-zinc-800 bg-zinc-950 text-zinc-400 uppercase text-[10px] font-semibold">
                                 <tr>
                                   <th className="px-4 py-2.5 w-1/3">Variable Key</th>
@@ -1498,7 +1540,7 @@ export const ProjectsView: React.FC = () => {
           }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
         >
-          <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+          <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-5 sm:p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
                 <FolderGit2 className="h-5 w-5 text-sky-400" />
@@ -1567,7 +1609,7 @@ export const ProjectsView: React.FC = () => {
           }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
         >
-          <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl flex flex-col max-h-[90vh]">
+          <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 p-4 sm:p-6 shadow-2xl flex flex-col max-h-[90dvh]">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
                 <UserCheck className="h-5 w-5 text-sky-400" />
@@ -1809,7 +1851,7 @@ export const ProjectsView: React.FC = () => {
           }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
         >
-          <div className="w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+          <div className="w-full max-w-sm max-h-[90dvh] overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-5 sm:p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
                 <Shield className="h-4 w-4 text-sky-400" />
@@ -1879,7 +1921,7 @@ export const ProjectsView: React.FC = () => {
           }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
         >
-          <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+          <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-5 sm:p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
                 <Pencil className="h-5 w-5 text-sky-400" />
@@ -2026,7 +2068,7 @@ export const ProjectsView: React.FC = () => {
           }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
         >
-          <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+          <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-5 sm:p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
                 <Shield className="h-5 w-5 text-sky-400" />
@@ -2149,7 +2191,7 @@ export const ProjectsView: React.FC = () => {
           }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
         >
-          <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+          <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-5 sm:p-6 shadow-2xl">
             <div className="flex items-center justify-between pb-4 border-b border-zinc-800/80 mb-4">
               <div className="flex items-center gap-3">
                 <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-amber-500/20 bg-amber-500/10 text-amber-400">

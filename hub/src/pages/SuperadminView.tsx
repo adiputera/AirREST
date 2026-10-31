@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldAlert, Plus, Search, Loader2, UserCheck, X, Eye, EyeOff, KeyRound, AlertCircle, Trash2, AlertTriangle, Save } from 'lucide-react';
+import { ShieldAlert, Plus, Search, Loader2, UserCheck, X, Eye, EyeOff, KeyRound, AlertCircle, Trash2, AlertTriangle, Save, Pencil } from 'lucide-react';
 import { useHubStore } from '../store/useHubStore';
-import { apiListAllUsers, apiProvisionUser, apiResetUserPassword, apiDeleteUser, apiGetFeaturePolicy, apiUpdateFeaturePolicy } from '../lib/api';
+import { apiListAllUsers, apiProvisionUser, apiUpdateUser, apiResetUserPassword, apiDeleteUser, apiGetFeaturePolicy, apiUpdateFeaturePolicy } from '../lib/api';
 import { FeatureFlags, FeaturePolicy, User } from '../types';
 
 export const SuperadminView: React.FC = () => {
@@ -23,6 +23,12 @@ export const SuperadminView: React.FC = () => {
   const [newRole, setNewRole] = useState<'user' | 'superadmin'>('user');
   const [isProvisioning, setIsProvisioning] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Edit User Modal
+  const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [editName, setEditName] = useState('');
+  const [isUpdatingUser, setIsUpdatingUser] = useState(false);
+  const [editErrorMsg, setEditErrorMsg] = useState<string | null>(null);
 
   // Reset Password Modal
   const [resetUser, setResetUser] = useState<User | null>(null);
@@ -135,6 +141,42 @@ export const SuperadminView: React.FC = () => {
     }
   };
 
+  const handleOpenEditUser = (u: User) => {
+    setEditingUser(u);
+    setEditName(u.name || '');
+    setEditErrorMsg(null);
+  };
+
+  const handleCloseEditUser = () => {
+    setEditingUser(null);
+    setEditName('');
+    setEditErrorMsg(null);
+  };
+
+  const handleUpdateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || !editingUser) return;
+    const trimmed = editName.trim();
+    if (!trimmed) {
+      setEditErrorMsg('Display name is required');
+      return;
+    }
+    setIsUpdatingUser(true);
+    setEditErrorMsg(null);
+    try {
+      const updated = await apiUpdateUser(apiUrl, token, editingUser.id, trimmed, refreshToken || undefined);
+      setUsers((prev) => prev.map((u) => (u.id === editingUser.id ? { ...u, name: updated.name } : u)));
+      if (editingUser.id === currentUser?.id) {
+        useHubStore.getState().updateUser({ ...currentUser, name: updated.name });
+      }
+      handleCloseEditUser();
+    } catch (err: any) {
+      setEditErrorMsg(err.message || 'Failed to update user');
+    } finally {
+      setIsUpdatingUser(false);
+    }
+  };
+
   const handleOpenResetPassword = (u: User) => {
     setResetUser(u);
     setResetPassword('');
@@ -206,10 +248,10 @@ export const SuperadminView: React.FC = () => {
   );
 
   return (
-    <div className="flex-1 overflow-y-auto p-8 bg-zinc-950">
+    <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8 bg-zinc-950">
       <div className="max-w-5xl mx-auto space-y-6 animate-in fade-in duration-150">
         {/* Banner */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4 sm:p-6">
           <div className="flex items-start gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20 shrink-0">
               <ShieldAlert className="h-5 w-5" />
@@ -224,14 +266,14 @@ export const SuperadminView: React.FC = () => {
 
           <button
             onClick={handleOpenProvision}
-            className="flex items-center gap-1.5 rounded-xl bg-amber-500 px-4 py-2 text-xs font-semibold text-zinc-950 hover:bg-amber-400 transition shadow-md shadow-amber-500/20 shrink-0"
+            className="flex items-center gap-1.5 rounded-xl bg-amber-500 px-4 py-2 text-xs font-semibold text-zinc-950 hover:bg-amber-400 transition shadow-md shadow-amber-500/20 shrink-0 self-start sm:self-auto"
           >
             <Plus className="h-4 w-4" />
             <span>Provision New User</span>
           </button>
         </div>
 
-        <section className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-6">
+        <section className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4 sm:p-6">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h2 className="text-sm font-bold text-zinc-100">Global Feature Controls</h2>
@@ -241,7 +283,7 @@ export const SuperadminView: React.FC = () => {
               type="button"
               onClick={() => void saveFeaturePolicy()}
               disabled={!featurePolicy || !featureFlags || isLoadingFeaturePolicy || isSavingFeaturePolicy}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-sky-500 px-4 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-sky-500 px-4 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-50 shrink-0 self-start sm:self-auto"
             >
               {isSavingFeaturePolicy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
               Save controls
@@ -252,7 +294,7 @@ export const SuperadminView: React.FC = () => {
           {isLoadingFeaturePolicy ? (
             <p className="mt-4 text-xs text-zinc-400"><Loader2 className="mr-2 inline h-3.5 w-3.5 animate-spin" />Loading feature controls…</p>
           ) : featureFlags ? (
-            <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {([
                 ['collection.move', 'Move Collection', 'Allow moving cloud collections between eligible scopes.'],
                 ['collection.delete', 'Delete Collection', 'Allow deleting cloud collections, including sync deletions.'],
@@ -277,8 +319,8 @@ export const SuperadminView: React.FC = () => {
         </section>
 
         {/* Directory Controls */}
-        <div className="flex items-center justify-between gap-4">
-          <div className="relative w-72">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="relative w-full sm:w-72">
             <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-zinc-500" />
             <input
               type="text"
@@ -296,98 +338,109 @@ export const SuperadminView: React.FC = () => {
 
         {/* Users Table */}
         <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 overflow-hidden shadow-sm">
-          <table className="w-full text-left text-xs">
-            <thead className="border-b border-zinc-800 bg-zinc-950/80 text-zinc-400 uppercase text-[10px] font-semibold">
-              <tr>
-                <th className="px-4 py-3">User</th>
-                <th className="px-4 py-3">Email Address</th>
-                <th className="px-4 py-3">System Role</th>
-                <th className="px-4 py-3">User ID</th>
-                <th className="px-4 py-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-800/60 text-zinc-200">
-              {isLoading ? (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[620px] sm:min-w-full text-left text-xs">
+              <thead className="border-b border-zinc-800 bg-zinc-950/80 text-zinc-400 uppercase text-[10px] font-semibold">
                 <tr>
-                  <td colSpan={5} className="py-10 text-center text-zinc-500">
-                    <Loader2 className="h-4 w-4 animate-spin inline mr-2 text-amber-400" />
-                    Loading registered users...
-                  </td>
+                  <th className="px-4 py-3">User</th>
+                  <th className="px-4 py-3">Email Address</th>
+                  <th className="px-4 py-3">System Role</th>
+                  <th className="px-4 py-3">User ID</th>
+                  <th className="px-4 py-3 text-right">Actions</th>
                 </tr>
-              ) : loadError ? (
-                <tr>
-                  <td colSpan={5} className="py-10 text-center text-rose-400">
-                    <div className="flex items-center justify-center gap-2">
-                      <AlertCircle className="h-4 w-4 text-rose-400" />
-                      <span>{loadError}</span>
-                    </div>
-                  </td>
-                </tr>
-              ) : filtered.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="py-10 text-center text-zinc-500">
-                    No matching users found.
-                  </td>
-                </tr>
-              ) : (
-                filtered.map((u) => (
-                  <tr key={u.id} className="hover:bg-zinc-800/30 transition">
-                    <td className="px-4 py-3 font-medium flex items-center gap-2">
-                      <div className="h-7 w-7 rounded-full bg-zinc-800 flex items-center justify-center font-bold text-[11px] text-zinc-300 border border-zinc-700/50">
-                        {u.name ? u.name[0].toUpperCase() : 'U'}
-                      </div>
-                      <span>{u.name}</span>
+              </thead>
+              <tbody className="divide-y divide-zinc-800/60 text-zinc-200">
+                {isLoading ? (
+                  <tr>
+                    <td colSpan={5} className="py-10 text-center text-zinc-500">
+                      <Loader2 className="h-4 w-4 animate-spin inline mr-2 text-amber-400" />
+                      Loading registered users...
                     </td>
-                    <td className="px-4 py-3 text-zinc-400">{u.email}</td>
-                    <td className="px-4 py-3">
-                      <span
-                        className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
-                          u.role === 'superadmin'
-                            ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                            : 'bg-zinc-800 text-zinc-300'
-                        }`}
-                      >
-                        {u.role}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-zinc-500 font-mono text-[11px]">{u.id}</td>
-                    <td className="px-4 py-3 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <button
-                          onClick={() => handleOpenResetPassword(u)}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 hover:text-white hover:border-amber-500/40 transition"
-                          title="Change / Reset Password"
-                        >
-                          <KeyRound className="h-3.5 w-3.5 text-amber-400" />
-                          <span>Change Password</span>
-                        </button>
-
-                        {u.id === currentUser?.id ? (
-                          <button
-                            disabled
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800/40 bg-zinc-900/30 px-2.5 py-1 text-xs font-semibold text-zinc-600 cursor-not-allowed"
-                            title="You cannot delete your own account"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                            <span>Delete</span>
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => handleOpenDeleteUser(u)}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs font-semibold text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/40 hover:text-rose-300 transition"
-                            title="Permanently remove user"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                            <span>Delete</span>
-                          </button>
-                        )}
+                  </tr>
+                ) : loadError ? (
+                  <tr>
+                    <td colSpan={5} className="py-10 text-center text-rose-400">
+                      <div className="flex items-center justify-center gap-2">
+                        <AlertCircle className="h-4 w-4 text-rose-400" />
+                        <span>{loadError}</span>
                       </div>
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ) : filtered.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="py-10 text-center text-zinc-500">
+                      No matching users found.
+                    </td>
+                  </tr>
+                ) : (
+                  filtered.map((u) => (
+                    <tr key={u.id} className="hover:bg-zinc-800/30 transition">
+                      <td className="px-4 py-3 font-medium flex items-center gap-2">
+                        <div className="h-7 w-7 rounded-full bg-zinc-800 flex items-center justify-center font-bold text-[11px] text-zinc-300 border border-zinc-700/50">
+                          {u.name ? u.name[0].toUpperCase() : 'U'}
+                        </div>
+                        <span>{u.name}</span>
+                      </td>
+                      <td className="px-4 py-3 text-zinc-400">{u.email}</td>
+                      <td className="px-4 py-3">
+                        <span
+                          className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                            u.role === 'superadmin'
+                              ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                              : 'bg-zinc-800 text-zinc-300'
+                          }`}
+                        >
+                          {u.role}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-zinc-500 font-mono text-[11px]">{u.id}</td>
+                      <td className="px-4 py-3 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            onClick={() => handleOpenEditUser(u)}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 hover:text-white hover:border-sky-500/40 transition"
+                            title="Edit User Name"
+                          >
+                            <Pencil className="h-3.5 w-3.5 text-sky-400" />
+                            <span>Edit</span>
+                          </button>
+
+                          <button
+                            onClick={() => handleOpenResetPassword(u)}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 hover:text-white hover:border-amber-500/40 transition"
+                            title="Change / Reset Password"
+                          >
+                            <KeyRound className="h-3.5 w-3.5 text-amber-400" />
+                            <span>Change Password</span>
+                          </button>
+
+                          {u.id === currentUser?.id ? (
+                            <button
+                              disabled
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800/40 bg-zinc-900/30 px-2.5 py-1 text-xs font-semibold text-zinc-600 cursor-not-allowed"
+                              title="You cannot delete your own account"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              <span>Delete</span>
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleOpenDeleteUser(u)}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs font-semibold text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/40 hover:text-rose-300 transition"
+                              title="Permanently remove user"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              <span>Delete</span>
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -401,7 +454,7 @@ export const SuperadminView: React.FC = () => {
           }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
         >
-          <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+          <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-5 sm:p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
                 <UserCheck className="h-5 w-5 text-amber-400" />
@@ -502,6 +555,91 @@ export const SuperadminView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Edit User Modal */}
+      {editingUser && (
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isUpdatingUser) {
+              handleCloseEditUser();
+            }
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+        >
+          <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-5 sm:p-6 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
+                <Pencil className="h-5 w-5 text-sky-400" />
+                <span>Edit User</span>
+              </h3>
+              <button
+                onClick={handleCloseEditUser}
+                disabled={isUpdatingUser}
+                className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800 disabled:opacity-50"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {editErrorMsg && (
+              <div className="mb-4 rounded-lg border border-rose-500/30 bg-rose-500/10 p-2.5 text-xs text-rose-300">
+                {editErrorMsg}
+              </div>
+            )}
+
+            <form onSubmit={handleUpdateUser} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1">Email Address</label>
+                <input
+                  type="email"
+                  value={editingUser.email}
+                  disabled
+                  className="w-full rounded-lg border border-zinc-800 bg-zinc-900/50 px-3 py-2 text-xs text-zinc-500 cursor-not-allowed"
+                />
+                <p className="mt-1 text-[11px] text-zinc-500">Email address cannot be changed.</p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1">Display Name</label>
+                <input
+                  type="text"
+                  required
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  placeholder="e.g. John Doe"
+                  className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs text-zinc-100 placeholder-zinc-500 focus:border-sky-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={handleCloseEditUser}
+                  disabled={isUpdatingUser}
+                  className="rounded-lg border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isUpdatingUser || !editName.trim()}
+                  className="flex items-center gap-1.5 rounded-lg bg-sky-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-sky-500 transition shadow-md disabled:opacity-50"
+                >
+                  {isUpdatingUser ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    <span>Save Changes</span>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Reset Password Modal */}
       {resetUser && (
         <div
@@ -512,7 +650,7 @@ export const SuperadminView: React.FC = () => {
           }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
         >
-          <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+          <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-5 sm:p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
                 <KeyRound className="h-5 w-5 text-amber-400" />
@@ -608,7 +746,7 @@ export const SuperadminView: React.FC = () => {
           }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
         >
-          <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+          <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-5 sm:p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
                 <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-500/10 text-rose-400 border border-rose-500/20">

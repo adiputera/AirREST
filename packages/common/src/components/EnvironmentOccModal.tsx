@@ -1,12 +1,15 @@
 import React, { useState } from 'react';
 import { AlertTriangle, CloudDownload, CloudUpload } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
+import { useBackHandler } from '../lib/backNavigation';
 
 export const EnvironmentOccModal: React.FC = () => {
   const conflict = useApiStore((state) => state.environmentOccConflict);
   const discard = useApiStore((state) => state.discardEnvironmentOccConflict);
   const overwrite = useApiStore((state) => state.overwriteEnvironmentOccConflict);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // An OCC conflict requires an explicit choice; Back must not discard it.
+  useBackHandler(Boolean(conflict), () => {}, 40);
 
   if (!conflict) return null;
   const run = async (action: () => void | Promise<void>) => {

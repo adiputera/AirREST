@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "AirREST",
-  "version": "0.1.4",
+  "version": "1.2.0",
   "identifier": "id.adiputera.airrest",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -15,6 +15,7 @@
         "title": "AirREST",
         "width": 1200,
         "height": 780,
+        "maximized": true,
         "theme": "Dark"
       }
     ],

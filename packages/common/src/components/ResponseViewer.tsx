@@ -263,20 +263,20 @@ export const ResponseViewer: React.FC = () => {
   return (
     <div className="flex flex-1 flex-col overflow-hidden bg-zinc-950">
       {/* Response Header Bar */}
-      <div className="flex h-12 items-center justify-between border-b border-zinc-800 px-4">
-        <div className="flex items-center gap-4">
+      <div className="flex min-h-12 flex-wrap items-center justify-between gap-2 border-b border-zinc-800 px-4 py-2">
+        <div className="flex flex-wrap items-center gap-3 md:gap-4">
           <span className="text-xs font-bold uppercase tracking-wider text-zinc-400">Response</span>
 
           {activeResponse && !isLoading && (
             <div className="flex items-center gap-3">
               {getStatusBadge(activeResponse.status, activeResponse.statusText)}
 
-              <div className="flex items-center gap-1 font-mono text-xs text-zinc-400">
+              <div className="flex items-center gap-1 whitespace-nowrap font-mono text-xs text-zinc-400">
                 <Clock className="h-3.5 w-3.5 text-zinc-500" />
                 <span>{activeResponse.timeMs} ms</span>
               </div>
 
-              <div className="flex items-center gap-1 font-mono text-xs text-zinc-400">
+              <div className="flex items-center gap-1 whitespace-nowrap font-mono text-xs text-zinc-400">
                 <HardDrive className="h-3.5 w-3.5 text-zinc-500" />
                 <span>{formatBytes(activeResponse.sizeBytes)}</span>
               </div>

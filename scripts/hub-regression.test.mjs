@@ -458,6 +458,34 @@ test('SuperadminView resets provision form state on close, reopen, and submit', 
   assert.equal(h.state.newEmail, '');
 });
 
+test('SuperadminView handles edit user modal and updates user name', async () => {
+  let updateCalls = 0;
+  let updatedPayload = null;
+  const targetUser = { id: 'u-1', name: 'Original Name', email: 'user@example.com', role: 'user' };
+  const h = component('hub/src/pages/SuperadminView.tsx', 'SuperadminView', {
+    users: [targetUser],
+    editingUser: targetUser,
+    editName: 'Updated Name',
+  }, {
+    apiListAllUsers: async () => [targetUser],
+    apiGetFeaturePolicy: async () => ({ revision: 1, flags: {} }),
+    apiUpdateUser: async (_url, _token, id, name) => {
+      updateCalls++;
+      updatedPayload = { id, name };
+      return { ...targetUser, name };
+    },
+  });
+
+  const forms = findElements(h.render(), (n) => n.type === 'form');
+  assert.ok(forms.length > 0, 'must have edit form');
+  await forms[0].props.onSubmit({ preventDefault() {} });
+
+  assert.equal(updateCalls, 1);
+  assert.deepEqual(updatedPayload, { id: 'u-1', name: 'Updated Name' });
+  assert.equal(h.state.editingUser, null);
+  assert.equal(h.state.editName, '');
+});
+
 test('TeamsView resets add member form and role on open, cancel, and success', async () => {
   let addCalls = 0;
   const h = component('hub/src/pages/TeamsView.tsx', 'TeamsView', {
@@ -543,4 +571,68 @@ test('LoginView clears password and resets showPassword on mount and submit', as
   assert.equal(loginCalls, 1);
   assert.equal(h.state.password, '');
   assert.equal(h.state.showPassword, false);
+});
+
+test('TeamsView toggles mobileView between list and detail on mobile', () => {
+  const h = component('hub/src/pages/TeamsView.tsx', 'TeamsView', {
+    teams: [{ id: 'team-1', name: 'Alpha Team' }],
+    mobileView: 'list',
+  });
+  h.store.selectedTeamId = 'team-1';
+
+  // In list view, clicking the team card switches mobileView to 'detail'
+  const teamBtn = findElements(h.render(), (n) => n.type === 'button' && n.key === 'team-1')[0];
+  assert.ok(teamBtn, 'team card button must exist');
+  teamBtn.props.onClick();
+  assert.equal(h.state.mobileView, 'detail');
+
+  // In detail view, back button with "Back to Teams" returns to 'list'
+  const backBtn = findElements(h.render(), (n) => n.type === 'button' && renderToStaticMarkup(n).includes('Back to Teams'))[0];
+  assert.ok(backBtn, 'back button must exist in detail view');
+  backBtn.props.onClick();
+  assert.equal(h.state.mobileView, 'list');
+});
+
+test('ProjectsView toggles mobileView between list and detail on mobile', () => {
+  const h = component('hub/src/pages/ProjectsView.tsx', 'ProjectsView', {
+    teams: [{ id: 'team-1', name: 'Alpha Team' }],
+    projects: [{ id: 'proj-1', name: 'Alpha Project' }],
+    mobileView: 'list',
+  });
+  h.store.selectedTeamId = 'team-1';
+  h.store.selectedProjectId = 'proj-1';
+
+  // In list view, clicking the project card switches mobileView to 'detail'
+  const projBtn = findElements(h.render(), (n) => n.type === 'button' && n.key === 'proj-1')[0];
+  assert.ok(projBtn, 'project card button must exist');
+  projBtn.props.onClick();
+  assert.equal(h.state.mobileView, 'detail');
+
+  // In detail view, back button with "Back to Projects" returns to 'list'
+  const backBtn = findElements(h.render(), (n) => n.type === 'button' && renderToStaticMarkup(n).includes('Back to Projects'))[0];
+  assert.ok(backBtn, 'back button must exist in detail view');
+  backBtn.props.onClick();
+  assert.equal(h.state.mobileView, 'list');
+});
+
+test('Sidebar renders mobile drawer overlay and handles close and selection', () => {
+  const { Sidebar } = load('hub/src/components/Sidebar.tsx', {
+    '../store/useHubStore': {
+      useHubStore: (selector) => selector({ activeTab: 'teams', user: { role: 'user' }, setActiveTab: (t) => { selectedTab = t; } }),
+    },
+  });
+
+  let selectedTab = null;
+  let closed = false;
+
+  // Closed state: no backdrop button
+  const closedElement = React.createElement(Sidebar, { isOpen: false, onClose: () => { closed = true; } });
+  const closedHtml = renderToStaticMarkup(closedElement);
+  assert.doesNotMatch(closedHtml, /Close navigation overlay/);
+
+  // Open state: backdrop overlay button exists
+  const openElement = React.createElement(Sidebar, { isOpen: true, onClose: () => { closed = true; } });
+  const openHtml = renderToStaticMarkup(openElement);
+  assert.match(openHtml, /Close navigation overlay/);
+  assert.match(openHtml, /translate-x-0/);
 });

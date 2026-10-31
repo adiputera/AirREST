@@ -51,7 +51,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
       }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
     >
-      <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+      <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-5 sm:p-6 shadow-2xl">
         <div className="flex items-start gap-3.5">
           <div
             className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${

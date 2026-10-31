@@ -58,7 +58,7 @@ export interface FileOptions {
 }
 
 export interface PlatformAdapter {
-  platformId: 'extension' | 'desktop' | 'web';
+  platformId: 'extension' | 'desktop' | 'android' | 'web';
   capabilities: PlatformCapabilities;
   transport: TestTransport;
   cloudTransport: CloudTransport;

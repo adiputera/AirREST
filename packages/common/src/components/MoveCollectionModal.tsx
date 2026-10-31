@@ -22,6 +22,7 @@ import {
 } from '../lib/cloudApi';
 import { getRoleFromJwt, canModifyCollection, hasScopePermission } from '../lib/jwt';
 import { isOfflineOnly } from '../lib/edition';
+import { useBackHandler } from '../lib/backNavigation';
 
 interface MoveCollectionModalProps {
   isOpen: boolean;
@@ -52,6 +53,7 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
   const [targetOptions, setTargetOptions] = useState<TargetOption[]>([]);
   const [selectedTargetScope, setSelectedTargetScope] = useState<ActiveScope | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  useBackHandler(isOpen && Boolean(collection), () => { if (!isSubmitting) onClose(); }, 20);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const activeScope = cloudConfig.activeScope;

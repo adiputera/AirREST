@@ -26,3 +26,4 @@ export * from './lib/blobManager';
 export * from './lib/scriptRunner';
 export * from './lib/scriptProtocol';
 export * from './lib/hostPermissions';
+export * from './lib/backNavigation';

@@ -470,6 +470,25 @@ export async function apiResetUserPassword(
   return unwrapData<any>(json);
 }
 
+export async function apiUpdateUser(
+  apiUrl: string,
+  token: string,
+  userId: string,
+  name: string,
+  refreshToken?: string
+) {
+  const res = await fetchWithAuth(`/api/v1/admin/users/${userId}`, {
+    method: 'PUT',
+    apiUrl,
+    token,
+    refreshToken,
+    body: JSON.stringify({ name }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(extractError(json, 'Failed to update user'));
+  return unwrapData<User>(json);
+}
+
 export async function apiDeleteUser(
   apiUrl: string,
   token: string,

@@ -6,6 +6,7 @@ import {
   ActiveScope,
   Collection,
   Environment,
+  ProjectRole,
 } from '@/types/api';
 
 export interface TokenRefreshCallback {
@@ -326,6 +327,31 @@ export async function changeUserPassword(
     refresh_token: string;
     expires_at: string;
   }>(json);
+}
+
+export async function updateUserProfile(
+  apiUrl: string,
+  name: string,
+  token?: string,
+  refreshToken?: string,
+  avatarUrl?: string
+): Promise<CloudUser> {
+  const res = await fetchWithAuth('/api/v1/auth/profile', {
+    method: 'PUT',
+    apiUrl,
+    token,
+    refreshToken,
+    body: JSON.stringify({
+      name,
+      avatar_url: avatarUrl,
+    }),
+  });
+
+  const json = await safeJson(res);
+  if (!res.ok) {
+    throw new Error(extractError(json, 'Failed to update profile', res.status));
+  }
+  return unwrapData<CloudUser>(json);
 }
 
 // ----------------- Workspaces & Teams -----------------
@@ -681,6 +707,31 @@ export async function deleteScopeCollection(
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(extractError(json, 'Failed to delete collection'));
+  }
+  return unwrapData<any>(json);
+}
+
+export async function updateScopeCollectionPermission(
+  apiUrl: string,
+  token: string,
+  collectionId: string,
+  minRole: ProjectRole,
+  baseVersion: number,
+  refreshToken?: string,
+  signal?: AbortSignal
+) {
+  const res = await fetchWithAuth(`/api/v1/collections/${collectionId}`, {
+    method: 'PUT',
+    apiUrl,
+    token,
+    refreshToken,
+    signal,
+    body: JSON.stringify({ min_role: minRole, base_version: baseVersion }),
+  });
+
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(extractError(json, 'Failed to update collection permission'));
   }
   return unwrapData<any>(json);
 }

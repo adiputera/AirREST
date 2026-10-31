@@ -3,6 +3,7 @@
 import React from 'react';
 import { Database, Cloud, Shield, Zap, Users, Check, ArrowRight, X } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
+import { useBackHandler } from '../lib/backNavigation';
 
 interface ModeSelectorModalProps {
   isOpen: boolean;
@@ -17,6 +18,7 @@ export const ModeSelectorModal: React.FC<ModeSelectorModalProps> = ({
 }) => {
   const setWorkspaceMode = useApiStore((state) => state.setWorkspaceMode);
   const workspaceMode = useApiStore((state) => state.workspaceMode);
+  useBackHandler(isOpen, onClose, 20);
 
   if (!isOpen) return null;
 
@@ -32,7 +34,7 @@ export const ModeSelectorModal: React.FC<ModeSelectorModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-4 animate-in fade-in duration-150">
-      <div className="relative w-full max-w-2xl rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl shadow-black/80">
+      <div className="relative max-h-[90dvh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-4 shadow-2xl shadow-black/80 md:p-6">
         {/* Close Button */}
         <button
           onClick={onClose}
