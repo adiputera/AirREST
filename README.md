@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="extension/public/logo.png" alt="AirREST Logo" width="280" />
+  <img src="apps/extension/public/logo.png" alt="AirREST Logo" width="280" />
 </p>
 
 # AirREST
