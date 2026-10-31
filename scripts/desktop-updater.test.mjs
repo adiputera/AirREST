@@ -227,6 +227,9 @@ test('T-UPDATER-6: Tauri config, capabilities, and GitHub workflow contracts are
     fs.readFileSync(path.join(rootDir, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'),
   );
   const capabilities = JSON.parse(
+    fs.readFileSync(path.join(rootDir, 'apps/desktop/src-tauri/capabilities/desktop.json'), 'utf8'),
+  );
+  const sharedCapabilities = JSON.parse(
     fs.readFileSync(path.join(rootDir, 'apps/desktop/src-tauri/capabilities/default.json'), 'utf8'),
   );
   const workflow = fs.readFileSync(
@@ -250,6 +253,9 @@ test('T-UPDATER-6: Tauri config, capabilities, and GitHub workflow contracts are
   assert.ok(capabilities.permissions.includes('updater:default'));
   assert.ok(capabilities.permissions.includes('process:allow-restart'));
   assert.ok(capabilities.permissions.includes('core:window:allow-destroy'));
+  assert.deepEqual(capabilities.platforms, ['linux', 'macOS', 'windows']);
+  assert.ok(!sharedCapabilities.permissions.includes('updater:default'));
+  assert.ok(!sharedCapabilities.permissions.includes('process:allow-restart'));
 
   assert.ok(workflow.includes('TAURI_SIGNING_PRIVATE_KEY'));
   assert.ok(workflow.includes('TAURI_UPDATER_PUBLIC_KEY'));

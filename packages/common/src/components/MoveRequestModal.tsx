@@ -14,6 +14,7 @@ import { CollectionItem } from '../types/api';
 import { findSavedRequestInCollections } from '../lib/requestDiff';
 import { MethodBadge } from './MethodBadge';
 import { canModifyCollection } from '../lib/jwt';
+import { useBackHandler } from '../lib/backNavigation';
 
 interface MoveRequestModalProps {
   isOpen: boolean;
@@ -36,6 +37,7 @@ export const MoveRequestModal: React.FC<MoveRequestModalProps> = ({
   const [selectedCollectionId, setSelectedCollectionId] = useState<string>(sourceCollectionId);
   const [selectedFolderId, setSelectedFolderId] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  useBackHandler(isOpen && Boolean(item), () => { if (!isSubmitting) onClose(); }, 20);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // Retrieve current source collection & folder information

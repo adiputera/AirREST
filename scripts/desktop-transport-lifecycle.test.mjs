@@ -1443,6 +1443,27 @@ export async function setupRuntimeModules(customStorage = null) {
   };
 }
 
+test('Choosing the default offline mode persists the onboarding choice', async () => {
+  const values = new Map();
+  const storage = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => { values.set(key, value); },
+    removeItem: (key) => { values.delete(key); },
+  };
+  const { runtimeModule } = await setupRuntimeModules(storage);
+  const adapter = { dispose() {} };
+  const runtime = runtimeModule.createAirrestRuntime({ adapter, storage });
+  assert.equal(runtime.store.getState().workspaceMode, 'offline');
+  assert.equal(runtime.store.getState().hasConfiguredMode, false);
+  runtime.store.getState().setWorkspaceMode('offline');
+  assert.equal(runtime.store.getState().hasConfiguredMode, true);
+  assert.equal(JSON.parse(values.get('air-rest-storage')).state.hasConfiguredMode, true);
+  runtime.dispose();
+  const restored = runtimeModule.createAirrestRuntime({ adapter, storage });
+  assert.equal(restored.store.getState().hasConfiguredMode, true);
+  restored.dispose();
+});
+
 test('T-S1a (S1): maintainer cannot delete environment requiring admin role in project scope', async () => {
   const { runtimeModule, cloudApiModule } = await setupRuntimeModules();
   let deleteCloudCalls = 0;

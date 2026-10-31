@@ -1,10 +1,11 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, X, Layers, ArrowRight, Trash2, Copy } from 'lucide-react';
+import { Plus, X, Layers, ArrowRight, Trash2, Copy, MoreVertical } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
 import { MethodBadge } from './MethodBadge';
 import { isRequestModified, findSavedRequestInCollections } from '../lib/requestDiff';
+import { useBackHandler } from '../lib/backNavigation';
 
 interface ContextMenuPosition {
   x: number;
@@ -25,6 +26,7 @@ export const TabBar: React.FC = () => {
   const duplicateTab = useApiStore((state) => state.duplicateTab);
 
   const [contextMenu, setContextMenu] = useState<ContextMenuPosition | null>(null);
+  useBackHandler(Boolean(contextMenu), () => setContextMenu(null), 15);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Close context menu on click outside or Escape key
@@ -131,6 +133,21 @@ export const TabBar: React.FC = () => {
                     title="Unsaved changes"
                   />
                 )}
+
+                <button
+                  type="button"
+                  aria-label={`Actions for ${displayName}`}
+                  className="rounded p-1 text-zinc-400 hover:bg-zinc-800 md:hidden"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    setContextMenu({
+                      x: Math.max(10, Math.min(rect.left, window.innerWidth - 210)),
+                      y: Math.max(10, Math.min(rect.bottom, window.innerHeight - 230)),
+                      tabId: tab.id,
+                    });
+                  }}
+                ><MoreVertical className="h-4 w-4" /></button>
 
                 <button
                   onClick={(e) => {

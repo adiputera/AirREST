@@ -1,6 +1,6 @@
 {
   "name": "airrest",
-  "version": "1.1.9",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -19,6 +19,11 @@
     "build:all-extensions": "npm run --prefix extension build:all-extensions",
     "dev:hub": "npm run --prefix hub dev",
     "dev:desktop": "npm run --prefix apps/desktop tauri -- dev",
+    "android:init": "npm run --prefix apps/desktop tauri -- android init",
+    "dev:android": "npm run --prefix apps/desktop tauri -- android dev",
+    "build:android": "npm run --prefix apps/desktop tauri -- android build --apk --target aarch64",
+    "build:android:bundle": "npm run --prefix apps/desktop tauri -- android build --aab --target aarch64",
+    "build:android:emulator": "npm run --prefix apps/desktop tauri -- android build --debug --apk --target x86_64",
     "build:hub": "npm run --prefix hub build",
     "build:desktop": "npm run --prefix apps/desktop tauri -- build && node scripts/fix-linux-deb.mjs",
     "version:desktop": "node scripts/bump-desktop-version.mjs",
@@ -36,13 +41,19 @@
     "test:desktop-sandbox": "node --test scripts/desktop-quickjs-sandbox.test.mjs",
     "test:desktop-transport": "node --test scripts/desktop-transport-lifecycle.test.mjs",
     "test:desktop-updater": "node --test scripts/desktop-updater.test.mjs",
-    "test:desktop": "npm run test:desktop-sandbox && npm run test:desktop-transport && npm run test:desktop-updater",
+    "test:tauri-files": "node --test scripts/tauri-file-adapter.test.mjs",
+    "test:android-back": "node --test scripts/android-back-navigation.test.mjs",
+    "test:android-update": "node --test scripts/android-update-banner.test.mjs",
+    "test:tauri-http-scope": "node --test scripts/tauri-http-scope.test.mjs",
+    "test:desktop": "npm run test:desktop-sandbox && npm run test:desktop-transport && npm run test:desktop-updater && npm run test:tauri-files && npm run test:android-back && npm run test:android-update && npm run test:tauri-http-scope",
     "test:sidebar-search": "node --test scripts/sidebar-search.test.mjs",
     "test:sidebar-dropdown-placement": "node --test scripts/sidebar-dropdown-placement.test.mjs",
+    "test:scope-switcher-placement": "node --test scripts/scope-switcher-placement.test.mjs",
     "test:tab-response-cache": "node --test scripts/tab-response-cache.test.mjs",
     "test:path-variables": "node --test scripts/path-variables.test.mjs",
     "test:request-collapse": "node --test scripts/request-collapse.test.mjs",
-    "test:all": "npm run test:security-clients && npm run test:extension-lifecycle && npm run test:extension-storage && npm run test:extension-fetcher && npm run test:cloud-compression && npm run test:feature-policy && npm run test:hub && npm run test:desktop && npm run test:sidebar-search && npm run test:sidebar-dropdown-placement && npm run test:tab-response-cache && npm run test:path-variables && npm run test:request-collapse"
+    "test:collection-permission": "node --test scripts/collection-permission.test.mjs",
+    "test:all": "npm run test:security-clients && npm run test:extension-lifecycle && npm run test:extension-storage && npm run test:extension-fetcher && npm run test:cloud-compression && npm run test:feature-policy && npm run test:hub && npm run test:desktop && npm run test:sidebar-search && npm run test:sidebar-dropdown-placement && npm run test:scope-switcher-placement && npm run test:tab-response-cache && npm run test:path-variables && npm run test:request-collapse && npm run test:collection-permission"
   },
   "devDependencies": {
     "eslint": "^9",

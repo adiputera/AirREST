@@ -1,9 +1,11 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { User, LogIn, KeyRound, LogOut, ChevronDown } from 'lucide-react';
+import { useBackHandler } from '../lib/backNavigation';
+import { User, LogIn, KeyRound, LogOut, ChevronDown, Pencil } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
 import { isOfflineOnly } from '../lib/edition';
+import { EditProfileModal } from './EditProfileModal';
 import { ChangePasswordModal } from './ChangePasswordModal';
 import { ConfirmModal } from './ConfirmModal';
 import { CloudAuthModal } from './CloudAuthModal';
@@ -14,7 +16,9 @@ interface UserMenuProps {
 
 export const UserMenu: React.FC<UserMenuProps> = ({ onOpenLogin }) => {
   const [isOpen, setIsOpen] = useState(false);
+  useBackHandler(isOpen, () => setIsOpen(false), 15);
   const [isInternalLoginOpen, setIsInternalLoginOpen] = useState(false);
+  const [isEditProfileOpen, setIsEditProfileOpen] = useState(false);
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [isSignOutConfirmOpen, setIsSignOutConfirmOpen] = useState(false);
   const [avatarError, setAvatarError] = useState(false);
@@ -28,6 +32,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onOpenLogin }) => {
   const token = cloudConfig.token;
   useEffect(() => {
     const requireSignIn = () => {
+      setIsEditProfileOpen(false);
       setIsChangePasswordOpen(false);
       setIsInternalLoginOpen(true);
     };
@@ -87,7 +92,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onOpenLogin }) => {
             <span className="absolute bottom-0 right-0 h-2 w-2 rounded-full bg-zinc-500 ring-2 ring-zinc-950" />
           </div>
 
-          <span className="text-xs font-medium text-zinc-300 group-hover:text-white transition">
+          <span className="hidden lg:inline text-xs font-medium text-zinc-300 group-hover:text-white transition">
             Sign In
           </span>
         </button>
@@ -158,7 +163,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onOpenLogin }) => {
             <span className="absolute bottom-0 right-0 h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-zinc-950" />
           </div>
 
-          <span className="hidden md:inline-block max-w-[100px] truncate text-xs font-medium text-zinc-300 group-hover:text-zinc-100 transition">
+          <span className="hidden lg:inline-block max-w-[85px] xl:max-w-[120px] truncate text-xs font-medium text-zinc-300 group-hover:text-zinc-100 transition">
             {displayName}
           </span>
           <ChevronDown
@@ -207,6 +212,25 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onOpenLogin }) => {
 
             {/* Menu Items */}
             <div className="space-y-0.5">
+              {/* Edit Profile */}
+              <button
+                onClick={() => {
+                  setIsOpen(false);
+                  setIsEditProfileOpen(true);
+                }}
+                className="w-full flex items-center gap-2.5 rounded-xl px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800/80 hover:text-white transition group text-left"
+              >
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-sky-500/20 bg-sky-500/10 text-sky-400 group-hover:bg-sky-500/20 transition">
+                  <Pencil className="h-3.5 w-3.5" />
+                </div>
+                <div className="flex-1">
+                  <div className="font-medium text-zinc-200 group-hover:text-white">
+                    Edit Profile
+                  </div>
+                  <div className="text-[10px] text-zinc-500">Update display name</div>
+                </div>
+              </button>
+
               {/* Change Password */}
               <button
                 onClick={() => {
@@ -248,6 +272,12 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onOpenLogin }) => {
           </div>
         )}
       </div>
+
+      {/* Edit Profile Modal */}
+      <EditProfileModal
+        isOpen={isEditProfileOpen}
+        onClose={() => setIsEditProfileOpen(false)}
+      />
 
       {/* Change Password Modal */}
       <ChangePasswordModal
