@@ -2,18 +2,6 @@ name: Android build
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - 'apps/native/**'
-      - 'packages/common/**'
-      - 'scripts/android-back-navigation.test.mjs'
-      - 'scripts/tauri-file-adapter.test.mjs'
-      - 'scripts/tauri-http-scope.test.mjs'
-      - 'scripts/check-android-page-size.py'
-      - 'scripts/android-emulator-smoke.py'
-      - 'package.json'
-      - 'package-lock.json'
-      - '.github/workflows/android-build.yml'
 
 permissions:
   contents: read
@@ -31,7 +19,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
       - name: Install Android platform and NDK
         run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;27.2.12479018'
       - uses: dtolnay/rust-toolchain@stable
