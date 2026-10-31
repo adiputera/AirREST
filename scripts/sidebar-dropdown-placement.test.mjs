@@ -7,7 +7,7 @@ import ts from 'typescript';
 test('Sidebar component implements smart upward/downward dropdown detection', () => {
   for (const filePath of [
     'packages/common/src/components/Sidebar.tsx',
-    'extension/src/components/Sidebar.tsx',
+    'apps/extension/src/components/Sidebar.tsx',
   ]) {
     const content = fs.readFileSync(new URL(`../${filePath}`, import.meta.url), 'utf8');
 

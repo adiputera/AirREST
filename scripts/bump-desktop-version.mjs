@@ -28,30 +28,30 @@ function updateJsonVersion(filePath, label) {
 // 1. Root package.json
 updateJsonVersion(path.join(rootDir, 'package.json'), 'root package.json');
 
-// 2. extension/package.json and manifest.json
-updateJsonVersion(path.join(rootDir, 'extension/package.json'), 'extension/package.json');
-updateJsonVersion(path.join(rootDir, 'extension/public/manifest.json'), 'extension manifest.json');
+// 2. apps/extension/package.json and manifest.json
+updateJsonVersion(path.join(rootDir, 'apps/extension/package.json'), 'apps/extension/package.json');
+updateJsonVersion(path.join(rootDir, 'apps/extension/public/manifest.json'), 'extension manifest.json');
 
 // 3. packages/common/package.json
 updateJsonVersion(path.join(rootDir, 'packages/common/package.json'), 'packages/common/package.json');
 
-// 4. apps/desktop/package.json
-updateJsonVersion(path.join(rootDir, 'apps/desktop/package.json'), 'apps/desktop/package.json');
+// 4. apps/native/package.json
+updateJsonVersion(path.join(rootDir, 'apps/native/package.json'), 'apps/native/package.json');
 
-// 5. apps/desktop/src-tauri/tauri.conf.json
-updateJsonVersion(path.join(rootDir, 'apps/desktop/src-tauri/tauri.conf.json'), 'apps/desktop/src-tauri/tauri.conf.json');
+// 5. apps/native/src-tauri/tauri.conf.json
+updateJsonVersion(path.join(rootDir, 'apps/native/src-tauri/tauri.conf.json'), 'apps/native/src-tauri/tauri.conf.json');
 
-// 6. apps/desktop/src-tauri/Cargo.toml
-const cargoTomlPath = path.join(rootDir, 'apps/desktop/src-tauri/Cargo.toml');
+// 6. apps/native/src-tauri/Cargo.toml
+const cargoTomlPath = path.join(rootDir, 'apps/native/src-tauri/Cargo.toml');
 if (fs.existsSync(cargoTomlPath)) {
   let cargoToml = fs.readFileSync(cargoTomlPath, 'utf8');
   cargoToml = cargoToml.replace(/^version = "[^"]+"/m, `version = "${targetVersion}"`);
   fs.writeFileSync(cargoTomlPath, cargoToml);
-  console.log(`✓ Updated apps/desktop/src-tauri/Cargo.toml -> ${targetVersion}`);
+  console.log(`✓ Updated apps/native/src-tauri/Cargo.toml -> ${targetVersion}`);
 }
 
-// 7. apps/desktop/src-tauri/gen/android/app/tauri.properties (if Android initialized)
-const androidPropsPath = path.join(rootDir, 'apps/desktop/src-tauri/gen/android/app/tauri.properties');
+// 7. apps/native/src-tauri/gen/android/app/tauri.properties (if Android initialized)
+const androidPropsPath = path.join(rootDir, 'apps/native/src-tauri/gen/android/app/tauri.properties');
 if (fs.existsSync(androidPropsPath)) {
   const parts = targetVersion.split('-')[0].split('.').map(Number);
   const major = parts[0] || 0;

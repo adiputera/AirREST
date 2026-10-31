@@ -33,8 +33,8 @@ function load(file, overrides = {}, globals = {}) {
 }
 
 function session(fetch, env = {}, persisted = null) {
-  const api = load('hub/src/lib/api.ts', {}, { fetch, VITE_ENV: env });
-  const { useHubStore: store } = load('hub/src/store/useHubStore.ts', { '../lib/api': api }, {
+  const api = load('apps/hub/src/lib/api.ts', {}, { fetch, VITE_ENV: env });
+  const { useHubStore: store } = load('apps/hub/src/store/useHubStore.ts', { '../lib/api': api }, {
     VITE_ENV: env,
     localStorage: { getItem: () => persisted, setItem() {}, removeItem() {} },
   });
@@ -145,7 +145,7 @@ test('auth eviction callback rejects mismatched tokens and accepts matching toke
     registerHubAuthEvicted(cb) { evictionHandler = cb; },
     invalidateHubSession() {},
   };
-  const { useHubStore: store } = load('hub/src/store/useHubStore.ts', { '../lib/api': fakeApi }, {
+  const { useHubStore: store } = load('apps/hub/src/store/useHubStore.ts', { '../lib/api': fakeApi }, {
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
   });
   login(store, 'active');
@@ -247,7 +247,7 @@ function component(file, exportName, initialState = {}, api = {}) {
     react: reactOverride,
     '../store/useHubStore': { useHubStore }, './store/useHubStore': { useHubStore },
     '../lib/api': api, './lib/api': api,
-    '../lib/environmentVariables': load('hub/src/lib/environmentVariables.ts'),
+    '../lib/environmentVariables': load('apps/hub/src/lib/environmentVariables.ts'),
     '../components/ConfirmModal': { ConfirmModal: () => null },
   };
   for (const name of ['Navbar', 'Sidebar']) overrides[`./components/${name}`] = stub(name);
@@ -256,10 +256,10 @@ function component(file, exportName, initialState = {}, api = {}) {
   return { state, store, effects, render() { index = 0; effects.length = 0; return exports[exportName](); } };
 }
 const base = { teams: [{ id: 't', name: 'Team' }], projects: [{ id: 'p', name: 'Project' }] };
-const projects = (state, api) => component('hub/src/pages/ProjectsView.tsx', 'ProjectsView', { ...base, ...state }, api);
+const projects = (state, api) => component('apps/hub/src/pages/ProjectsView.tsx', 'ProjectsView', { ...base, ...state }, api);
 
 test('App refuses a stale superadmin tab for an ordinary user', () => {
-  const h = component('hub/src/App.tsx', 'App');
+  const h = component('apps/hub/src/App.tsx', 'App');
   h.store.activeTab = 'superadmin';
   h.store.user = { ...user, role: 'user' };
   const html = renderToStaticMarkup(h.render());
@@ -277,7 +277,7 @@ test('malformed environment variables do not crash rendering or filtering', () =
 });
 
 test('normal and legacy environment variables retain values and disabled state', () => {
-  const { normalizeEnvironmentVariables } = load('hub/src/lib/environmentVariables.ts');
+  const { normalizeEnvironmentVariables } = load('apps/hub/src/lib/environmentVariables.ts');
   const variables = [{ key: 'host', value: 'https://example.com', enabled: false }, { key: 'retries', value: 3 }];
   for (const input of [variables, JSON.stringify(variables)]) {
     const result = normalizeEnvironmentVariables(input);
@@ -309,7 +309,7 @@ for (const view of ['project', 'team']) {
     const old = deferred(), current = deferred();
     const h = view === 'project'
       ? projects({}, { apiListProjectMembers: (_url, _token, id) => id === 'p' ? old.promise : current.promise })
-      : component('hub/src/pages/TeamsView.tsx', 'TeamsView', { teams: base.teams }, { apiListTeamMembers: (_url, _token, id) => id === 't' ? old.promise : current.promise });
+      : component('apps/hub/src/pages/TeamsView.tsx', 'TeamsView', { teams: base.teams }, { apiListTeamMembers: (_url, _token, id) => id === 't' ? old.promise : current.promise });
     const effect = view === 'project' ? 2 : 1;
     const stateKey = view === 'project' ? 'projectMembers' : 'members';
     h.render();
@@ -418,7 +418,7 @@ function findElements(node, predicate, acc = []) {
 
 test('SuperadminView resets provision form state on close, reopen, and submit', async () => {
   let provisionCalls = 0;
-  const h = component('hub/src/pages/SuperadminView.tsx', 'SuperadminView', {
+  const h = component('apps/hub/src/pages/SuperadminView.tsx', 'SuperadminView', {
     isProvisionOpen: true,
     newRole: 'superadmin',
     showNewPassword: true,
@@ -462,7 +462,7 @@ test('SuperadminView handles edit user modal and updates user name', async () =>
   let updateCalls = 0;
   let updatedPayload = null;
   const targetUser = { id: 'u-1', name: 'Original Name', email: 'user@example.com', role: 'user' };
-  const h = component('hub/src/pages/SuperadminView.tsx', 'SuperadminView', {
+  const h = component('apps/hub/src/pages/SuperadminView.tsx', 'SuperadminView', {
     users: [targetUser],
     editingUser: targetUser,
     editName: 'Updated Name',
@@ -488,7 +488,7 @@ test('SuperadminView handles edit user modal and updates user name', async () =>
 
 test('TeamsView resets add member form and role on open, cancel, and success', async () => {
   let addCalls = 0;
-  const h = component('hub/src/pages/TeamsView.tsx', 'TeamsView', {
+  const h = component('apps/hub/src/pages/TeamsView.tsx', 'TeamsView', {
     teams: base.teams,
     isAddMemberOpen: true,
     newMemberRole: 'admin',
@@ -553,7 +553,7 @@ test('ProjectsView resets assign member form and role on open, cancel, and succe
 
 test('LoginView clears password and resets showPassword on mount and submit', async () => {
   let loginCalls = 0;
-  const h = component('hub/src/pages/LoginView.tsx', 'LoginView', {
+  const h = component('apps/hub/src/pages/LoginView.tsx', 'LoginView', {
     password: 'dirtypassword123',
     showPassword: true,
   }, {
@@ -574,7 +574,7 @@ test('LoginView clears password and resets showPassword on mount and submit', as
 });
 
 test('TeamsView toggles mobileView between list and detail on mobile', () => {
-  const h = component('hub/src/pages/TeamsView.tsx', 'TeamsView', {
+  const h = component('apps/hub/src/pages/TeamsView.tsx', 'TeamsView', {
     teams: [{ id: 'team-1', name: 'Alpha Team' }],
     mobileView: 'list',
   });
@@ -594,7 +594,7 @@ test('TeamsView toggles mobileView between list and detail on mobile', () => {
 });
 
 test('ProjectsView toggles mobileView between list and detail on mobile', () => {
-  const h = component('hub/src/pages/ProjectsView.tsx', 'ProjectsView', {
+  const h = component('apps/hub/src/pages/ProjectsView.tsx', 'ProjectsView', {
     teams: [{ id: 'team-1', name: 'Alpha Team' }],
     projects: [{ id: 'proj-1', name: 'Alpha Project' }],
     mobileView: 'list',
@@ -616,7 +616,7 @@ test('ProjectsView toggles mobileView between list and detail on mobile', () => 
 });
 
 test('Sidebar renders mobile drawer overlay and handles close and selection', () => {
-  const { Sidebar } = load('hub/src/components/Sidebar.tsx', {
+  const { Sidebar } = load('apps/hub/src/components/Sidebar.tsx', {
     '../store/useHubStore': {
       useHubStore: (selector) => selector({ activeTab: 'teams', user: { role: 'user' }, setActiveTab: (t) => { selectedTab = t; } }),
     },

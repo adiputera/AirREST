@@ -14,8 +14,8 @@ function loadClient(file, fetch) {
   return exports;
 }
 
-for (const file of ['extension/src/lib/cloudApi.ts', 'hub/src/lib/api.ts']) {
-  const registerEviction = file.startsWith('extension') ? 'registerAuthEvictedCallback' : 'registerHubAuthEvicted';
+for (const file of ['apps/extension/src/lib/cloudApi.ts', 'apps/hub/src/lib/api.ts']) {
+  const registerEviction = file.includes('extension') ? 'registerAuthEvictedCallback' : 'registerHubAuthEvicted';
   test(`${file}: revoked refresh signs out`, async () => {
     let calls = 0;
     let evictions = 0;
@@ -54,7 +54,7 @@ for (const file of ['extension/src/lib/cloudApi.ts', 'hub/src/lib/api.ts']) {
 test('password change returns a replacement token pair without evicting the current session', async () => {
   let evictions = 0;
   let status = 400;
-  const api = loadClient('extension/src/lib/cloudApi.ts', async () => new Response(JSON.stringify({
+  const api = loadClient('apps/extension/src/lib/cloudApi.ts', async () => new Response(JSON.stringify({
     data: status === 200
       ? { user: { id: 'user-1' }, token: 'replacement-access', refresh_token: 'replacement-refresh', expires_at: '2030-01-01T00:00:00Z' }
       : { message: 'password updated' },
@@ -71,7 +71,7 @@ test('password change returns a replacement token pair without evicting the curr
 });
 
 test('import count and depth limits fail before network IO', async () => {
-  const api = loadClient('extension/src/lib/cloudApi.ts', async () => { assert.fail('must not send oversized import'); });
+  const api = loadClient('apps/extension/src/lib/cloudApi.ts', async () => { assert.fail('must not send oversized import'); });
   await assert.rejects(api.batchImportToScope('https://example.com', 'token', 'workspace', Array.from({ length: 101 }, () => ({ items: [] }))), /100 collections/);
   let items = [{ name: 'leaf' }];
   for (let i = 0; i < 32; i++) items = [{ name: 'folder', items }];
@@ -92,7 +92,7 @@ function loadCommonModule(file, customRequires = {}) {
 }
 
 test('T-C4 (C4): buildItemTree and convertPostmanItem safely handle cyclic parent references and bounded recursion', () => {
-  for (const transformerPath of ['packages/common/src/lib/cloudSyncTransformer.ts', 'extension/src/lib/cloudSyncTransformer.ts']) {
+  for (const transformerPath of ['packages/common/src/lib/cloudSyncTransformer.ts', 'apps/extension/src/lib/cloudSyncTransformer.ts']) {
     const { buildItemTree } = loadCommonModule(transformerPath);
     assert.equal(typeof buildItemTree, 'function');
 
@@ -161,7 +161,7 @@ test('T-C4 (C4): buildItemTree and convertPostmanItem safely handle cyclic paren
 });
 
 test('T-VN3 (V-NEW-3): getUserScopeRank strictly prioritizes user.role over untrusted JWT claims', () => {
-  for (const jwtPath of ['packages/common/src/lib/jwt.ts', 'extension/src/lib/jwt.ts']) {
+  for (const jwtPath of ['packages/common/src/lib/jwt.ts', 'apps/extension/src/lib/jwt.ts']) {
     const { getUserScopeRank } = loadCommonModule(jwtPath);
     assert.equal(typeof getUserScopeRank, 'function', `${jwtPath} must export getUserScopeRank`);
 
@@ -209,7 +209,7 @@ test('T-VN3 (V-NEW-3): getUserScopeRank strictly prioritizes user.role over untr
 });
 
 test('T-READER-PERMS: reader level has read-only capability and cannot write collections in project scope', () => {
-  for (const jwtPath of ['packages/common/src/lib/jwt.ts', 'extension/src/lib/jwt.ts']) {
+  for (const jwtPath of ['packages/common/src/lib/jwt.ts', 'apps/extension/src/lib/jwt.ts']) {
     const { hasScopePermission, canModifyCollection } = loadCommonModule(jwtPath);
 
     const readerProjectScope = { type: 'project', role: 'reader' };

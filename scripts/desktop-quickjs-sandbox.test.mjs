@@ -14,7 +14,7 @@ function loadProductionQuickJSRunner(options = {}) {
   const protoExports = {};
   vm.runInNewContext(protoCompiled, { exports: protoExports, console, TextEncoder }, { filename: 'scriptProtocol.ts' });
 
-  const runnerSrc = fs.readFileSync(new URL('../apps/desktop/src/scripts/quickjsRunner.ts', import.meta.url), 'utf8');
+  const runnerSrc = fs.readFileSync(new URL('../apps/native/src/scripts/quickjsRunner.ts', import.meta.url), 'utf8');
   const runnerCompiled = ts.transpileModule(runnerSrc, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
