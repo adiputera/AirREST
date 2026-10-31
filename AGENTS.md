@@ -27,5 +27,9 @@ Whenever asked to perform a code audit, security scan, reliability scan, or arch
    - **Findings**: Categorized list of issues with severity/priority levels (`P1`/`P2`/`P3`), root-cause analysis, impact, and exact file/line references.
    - **Remediation / Fix Plan**: Actionable, step-by-step work packages and checklists detailing how to fix each finding without breaking existing contracts.
    - **Verification Guide**: Concrete test matrix (automated test scenarios, expected assertions, target test files), exact CLI verification commands, and manual verification steps.
+2. **Local-Only & Strictly Ignored (`docs/`)**: The `docs/` directory is intentionally ignored in `.gitignore` and must remain strictly local:
+   - **Never Stage, Commit, or Push**: NEVER add, commit, or push any files or directories inside `docs/` to Git.
+   - **Never Modify `.gitignore` to Un-ignore Docs**: NEVER alter `.gitignore` to whitelist or track `docs/` (e.g., never add `!docs/*` or `!docs/*.md`). The `docs/` folder is deliberately ignored by design.
+
 
 

@@ -441,7 +441,7 @@ AirREST is completely backend-agnostic! If you prefer implementing the backend i
 │   └── workflows/
 │       └── desktop-release.yml   # Multi-OS Tauri v2 build & GitHub Release workflow
 ├── .gitignore                    # Ignore rules (.env, build outputs, dependencies)
-├── package.json                  # Root npm workspace configuration (workspaces: ["packages/*", "apps/*", "extension", "hub"])
+├── package.json                  # Root npm workspace configuration (workspaces: ["packages/*", "apps/*"])
 ├── package-lock.json
 ├── eslint.config.mjs             # Monorepo ESLint configuration
 ├── tsconfig.json                 # Workspace root TypeScript configuration
@@ -458,34 +458,34 @@ AirREST is completely backend-agnostic! If you prefer implementing the backend i
 │       └── package.json          # Shared package configuration
 │
 ├── apps/
-│   └── desktop/                  # Tauri v2 Desktop Application (React 19 + Rust Shell)
-│       ├── src/                  # Desktop renderer frontend & adapters (tauriAdapter.ts)
-│       ├── src-tauri/            # Tauri backend shell (Cargo.toml, capabilities, tauri.conf.json)
-│       └── package.json          # Desktop dependencies (@tauri-apps/api, plugins, quickjs-emscripten)
-│
-├── extension/                    # Chrome Extension (Manifest V3 + React 19 + Tailwind CSS v4)
-│   ├── dist/                     # Compiled full edition
-│   ├── dist-offline/             # Compiled offline-only edition
-│   ├── public/                   # Static extension assets (manifest.json, sandbox.html, service-worker.js, icons)
-│   ├── src/                      # Extension source code
-│   │   ├── components/           # UI components (Header, RequestEditor, ResponseViewer, Modals)
-│   │   ├── lib/                  # Core utilities (cURL, fetcher, postman, scriptRunner, cloudApi)
-│   │   ├── store/                # Zustand persistent application store
-│   │   ├── types/                # TypeScript interfaces and models
-│   │   ├── App.tsx               # Main application shell
-│   │   ├── index.css             # Tailwind CSS v4 stylesheets
-│   │   └── main.tsx              # React DOM entrypoint
-│   ├── index.html                # Extension window HTML
-│   ├── package.json              # Extension dependencies & scripts
-│   ├── tsconfig.json             # Extension TypeScript configuration
-│   └── vite.config.ts            # Extension Vite bundler configuration
-│
-├── hub/                          # AirREST Hub web portal (Vite + React 19 + Tailwind CSS v4)
-│   ├── src/                      # Hub pages (Teams, Projects, Superadmin, Connect)
-│   ├── dist/                     # Hub build output
-│   ├── package.json              # Hub dependencies
-│   ├── vercel.json               # Hub Vercel routing configuration
-│   └── vite.config.ts            # Hub Vite configuration
+│   ├── native/                   # Tauri v2 Shell for Desktop & Android (React 19 + Rust Core)
+│   │   ├── src/                  # Native renderer frontend & adapters (tauriAdapter.ts)
+│   │   ├── src-tauri/            # Tauri backend shell (Cargo.toml, capabilities, tauri.conf.json, gen/android)
+│   │   └── package.json          # Native app dependencies (@tauri-apps/api, plugins, quickjs-emscripten)
+│   │
+│   ├── extension/                # Chrome Extension (Manifest V3 + React 19 + Tailwind CSS v4)
+│   │   ├── dist/                 # Compiled full edition
+│   │   ├── dist-offline/         # Compiled offline-only edition
+│   │   ├── public/               # Static extension assets (manifest.json, sandbox.html, service-worker.js, icons)
+│   │   ├── src/                  # Extension source code
+│   │   │   ├── components/       # UI components (Header, RequestEditor, ResponseViewer, Modals)
+│   │   │   ├── lib/              # Core utilities (cURL, fetcher, postman, scriptRunner, cloudApi)
+│   │   │   ├── store/            # Zustand persistent application store
+│   │   │   ├── types/            # TypeScript interfaces and models
+│   │   │   ├── App.tsx           # Main application shell
+│   │   │   ├── index.css         # Tailwind CSS v4 stylesheets
+│   │   │   └── main.tsx          # React DOM entrypoint
+│   │   ├── index.html            # Extension window HTML
+│   │   ├── package.json          # Extension dependencies & scripts
+│   │   ├── tsconfig.json         # Extension TypeScript configuration
+│   │   └── vite.config.ts        # Extension Vite bundler configuration
+│   │
+│   └── hub/                      # AirREST Hub web portal (Vite + React 19 + Tailwind CSS v4)
+│       ├── src/                  # Hub pages (Teams, Projects, Superadmin, Connect)
+│       ├── dist/                 # Hub build output
+│       ├── package.json          # Hub dependencies
+│       ├── vercel.json           # Hub Vercel routing configuration
+│       └── vite.config.ts        # Hub Vite configuration
 │
 └── backend/                      # Go REST synchronization service (Chi + PostgreSQL + pgx)
     ├── api/                      # Vercel Serverless Function entrypoint (index.go)

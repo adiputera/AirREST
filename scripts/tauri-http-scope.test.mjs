@@ -5,7 +5,7 @@ import test from 'node:test';
 test('Tauri HTTP scope allows standard and custom ports for HTTP(S), including IPv6', {
   skip: typeof URLPattern === 'undefined' ? 'URLPattern is unavailable in this Node version' : false,
 }, () => {
-  const capability = JSON.parse(fs.readFileSync(new URL('../apps/desktop/src-tauri/capabilities/default.json', import.meta.url), 'utf8'));
+  const capability = JSON.parse(fs.readFileSync(new URL('../apps/native/src-tauri/capabilities/default.json', import.meta.url), 'utf8'));
   const http = capability.permissions.find((permission) => permission.identifier === 'http:default');
   const patterns = http.allow.map(({ url }) => new URLPattern(url));
   const allowed = (url) => patterns.some((pattern) => pattern.test(url));

@@ -19,7 +19,7 @@ function loadUrlParams() {
 const urlParams = loadUrlParams();
 
 function loadFetcher(fetchImpl, hostPermissionResult = null) {
-  const source = fs.readFileSync(new URL('../extension/src/lib/fetcher.ts', import.meta.url), 'utf8');
+  const source = fs.readFileSync(new URL('../apps/extension/src/lib/fetcher.ts', import.meta.url), 'utf8');
   const compiled = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
@@ -49,7 +49,7 @@ function loadFetcher(fetchImpl, hostPermissionResult = null) {
     console,
     Map,
     Date,
-  }, { filename: 'extension/src/lib/fetcher.ts' });
+  }, { filename: 'apps/extension/src/lib/fetcher.ts' });
   return exports;
 }
 
@@ -189,7 +189,7 @@ test('T-C2 (C2): bounded memory for recent network errors enforces FIFO eviction
   assert.equal(localRecentErrors.has('https://example.com/api/item/new'), true);
 
   // 2. Test service-worker.js listener bounds capacity
-  const swSource = fs.readFileSync(new URL('../extension/public/service-worker.js', import.meta.url), 'utf8');
+  const swSource = fs.readFileSync(new URL('../apps/extension/public/service-worker.js', import.meta.url), 'utf8');
   let webRequestListener = null;
   const mockChrome = {
     webRequest: {

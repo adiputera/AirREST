@@ -6,7 +6,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 
 function loadDesktopUpdateModule() {
-  const srcPath = new URL('../apps/desktop/src/components/DesktopUpdateBanner.tsx', import.meta.url);
+  const srcPath = new URL('../apps/native/src/components/DesktopUpdateBanner.tsx', import.meta.url);
   const src = fs.readFileSync(srcPath, 'utf8');
   const compiled = ts.transpileModule(src, {
     compilerOptions: {
@@ -224,20 +224,20 @@ test('T-UPDATER-5: Re-entrancy guard prevents duplicate install() and dispose() 
 test('T-UPDATER-6: Tauri config, capabilities, and GitHub workflow contracts are synchronized', () => {
   const rootDir = path.resolve(new URL('..', import.meta.url).pathname);
   const tauriConf = JSON.parse(
-    fs.readFileSync(path.join(rootDir, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'),
+    fs.readFileSync(path.join(rootDir, 'apps/native/src-tauri/tauri.conf.json'), 'utf8'),
   );
   const capabilities = JSON.parse(
-    fs.readFileSync(path.join(rootDir, 'apps/desktop/src-tauri/capabilities/desktop.json'), 'utf8'),
+    fs.readFileSync(path.join(rootDir, 'apps/native/src-tauri/capabilities/desktop.json'), 'utf8'),
   );
   const sharedCapabilities = JSON.parse(
-    fs.readFileSync(path.join(rootDir, 'apps/desktop/src-tauri/capabilities/default.json'), 'utf8'),
+    fs.readFileSync(path.join(rootDir, 'apps/native/src-tauri/capabilities/default.json'), 'utf8'),
   );
   const workflow = fs.readFileSync(
     path.join(rootDir, '.github/workflows/desktop-release.yml'),
     'utf8',
   );
   const libRs = fs.readFileSync(
-    path.join(rootDir, 'apps/desktop/src-tauri/src/lib.rs'),
+    path.join(rootDir, 'apps/native/src-tauri/src/lib.rs'),
     'utf8',
   );
 

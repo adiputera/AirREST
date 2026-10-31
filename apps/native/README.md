@@ -39,7 +39,7 @@ partial configuration is rejected. Debug builds use the Android debug key.
 With the variables set, build both ARM64 artifacts from the repository root:
 
 ```sh
-npm run --prefix apps/desktop tauri -- android build --apk --aab --target aarch64 --ci
+npm run --prefix apps/native tauri -- android build --apk --aab --target aarch64 --ci
 ```
 
 Tauri derives `versionCode` from `tauri.conf.json` as
