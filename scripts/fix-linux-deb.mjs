@@ -13,7 +13,7 @@ if (process.platform !== 'linux') {
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const debDir = path.resolve(__dirname, '../apps/desktop/src-tauri/target/release/bundle/deb');
+const debDir = path.resolve(__dirname, '../apps/native/src-tauri/target/release/bundle/deb');
 
 if (!fs.existsSync(debDir)) {
   process.exit(0);

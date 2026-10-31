@@ -537,7 +537,7 @@ test('Gate P0.1/F8: Disposing runtime A does not break independent runtime B, it
 // =========================================================================
 
 function loadProductionTauriExecutor(MockWorkerClass) {
-  const adapterSrc = fs.readFileSync(new URL('../apps/desktop/src/adapters/tauriAdapter.ts', import.meta.url), 'utf8')
+  const adapterSrc = fs.readFileSync(new URL('../apps/native/src/adapters/tauriAdapter.ts', import.meta.url), 'utf8')
     .replaceAll('import.meta.url', '"file:///dummy.ts"');
   const compiled = ts.transpileModule(adapterSrc, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -1084,7 +1084,7 @@ test('V2 (P2): Retried 401 after silent token rotation evicts the rotated token 
 });
 
 test('V3 (P2): QuickJS runner defers EVAL_START until WASM initialization finishes', async () => {
-  const runnerSrc = fs.readFileSync(new URL('../apps/desktop/src/scripts/quickjsRunner.ts', import.meta.url), 'utf8');
+  const runnerSrc = fs.readFileSync(new URL('../apps/native/src/scripts/quickjsRunner.ts', import.meta.url), 'utf8');
   const protoSrc = fs.readFileSync(new URL('../packages/common/src/lib/scriptProtocol.ts', import.meta.url), 'utf8');
 
   const protoCompiled = ts.transpileModule(protoSrc, {
@@ -1934,7 +1934,7 @@ test('T-IMPORT-3: chromeAdapter.openFile in DOM environment creates file input a
     },
   };
 
-  const adapterSrc = fs.readFileSync(new URL('../extension/src/adapters/chromeAdapter.ts', import.meta.url), 'utf8');
+  const adapterSrc = fs.readFileSync(new URL('../apps/extension/src/adapters/chromeAdapter.ts', import.meta.url), 'utf8');
   const adapterExports = {};
   vm.runInNewContext(
     ts.transpileModule(adapterSrc, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText,

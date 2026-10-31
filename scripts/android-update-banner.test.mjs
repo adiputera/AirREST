@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 
 function loadBannerLogic() {
-  const source = fs.readFileSync(new URL('../apps/desktop/src/components/AndroidUpdateBanner.tsx', import.meta.url), 'utf8');
+  const source = fs.readFileSync(new URL('../apps/native/src/components/AndroidUpdateBanner.tsx', import.meta.url), 'utf8');
   const compiled = ts.transpileModule(source, {
     compilerOptions: {
       module: ts.ModuleKind.CommonJS,

@@ -5,7 +5,7 @@ import test from 'node:test';
 test('Sidebar component has updated search placeholder and clear button', () => {
   for (const filePath of [
     'packages/common/src/components/Sidebar.tsx',
-    'extension/src/components/Sidebar.tsx',
+    'apps/extension/src/components/Sidebar.tsx',
   ]) {
     const content = fs.readFileSync(new URL(`../${filePath}`, import.meta.url), 'utf8');
 
