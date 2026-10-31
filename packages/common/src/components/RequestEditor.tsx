@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Send,
   Lock,
@@ -14,6 +14,7 @@ import {
   FlaskConical,
   Bookmark,
   Terminal,
+  Copy,
   Check,
   UploadCloud,
   FileUp,
@@ -22,6 +23,8 @@ import {
   Folder,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
 import { HttpMethod, BodyType, RawType, KeyValuePair } from '../types/api';
@@ -135,6 +138,13 @@ export const RequestEditor: React.FC = () => {
   const [isUrlEncodedBulkEdit, setIsUrlEncodedBulkEdit] = useState(false);
   const [urlEncodedBulkText, setUrlEncodedBulkText] = useState('');
   const [justSaved, setJustSaved] = useState(false);
+  const [isNarrowScreen, setIsNarrowScreen] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth < 450 : false
+  );
+  const [isEditingNameOnMobile, setIsEditingNameOnMobile] = useState(false);
+  const [isSaveMenuOpen, setIsSaveMenuOpen] = useState(false);
+  const saveMenuRef = useRef<HTMLDivElement>(null);
+  const mobileInputRef = useRef<HTMLInputElement>(null);
 
   const currentTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
   const isDirty = currentTab ? isRequestModified(currentTab, collections) : false;
@@ -197,6 +207,50 @@ export const RequestEditor: React.FC = () => {
   useEffect(() => {
     setIsUrlEncodedBulkEdit(false);
   }, [activeTabId, currentTab?.bodyType]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      const narrow = window.innerWidth < 450;
+      setIsNarrowScreen(narrow);
+      if (!narrow) {
+        setIsEditingNameOnMobile(false);
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  useEffect(() => {
+    setIsEditingNameOnMobile(false);
+    setIsSaveMenuOpen(false);
+  }, [activeTabId]);
+
+  useEffect(() => {
+    if (!isSaveMenuOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (saveMenuRef.current && !saveMenuRef.current.contains(e.target as Node)) {
+        setIsSaveMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsSaveMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isSaveMenuOpen]);
+
+  useEffect(() => {
+    if (isEditingNameOnMobile && mobileInputRef.current) {
+      mobileInputRef.current.focus();
+      mobileInputRef.current.select();
+    }
+  }, [isEditingNameOnMobile]);
 
   const handleToggleBulkEdit = () => {
     if (!isUrlEncodedBulkEdit) {
@@ -344,110 +398,206 @@ export const RequestEditor: React.FC = () => {
     <>
       <div className="flex flex-col border-b border-zinc-800 bg-zinc-950 px-3.5 pt-2 pb-1.5">
         {/* Request Name and Actions Bar */}
-        <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2 flex-1 mr-4">
-            <div className="relative flex items-center flex-1 max-w-sm">
-              <input
-                type="text"
-                value={currentTab.name}
-                onChange={(e) => updateActiveRequest({ name: e.target.value })}
-                placeholder="Untitled Request Name"
-                className="bg-transparent font-medium text-xs text-zinc-300 hover:text-white focus:text-white focus:outline-none focus:border-b focus:border-sky-500 transition px-1 py-0.5 rounded w-full pr-5"
-              />
-              {isDirty && (
-                <span
-                  className="absolute right-1 h-2 w-2 rounded-full bg-amber-400 shrink-0 shadow-sm shadow-amber-400/50"
-                  title="Unsaved changes"
-                />
-              )}
-            </div>
-
-            {savedRequestInfo && (
-              <span
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-zinc-900 border border-zinc-800 text-zinc-400 shrink-0 truncate max-w-[160px]"
-                title={`Saved in collection: ${savedRequestInfo.collection.name}`}
+        <div className="mb-1.5 flex items-center justify-between gap-2 min-h-[28px]">
+          {isNarrowScreen && isEditingNameOnMobile ? (
+            /* Mobile Full-Width Request Name Edit Mode */
+            <div className="flex items-center gap-1.5 flex-1 w-full animate-in fade-in duration-100">
+              <button
+                type="button"
+                onClick={() => setIsEditingNameOnMobile(false)}
+                className="flex items-center justify-center h-7 w-7 rounded-md border border-zinc-800 bg-zinc-900 text-zinc-400 hover:text-white hover:bg-zinc-800 transition shrink-0"
+                title="Back to action buttons"
               >
-                <Folder className="h-3 w-3 text-amber-400 shrink-0" />
-                <span className="truncate">{savedRequestInfo.collection.name}</span>
-              </span>
-            )}
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <div className="relative flex items-center flex-1 min-w-0">
+                <input
+                  ref={mobileInputRef}
+                  type="text"
+                  value={currentTab.name}
+                  onChange={(e) => updateActiveRequest({ name: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      setIsEditingNameOnMobile(false);
+                    }
+                  }}
+                  placeholder="Untitled Request Name"
+                  className="bg-zinc-900 border border-zinc-700 rounded px-2.5 py-1 text-xs text-white placeholder-zinc-500 focus:border-sky-500 focus:outline-none transition w-full pr-6"
+                />
+                {isDirty && (
+                  <span
+                    className="absolute right-2 h-2 w-2 rounded-full bg-amber-400 shrink-0 shadow-sm shadow-amber-400/50"
+                    title="Unsaved changes"
+                  />
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsEditingNameOnMobile(false)}
+                className="flex items-center justify-center h-7 w-7 rounded-md bg-sky-600 hover:bg-sky-500 text-white transition shrink-0 shadow-sm"
+                title="Done"
+              >
+                <Check className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="flex min-w-0 items-center gap-1.5 flex-1">
+                {/* Mobile Toggle Button (screen < 450px) */}
+                {isNarrowScreen ? (
+                  <button
+                    type="button"
+                    onClick={() => setIsEditingNameOnMobile(true)}
+                    className="flex items-center justify-center h-6 w-6 rounded-md border border-zinc-800 bg-zinc-900 text-zinc-400 hover:text-sky-400 hover:border-zinc-700 transition shrink-0"
+                    title="Edit request name"
+                  >
+                    <ChevronRight className="h-3.5 w-3.5 text-sky-400" />
+                  </button>
+                ) : (
+                  /* Desktop Request Name Input (screen >= 450px) */
+                  <div className="relative flex items-center flex-1 max-w-sm">
+                    <input
+                      type="text"
+                      value={currentTab.name}
+                      onChange={(e) => updateActiveRequest({ name: e.target.value })}
+                      placeholder="Untitled Request Name"
+                      className="bg-transparent font-medium text-xs text-zinc-300 hover:text-white focus:text-white focus:outline-none focus:border-b focus:border-sky-500 transition px-1 py-0.5 rounded w-full pr-5"
+                    />
+                    {isDirty && (
+                      <span
+                        className="absolute right-1 h-2 w-2 rounded-full bg-amber-400 shrink-0 shadow-sm shadow-amber-400/50"
+                        title="Unsaved changes"
+                      />
+                    )}
+                  </div>
+                )}
 
-            <div className="flex items-center rounded-md border border-zinc-800 bg-zinc-900 overflow-hidden shadow-sm">
-              {isReadOnly ? (
-                <div
-                  className="flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium text-zinc-500 bg-zinc-800/40 cursor-not-allowed select-none"
-                  title={
-                    isScopeReadOnly
-                      ? "This project is read-only for your role (reader). Modifications cannot be saved."
-                      : "This request belongs to a read-only collection. Use 'Save As' to save a copy."
-                  }
-                >
-                  <Lock className="h-3 w-3 text-zinc-500" />
-                  <span>Read-only</span>
-                </div>
-              ) : (
-                <button
-                  onClick={handleSave}
-                  className={`flex items-center gap-1 px-2 py-0.5 text-xs font-medium transition ${isDirty
-                      ? 'text-amber-300 hover:bg-amber-500/10'
-                      : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'
+                {/* Collection Folder Badge */}
+                {savedRequestInfo && (
+                  <span
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-zinc-900 border border-zinc-800 text-zinc-400 shrink-0 truncate ${
+                      isNarrowScreen ? 'max-w-[100px]' : 'max-w-[160px]'
                     }`}
-                  title="Save request (Ctrl+S / ⌘+S)"
+                    title={`Saved in collection: ${savedRequestInfo.collection.name}`}
+                  >
+                    <Folder className="h-3 w-3 text-amber-400 shrink-0" />
+                    <span className="truncate">{savedRequestInfo.collection.name}</span>
+                  </span>
+                )}
+
+                {/* Save & Save As Split Dropdown */}
+                <div ref={saveMenuRef} className="relative flex items-center rounded-md border border-zinc-800 bg-zinc-900 shadow-sm shrink-0">
+                  {isReadOnly ? (
+                    <div
+                      className="flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium text-zinc-500 bg-zinc-800/40 cursor-not-allowed select-none"
+                      title={
+                        isScopeReadOnly
+                          ? "This project is read-only for your role (reader). Modifications cannot be saved."
+                          : "This request belongs to a read-only collection. Use 'Save As' to save a copy."
+                      }
+                    >
+                      <Lock className="h-3 w-3 text-zinc-500" />
+                      <span>Read-only</span>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleSave}
+                      className={`flex items-center gap-1 px-2 py-0.5 text-xs font-medium transition ${
+                        isDirty
+                          ? 'text-amber-300 hover:bg-amber-500/10'
+                          : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'
+                      }`}
+                      title="Save request (Ctrl+S / ⌘+S)"
+                    >
+                      {justSaved ? (
+                        <>
+                          <Check className="h-3 w-3 text-emerald-400" />
+                          <span className="text-emerald-400 font-semibold">Saved!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Bookmark className={`h-3 w-3 ${isDirty ? 'text-amber-400' : 'text-zinc-400'}`} />
+                          <span>Save</span>
+                          {isDirty && (
+                            <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+                          )}
+                        </>
+                      )}
+                    </button>
+                  )}
+
+                  {canWriteScope && (
+                    <button
+                      type="button"
+                      onClick={() => setIsSaveMenuOpen((prev) => !prev)}
+                      className="border-l border-zinc-800 px-1 py-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition flex items-center justify-center"
+                      title="Save options"
+                    >
+                      <ChevronDown className={`h-3 w-3 transition-transform ${isSaveMenuOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                  )}
+
+                  {/* Save As Dropdown Menu */}
+                  {isSaveMenuOpen && canWriteScope && (
+                    <div className="absolute left-0 sm:left-auto sm:right-0 top-full mt-1 z-30 min-w-[130px] rounded-lg border border-zinc-800 bg-zinc-900/95 py-1 text-xs shadow-xl backdrop-blur-md animate-in fade-in duration-100">
+                      {!isReadOnly && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsSaveMenuOpen(false);
+                            handleSave();
+                          }}
+                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-zinc-300 hover:bg-zinc-800 hover:text-white transition"
+                        >
+                          <Bookmark className="h-3.5 w-3.5 text-zinc-400" />
+                          <span>Save</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsSaveMenuOpen(false);
+                          setIsSaveAsMode(true);
+                          setIsSaveModalOpen(true);
+                        }}
+                        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-zinc-300 hover:bg-zinc-800 hover:text-white transition"
+                      >
+                        <Plus className="h-3.5 w-3.5 text-zinc-400" />
+                        <span>Save As...</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* cURL and Keyboard Shortcut */}
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleCopyCurl}
+                  className="flex items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900 px-2 py-0.5 text-xs font-medium text-zinc-300 hover:bg-zinc-850 hover:text-white transition"
+                  title="Copy active request as cURL command"
                 >
-                  {justSaved ? (
+                  {copiedCurl ? (
                     <>
                       <Check className="h-3 w-3 text-emerald-400" />
-                      <span className="text-emerald-400 font-semibold">Saved!</span>
+                      <span className="text-emerald-400">Copied!</span>
                     </>
                   ) : (
                     <>
-                      <Bookmark className={`h-3 w-3 ${isDirty ? 'text-amber-400' : 'text-zinc-400'}`} />
-                      <span>Save</span>
-                      {isDirty && (
-                        <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
-                      )}
+                      <Copy className="h-3 w-3 text-sky-400" />
+                      <span>cURL</span>
                     </>
                   )}
                 </button>
-              )}
-              {canWriteScope && (
-                <button
-                  onClick={() => {
-                    setIsSaveAsMode(true);
-                    setIsSaveModalOpen(true);
-                  }}
-                  className="border-l border-zinc-800 px-1.5 py-0.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition text-[10px] font-medium"
-                  title="Save As (save a copy to another collection)"
-                >
-                  Save As
-                </button>
-              )}
-            </div>
-          </div>
 
-          <div className="flex items-center gap-3">
-            <button
-              onClick={handleCopyCurl}
-              className="flex items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900 px-2 py-0.5 text-xs font-medium text-zinc-300 hover:bg-zinc-850 hover:text-white transition"
-              title="Copy active request as cURL command"
-            >
-              {copiedCurl ? (
-                <>
-                  <Check className="h-3 w-3 text-emerald-400" />
-                  <span className="text-emerald-400">cURL Copied!</span>
-                </>
-              ) : (
-                <>
-                  <Terminal className="h-3 w-3 text-sky-400" />
-                  <span>Copy cURL</span>
-                </>
-              )}
-            </button>
-
-            <div className="text-[11px] text-zinc-500 font-mono hidden md:block">
-              Press <kbd className="rounded border border-zinc-700 bg-zinc-900 px-1 py-0.5 text-zinc-300">⌘+Enter</kbd> to send
-            </div>
-          </div>
+                <div className="text-[11px] text-zinc-500 font-mono hidden lg:block">
+                  Press <kbd className="rounded border border-zinc-700 bg-zinc-900 px-1 py-0.5 text-zinc-300">⌘+Enter</kbd> to send
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
         <div className="flex items-center gap-2">

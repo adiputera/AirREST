@@ -233,7 +233,9 @@ jobs:
 
       - name: Verify APK Signatures and 16 KiB Alignment
         run: |
-          $ANDROID_HOME/build-tools/36.0.0/apksigner verify --verbose apps/native/src-tauri/target/release-assets/*.apk
+          for apk in apps/native/src-tauri/target/release-assets/*.apk; do
+            "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk"
+          done
           python3 scripts/check-android-page-size.py \
             "apps/native/src-tauri/target/release-assets/airrest-${{ steps.release_meta.outputs.version }}-android-arm64.apk" \
             --readelf "$ANDROID_HOME/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" \
