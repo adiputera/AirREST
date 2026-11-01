@@ -114,14 +114,14 @@ test('T-UPDATER-2: macOS flow downloads and silently stages update on disk in ba
   assert.deepEqual(states, ['checking', 'downloading', 'ready']);
   assert.deepEqual(progress, [50, 100]);
 
-  // Clicking Restart Sekarang on macOS should relaunch immediately without re-installing
+  // Clicking Restart Now on macOS should relaunch immediately without re-installing
   await controller.applyAndRestart();
   assert.equal(calls.install.length, 1);
   assert.equal(relaunched, 1);
 });
 
 test('T-UPDATER-3: Windows flow downloads in background; Restart sets restartAfterInstall:true, Close sets restartAfterInstall:false', async () => {
-  // Case A: User clicks "Restart Sekarang"
+  // Case A: User clicks "Restart Now"
   {
     const { calls, update } = createMockUpdate('0.1.2');
     const controller = createUpdaterController({
