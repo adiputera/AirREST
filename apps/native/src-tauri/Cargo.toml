@@ -1,6 +1,6 @@
 [package]
 name = "airrest-desktop"
-version = "1.2.0"
+version = "1.2.1"
 description = "AirREST Desktop Client"
 authors = ["AirREST Team"]
 edition = "2024"
