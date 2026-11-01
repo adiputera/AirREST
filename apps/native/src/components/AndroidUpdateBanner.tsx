@@ -50,7 +50,7 @@ export const DISMISSED_VERSION_KEY = 'airrest_android_dismissed_version';
 
 export function AndroidUpdateBanner({
   repo = 'adiputera/AirREST',
-  currentVersion = typeof __AIRREST_VERSION__ !== 'undefined' ? __AIRREST_VERSION__ : '1.2.0',
+  currentVersion = typeof __AIRREST_VERSION__ !== 'undefined' ? __AIRREST_VERSION__ : '0.0.0',
 }: {
   repo?: string;
   currentVersion?: string;
