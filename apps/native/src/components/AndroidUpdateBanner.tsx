@@ -138,7 +138,7 @@ export function AndroidUpdateBanner({
       <div className="flex items-center gap-2 overflow-hidden truncate">
         <span className="flex h-2 w-2 rounded-full bg-cyan-400 animate-pulse shrink-0" />
         <span className="font-semibold text-cyan-300">AirREST {newVer}</span>
-        <span className="truncate text-slate-300">tersedia</span>
+        <span className="truncate text-slate-300">is available</span>
       </div>
 
       <div className="flex items-center gap-2 shrink-0">
@@ -148,12 +148,12 @@ export function AndroidUpdateBanner({
           disabled={downloading}
           className="rounded bg-cyan-600 hover:bg-cyan-500 active:bg-cyan-700 px-2.5 py-1 text-xs font-medium text-white shadow-sm transition-colors focus:outline-none focus:ring-1 focus:ring-cyan-400 cursor-pointer"
         >
-          {downloading ? 'Membuka...' : 'Unduh APK'}
+          {downloading ? 'Opening...' : 'Download APK'}
         </button>
         <button
           type="button"
           onClick={handleDismiss}
-          aria-label="Tutup notifikasi pembaruan"
+          aria-label="Close update notification"
           className="p-1 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
         >
           <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
