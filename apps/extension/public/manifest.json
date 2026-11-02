@@ -21,6 +21,10 @@
       "128": "icons/icon-128.png"
     }
   },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'none';",
+    "sandbox": "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval';"
+  },
   "sandbox": {
     "pages": [
       "sandbox.html"

@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+import ts from 'typescript';
 
 // Test Theme Logic Functions
 function getNextThemeMode(current) {
@@ -125,4 +128,43 @@ test('Theme persistence serialization and hydration defaults', () => {
   // Persisted explicit theme
   const savedState = { theme: 'light' };
   assert.equal(savedState.theme, 'light');
+});
+
+test('T-EXT-THEME: initEarlyTheme reads StorageEnvelope from localStorage and applies light theme without FOUC', () => {
+  const source = fs.readFileSync(new URL('../packages/common/src/lib/theme.ts', import.meta.url), 'utf8');
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+
+  const mockDoc = createMockDocument('dark');
+  const envelope = JSON.stringify({
+    __airrestStorageEnvelope: 1,
+    seq: 1,
+    updatedAt: Date.now(),
+    writerId: 'w-1',
+    deleted: false,
+    data: JSON.stringify({ state: { theme: 'light' }, version: 0 }),
+  });
+
+  const exports = {};
+  vm.runInNewContext(compiled, {
+    exports,
+    require: () => ({}),
+    window: {
+      matchMedia: () => ({ matches: true }),
+    },
+    document: mockDoc,
+    localStorage: {
+      getItem: (key) => (key === 'air-rest-storage' ? envelope : null),
+    },
+    console,
+    JSON,
+  });
+
+  assert.equal(mockDoc.documentElement.getAttribute('data-theme'), 'light');
+  assert.equal(mockDoc.documentElement.classList.contains('dark'), false);
+  assert.equal(mockDoc.documentElement.style.colorScheme, 'light');
 });

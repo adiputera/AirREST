@@ -38,6 +38,7 @@ import {
   apiDeleteCollection,
   apiDeleteEnvironment,
   apiMoveCollection,
+  apiGetClientFeaturePolicy,
 } from '../lib/api';
 import {
   Team,
@@ -52,6 +53,19 @@ import {
 import { ConfirmModal } from '../components/ConfirmModal';
 import { normalizeEnvironmentVariables } from '../lib/environmentVariables';
 
+async function mapConcurrent<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let index = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (index < items.length) {
+      const i = index++;
+      results[i] = await fn(items[i]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 export const ProjectsView: React.FC = () => {
   const apiUrl = useHubStore((state) => state.apiUrl);
   const token = useHubStore((state) => state.token);
@@ -61,6 +75,9 @@ export const ProjectsView: React.FC = () => {
   const setSelectedTeamId = useHubStore((state) => state.setSelectedTeamId);
   const selectedProjectId = useHubStore((state) => state.selectedProjectId);
   const setSelectedProjectId = useHubStore((state) => state.setSelectedProjectId);
+  const featurePolicy = useHubStore((state) => state.featurePolicy);
+  const featurePolicyFetchedAt = useHubStore((state) => state.featurePolicyFetchedAt);
+  const setFeaturePolicy = useHubStore((state) => state.setFeaturePolicy);
 
   const [teams, setTeams] = useState<Team[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -216,18 +233,21 @@ export const ProjectsView: React.FC = () => {
           apiListProjectEnvironments(apiUrl, token, selectedProjectId, refreshToken || undefined),
         ]);
         if (cancelled) return;
-        const colDetails = await Promise.all(
-          colList.map((c) =>
-            apiGetCollection(apiUrl, token, c.id, refreshToken || undefined).catch(() => ({
-              ...c,
-              items: [],
-            }))
-          )
-        );
+        const colDetails = await mapConcurrent(colList, 4, async (c) => {
+          try {
+            return await apiGetCollection(apiUrl, token, c.id, refreshToken || undefined);
+          } catch {
+            return { ...c, items: [], detailsLoadFailed: true } as Collection & { detailsLoadFailed?: boolean };
+          }
+        });
         if (cancelled || useHubStore.getState().selectedProjectId !== selectedProjectId) return;
         setCollections(colDetails);
         setEnvironments(envData);
       } catch (err) {
+        if (!cancelled && useHubStore.getState().selectedProjectId === selectedProjectId) {
+          setCollections([]);
+          setEnvironments([]);
+        }
         if (!cancelled) setErrorMsg(err instanceof Error ? err.message : 'Failed to load project resources');
       } finally {
         if (!cancelled) {
@@ -240,14 +260,66 @@ export const ProjectsView: React.FC = () => {
     return () => { cancelled = true; };
   }, [selectedProjectId, apiUrl, token]);
 
+  const refreshResources = async () => {
+    if (!selectedProjectId || !token) return;
+    try {
+      const [colList, envData] = await Promise.all([
+        apiListProjectCollections(apiUrl, token, selectedProjectId, refreshToken || undefined),
+        apiListProjectEnvironments(apiUrl, token, selectedProjectId, refreshToken || undefined),
+      ]);
+      const colDetails = await mapConcurrent(colList, 4, async (c) => {
+        try {
+          return await apiGetCollection(apiUrl, token, c.id, refreshToken || undefined);
+        } catch {
+          return { ...c, items: [], detailsLoadFailed: true } as Collection & { detailsLoadFailed?: boolean };
+        }
+      });
+      if (useHubStore.getState().selectedProjectId !== selectedProjectId) return;
+      setCollections(colDetails);
+      setEnvironments(envData);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to load project resources');
+    }
+  };
+
+  const refreshFeaturePolicy = async () => {
+    if (!token) return;
+    try {
+      const policy = await apiGetClientFeaturePolicy(apiUrl, token, refreshToken || undefined);
+      setFeaturePolicy(policy, Date.now());
+    } catch {
+      // keep existing policy or fail closed
+    }
+  };
+
+  useEffect(() => {
+    if (!token) return;
+    const isFresh = Boolean(
+      featurePolicy &&
+      featurePolicyFetchedAt &&
+      Date.now() - featurePolicyFetchedAt < 30 * 60 * 1000
+    );
+    if (!isFresh) {
+      refreshFeaturePolicy();
+    }
+  }, [apiUrl, token, featurePolicy, featurePolicyFetchedAt]);
+
   const activeProject = projects.find((p) => p.id === selectedProjectId);
   const activeTeam = teams.find((t) => t.id === selectedTeamId);
   const isTeamAdmin = user?.role === 'superadmin' || activeTeam?.user_role === 'admin';
   const canEditProject = isTeamAdmin || activeProject?.user_role === 'admin';
   const canManagePermissions = canEditProject || activeProject?.user_role === 'maintainer';
-  const canMoveCollection =
-    canEditProject ||
-    activeProject?.user_role === 'maintainer';
+
+  const isPolicyFresh = Boolean(
+    featurePolicy &&
+    featurePolicyFetchedAt &&
+    Date.now() - featurePolicyFetchedAt < 30 * 60 * 1000
+  );
+  const isMoveAllowed = isPolicyFresh && featurePolicy?.flags?.['collection.move'] !== false;
+  const isDeleteAllowed = isPolicyFresh && featurePolicy?.flags?.['collection.delete'] !== false;
+
+  const canMoveCollection = (canEditProject || activeProject?.user_role === 'maintainer') && isMoveAllowed;
+  const canDeleteCollection = canManagePermissions && isDeleteAllowed;
 
   const eligibleTargetProjects = projects.filter((p) => {
     if (p.id === selectedProjectId) return false;
@@ -259,7 +331,7 @@ export const ProjectsView: React.FC = () => {
 
   const handleOpenMoveCollection = (col: { id: string; name: string }) => {
     setMoveColItem(col);
-    setTargetMoveProjectId('');
+    setTargetMoveProjectId(eligibleTargetProjects[0]?.id || '');
     setErrorMsg(null);
   };
 
@@ -279,20 +351,15 @@ export const ProjectsView: React.FC = () => {
       handleCloseMoveCollection();
       if (useHubStore.getState().selectedProjectId !== selectedProjectId) return;
       if (selectedProjectId) {
-        const colList = await apiListProjectCollections(apiUrl, token, selectedProjectId, refreshToken || undefined);
-        const colDetails = await Promise.all(
-          colList.map((c) =>
-            apiGetCollection(apiUrl, token, c.id, refreshToken || undefined).catch(() => ({
-              ...c,
-              items: [],
-            }))
-          )
-        );
-        if (useHubStore.getState().selectedProjectId !== selectedProjectId) return;
-        setCollections(colDetails);
+        await refreshResources();
       }
     } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to move collection');
+      if (err?.code === 'FEATURE_DISABLED' || err?.status === 403 || err?.message?.includes('FEATURE_DISABLED')) {
+        await refreshFeaturePolicy();
+        setErrorMsg('This feature has been disabled by an administrator.');
+      } else {
+        setErrorMsg(err.message || 'Failed to move collection');
+      }
     } finally {
       setIsMovingCol(false);
     }
@@ -329,6 +396,7 @@ export const ProjectsView: React.FC = () => {
           apiUrl,
           token,
           permModalItem.id,
+          permModalItem.name,
           selectedPermRole,
           permModalItem.version,
           refreshToken || undefined
@@ -359,7 +427,22 @@ export const ProjectsView: React.FC = () => {
       }
       handleClosePermModal();
     } catch (err: any) {
-      alert(err.message || 'Failed to update permission');
+      if (err?.status === 409 && (err?.data?.version || err?.data)) {
+        const newVersion = err.data.version || (permModalItem.version + 1);
+        setPermModalItem((prev) => (prev ? { ...prev, version: newVersion } : null));
+        if (permModalItem.type === 'collection') {
+          setCollections((prev) =>
+            prev.map((c) => (c.id === permModalItem.id ? { ...c, version: newVersion } : c))
+          );
+        } else {
+          setEnvironments((prev) =>
+            prev.map((env) => (env.id === permModalItem.id ? { ...env, version: newVersion } : env))
+          );
+        }
+        setErrorMsg(`Conflict: Modified by another user. Version updated to ${newVersion}. Please review and click Save again.`);
+      } else {
+        setErrorMsg(err.message || 'Failed to update permission');
+      }
     } finally {
       setIsUpdatingPerm(false);
     }
@@ -758,7 +841,12 @@ export const ProjectsView: React.FC = () => {
       setCollections((prev) => prev.filter((c) => c.id !== collectionToDelete.id));
       setCollectionToDelete(null);
     } catch (err: any) {
-      alert(err.message || 'Failed to delete collection');
+      if (err?.code === 'FEATURE_DISABLED' || err?.status === 403 || err?.message?.includes('FEATURE_DISABLED')) {
+        await refreshFeaturePolicy();
+        setErrorMsg('This feature has been disabled by an administrator.');
+      } else {
+        setErrorMsg(err.message || 'Failed to delete collection');
+      }
     } finally {
       setIsDeletingCollection(false);
     }
@@ -810,9 +898,16 @@ export const ProjectsView: React.FC = () => {
       const updated = await apiListProjectMembers(apiUrl, token, selectedProjectId, refreshToken || undefined);
       if (useHubStore.getState().selectedProjectId !== selectedProjectId) return;
       setProjectMembers(updated);
+      if (editingMember.user_id === user?.id) {
+        if (selectedTeamId) {
+          const updatedProjects = await apiListTeamProjects(apiUrl, token, selectedTeamId, refreshToken || undefined);
+          setProjects(updatedProjects);
+        }
+        await refreshResources();
+      }
       handleCloseEditMember();
     } catch (err: any) {
-      alert(err.message || 'Failed to update project member role');
+      setErrorMsg(err.message || 'Failed to update project member role');
     } finally {
       setIsUpdatingRole(false);
     }
@@ -982,6 +1077,16 @@ export const ProjectsView: React.FC = () => {
                 </span>
               )}
             </div>
+
+            {errorMsg && (
+              <div className="flex items-center gap-2 rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-400">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span className="flex-1">{errorMsg}</span>
+                <button type="button" onClick={() => setErrorMsg(null)} className="text-red-400 hover:text-red-300">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
 
             {/* Project Banner */}
             <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4 sm:p-6 flex flex-col xl:flex-row xl:items-center justify-between gap-4 sm:gap-6">
@@ -1338,21 +1443,45 @@ export const ProjectsView: React.FC = () => {
                                       <span>Move</span>
                                     </button>
                                   )}
-                                  <button
-                                    type="button"
-                                    onClick={() => setCollectionToDelete(col)}
-                                    className="flex items-center gap-1 rounded-lg border border-red-500/20 bg-red-500/10 px-2.5 py-1 text-xs font-semibold text-red-400 hover:text-red-300 hover:bg-red-500/20 transition"
-                                    title="Delete Collection"
-                                  >
-                                    <Trash2 className="h-3 w-3" />
-                                    <span>Delete</span>
-                                  </button>
+                                  {canDeleteCollection && (
+                                    <button
+                                      type="button"
+                                      disabled={(col as any).detailsLoadFailed}
+                                      onClick={() => setCollectionToDelete(col)}
+                                      className="flex items-center gap-1 rounded-lg border border-red-500/20 bg-red-500/10 px-2.5 py-1 text-xs font-semibold text-red-400 hover:text-red-300 hover:bg-red-500/20 transition disabled:opacity-50"
+                                      title={(col as any).detailsLoadFailed ? 'Cannot delete collection while details failed to load' : 'Delete Collection'}
+                                    >
+                                      <Trash2 className="h-3 w-3" />
+                                      <span>Delete</span>
+                                    </button>
+                                  )}
                                 </>
                               )}
                             </div>
                           </div>
 
-                          {!isCollapsed && renderCollectionItems(col.items || [])}
+                          {(col as any).detailsLoadFailed ? (
+                            <div className="flex items-center gap-2 p-3 text-xs text-amber-400 bg-amber-500/10 rounded-xl border border-amber-500/20 m-3">
+                              <AlertCircle className="h-4 w-4 shrink-0" />
+                              <span>Failed to load requests for this collection.</span>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  try {
+                                    const detailed = await apiGetCollection(apiUrl, token!, col.id, refreshToken || undefined);
+                                    setCollections((prev) => prev.map((item) => (item.id === col.id ? detailed : item)));
+                                  } catch (err: any) {
+                                    setErrorMsg(err.message || 'Retry failed to load collection');
+                                  }
+                                }}
+                                className="ml-auto underline font-semibold hover:text-amber-300"
+                              >
+                                Retry
+                              </button>
+                            </div>
+                          ) : (
+                            !isCollapsed && renderCollectionItems(col.items || [])
+                          )}
                         </div>
                       );
                     })}
@@ -1555,6 +1684,12 @@ export const ProjectsView: React.FC = () => {
             </div>
 
             <form onSubmit={handleCreateProject} className="space-y-4">
+              {errorMsg && (
+                <div className="flex items-center gap-2 rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-400">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  <span className="flex-1">{errorMsg}</span>
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-semibold text-zinc-300 mb-1">Project Name</label>
                 <input
@@ -2238,6 +2373,7 @@ export const ProjectsView: React.FC = () => {
                       onChange={(e) => setTargetMoveProjectId(e.target.value)}
                       className="w-full rounded-xl border border-zinc-800 bg-zinc-900 p-2.5 text-xs text-zinc-200 focus:border-sky-500 focus:outline-none cursor-pointer"
                     >
+                      <option value="" disabled>Select a destination project...</option>
                       {eligibleTargetProjects.map((p) => (
                         <option key={p.id} value={p.id}>
                           {p.name} {p.user_role ? `(${p.user_role.toUpperCase()})` : ''}

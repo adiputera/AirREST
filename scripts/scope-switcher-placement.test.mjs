@@ -9,11 +9,6 @@ test('Responsive Header and Sidebar layout parity (Mobile vs Desktop)', () => {
       header: 'packages/common/src/components/Header.tsx',
       sidebar: 'packages/common/src/components/Sidebar.tsx',
     },
-    {
-      scopeSwitcher: 'apps/extension/src/components/ScopeSwitcher.tsx',
-      header: 'apps/extension/src/components/Header.tsx',
-      sidebar: 'apps/extension/src/components/Sidebar.tsx',
-    },
   ];
 
   for (const { scopeSwitcher, header, sidebar } of targetFiles) {

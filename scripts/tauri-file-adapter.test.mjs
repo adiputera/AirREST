@@ -88,3 +88,44 @@ test('classifyTauriNetworkError categorizes SSL, DNS, connection refused, and ti
   assert.equal(classifyTauriNetworkError(new Error('request timed out')).category, 'timeout');
   assert.equal(classifyTauriNetworkError(new Error('unexpected internal failure')).category, 'other');
 });
+
+test('T-NAT-FILE: openFile rejects oversized file exceeding 16 MiB limit before reading; calculateVersionCode produces 1003000 for 1.3.0', async () => {
+  const source = fs.readFileSync(new URL('../apps/native/src/adapters/tauriAdapter.ts', import.meta.url), 'utf8')
+    .replaceAll('import.meta.url', '"file:///adapter.ts"');
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  let readCalled = false;
+  const modules = {
+    '@tauri-apps/plugin-dialog': {
+      open: async () => '/path/to/oversized.json',
+    },
+    '@tauri-apps/plugin-fs': {
+      stat: async () => ({ size: 20 * 1024 * 1024, isFile: true }), // 20 MiB
+      readTextFile: async () => { readCalled = true; return '{}'; },
+    },
+  };
+  const exports = {};
+  vm.runInNewContext(compiled, {
+    exports,
+    require: (name) => modules[name] || {},
+    __AIRREST_ANDROID__: false,
+    console,
+    Uint8Array,
+  });
+
+  await assert.rejects(
+    async () => {
+      await exports.tauriAdapter.openFile();
+    },
+    (err) => {
+      assert.match(err.message, /16 MB/i);
+      return true;
+    }
+  );
+  assert.equal(readCalled, false, 'readTextFile must not be called when stat reports oversized file');
+
+  const { calculateVersionCode } = await import('../scripts/bump-desktop-version.mjs');
+  assert.equal(calculateVersionCode('1.3.0'), 1003000);
+});
+

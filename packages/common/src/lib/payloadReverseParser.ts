@@ -140,7 +140,7 @@ function trySanitizeJson(raw: string): unknown {
   let clean = raw.replace(/\/\*[\s\S]*?\*\/|([^\\:]|^)\/\/.*$/gm, '$1');
   // 2. Wrap unquoted template variables in objects and lists
   clean = clean.replace(/:\s*(\{\{[^{}]+\}\})/g, ': "__AIRREST_TMPL_$1__"');
-  clean = clean.replace(/([\[,]\s*)(\{\{[^{}]+\}\})/g, '$1"__AIRREST_TMPL_$2__"');
+  clean = clean.replace(/([[,]\s*)(\{\{[^{}]+\}\})/g, '$1"__AIRREST_TMPL_$2__"');
   // 3. Remove trailing commas
   clean = clean.replace(/,\s*([}\]])/g, '$1');
   return JSON.parse(clean);

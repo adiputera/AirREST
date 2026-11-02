@@ -4,6 +4,7 @@ import { createTrackedBlobUrl } from './blobManager';
 import { substitutePathVariables } from './urlParams';
 
 export const RESPONSE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024; // 10 MiB
+export const MAX_OUTBOUND_ATTACHMENT_BYTES = 25 * 1024 * 1024; // 25 MiB
 export const REQUEST_TIMEOUT_MS = 30_000;
 
 export class ResponseTooLargeError extends Error {
@@ -247,6 +248,11 @@ export function prepareRequest(
           if (!(item.file instanceof Blob)) {
             throw new Error(`Attachment for “${item.key || item.fileName || 'unnamed field'}” must be selected again.`);
           }
+          if (item.file.size > MAX_OUTBOUND_ATTACHMENT_BYTES) {
+            throw new Error(
+              `Attachment “${item.fileName || item.key}” exceeds the 25 MB payload limit (size: ${(item.file.size / (1024 * 1024)).toFixed(1)} MB).`
+            );
+          }
           formData.append(itemKey, item.file, item.file.name || item.fileName || 'file.bin');
         } else {
           formData.append(itemKey, interpolateVariables(String(item.value ?? ''), variables));
@@ -259,6 +265,11 @@ export function prepareRequest(
     } else if (request.bodyType === 'binary') {
       if (!(request.bodyBinaryFile?.file instanceof Blob)) {
         throw new Error(`Binary attachment “${request.bodyBinaryFile?.name || 'unnamed file'}” must be selected again.`);
+      }
+      if (request.bodyBinaryFile.file.size > MAX_OUTBOUND_ATTACHMENT_BYTES) {
+        throw new Error(
+          `Binary attachment “${request.bodyBinaryFile.name}” exceeds the 25 MB payload limit.`
+        );
       }
       bodyPayload = request.bodyBinaryFile.file;
       if (!headers['Content-Type'] && !headers['content-type']) {
@@ -379,9 +390,11 @@ export function recordLocalRecentError(url: string, error: string): void {
   localRecentErrors.set(url, { error, timestamp: now });
 }
 
-if (typeof chrome !== 'undefined' && chrome.webRequest?.onErrorOccurred) {
+const chromeObj = typeof globalThis !== 'undefined' ? (globalThis as any).chrome : undefined;
+
+if (chromeObj?.webRequest?.onErrorOccurred) {
   try {
-    chrome.webRequest.onErrorOccurred.addListener(
+    chromeObj.webRequest.onErrorOccurred.addListener(
       (details: any) => {
         recordLocalRecentError(details.url, details.error);
       },
@@ -392,7 +405,7 @@ if (typeof chrome !== 'undefined' && chrome.webRequest?.onErrorOccurred) {
   }
 }
 
-async function getChromiumNetworkError(url: string): Promise<string | null> {
+export async function getChromiumNetworkError(url: string): Promise<string | null> {
   const findInMap = (targetUrl: string): string | null => {
     const exact = localRecentErrors.get(targetUrl);
     if (exact && Date.now() - exact.timestamp < 10000) return exact.error;
@@ -412,11 +425,11 @@ async function getChromiumNetworkError(url: string): Promise<string | null> {
   const local = findInMap(url);
   if (local) return local;
 
-  if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+  if (chromeObj?.runtime?.sendMessage) {
     try {
       const res = await new Promise<{ error: string | null }>((resolve) => {
-        chrome.runtime.sendMessage({ type: 'GET_RECENT_NETWORK_ERROR', url }, (response: any) => {
-          if (chrome.runtime.lastError || !response) {
+        chromeObj.runtime.sendMessage({ type: 'GET_RECENT_NETWORK_ERROR', url }, (response: any) => {
+          if (chromeObj.runtime?.lastError || !response) {
             resolve({ error: null });
           } else {
             resolve(response);
@@ -501,8 +514,8 @@ export async function executeApiRequest(
 
     const hasPerm = resolvedAdapter
       ? await resolvedAdapter.hasHostPermission(finalUrl)
-      : (typeof chrome !== 'undefined' && chrome.permissions?.contains)
-        ? await chrome.permissions.contains({ origins: [`${parsedUrl.origin}/*`] }).catch(() => null)
+      : (chromeObj?.permissions?.contains)
+        ? await chromeObj.permissions.contains({ origins: [`${parsedUrl.origin}/*`] }).catch(() => null)
         : null;
 
     if (hasPerm === false) {

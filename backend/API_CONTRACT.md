@@ -337,7 +337,7 @@ In addition to enums, the Frontend relies on specific primitive types and relati
 - `DELETE /api/v1/collections/{id}` *(Auth)* — Soft delete collection (tombstone). Requires both existing RBAC/min-role checks and global `collection.delete`; a disabled feature returns `403 FEATURE_DISABLED`.
 - `POST /api/v1/collections/{id}/move` *(Auth)* — Move collection across scopes. Personal/offline sources may move into a project; a project collection cannot move into a personal workspace. Requires both existing RBAC/min-role checks and global `collection.move`; a disabled feature returns `403 FEATURE_DISABLED`.
   - Payload: `{ "target_workspace_id"?: UUID, "target_project_id"?: UUID }`
-- `PUT /api/v1/collections/{id}/reorder` *(Auth)* — Batch reorder items and folder parentage.
+- `PUT /api/v1/collections/{id}/reorder` *(Auth)* — Batch reorder items and folder parentage (also accessible via contract alias `PUT /api/v1/collections/{id}/items/reorder`).
   - Payload: `{ "items": [{ "id": UUID, "parent_id": UUID|null, "sort_order": int }] }`
 - `POST /api/v1/items` *(Auth)* — Create request or folder item.
   - Payload: `CollectionItem` schema.

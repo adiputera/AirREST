@@ -1139,7 +1139,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
       link.href = url;
       link.download = filename;
       link.click();
-      URL.revokeObjectURL(url);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (err) {
       console.error('Failed to export collection', err);
     }

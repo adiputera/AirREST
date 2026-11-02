@@ -94,6 +94,12 @@ func CanAccessCollection(userRole domain.ProjectRole, minRole domain.ProjectRole
 	return userRank >= minRank
 }
 
+// CanModifyMinRole checks whether a user with a given project role has permission to alter min_role.
+// Only admin and maintainer roles may modify min_role boundaries.
+func CanModifyMinRole(role domain.ProjectRole) bool {
+	return role == domain.ProjectRoleAdmin || role == domain.ProjectRoleMaintainer
+}
+
 // CheckCollectionAccess checks both container-level permissions and granular min_role on the collection
 func (s *CollectionService) CheckCollectionAccess(ctx context.Context, user *domain.User, col *domain.Collection, requireWrite bool) error {
 	if err := s.CheckPermission(ctx, user, col.WorkspaceID, col.ProjectID, requireWrite); err != nil {
@@ -240,6 +246,11 @@ func (s *CollectionService) UpdateCollection(ctx context.Context, user *domain.U
 		}
 		if c.MinRole != "" && !CanAccessCollection(role, c.MinRole) {
 			return nil, ErrForbidden
+		}
+		if c.MinRole != "" && c.MinRole != existing.MinRole {
+			if !CanModifyMinRole(role) {
+				return nil, ErrForbidden
+			}
 		}
 	}
 

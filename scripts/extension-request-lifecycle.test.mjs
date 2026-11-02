@@ -9,7 +9,7 @@ const require = createRequire(import.meta.url);
 
 function loadStore({ executePreRequestScript, executeApiRequest, cloudApi = {}, isOfflineOnly = true }) {
   const source = fs
-    .readFileSync(new URL('../apps/extension/src/store/useApiStore.ts', import.meta.url), 'utf8')
+    .readFileSync(new URL('../packages/common/src/store/useApiStore.ts', import.meta.url), 'utf8')
     .replaceAll('import.meta.env', '({})');
   const compiled = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -22,13 +22,13 @@ function loadStore({ executePreRequestScript, executeApiRequest, cloudApi = {}, 
   };
   const noop = () => {};
   const modules = {
-    '@/lib/storage': { appStorage },
-    '@/lib/blobManager': { revokeBlobUrl: noop, revokeBlobUrls: noop },
-    '@/lib/fetcher': { executeApiRequest },
-    '@/lib/scriptRunner': { executePreRequestScript, executePostResponseScript: async () => ({ success: true, environment: {}, variables: {} }) },
-    '@/lib/postman': { importPostmanCollection: noop, importPostmanEnvironment: noop, detectPostmanJsonType: noop },
-    '@/lib/urlParams': { parseQueryParamsFromUrl: noop, parsePathVariablesFromUrl: () => [], buildUrlWithParams: noop },
-    '@/lib/cloudApi': {
+    'storage': { appStorage },
+    'blobManager': { revokeBlobUrl: noop, revokeBlobUrls: noop },
+    'fetcher': { executeApiRequest },
+    'scriptRunner': { executePreRequestScript, executePostResponseScript: async () => ({ success: true, environment: {}, variables: {} }) },
+    'postman': { importPostmanCollection: noop, importPostmanEnvironment: noop, detectPostmanJsonType: noop },
+    'urlParams': { parseQueryParamsFromUrl: noop, parsePathVariablesFromUrl: () => [], buildUrlWithParams: noop },
+    'cloudApi': {
       batchImportToScope: noop,
       registerTokenRefreshCallback: noop,
       registerAuthEvictedCallback: noop,
@@ -47,8 +47,8 @@ function loadStore({ executePreRequestScript, executeApiRequest, cloudApi = {}, 
       fetchScopeEnvironments: noop,
       ...cloudApi,
     },
-    '@/lib/treeHelper': { reorderItemInTree: noop },
-    '@/lib/cloudSyncTransformer': {
+    'treeHelper': { reorderItemInTree: noop },
+    'cloudSyncTransformer': {
       buildCollectionFromDetails: (collection) => ({ ...collection, items: collection.items ?? [] }),
       buildEnvironmentsFromDelta: (environments) => (environments ?? []).map((environment) => ({
         ...environment,
@@ -57,19 +57,30 @@ function loadStore({ executePreRequestScript, executeApiRequest, cloudApi = {}, 
         updatedAt: environment.updatedAt ?? Date.now(),
       })),
     },
-    '@/lib/edition': { isOfflineOnly },
-    '@/lib/requestDiff': {
+    'edition': { isOfflineOnly },
+    'requestDiff': {
       findSavedRequestInCollections: noop,
       alignCollectionItemIds: noop,
       flattenCollectionRequests: noop,
       alignEnvironmentVariableIds: noop,
     },
-    '@/lib/jwt': { canModifyCollection: () => true, hasScopePermission: () => true },
+    'jwt': { canModifyCollection: () => true, hasScopePermission: () => true },
+    'theme': { applyTheme: noop },
+    'storeContext': { StoreContext: {} },
+  };
+
+  const resolveModule = (id) => {
+    for (const [key, mod] of Object.entries(modules)) {
+      if (id === key || id.endsWith(`/${key}`) || id.endsWith(`@/lib/${key}`)) {
+        return mod;
+      }
+    }
+    return require(id);
   };
 
   vm.runInNewContext(compiled, {
     exports,
-    require: (id) => modules[id] ?? require(id),
+    require: resolveModule,
     console,
     crypto: { randomUUID: () => 'test-id' },
     Date,
@@ -83,7 +94,7 @@ function loadStore({ executePreRequestScript, executeApiRequest, cloudApi = {}, 
     URLSearchParams,
     TextEncoder,
     TextDecoder,
-  }, { filename: 'apps/extension/src/store/useApiStore.ts' });
+  }, { filename: 'packages/common/src/store/useApiStore.ts' });
 
   return exports.useApiStore;
 }
@@ -619,7 +630,7 @@ function loadResponseViewerHelpers(filePath) {
 }
 
 test('T-C1 (C1): safeDecodeURIComponent and getFileNameFromHeaders handle malformed URI in Content-Disposition', () => {
-  for (const file of ['../packages/common/src/components/ResponseViewer.tsx', '../apps/extension/src/components/ResponseViewer.tsx']) {
+  for (const file of ['../packages/common/src/components/ResponseViewer.tsx']) {
     const helpers = loadResponseViewerHelpers(file);
     const { safeDecodeURIComponent, getFileNameFromHeaders } = helpers;
 
@@ -850,4 +861,83 @@ test('T-VN1 (V-NEW-1): createAirrestRuntime with chromeAdapter executes pre-requ
   // 3. Verify clean disposal
   runtime.dispose();
   assert.equal(removed, true, 'runtime.dispose() must tear down sandbox iframe');
+});
+
+test('T-EXT-CSP: manifest.json and sandbox.html CSP hardening & prototype isolation', async () => {
+  // 1. Verify manifest.json CSP
+  const manifestRaw = fs.readFileSync(new URL('../apps/extension/public/manifest.json', import.meta.url), 'utf8');
+  const manifest = JSON.parse(manifestRaw);
+  assert.ok(manifest.content_security_policy, 'manifest.json must define content_security_policy');
+  assert.match(manifest.content_security_policy.sandbox, /default-src\s+'none'/);
+  assert.match(manifest.content_security_policy.sandbox, /sandbox\s+allow-scripts/);
+  assert.match(manifest.content_security_policy.extension_pages, /object-src\s+'none'/);
+
+  // 2. Verify sandbox.html CSP meta tag
+  const sandboxHtml = fs.readFileSync(new URL('../apps/extension/public/sandbox.html', import.meta.url), 'utf8');
+  assert.match(sandboxHtml, /<meta\s+http-equiv="Content-Security-Policy"\s+content="[^"]*default-src\s+'none'[^"]*"/i);
+
+  // 3. Verify scriptRunner sets sandbox attribute
+  const runnerSource = fs.readFileSync(new URL('../packages/common/src/lib/scriptRunner.ts', import.meta.url), 'utf8');
+  assert.match(runnerSource, /setAttribute\(\s*['"]sandbox['"]\s*,\s*['"]allow-scripts['"]\s*\)/);
+
+  // 4. Verify prototype isolation in sandbox execution
+  let messageHandler = null;
+  const mockSandboxWindow = {
+    addEventListener: (type, fn) => {
+      if (type === 'message') messageHandler = fn;
+    },
+    removeEventListener: () => {},
+  };
+  const mockParent = {
+    postMessage: (data) => {
+      mockParent.lastData = data;
+    },
+    lastData: null,
+  };
+
+  const scriptMatch = sandboxHtml.match(/<script>([\s\S]*?)<\/script>/);
+  assert.ok(scriptMatch, 'sandbox.html must contain script tag');
+
+  const sandboxContext = {
+    window: mockSandboxWindow,
+    document: {},
+    console,
+    Date,
+    JSON,
+    Object,
+    String,
+    Function,
+    Error,
+  };
+  mockSandboxWindow.parent = mockParent;
+
+  vm.createContext(sandboxContext);
+  vm.runInContext(scriptMatch[1], sandboxContext);
+
+  assert.ok(messageHandler, 'sandbox.html must register message event listener');
+
+  // Trigger execution querying Object.prototype properties ('toString', 'valueOf', 'constructor')
+  const testId = 'test-proto-isolation';
+  messageHandler({
+    source: mockParent,
+    origin: 'chrome-extension://test-extension-id',
+    data: {
+      id: testId,
+      script: `
+        pm.test('Prototype isolation', () => {
+          pm.expect(pm.variables.get('toString')).to.be(undefined);
+          pm.expect(pm.environment.get('valueOf')).to.be(undefined);
+          pm.expect(postman.getGlobalVariable('constructor')).to.be(undefined);
+          pm.environment.set('custom', 'ok');
+        });
+      `,
+      environment: {},
+      variables: {},
+    },
+  });
+
+  assert.ok(mockParent.lastData, 'Sandbox must reply to parent window');
+  assert.equal(mockParent.lastData.id, testId);
+  assert.equal(mockParent.lastData.success, true, `Script should pass without prototype pollution: ${mockParent.lastData.error}`);
+  assert.equal(mockParent.lastData.environment.custom, 'ok');
 });
