@@ -1450,6 +1450,21 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
                                 <AlertTriangle className="h-3.5 w-3.5" />
                               </button>
                             )}
+                            {col._syncStatus === 'pending' && !col.isPartial && (
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void pullCloudDelta();
+                                }}
+                                disabled={syncStatus === 'syncing'}
+                                className="inline-flex shrink-0 items-center text-amber-500 dark:text-amber-400 hover:text-amber-600 dark:hover:text-amber-300 disabled:cursor-wait disabled:opacity-60"
+                                title="Sync pending: this collection is not yet uploaded to the cloud. Click to retry sync."
+                                aria-label={`Retry uploading ${col.name}`}
+                              >
+                                <Upload className="h-3.5 w-3.5 animate-pulse" />
+                              </button>
+                            )}
                             <span className="text-[10px] text-tx-muted shrink-0 font-mono">
                               {(col.items || []).length}
                             </span>

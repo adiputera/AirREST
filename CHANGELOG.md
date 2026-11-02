@@ -7,7 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [1.3.1] - 2026-11-02
+
+### Added
+- **Explicit Save & Discard Controls for Environment Variables (Name & Initial Value)**:
+  - Replaced eager keystroke cloud pushes with local draft buffering (`draftKeys`, `draftInitialValues`) in `EnvironmentModal`.
+  - Added inline Save ($\checkmark$ / <kbd>Enter</kbd>) and Discard ($\times$ / <kbd>Esc</kbd>) action buttons on every variable row, lighting up dynamically whenever variable name or initial value differs from its saved state.
+  - Added visual dirty state indicators with amber boundary styling on modified variable name and initial value inputs.
+  - Introduced an **Unsaved Variable Changes Confirmation Dialog** with **Save Changes**, **Discard**, and **Cancel** options, safeguarding against accidental loss of edits when clicking Done, the close button, pressing <kbd>Esc</kbd>, Android back navigation, or switching environments in the sidebar list.
+  - Retained instant local reflection for Current Value without cloud push.
+  - Added automated unit test suite in `scripts/environment-draft-sync.test.mjs`.
+
+### Changed
+- **Extended Request and Cloud Synchronization Deadlines to 5 Minutes (300s)**:
+  - Extended backend request execution deadline (`RequestTimeout`) in `backend/core/middleware/limits.go` from 120 seconds (2 minutes) to 300 seconds (5 minutes) matching Vercel Hobby serverless maximum execution limits.
+  - Configured explicit `maxDuration: 300` in `backend/vercel.json` for the serverless function handler (`api/index.go`).
+  - Extended shared client cloud sync request deadline (`getDefaultCloudSignal`) in `packages/common/src/lib/cloudApi.ts` from 120,000ms to 300,000ms (5 minutes).
+  - Extended desktop transport fallback timeout in `apps/native/src/adapters/tauriAdapter.ts` (`combineSignals`) from 120,000ms to 300,000ms (5 minutes).
+  - Extended client test request execution deadline (`REQUEST_TIMEOUT_MS`) in `packages/common/src/lib/fetcher.ts` from 120 seconds to 300 seconds (5 minutes).
+  - Synchronized API contract specifications and documentation in `backend/API_CONTRACT.md`, `backend/openapi.yaml`, and `backend/openapi.json`.
+
+### Fixed
+- **Collection Import Error Handling & Cloud Push Retry**:
+  - Prevented premature closing of `ImportModal` when batch upload (`POST /api/v1/sync/import-batch`) times out or encounters network errors; `addCollection`, `replaceCollection`, and `addEnvironment` now propagate errors so `ImportModal` remains open with the error message and preserves user input.
+  - Added `_syncStatus: 'pending'` tracking for un-synced and pending collections in cloud workspace scopes.
+  - Fixed sync retry flow in `pullCloudDelta`: clicking the Sync/Retry button in `ScopeSwitcher` now proactively attempts re-uploading un-synced collections via `batchImportToScope` before pulling delta changes, preventing data loss.
+  - Protected un-synced and pending collections from being wiped out or overwritten by server pulls in `pullCloudDelta`.
+  - Avoided false conflict modal triggers when re-attempting imports of failed/pending collections in `ImportModal`.
+  - Added visual pending sync indicator in `Sidebar` collection headers with one-click retry trigger.
+  - Added unit test suite in `scripts/collection-sync-retry.test.mjs`.
+- **Android APK Update Browser Redirect**:
+  - Redirected APK download flow in `AndroidUpdateBanner` to open the GitHub Release web page (`html_url`) in the external browser rather than directly streaming the binary `.apk` URL into in-app webviews / Chrome Custom Tabs.
+  - Resolved download stalls (freezing at 100%) caused by in-app browser sandbox limitations and missing package installation hand-offs.
+  - Added regression test assertion in `scripts/android-update-banner.test.mjs`.
+- **Optimistic Concurrency Control (OCC) Cloud Sync Concurrency**:
+  - Increased `scheduleEnvironmentCloudSync` debounce timeout from `300ms` to `1200ms` in `useApiStore.ts`.
+  - Added in-flight request lock (`envSyncInFlight`) and queued sync serialization (`envSyncQueued`) to prevent overlapping sync requests from dispatching stale `base_version` payloads that triggered 409 conflict popups while editing.
 
 ## [1.3.0] - 2026-11-02
 

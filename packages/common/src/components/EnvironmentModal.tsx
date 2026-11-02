@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import {
   Plus,
   Trash2,
@@ -11,6 +11,7 @@ import {
   Upload,
   Download,
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
   FileCode,
   Shield,
@@ -70,6 +71,11 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
   const [selectedEnvId, setSelectedEnvId] = useState<string>(
     activeEnvironmentId || (environments[0]?.id ?? '')
   );
+  const [draftKeys, setDraftKeys] = useState<Record<string, string>>({});
+  const [draftInitialValues, setDraftInitialValues] = useState<Record<string, string>>({});
+  const [pendingExitAction, setPendingExitAction] = useState<
+    null | { type: 'close' } | { type: 'switchEnv'; targetId: string }
+  >(null);
   const [newEnvName, setNewEnvName] = useState('');
   const [newEnvMinRole, setNewEnvMinRole] = useState<'reader' | 'contributor' | 'maintainer' | 'admin'>('reader');
   const [isAddingEnv, setIsAddingEnv] = useState(false);
@@ -88,15 +94,173 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
   const [isNewEnvPermModalOpen, setIsNewEnvPermModalOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  useBackHandler(isOpen, () => {
-    if (isPasteModalOpen) setIsPasteModalOpen(false);
-    else onClose();
-  }, 20);
-
-  if (!isOpen) return null;
 
   const currentEnv =
     (environments || []).find((e) => e.id === selectedEnvId) || (environments || [])[0];
+
+  const hasUnsavedDrafts = useMemo(() => {
+    if (!currentEnv) return false;
+    return currentEnv.variables.some((v) => {
+      const savedKey = v.key ?? '';
+      const savedInitial = v.initialValue ?? v.value ?? '';
+      const isKeyDirty = draftKeys[v.id] !== undefined && draftKeys[v.id] !== savedKey;
+      const isInitialDirty = draftInitialValues[v.id] !== undefined && draftInitialValues[v.id] !== savedInitial;
+      return isKeyDirty || isInitialDirty;
+    });
+  }, [currentEnv, draftKeys, draftInitialValues]);
+
+  const handleSaveRow = (varId: string) => {
+    if (!currentEnv) return;
+    const v = currentEnv.variables.find((item) => item.id === varId);
+    if (!v) return;
+
+    const savedKey = v.key ?? '';
+    const savedInitial = v.initialValue ?? v.value ?? '';
+    const nextKey = draftKeys[varId] !== undefined ? draftKeys[varId] : savedKey;
+    const nextInitial = draftInitialValues[varId] !== undefined ? draftInitialValues[varId] : savedInitial;
+
+    const currentVal = v.currentValue !== undefined ? v.currentValue : savedInitial;
+    const shouldSyncCurrent = currentVal === '' || currentVal === savedInitial;
+
+    updateEnvironmentVariable(currentEnv.id, varId, {
+      key: nextKey,
+      initialValue: nextInitial,
+      value: nextInitial,
+      ...(shouldSyncCurrent ? { currentValue: nextInitial } : {}),
+    });
+
+    setDraftKeys((prev) => {
+      const next = { ...prev };
+      delete next[varId];
+      return next;
+    });
+    setDraftInitialValues((prev) => {
+      const next = { ...prev };
+      delete next[varId];
+      return next;
+    });
+  };
+
+  const handleDiscardRow = (varId: string) => {
+    setDraftKeys((prev) => {
+      const next = { ...prev };
+      delete next[varId];
+      return next;
+    });
+    setDraftInitialValues((prev) => {
+      const next = { ...prev };
+      delete next[varId];
+      return next;
+    });
+  };
+
+  const handleRequestClose = () => {
+    if (hasUnsavedDrafts) {
+      setPendingExitAction({ type: 'close' });
+    } else {
+      setDraftKeys({});
+      setDraftInitialValues({});
+      onClose();
+    }
+  };
+
+  const handleSelectEnv = (envId: string) => {
+    if (envId === selectedEnvId) return;
+    if (hasUnsavedDrafts) {
+      setPendingExitAction({ type: 'switchEnv', targetId: envId });
+    } else {
+      setDraftKeys({});
+      setDraftInitialValues({});
+      setSelectedEnvId(envId);
+    }
+  };
+
+  const handleCancelExit = () => {
+    setPendingExitAction(null);
+  };
+
+  const handleDiscardAllDraftsAndProceed = () => {
+    setDraftKeys({});
+    setDraftInitialValues({});
+    const action = pendingExitAction;
+    setPendingExitAction(null);
+    if (action?.type === 'close') {
+      onClose();
+    } else if (action?.type === 'switchEnv') {
+      setSelectedEnvId(action.targetId);
+    }
+  };
+
+  const handleSaveAllDraftsAndProceed = () => {
+    if (!currentEnv) return;
+    const updatedVariables = currentEnv.variables.map((v) => {
+      const savedKey = v.key ?? '';
+      const savedInitial = v.initialValue ?? v.value ?? '';
+      const nextKey = draftKeys[v.id] !== undefined ? draftKeys[v.id] : savedKey;
+      const nextInitial = draftInitialValues[v.id] !== undefined ? draftInitialValues[v.id] : savedInitial;
+      const currentVal = v.currentValue !== undefined ? v.currentValue : savedInitial;
+      const shouldSyncCurrent = currentVal === '' || currentVal === savedInitial;
+
+      return {
+        ...v,
+        key: nextKey,
+        initialValue: nextInitial,
+        value: nextInitial,
+        ...(shouldSyncCurrent ? { currentValue: nextInitial } : {}),
+      };
+    });
+
+    updateEnvironment(currentEnv.id, { variables: updatedVariables });
+    setDraftKeys({});
+    setDraftInitialValues({});
+    const action = pendingExitAction;
+    setPendingExitAction(null);
+    if (action?.type === 'close') {
+      onClose();
+    } else if (action?.type === 'switchEnv') {
+      setSelectedEnvId(action.targetId);
+    }
+  };
+
+  useBackHandler(isOpen, () => {
+    if (pendingExitAction) {
+      setPendingExitAction(null);
+    } else if (isPasteModalOpen) {
+      setIsPasteModalOpen(false);
+    } else if (hasUnsavedDrafts) {
+      setPendingExitAction({ type: 'close' });
+    } else {
+      onClose();
+    }
+  }, 20);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !e.defaultPrevented) {
+        if (pendingExitAction) {
+          e.preventDefault();
+          setPendingExitAction(null);
+        } else if (isPasteModalOpen) {
+          e.preventDefault();
+          setIsPasteModalOpen(false);
+        } else if (hasUnsavedDrafts) {
+          e.preventDefault();
+          setPendingExitAction({ type: 'close' });
+        } else {
+          e.preventDefault();
+          onClose();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, pendingExitAction, isPasteModalOpen, hasUnsavedDrafts, onClose]);
+
+  if (!isOpen) return null;
+
   const isEnvReadOnly = currentEnv
     ? !canModifyEnvironment(currentEnv.minRole, activeScope, workspaceMode, cloudConfig?.user?.role)
     : false;
@@ -397,7 +561,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
               return (
                 <div
                   key={env.id}
-                  onClick={() => setSelectedEnvId(env.id)}
+                  onClick={() => handleSelectEnv(env.id)}
                   className={`group flex items-center justify-between rounded-xl px-3 py-2 text-xs cursor-pointer transition ${isSelected
                       ? 'bg-element text-tx-primary font-semibold'
                       : 'text-tx-muted hover:bg-hover hover:text-tx-secondary'
@@ -557,7 +721,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                 </button>
               )}
               <button
-                onClick={onClose}
+                onClick={handleRequestClose}
                 className="rounded-lg p-1.5 text-tx-muted hover:bg-hover hover:text-tx-primary transition"
               >
                 <X className="h-5 w-5" />
@@ -631,6 +795,8 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                   <button
                     type="button"
                     onClick={() => {
+                      setDraftKeys({});
+                      setDraftInitialValues({});
                       resetEnvironmentCurrentValues(currentEnv.id);
                       setSuccessMsg('Reset all current values to initial values');
                       setTimeout(() => setSuccessMsg(null), 2500);
@@ -645,6 +811,8 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                     type="button"
                     disabled={isEnvReadOnly}
                     onClick={() => {
+                      setDraftKeys({});
+                      setDraftInitialValues({});
                       persistEnvironmentCurrentValues(currentEnv.id);
                       setSuccessMsg('Persisted all current values to initial values and synced to cloud');
                       setTimeout(() => setSuccessMsg(null), 2500);
@@ -681,8 +849,18 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                   </thead>
                   <tbody className="divide-y divide-line">
                     {currentEnv.variables.map((v) => {
-                      const initialVal = v.initialValue ?? v.value ?? '';
-                      const currentVal = v.currentValue !== undefined ? v.currentValue : initialVal;
+                      const savedKey = v.key ?? '';
+                      const savedInitial = v.initialValue ?? v.value ?? '';
+                      const currentVal = v.currentValue !== undefined ? v.currentValue : savedInitial;
+                      const draftKey = draftKeys[v.id];
+                      const draftInitial = draftInitialValues[v.id];
+                      const displayedKey = draftKey !== undefined ? draftKey : savedKey;
+                      const displayedInitialVal = draftInitial !== undefined ? draftInitial : savedInitial;
+
+                      const isKeyDirty = draftKey !== undefined && draftKey !== savedKey;
+                      const isInitialDirty = draftInitial !== undefined && draftInitial !== savedInitial;
+                      const isRowDirty = isKeyDirty || isInitialDirty;
+
                       return (
                         <tr key={v.id} className="group hover:bg-hover transition">
                           <td className="px-3 py-1.5 text-center">
@@ -701,34 +879,88 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                           <td className="px-2 py-1.5">
                             <input
                               type="text"
-                              value={v.key}
+                              value={displayedKey}
                               disabled={isEnvReadOnly}
-                              onChange={(e) =>
-                                updateEnvironmentVariable(currentEnv.id, v.id, {
-                                  key: e.target.value,
-                                })
-                              }
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setDraftKeys((prev) => ({
+                                  ...prev,
+                                  [v.id]: val,
+                                }));
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  handleSaveRow(v.id);
+                                } else if (e.key === 'Escape') {
+                                  e.preventDefault();
+                                  handleDiscardRow(v.id);
+                                }
+                              }}
                               placeholder="e.g. baseUrl"
-                              className="w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-sky-600 dark:text-sky-400 placeholder-tx-faint focus:bg-card focus:outline-none focus:ring-1 focus:ring-sky-500/50 disabled:opacity-60 disabled:cursor-not-allowed"
+                              className={`w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-sky-600 dark:text-sky-400 placeholder-tx-faint focus:bg-card focus:outline-none focus:ring-1 focus:ring-sky-500/50 disabled:opacity-60 disabled:cursor-not-allowed transition ${
+                                isKeyDirty ? 'ring-1 ring-amber-500/50 border border-amber-500/40 bg-amber-500/5' : ''
+                              }`}
                             />
                           </td>
                           <td className="px-2 py-1.5">
-                            <input
-                              type="text"
-                              value={initialVal}
-                              disabled={isEnvReadOnly}
-                              onChange={(e) => {
-                                const nextInit = e.target.value;
-                                const shouldSyncCurrent = currentVal === '' || currentVal === initialVal;
-                                updateEnvironmentVariable(currentEnv.id, v.id, {
-                                  initialValue: nextInit,
-                                  value: nextInit,
-                                  ...(shouldSyncCurrent ? { currentValue: nextInit } : {}),
-                                });
-                              }}
-                              placeholder="e.g. https://api.example.com"
-                              className="w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-tx-primary placeholder-tx-faint focus:bg-card focus:outline-none focus:ring-1 focus:ring-sky-500/50 disabled:opacity-60 disabled:cursor-not-allowed"
-                            />
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="text"
+                                value={displayedInitialVal}
+                                disabled={isEnvReadOnly}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setDraftInitialValues((prev) => ({
+                                    ...prev,
+                                    [v.id]: val,
+                                  }));
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    handleSaveRow(v.id);
+                                  } else if (e.key === 'Escape') {
+                                    e.preventDefault();
+                                    handleDiscardRow(v.id);
+                                  }
+                                }}
+                                placeholder="e.g. https://api.example.com"
+                                className={`flex-1 min-w-0 rounded bg-transparent px-2 py-1 font-mono text-xs text-tx-primary placeholder-tx-faint focus:bg-card focus:outline-none focus:ring-1 focus:ring-sky-500/50 disabled:opacity-60 disabled:cursor-not-allowed transition ${
+                                  isInitialDirty ? 'ring-1 ring-amber-500/50 border border-amber-500/40 bg-amber-500/5' : ''
+                                }`}
+                              />
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button
+                                  type="button"
+                                  disabled={!isRowDirty || isEnvReadOnly}
+                                  onClick={() => handleSaveRow(v.id)}
+                                  className={`flex items-center justify-center h-6 w-6 rounded transition ${
+                                    isRowDirty
+                                      ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/25 border border-emerald-500/40 cursor-pointer shadow-xs'
+                                      : 'text-tx-faint opacity-30 cursor-not-allowed'
+                                  }`}
+                                  title={isRowDirty ? "Save variable (syncs to cloud) [Enter]" : "No unsaved changes"}
+                                  aria-label="Save variable"
+                                >
+                                  <Check className="h-3.5 w-3.5 stroke-[2.5]" />
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={!isRowDirty || isEnvReadOnly}
+                                  onClick={() => handleDiscardRow(v.id)}
+                                  className={`flex items-center justify-center h-6 w-6 rounded transition ${
+                                    isRowDirty
+                                      ? 'bg-rose-500/15 text-rose-500 dark:text-rose-400 hover:bg-rose-500/25 border border-rose-500/40 cursor-pointer shadow-xs'
+                                      : 'text-tx-faint opacity-30 cursor-not-allowed'
+                                  }`}
+                                  title={isRowDirty ? "Cancel changes [Esc]" : "No unsaved changes"}
+                                  aria-label="Cancel changes"
+                                >
+                                  <X className="h-3.5 w-3.5 stroke-[2.5]" />
+                                </button>
+                              </div>
+                            </div>
                           </td>
                           <td className="px-2 py-1.5">
                             <input
@@ -749,7 +981,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                                 type="button"
                                 onClick={() =>
                                   updateEnvironmentVariable(currentEnv.id, v.id, {
-                                    currentValue: initialVal,
+                                    currentValue: savedInitial,
                                   })
                                 }
                                 className="rounded p-1 text-tx-muted hover:bg-hover hover:text-sky-500 transition"
@@ -760,12 +992,22 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                               <button
                                 type="button"
                                 disabled={isEnvReadOnly}
-                                onClick={() =>
+                                onClick={() => {
+                                  setDraftKeys((prev) => {
+                                    const next = { ...prev };
+                                    delete next[v.id];
+                                    return next;
+                                  });
+                                  setDraftInitialValues((prev) => {
+                                    const next = { ...prev };
+                                    delete next[v.id];
+                                    return next;
+                                  });
                                   updateEnvironmentVariable(currentEnv.id, v.id, {
                                     initialValue: currentVal,
                                     value: currentVal,
-                                  })
-                                }
+                                  });
+                                }}
                                 className="rounded p-1 text-tx-muted hover:bg-hover hover:text-emerald-500 disabled:opacity-20 disabled:cursor-not-allowed transition"
                                 title={isEnvReadOnly ? 'Read only in cloud scope' : 'Persist Current Value to Initial Value (syncs to cloud)'}
                               >
@@ -773,7 +1015,19 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                               </button>
                               <button
                                 type="button"
-                                onClick={() => removeEnvironmentVariable(currentEnv.id, v.id)}
+                                onClick={() => {
+                                  setDraftKeys((prev) => {
+                                    const next = { ...prev };
+                                    delete next[v.id];
+                                    return next;
+                                  });
+                                  setDraftInitialValues((prev) => {
+                                    const next = { ...prev };
+                                    delete next[v.id];
+                                    return next;
+                                  });
+                                  removeEnvironmentVariable(currentEnv.id, v.id);
+                                }}
                                 disabled={isEnvReadOnly}
                                 className="rounded p-1 text-tx-muted opacity-60 hover:bg-hover hover:text-rose-500 group-hover:opacity-100 disabled:opacity-20 disabled:cursor-not-allowed transition"
                                 title={isEnvReadOnly ? 'Read only' : 'Delete variable'}
@@ -803,7 +1057,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
 
                 <button
                   type="button"
-                  onClick={onClose}
+                  onClick={handleRequestClose}
                   className="rounded-xl border border-line bg-element px-4 py-1.5 text-xs font-semibold text-tx-primary hover:bg-hover transition"
                 >
                   Done
@@ -813,6 +1067,91 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
           ) : null}
         </div>
       </div>
+
+      {pendingExitAction && (
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) handleCancelExit();
+          }}
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150 select-none"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-line bg-surface p-6 shadow-2xl animate-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-3.5">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-500/20 bg-amber-500/10 text-amber-500 dark:text-amber-400">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-base font-bold text-tx-primary">Unsaved Variable Changes</h3>
+                  <button
+                    type="button"
+                    onClick={handleCancelExit}
+                    className="rounded-lg p-1 text-tx-muted hover:bg-hover hover:text-tx-primary transition cursor-pointer"
+                    title="Cancel"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+
+                <div className="mt-2 text-xs leading-relaxed text-tx-muted">
+                  You have unsaved changes to environment variables in{' '}
+                  <strong className="text-tx-primary font-mono">"{currentEnv?.name}"</strong>.
+                  Do you want to save or discard these changes before {pendingExitAction.type === 'close' ? 'closing' : 'switching environments'}?
+                </div>
+
+                <div className="mt-3 max-h-32 overflow-y-auto space-y-1 rounded-xl border border-line bg-card/60 p-2.5">
+                  {currentEnv?.variables
+                    .filter((v) => {
+                      const savedKey = v.key ?? '';
+                      const savedInitial = v.initialValue ?? v.value ?? '';
+                      const isKeyDirty = draftKeys[v.id] !== undefined && draftKeys[v.id] !== savedKey;
+                      const isInitialDirty = draftInitialValues[v.id] !== undefined && draftInitialValues[v.id] !== savedInitial;
+                      return isKeyDirty || isInitialDirty;
+                    })
+                    .map((v) => {
+                      const displayK = draftKeys[v.id] !== undefined ? draftKeys[v.id] : v.key;
+                      const displayI = draftInitialValues[v.id] !== undefined ? draftInitialValues[v.id] : (v.initialValue ?? v.value ?? '');
+                      return (
+                        <div key={v.id} className="flex items-center justify-between text-[11px] font-mono">
+                          <span className="text-sky-500 truncate max-w-[40%] font-semibold">{displayK || 'Untitled'}</span>
+                          <span className="text-tx-muted truncate max-w-[55%] text-right">{displayI}</span>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 flex flex-wrap items-center justify-end gap-2.5 pt-2 border-t border-line">
+              <button
+                type="button"
+                onClick={handleCancelExit}
+                className="rounded-xl border border-line bg-card px-3.5 py-2 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition cursor-pointer"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={handleDiscardAllDraftsAndProceed}
+                className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-3.5 py-2 text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-500/20 transition cursor-pointer"
+              >
+                Discard
+              </button>
+
+              <button
+                type="button"
+                onClick={handleSaveAllDraftsAndProceed}
+                className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-sky-500/20 hover:from-sky-400 hover:to-blue-500 active:scale-95 transition cursor-pointer"
+              >
+                <Check className="h-3.5 w-3.5" />
+                <span>Save Changes</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <ConfirmModal
         isOpen={showDeleteConfirm}

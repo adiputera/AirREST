@@ -5,7 +5,7 @@ import { substitutePathVariables } from './urlParams';
 
 export const RESPONSE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024; // 10 MiB
 export const MAX_OUTBOUND_ATTACHMENT_BYTES = 25 * 1024 * 1024; // 25 MiB
-export const REQUEST_TIMEOUT_MS = 120_000; // 120 seconds (2 minutes)
+export const REQUEST_TIMEOUT_MS = 300_000; // 300 seconds (5 minutes)
 
 export class ResponseTooLargeError extends Error {
   constructor() {

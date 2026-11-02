@@ -13,7 +13,7 @@ export function getCloudTransport(): CloudTransport | null {
 
 function getDefaultCloudSignal(): AbortSignal | undefined {
   if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
-    return AbortSignal.timeout(120000);
+    return AbortSignal.timeout(300000);
   }
   if (typeof AbortController !== 'undefined') {
     return new AbortController().signal;
