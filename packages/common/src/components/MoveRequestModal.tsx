@@ -152,39 +152,39 @@ export const MoveRequestModal: React.FC<MoveRequestModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-      <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+      <div className="w-full max-w-md rounded-2xl border border-line-strong bg-card p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-zinc-800/80 pb-4">
+        <div className="flex items-center justify-between border-b border-line pb-4">
           <div className="flex items-center gap-2.5">
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-sky-500/10 text-sky-400 border border-sky-500/20">
               <FolderInput className="h-5 w-5" />
             </div>
             <div>
-              <h2 className="text-base font-semibold text-zinc-100">Move Request</h2>
-              <p className="text-xs text-zinc-400">Move request to another folder or collection</p>
+              <h2 className="text-base font-semibold text-tx-primary">Move Request</h2>
+              <p className="text-xs text-tx-muted">Move request to another folder or collection</p>
             </div>
           </div>
           <button
             onClick={onClose}
             disabled={isSubmitting}
-            className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors"
+            className="rounded-lg p-1.5 text-tx-muted hover:bg-hover hover:text-tx-primary transition-colors"
           >
             <X className="h-5 w-5" />
           </button>
         </div>
 
         {/* Current Request Info */}
-        <div className="mt-4 rounded-xl border border-zinc-800/80 bg-zinc-900/60 p-3 space-y-2">
+        <div className="mt-4 rounded-xl border border-line bg-element/50 p-3 space-y-2">
           <div className="flex items-center gap-2">
             {item.request && <MethodBadge method={item.request.method} size="sm" />}
-            <span className="text-xs font-semibold text-zinc-100 truncate flex-1" title={item.name}>
+            <span className="text-xs font-semibold text-tx-primary truncate flex-1" title={item.name}>
               {item.name}
             </span>
           </div>
-          <div className="flex items-center gap-1.5 text-[11px] text-zinc-400 truncate">
+          <div className="flex items-center gap-1.5 text-[11px] text-tx-muted truncate">
             <Folder className="h-3 w-3 text-amber-400/80 shrink-0" />
-            <span className="text-zinc-500">Current:</span>
-            <span className="text-zinc-300 truncate font-mono">
+            <span className="text-tx-muted">Current:</span>
+            <span className="text-tx-secondary truncate font-mono">
               {sourceCollection?.name || 'Collection'} / {currentFolderName}
             </span>
           </div>
@@ -194,7 +194,7 @@ export const MoveRequestModal: React.FC<MoveRequestModalProps> = ({
         <div className="mt-4 space-y-4">
           {/* Target Collection */}
           <div>
-            <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
+            <label className="block text-xs font-semibold text-tx-secondary mb-1.5">
               Target Collection
             </label>
             <select
@@ -204,7 +204,7 @@ export const MoveRequestModal: React.FC<MoveRequestModalProps> = ({
                 setSelectedFolderId('');
               }}
               disabled={isSubmitting}
-              className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 p-2.5 text-xs text-zinc-200 focus:border-sky-500 focus:outline-none cursor-pointer"
+              className="w-full rounded-xl border border-line bg-card p-2.5 text-xs text-tx-primary focus:border-sky-500 focus:outline-none cursor-pointer"
             >
               {collections.map((col) => {
                 const isTargetEditable = canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role);
@@ -219,14 +219,14 @@ export const MoveRequestModal: React.FC<MoveRequestModalProps> = ({
 
           {/* Target Folder */}
           <div>
-            <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
+            <label className="block text-xs font-semibold text-tx-secondary mb-1.5">
               Target Folder
             </label>
             <select
               value={selectedFolderId}
               onChange={(e) => setSelectedFolderId(e.target.value)}
               disabled={isSubmitting}
-              className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 p-2.5 text-xs text-zinc-200 focus:border-sky-500 focus:outline-none cursor-pointer"
+              className="w-full rounded-xl border border-line bg-card p-2.5 text-xs text-tx-primary focus:border-sky-500 focus:outline-none cursor-pointer"
             >
               <option value="">(Root Collection / No Folder)</option>
               {availableFolders.map((folder) => {
@@ -259,12 +259,12 @@ export const MoveRequestModal: React.FC<MoveRequestModalProps> = ({
         </div>
 
         {/* Footer Actions */}
-        <div className="mt-6 flex items-center justify-end gap-2.5 border-t border-zinc-800/80 pt-4">
+        <div className="mt-6 flex items-center justify-end gap-2.5 border-t border-line pt-4">
           <button
             type="button"
             onClick={onClose}
             disabled={isSubmitting}
-            className="rounded-xl border border-zinc-800 px-4 py-2 text-xs font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition"
+            className="rounded-xl border border-line px-4 py-2 text-xs font-medium text-tx-muted hover:bg-hover hover:text-tx-primary transition"
           >
             Cancel
           </button>

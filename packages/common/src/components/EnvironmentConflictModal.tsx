@@ -69,17 +69,17 @@ export const EnvironmentConflictModal: React.FC<EnvironmentConflictModalProps> =
       }}
       className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
     >
-      <div className="w-full max-w-2xl rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+      <div className="w-full max-w-2xl rounded-2xl border border-line-strong bg-card p-6 shadow-2xl">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-zinc-850 pb-4">
+        <div className="flex items-center justify-between border-b border-line pb-4">
           <div className="flex items-center gap-2.5">
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20">
               <AlertTriangle className="h-5 w-5" />
             </div>
             <div>
-              <h2 className="text-base font-semibold text-zinc-100">Environment Already Exists</h2>
-              <p className="text-xs text-zinc-400">
-                An environment named <span className="font-semibold text-zinc-200">"{existingEnv.name}"</span> already exists in your workspace.
+              <h2 className="text-base font-semibold text-tx-primary">Environment Already Exists</h2>
+              <p className="text-xs text-tx-muted">
+                An environment named <span className="font-semibold text-tx-secondary">"{existingEnv.name}"</span> already exists in your workspace.
               </p>
             </div>
           </div>
@@ -87,7 +87,7 @@ export const EnvironmentConflictModal: React.FC<EnvironmentConflictModalProps> =
             type="button"
             onClick={onClose}
             disabled={isResolving}
-            className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors disabled:opacity-40"
+            className="rounded-lg p-1.5 text-tx-muted hover:bg-hover hover:text-tx-primary transition-colors disabled:opacity-40"
           >
             <X className="h-5 w-5" />
           </button>
@@ -96,10 +96,10 @@ export const EnvironmentConflictModal: React.FC<EnvironmentConflictModalProps> =
         {/* Variable Differences Breakdown */}
         <div className="mt-4">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold text-zinc-200 flex items-center gap-2">
+            <span className="text-xs font-semibold text-tx-secondary flex items-center gap-2">
               <Globe className="h-3.5 w-3.5 text-sky-400" />
               <span>Variable Differences</span>
-              <span className="text-[11px] font-normal text-zinc-500">
+              <span className="text-[11px] font-normal text-tx-muted">
                 ({totalChanges} {totalChanges === 1 ? 'change' : 'changes'} detected)
               </span>
             </span>
@@ -121,7 +121,7 @@ export const EnvironmentConflictModal: React.FC<EnvironmentConflictModalProps> =
                 </span>
               )}
               {diff.unchangedCount > 0 && (
-                <span className="inline-flex items-center rounded-full bg-zinc-850 px-2 py-0.5 font-medium text-zinc-400 border border-zinc-750">
+                <span className="inline-flex items-center rounded-full bg-element px-2 py-0.5 font-medium text-tx-muted border border-line">
                   {diff.unchangedCount} Same
                 </span>
               )}
@@ -129,9 +129,9 @@ export const EnvironmentConflictModal: React.FC<EnvironmentConflictModalProps> =
           </div>
 
           {/* Changed Variables List */}
-          <div className="max-h-56 overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-900/60 p-2 space-y-1.5">
+          <div className="max-h-56 overflow-y-auto rounded-xl border border-line bg-element/50 p-2 space-y-1.5">
             {totalChanges === 0 ? (
-              <div className="py-6 text-center text-xs text-zinc-400">
+              <div className="py-6 text-center text-xs text-tx-muted">
                 All {diff.totalIncoming} variables are identical between existing and incoming environment.
               </div>
             ) : (
@@ -139,7 +139,7 @@ export const EnvironmentConflictModal: React.FC<EnvironmentConflictModalProps> =
                 {diff.added.map((item, idx) => (
                   <div
                     key={`added-${item.key}-${idx}`}
-                    className="flex items-center justify-between rounded-lg bg-zinc-950/70 px-3 py-2 border border-zinc-850/80 hover:border-emerald-500/30 transition"
+                    className="flex items-center justify-between rounded-lg bg-card px-3 py-2 border border-line hover:border-emerald-500/30 transition"
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
                       <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
@@ -151,10 +151,10 @@ export const EnvironmentConflictModal: React.FC<EnvironmentConflictModalProps> =
                     </div>
                     <div className="flex items-center gap-2 text-xs font-mono ml-3 shrink-0 max-w-[280px]">
                       <span className="text-emerald-400 truncate">
-                        {item.newValue || <em className="text-zinc-600 text-[11px] not-italic">empty</em>}
+                        {item.newValue || <em className="text-tx-muted text-[11px] not-italic">empty</em>}
                       </span>
                       {item.newEnabled === false && (
-                        <span className="text-[10px] text-zinc-500 italic">(disabled)</span>
+                        <span className="text-[10px] text-tx-muted italic">(disabled)</span>
                       )}
                     </div>
                   </div>
@@ -163,7 +163,7 @@ export const EnvironmentConflictModal: React.FC<EnvironmentConflictModalProps> =
                 {diff.modified.map((item, idx) => (
                   <div
                     key={`mod-${item.key}-${idx}`}
-                    className="flex items-center justify-between rounded-lg bg-zinc-950/70 px-3 py-2 border border-zinc-850/80 hover:border-amber-500/30 transition"
+                    className="flex items-center justify-between rounded-lg bg-card px-3 py-2 border border-line hover:border-amber-500/30 transition"
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
                       <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
@@ -179,16 +179,16 @@ export const EnvironmentConflictModal: React.FC<EnvironmentConflictModalProps> =
                           <span className="text-rose-400 line-through opacity-70 truncate max-w-[130px]">
                             {item.oldValue || '""'}
                           </span>
-                          <span className="text-zinc-500">→</span>
+                          <span className="text-tx-muted">→</span>
                           <span className="text-amber-300 font-medium truncate max-w-[130px]">
                             {item.newValue || '""'}
                           </span>
                         </div>
                       ) : (
-                        <span className="text-zinc-400 truncate max-w-[200px]">{item.newValue}</span>
+                        <span className="text-tx-secondary truncate max-w-[200px]">{item.newValue}</span>
                       )}
                       {item.oldEnabled !== item.newEnabled && (
-                        <span className="text-[10px] text-zinc-500 mt-0.5">
+                        <span className="text-[10px] text-tx-muted mt-0.5">
                           {item.oldEnabled ? 'enabled' : 'disabled'} → {item.newEnabled ? 'enabled' : 'disabled'}
                         </span>
                       )}
@@ -199,19 +199,19 @@ export const EnvironmentConflictModal: React.FC<EnvironmentConflictModalProps> =
                 {diff.removed.map((item, idx) => (
                   <div
                     key={`rem-${item.key}-${idx}`}
-                    className="flex items-center justify-between rounded-lg bg-zinc-950/70 px-3 py-2 border border-zinc-850/80 hover:border-rose-500/30 transition"
+                    className="flex items-center justify-between rounded-lg bg-card px-3 py-2 border border-line hover:border-rose-500/30 transition"
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
                       <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">
                         - Removed
                       </span>
-                      <span className="text-xs font-mono font-medium text-zinc-400 line-through truncate">
+                      <span className="text-xs font-mono font-medium text-tx-muted line-through truncate">
                         {item.key}
                       </span>
                     </div>
                     <div className="flex items-center gap-2 text-xs font-mono ml-3 shrink-0 max-w-[280px]">
                       <span className="text-rose-400/80 truncate">
-                        {item.oldValue || <em className="text-zinc-600 text-[11px] not-italic">empty</em>}
+                        {item.oldValue || <em className="text-tx-muted text-[11px] not-italic">empty</em>}
                       </span>
                     </div>
                   </div>
@@ -223,23 +223,23 @@ export const EnvironmentConflictModal: React.FC<EnvironmentConflictModalProps> =
 
         {/* Action Explanation Cards */}
         <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
-            <div className="flex items-center gap-1.5 font-semibold text-zinc-200">
+          <div className="rounded-xl border border-line bg-element/40 p-3">
+            <div className="flex items-center gap-1.5 font-semibold text-tx-primary">
               <Copy className="h-3.5 w-3.5 text-sky-400" />
               <span>Import as Copy</span>
             </div>
-            <p className="mt-1 text-zinc-400 text-[11px] leading-relaxed">
+            <p className="mt-1 text-tx-muted text-[11px] leading-relaxed">
               Imports as a new environment named{' '}
               <span className="font-semibold text-sky-300">"{copyCandidateName}"</span>. Existing environment is kept intact.
             </p>
           </div>
 
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
-            <div className="flex items-center gap-1.5 font-semibold text-zinc-200">
+          <div className="rounded-xl border border-line bg-element/40 p-3">
+            <div className="flex items-center gap-1.5 font-semibold text-tx-primary">
               <RefreshCw className="h-3.5 w-3.5 text-amber-400" />
               <span>Replace Environment</span>
             </div>
-            <p className="mt-1 text-zinc-400 text-[11px] leading-relaxed">
+            <p className="mt-1 text-tx-muted text-[11px] leading-relaxed">
               Replaces <span className="font-semibold text-amber-300">"{existingEnv.name}"</span> in-place. Variable values will be updated and synced.
             </p>
           </div>
@@ -251,7 +251,7 @@ export const EnvironmentConflictModal: React.FC<EnvironmentConflictModalProps> =
             type="button"
             disabled={isResolving}
             onClick={onClose}
-            className="rounded-xl px-4 py-2 text-xs font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition disabled:opacity-50"
+            className="rounded-xl px-4 py-2 text-xs font-medium text-tx-muted hover:bg-hover hover:text-tx-primary transition disabled:opacity-50"
           >
             Cancel
           </button>
@@ -259,7 +259,7 @@ export const EnvironmentConflictModal: React.FC<EnvironmentConflictModalProps> =
             type="button"
             disabled={isResolving}
             onClick={onImportAsCopy}
-            className="flex items-center justify-center gap-2 rounded-xl border border-zinc-700 bg-zinc-850 hover:bg-zinc-800 px-4 py-2 text-xs font-semibold text-zinc-100 shadow transition active:scale-95 disabled:opacity-50"
+            className="flex items-center justify-center gap-2 rounded-xl border border-line bg-element hover:bg-hover px-4 py-2 text-xs font-semibold text-tx-primary shadow transition active:scale-95 disabled:opacity-50"
           >
             {isResolving ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />

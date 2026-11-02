@@ -55,15 +55,15 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
       }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
     >
-      <div className="w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+      <div className="w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl border border-line bg-surface p-6 shadow-2xl">
         <div className="flex items-start gap-3.5">
           <div
             className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${
               isDanger
-                ? 'border-rose-500/20 bg-rose-500/10 text-rose-400'
+                ? 'border-rose-500/20 bg-rose-500/10 text-rose-500 dark:text-rose-400'
                 : isWarning
-                ? 'border-amber-500/20 bg-amber-500/10 text-amber-400'
-                : 'border-sky-500/20 bg-sky-500/10 text-sky-400'
+                ? 'border-amber-500/20 bg-amber-500/10 text-amber-500 dark:text-amber-400'
+                : 'border-sky-500/20 bg-sky-500/10 text-sky-500 dark:text-sky-400'
             }`}
           >
             {isDanger ? (
@@ -75,17 +75,17 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
 
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold text-zinc-100">{title}</h3>
+              <h3 className="text-base font-bold text-tx-primary">{title}</h3>
               <button
                 type="button"
                 onClick={onClose}
                 disabled={isLoading}
-                className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800 hover:text-white transition disabled:opacity-40"
+                className="rounded-lg p-1 text-tx-muted hover:bg-hover hover:text-tx-primary transition disabled:opacity-40"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <div className="mt-2 text-xs leading-relaxed text-zinc-400">
+            <div className="mt-2 text-xs leading-relaxed text-tx-muted">
               {message}
             </div>
           </div>
@@ -96,7 +96,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
             type="button"
             onClick={onClose}
             disabled={isLoading}
-            className="rounded-xl px-4 py-2 text-xs font-semibold text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition disabled:opacity-40"
+            className="rounded-xl px-4 py-2 text-xs font-semibold text-tx-muted hover:bg-hover hover:text-tx-primary transition disabled:opacity-40"
           >
             {cancelText}
           </button>

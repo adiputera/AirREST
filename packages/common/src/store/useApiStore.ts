@@ -30,7 +30,9 @@ import {
   FeaturePolicyStatus,
   FeatureFlags,
   ProjectRole,
+  ThemeMode,
 } from '../types/api';
+import { applyTheme } from '../lib/theme';
 import { executeApiRequest } from '../lib/fetcher';
 import type { PlatformAdapter } from '../types/platform';
 import { revokeBlobUrl, revokeBlobUrls } from '../lib/blobManager';
@@ -334,6 +336,10 @@ export interface ApiStoreState {
   collections: Collection[];
   history: HistoryItem[];
   sidebarTab: 'collections' | 'history';
+
+  // Theming
+  theme: ThemeMode;
+  setTheme: (theme: ThemeMode) => void;
 
   // Environments
   environments: Environment[];
@@ -680,6 +686,11 @@ export function createApiStore(
       collections: [],
       history: [],
       sidebarTab: 'collections',
+      theme: 'system',
+      setTheme: (newTheme: ThemeMode) => {
+        applyTheme(newTheme);
+        set({ theme: newTheme });
+      },
       environments: [],
       activeEnvironmentId: null,
 
@@ -4786,10 +4797,16 @@ export function createApiStore(
           workspaceMode: isOfflineOnly ? 'offline' : state.workspaceMode,
           hasConfiguredMode: isOfflineOnly ? true : state.hasConfiguredMode,
           cloudConfig: state.cloudConfig,
+          theme: state.theme ?? 'system',
         };
       },
       onRehydrateStorage: () => (state) => {
         if (!state) return;
+
+        if (!state.theme) {
+          state.theme = 'system';
+        }
+        applyTheme(state.theme);
 
         state.tabs = (state.tabs || []).map(normalizePersistedRequestAttachments);
         state.collections = ensureUniqueCollectionItemIds((state.collections || []).map(normalizeCollectionAttachments));

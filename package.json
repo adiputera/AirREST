@@ -55,7 +55,9 @@
     "test:path-variables": "node --test scripts/path-variables.test.mjs",
     "test:request-collapse": "node --test scripts/request-collapse.test.mjs",
     "test:collection-permission": "node --test scripts/collection-permission.test.mjs",
-    "test:all": "npm run test:security-clients && npm run test:extension-lifecycle && npm run test:extension-storage && npm run test:extension-fetcher && npm run test:cloud-compression && npm run test:feature-policy && npm run test:hub && npm run test:desktop && npm run test:sidebar-search && npm run test:sidebar-dropdown-placement && npm run test:scope-switcher-placement && npm run test:tab-response-cache && npm run test:path-variables && npm run test:request-collapse && npm run test:collection-permission"
+    "test:theme": "node --test scripts/theme-resolution.test.mjs",
+    "test:payload-builder": "node --test scripts/payload-builder.test.mjs",
+    "test:all": "npm run test:security-clients && npm run test:extension-lifecycle && npm run test:extension-storage && npm run test:extension-fetcher && npm run test:cloud-compression && npm run test:feature-policy && npm run test:hub && npm run test:desktop && npm run test:sidebar-search && npm run test:sidebar-dropdown-placement && npm run test:scope-switcher-placement && npm run test:tab-response-cache && npm run test:path-variables && npm run test:request-collapse && npm run test:collection-permission && npm run test:theme && npm run test:payload-builder"
   },
   "devDependencies": {
     "eslint": "^9",

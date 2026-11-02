@@ -186,11 +186,11 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
       }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in duration-150"
     >
-      <div className="relative max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-4 shadow-2xl shadow-black/90 md:p-6">
+      <div className="relative max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-2xl border border-line-strong bg-card p-4 shadow-2xl shadow-black/90 md:p-6">
         {/* Close Button */}
         <button
           onClick={handleClose}
-          className="absolute right-4 top-4 rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white transition"
+          className="absolute right-4 top-4 rounded-lg p-1.5 text-tx-muted hover:bg-hover hover:text-tx-primary transition"
           title="Close"
         >
           <X className="h-4 w-4" />
@@ -202,8 +202,8 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
             <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-500/10 text-sky-400 border border-sky-500/20 mb-3">
               <CheckCircle2 className="h-6 w-6" />
             </div>
-            <h3 className="text-base font-bold text-zinc-100">Successfully Signed In!</h3>
-            <p className="text-xs text-zinc-400 mt-2 leading-relaxed">
+            <h3 className="text-base font-bold text-tx-primary">Successfully Signed In!</h3>
+            <p className="text-xs text-tx-muted mt-2 leading-relaxed">
               We detected <strong className="text-sky-400">{localCount} collection(s)</strong> in your local offline workspace.
               Would you like to import them into your active workspace?
             </p>
@@ -219,7 +219,7 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
               <button
                 disabled={isLoading}
                 onClick={() => handleImportDecision(false)}
-                className="w-full rounded-lg border border-zinc-800 bg-zinc-900 py-2.5 text-xs font-medium text-zinc-300 hover:bg-zinc-800 hover:text-white transition disabled:opacity-50"
+                className="w-full rounded-lg border border-line bg-element py-2.5 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition disabled:opacity-50"
               >
                 Start with a Clean Workspace
               </button>
@@ -235,8 +235,8 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
                 className="h-10 w-10 rounded-xl object-cover shadow-md shadow-sky-500/20"
               />
               <div>
-                <h3 className="text-base font-bold text-zinc-100">Connect to Self-Hosted AirREST</h3>
-                <p className="text-xs text-zinc-400">Collaborate with teams &amp; sync collections</p>
+                <h3 className="text-base font-bold text-tx-primary">Connect to Self-Hosted AirREST</h3>
+                <p className="text-xs text-tx-muted">Collaborate with teams &amp; sync collections</p>
               </div>
             </div>
 
@@ -250,24 +250,24 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
 
             <form onSubmit={handleSubmit} className="space-y-3">
               <div>
-                <label className="block text-[11px] font-semibold text-zinc-300 mb-1">Email Address</label>
+                <label className="block text-[11px] font-semibold text-tx-secondary mb-1">Email Address</label>
                 <div className="relative">
-                  <Mail className="absolute left-3 top-2.5 h-4 w-4 text-zinc-500" />
+                  <Mail className="absolute left-3 top-2.5 h-4 w-4 text-tx-muted" />
                   <input
                     type="email"
                     required
                     placeholder="user@example.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="w-full rounded-lg border border-zinc-800 bg-zinc-900/90 pl-9 pr-3 py-2 text-xs text-zinc-100 placeholder-zinc-500 focus:border-sky-500 focus:outline-none"
+                    className="w-full rounded-lg border border-line bg-element pl-9 pr-3 py-2 text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-[11px] font-semibold text-zinc-300 mb-1">Password</label>
+                <label className="block text-[11px] font-semibold text-tx-secondary mb-1">Password</label>
                 <div className="relative">
-                  <Lock className="absolute left-3 top-2.5 h-4 w-4 text-zinc-500" />
+                  <Lock className="absolute left-3 top-2.5 h-4 w-4 text-tx-muted" />
                   <input
                     type={showPassword ? 'text' : 'password'}
                     required
@@ -275,12 +275,12 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
                     placeholder="Minimum 8 characters"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="w-full rounded-lg border border-zinc-800 bg-zinc-900/90 pl-9 pr-10 py-2 text-xs text-zinc-100 placeholder-zinc-500 focus:border-sky-500 focus:outline-none"
+                    className="w-full rounded-lg border border-line bg-element pl-9 pr-10 py-2 text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-2.5 top-2.5 text-zinc-500 hover:text-zinc-300 transition"
+                    className="absolute right-2.5 top-2.5 text-tx-muted hover:text-tx-primary transition"
                     title={showPassword ? 'Hide password' : 'Show password'}
                     aria-label={showPassword ? 'Hide password' : 'Show password'}
                   >
@@ -294,15 +294,15 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
                 <button
                   type="button"
                   onClick={() => setShowServerConfig(!showServerConfig)}
-                  className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-400 hover:text-sky-400 transition"
+                  className="flex items-center gap-1.5 text-[11px] font-medium text-tx-muted hover:text-sky-400 transition"
                 >
                   <Server className="h-3 w-3" />
                   <span>{showServerConfig ? 'Hide Server Configuration' : 'Server Settings (Custom URL)'}</span>
                 </button>
 
                 {showServerConfig && (
-                  <div className="mt-2 rounded-lg border border-zinc-800/80 bg-zinc-900/50 p-2.5 animate-in fade-in duration-150">
-                    <label className="block text-[10px] uppercase font-semibold text-zinc-400 mb-1">
+                  <div className="mt-2 rounded-lg border border-line bg-element/50 p-2.5 animate-in fade-in duration-150">
+                    <label className="block text-[10px] uppercase font-semibold text-tx-muted mb-1">
                       API Server Endpoint
                     </label>
                     <input
@@ -310,9 +310,9 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
                       placeholder="http://localhost:8080"
                       value={apiUrl}
                       onChange={(e) => setApiUrl(e.target.value)}
-                      className="w-full rounded border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-200 focus:border-sky-500 focus:outline-none font-mono"
+                      className="w-full rounded border border-line bg-card px-2.5 py-1.5 text-xs text-tx-primary focus:border-sky-500 focus:outline-none font-mono"
                     />
-                    <p className="text-[10px] text-zinc-500 mt-1">
+                    <p className="text-[10px] text-tx-faint mt-1">
                       Input your self-hosted AirREST backend URL.
                     </p>
                   </div>
@@ -327,7 +327,7 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
                 {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Sign In & Synchronize'}
               </button>
 
-              <p className="mt-4 text-center text-[11px] text-zinc-500">
+              <p className="mt-4 text-center text-[11px] text-tx-faint">
                 New accounts are provisioned exclusively by your system administrator in AirREST Hub.
               </p>
             </form>
