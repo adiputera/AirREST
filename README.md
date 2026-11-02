@@ -39,7 +39,7 @@ AirREST is an API testing client that runs directly inside Google Chrome as a Ma
 - **HTTP Methods**: Full support for `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, and `OPTIONS`.
 - **Bidirectional URL & Query Sync**: Editing query parameters in the URL input updates the key-value table automatically, and edits within the table update the URL query string in real time. Supports multi-value keys, templated variables (`{{var}}`), and parameter toggling.
 - **Unsaved Modifications Tracker & Safe Close**: Visual indicator dot (`●`) marks tabs with unsaved edits. Closing a dirty tab triggers an interactive confirmation dialog with options to **Save**, **Close Tab** (discard changes), or **Cancel** to prevent accidental data loss. Pressing <kbd>Ctrl + S</kbd> / <kbd>Cmd + S</kbd> saves updates directly into the source collection item.
-- **Request Safety & Cancellation**: Inflight requests can be cancelled on demand via the **Cancel** button using native `AbortController`. Built-in 30-second execution deadlines and a 10 MiB streamed response body limit protect against memory overflow and hung connections.
+- **Request Safety & Cancellation**: Inflight requests can be cancelled on demand via the **Cancel** button using native `AbortController`. Built-in 2-minute (120-second) execution deadlines and a 10 MiB streamed response body limit protect against memory overflow and hung connections.
 - **Keyboard Shortcuts**: Quick dispatch with <kbd>Ctrl + Enter</kbd> (Windows/Linux) or <kbd>Cmd + Enter</kbd> (macOS).
 
 ### 2. 📝 Flexible Request Body Formats
