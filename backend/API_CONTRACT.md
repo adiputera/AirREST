@@ -380,7 +380,7 @@ In addition to enums, the Frontend relies on specific primitive types and relati
 
 ### Request limits and availability
 
-All routes enforce a 4 MiB (4,194,304-byte) request body limit, including chunked bodies and bodies without `Content-Length`. `POST /api/v1/sync/push` and `POST /api/v1/sync/import-batch` additionally accept one gzip member: maximum 3,000,000 encoded bytes and 16 MiB decoded JSON. Oversize bodies return `413 PAYLOAD_TOO_LARGE`. At most 16 handlers run concurrently per instance; excess requests receive `503 SERVER_BUSY` and `Retry-After: 1`. A 30-second request deadline propagates to database work and returns `503 REQUEST_TIMEOUT`. These errors use the standard flat error envelope. Hosting/proxy limits can be smaller.
+All routes enforce a 4 MiB (4,194,304-byte) request body limit, including chunked bodies and bodies without `Content-Length`. `POST /api/v1/sync/push` and `POST /api/v1/sync/import-batch` additionally accept one gzip member: maximum 3,000,000 encoded bytes and 16 MiB decoded JSON. Oversize bodies return `413 PAYLOAD_TOO_LARGE`. At most 16 handlers run concurrently per instance; excess requests receive `503 SERVER_BUSY` and `Retry-After: 1`. A 120-second (2-minute) request deadline propagates to database work and returns `503 REQUEST_TIMEOUT`. These errors use the standard flat error envelope. Hosting/proxy limits can be smaller.
 
 Sync failures do not return successful partial deltas. Role lookup and row iteration errors are propagated; result sets close before another connection is needed. Invalid scope returns 400; authorization returns 403; concurrent import collision returns 409; batch limits return 413; other sync/database failures return 500.
 

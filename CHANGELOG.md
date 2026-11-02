@@ -40,7 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unified Path Variables empty state placeholder to use `:variable` matching the section header hint.
 - Replaced hardcoded `Extension v1.1` header badge with uniform `Extension` badge across extension and shared layout components.
 - Localized Android update banner notification messages to English for consistent global client experience.
-- Hardened native desktop and cloud transport lifecycle with explicit connect timeouts (15s) and request fallback timeouts (30s) in `tauriAdapter.ts` and `cloudApi.ts`.
+- Extended cloud API request deadline and client transport fallback timeouts from 30 seconds to 120 seconds (2 minutes) across backend limits middleware (`RequestTimeout`), shared cloud client (`getDefaultCloudSignal`), and desktop transport adapter (`tauriAdapter.ts`) to accommodate large collection batch imports.
+- Extended client test request execution deadline (`REQUEST_TIMEOUT_MS`) from 30 seconds to 120 seconds (2 minutes) in `fetcher.ts` to accommodate long-running target APIs and reporting tasks.
+- Hardened native desktop and cloud transport lifecycle with explicit connect timeouts (15s) and request fallback timeouts (120s) in `tauriAdapter.ts` and `cloudApi.ts`.
 - Bounded QuickJS sandbox memory footprint in `quickjsRunner.ts` by directly injecting payload handles via `context.newString` instead of double-JSON template stringification, and added promise cache reset on failure.
 - Cleaned up desktop boilerplate files (`App.css`, `react.svg`) and declared missing `zustand` dependency in `apps/native/package.json`.
 - Migrated 10 test suites in `scripts/*.test.mjs` to target `@airrest/common` shared packages, decoupling extension test specifications from dead duplicate source files.
