@@ -31,6 +31,7 @@ import { HttpMethod, BodyType, RawType, KeyValuePair } from '../types/api';
 import { KeyValueEditor } from './KeyValueEditor';
 import { METHOD_COLORS } from './MethodBadge';
 import { SaveToCollectionModal } from './SaveToCollectionModal';
+import { useBackHandler } from '../lib/backNavigation';
 import { generateCurlCommand } from '../lib/curl';
 import { VariableInput } from './VariableInput';
 import { interpolateVariables } from '../lib/fetcher';
@@ -144,8 +145,12 @@ export const RequestEditor: React.FC = () => {
   );
   const [isEditingNameOnMobile, setIsEditingNameOnMobile] = useState(false);
   const [isSaveMenuOpen, setIsSaveMenuOpen] = useState(false);
+  const [isMethodMenuOpen, setIsMethodMenuOpen] = useState(false);
   const saveMenuRef = useRef<HTMLDivElement>(null);
+  const methodMenuRef = useRef<HTMLDivElement>(null);
   const mobileInputRef = useRef<HTMLInputElement>(null);
+
+  useBackHandler(isMethodMenuOpen, () => setIsMethodMenuOpen(false), 20);
 
   const currentTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
   const isDirty = currentTab ? isRequestModified(currentTab, collections) : false;
@@ -224,7 +229,30 @@ export const RequestEditor: React.FC = () => {
   useEffect(() => {
     setIsEditingNameOnMobile(false);
     setIsSaveMenuOpen(false);
+    setIsMethodMenuOpen(false);
   }, [activeTabId]);
+
+  useEffect(() => {
+    if (!isMethodMenuOpen) return;
+    const handleClickOutside = (e: MouseEvent | TouchEvent) => {
+      if (methodMenuRef.current && !methodMenuRef.current.contains(e.target as Node)) {
+        setIsMethodMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsMethodMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isMethodMenuOpen]);
 
   useEffect(() => {
     if (!isSaveMenuOpen) return;
@@ -518,10 +546,10 @@ export const RequestEditor: React.FC = () => {
                         </>
                       ) : (
                         <>
-                          <Bookmark className={`h-3 w-3 ${isDirty ? 'text-amber-500 dark:text-amber-400' : 'text-tx-muted'}`} />
+                          <Bookmark className={`h-3 w-3 ${isDirty ? 'text-amber-600 dark:text-amber-400' : 'text-tx-muted'}`} />
                           <span>Save</span>
                           {isDirty && (
-                            <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+                            <span className="h-1.5 w-1.5 rounded-full bg-amber-500 dark:bg-amber-400 animate-pulse" />
                           )}
                         </>
                       )}
@@ -603,18 +631,53 @@ export const RequestEditor: React.FC = () => {
 
         <div className="flex items-center gap-2">
           {/* Method Selector */}
-          <div className="relative shrink-0">
-            <select
-              value={currentTab.method}
-              onChange={(e) => updateActiveRequest({ method: e.target.value as HttpMethod })}
-              className={`h-8 rounded-md border border-line bg-card px-2.5 pr-6 font-mono text-xs font-bold ${activeMethodColor} focus:border-sky-500 focus:outline-none cursor-pointer`}
+          <div className="relative shrink-0" ref={methodMenuRef}>
+            <button
+              type="button"
+              onClick={() => setIsMethodMenuOpen((prev) => !prev)}
+              className={`flex h-8 items-center gap-1.5 rounded-md border border-line bg-card px-2.5 font-mono text-xs font-bold ${activeMethodColor} hover:border-line-strong hover:bg-hover focus:outline-none focus:ring-1 focus:ring-sky-500 transition cursor-pointer select-none`}
+              aria-expanded={isMethodMenuOpen}
+              aria-haspopup="listbox"
+              aria-label="Select HTTP Method"
             >
-              {methods.map((m) => (
-                <option key={m} value={m} className="bg-card text-tx-primary font-bold">
-                  {m}
-                </option>
-              ))}
-            </select>
+              <span>{currentTab.method}</span>
+              <ChevronDown
+                className={`h-3 w-3 opacity-60 transition-transform duration-150 ${
+                  isMethodMenuOpen ? 'rotate-180' : ''
+                }`}
+              />
+            </button>
+
+            {isMethodMenuOpen && (
+              <div
+                role="listbox"
+                aria-label="HTTP Methods"
+                className="absolute left-0 top-full mt-1.5 w-32 rounded-xl border border-line bg-card/95 backdrop-blur-md p-1 shadow-2xl z-50 animate-in fade-in zoom-in-95 duration-100"
+              >
+                {methods.map((m) => {
+                  const isSelected = m === currentTab.method;
+                  const color = METHOD_COLORS[m]?.text || 'text-tx-primary';
+                  return (
+                    <button
+                      key={m}
+                      type="button"
+                      role="option"
+                      aria-selected={isSelected}
+                      onClick={() => {
+                        updateActiveRequest({ method: m });
+                        setIsMethodMenuOpen(false);
+                      }}
+                      className={`flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 font-mono text-xs font-bold transition text-left cursor-pointer ${color} ${
+                        isSelected ? 'bg-element shadow-xs' : 'hover:bg-hover'
+                      }`}
+                    >
+                      <span>{m}</span>
+                      {isSelected && <Check className="h-3 w-3 text-tx-secondary shrink-0" />}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* URL Input */}
@@ -658,7 +721,7 @@ export const RequestEditor: React.FC = () => {
           <div className="mt-1 flex items-center gap-1.5 rounded-md bg-card/60 border border-line px-2 py-0.5 text-[10.5px] font-mono text-tx-muted leading-tight">
             <span className="text-tx-faint font-semibold shrink-0 text-[9px] uppercase tracking-wider">Resolved</span>
             <span className="text-tx-muted shrink-0 text-[10px]">→</span>
-            <span className="text-amber-600 dark:text-amber-400/90 font-medium truncate select-all">
+            <span className="text-amber-700 dark:text-amber-400 font-medium truncate select-all">
               {interpolateVariables(currentTab.url, envVarsMap)}
             </span>
           </div>
@@ -864,7 +927,7 @@ export const RequestEditor: React.FC = () => {
                     </div>
                   ) : (
                     <div className="rounded-xl border border-dashed border-line bg-element/50 p-4 text-center text-xs text-tx-muted">
-                      This request does not have any path variables. Define them by adding <code className="text-sky-500 dark:text-sky-400 font-mono">:id</code> in the URL path.
+                      This request does not have any path variables. Define them by adding <code className="text-sky-500 dark:text-sky-400 font-mono">:variable</code> in the URL path.
                     </div>
                   )}
                 </div>

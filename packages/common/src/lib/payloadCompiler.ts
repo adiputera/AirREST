@@ -29,8 +29,8 @@ export function escapeXml(str: string): string {
 export function sanitizeXmlTagName(tag?: string, defaultTag = 'item'): string {
   const trimmed = (tag || '').trim();
   if (!trimmed) return defaultTag;
-  const sanitized = trimmed.replace(/[^a-zA-Z0-9_\-:]/g, '_');
-  if (/^[0-9\-]/.test(sanitized)) {
+  const sanitized = trimmed.replace(/[^a-zA-Z0-9_:-]/g, '_');
+  if (/^[0-9-]/.test(sanitized)) {
     return `_${sanitized}`;
   }
   return sanitized || defaultTag;
@@ -111,8 +111,13 @@ export function compileNodeToJsonValue(node: PayloadNode): unknown {
       return isNaN(num) ? valStr : num;
     }
 
-    case 'boolean':
+    case 'boolean': {
+      const valStr = typeof node.value === 'string' ? node.value.trim() : '';
+      if (valStr.includes('{{') && valStr.includes('}}')) {
+        return valStr;
+      }
       return node.value === 'true' || node.value === (true as unknown);
+    }
 
     case 'null':
       return null;
@@ -272,19 +277,13 @@ export function createInitialPayloadConfig(rootType: 'object' | 'list' = 'object
       rootType: 'list',
       xmlContainerTag: 'items',
       xmlItemTag: 'item',
-      nodes: [
-        createDefaultPayloadNode({ key: '', type: 'string', value: 'example' }),
-      ],
+      nodes: [],
     };
   }
 
   return {
     rootType: 'object',
     rootKey: 'request',
-    nodes: [
-      createDefaultPayloadNode({ key: 'title', type: 'string', value: 'foo' }),
-      createDefaultPayloadNode({ key: 'count', type: 'number', value: '1' }),
-      createDefaultPayloadNode({ key: 'active', type: 'boolean', value: 'true' }),
-    ],
+    nodes: [],
   };
 }

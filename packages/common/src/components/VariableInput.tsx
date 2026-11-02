@@ -260,7 +260,7 @@ export const VariableInput: React.FC<VariableInputProps> = ({
   return (
     <div className={`relative w-full ${className}`}>
       <div
-        className={`relative flex w-full items-center overflow-hidden rounded-md border border-zinc-800 bg-zinc-900/90 transition focus-within:border-sky-500 focus-within:ring-1 focus-within:ring-sky-500 ${disabled ? 'opacity-60 cursor-not-allowed' : ''
+        className={`relative flex w-full items-center overflow-hidden rounded-md border border-line bg-card/90 transition focus-within:border-sky-500 focus-within:ring-1 focus-within:ring-sky-500 ${disabled ? 'opacity-60 cursor-not-allowed' : ''
           }`}
       >
         {/* Syntax Highlighting Mirror Layer */}
@@ -279,8 +279,8 @@ export const VariableInput: React.FC<VariableInputProps> = ({
                     data-resolved={token.isResolved ? 'true' : 'false'}
                     data-resolved-val={token.resolvedValue || ''}
                     className={`font-semibold cursor-help transition-colors ${token.isResolved
-                        ? 'text-amber-400 bg-amber-400/15'
-                        : 'text-rose-400 bg-rose-400/15'
+                        ? 'text-amber-700 dark:text-amber-400 bg-amber-500/15'
+                        : 'text-rose-600 dark:text-rose-400 bg-rose-500/15'
                       }`}
                   >
                     {token.text}
@@ -355,8 +355,8 @@ export const VariableInput: React.FC<VariableInputProps> = ({
             <div className="flex items-center gap-2 border-b border-line pb-2 mb-2">
               <div
                 className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md ${hoveredVar.isResolved
-                    ? 'bg-amber-500/15 text-amber-500 dark:text-amber-400 border border-amber-500/20'
-                    : 'bg-rose-500/15 text-rose-500 dark:text-rose-400 border border-rose-500/20'
+                    ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20'
+                    : 'bg-rose-500/15 text-rose-600 dark:text-rose-400 border border-rose-500/20'
                   }`}
               >
                 {hoveredVar.varName.startsWith('$') ? (
@@ -398,7 +398,7 @@ export const VariableInput: React.FC<VariableInputProps> = ({
               <div className="flex items-start gap-1.5">
                 <span className="text-tx-muted shrink-0">Current Value:</span>
                 <span
-                  className={`break-all font-medium ${hoveredVar.isResolved ? 'text-amber-600 dark:text-amber-300' : 'text-rose-500 dark:text-rose-400 italic'
+                  className={`break-all font-medium ${hoveredVar.isResolved ? 'text-amber-700 dark:text-amber-300' : 'text-rose-600 dark:text-rose-400 italic'
                     }`}
                 >
                   {hoveredVar.isResolved
@@ -410,7 +410,7 @@ export const VariableInput: React.FC<VariableInputProps> = ({
 
             {!hoveredVar.isResolved && (
               <div className="mt-2 text-[10px] text-tx-muted border-t border-line pt-1.5 font-sans leading-relaxed">
-                Add this variable in the <span className="text-sky-500 dark:text-sky-400 font-semibold">Environments</span> modal or extract it in tests with <code className="text-emerald-600 dark:text-emerald-400 font-mono">pm.environment.set(&apos;{hoveredVar.varName}&apos;, ...)</code>.
+                Add this variable in the <span className="text-sky-600 dark:text-sky-400 font-semibold">Environments</span> modal or extract it in tests with <code className="text-emerald-600 dark:text-emerald-400 font-mono">pm.environment.set(&apos;{hoveredVar.varName}&apos;, ...)</code>.
               </div>
             )}
           </div>,
@@ -425,12 +425,12 @@ export const VariableInput: React.FC<VariableInputProps> = ({
             <span
               key={i}
               className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-medium border ${v.isResolved
-                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-300'
+                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'
                   : 'border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-400'
                 }`}
             >
               {v.isResolved ? (
-                <CheckCircle2 className="h-3 w-3 text-amber-500 dark:text-amber-400 shrink-0" />
+                <CheckCircle2 className="h-3 w-3 text-amber-600 dark:text-amber-400 shrink-0" />
               ) : (
                 <AlertCircle className="h-3 w-3 text-rose-500 dark:text-rose-400 shrink-0" />
               )}

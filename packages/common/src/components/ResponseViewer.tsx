@@ -21,11 +21,16 @@ import {
   ServerOff,
   Globe,
   WifiOff,
+  Maximize2,
+  Minimize2,
+  GripHorizontal,
+  X,
 } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
 import { requestHostPermission } from '../lib/hostPermissions';
 import { getDefaultPlatformAdapter } from '../lib/fetcher';
 import { getTrackedBlob } from '../lib/blobManager';
+import { useBackHandler } from '../lib/backNavigation';
 
 function getExtensionFromMime(mime: string): string {
   const m = (mime || '').toLowerCase();
@@ -99,6 +104,109 @@ export const ResponseViewer: React.FC = () => {
   const [imgDimensions, setImgDimensions] = useState<{ width: number; height: number } | null>(null);
   const [permissionMessage, setPermissionMessage] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [isExpandedModalOpen, setIsExpandedModalOpen] = useState(false);
+
+  // Drag-to-resize response height (persisted in localStorage)
+  const [responseHeight, setResponseHeight] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('airrest:response_editor_height');
+      if (saved) {
+        const val = parseInt(saved, 10);
+        if (!isNaN(val) && val >= 160 && val <= 1000) return val;
+      }
+    } catch {
+      // ignore
+    }
+    return 400;
+  });
+
+  const isResizingResponseRef = React.useRef(false);
+  const startResponseYRef = React.useRef(0);
+  const startResponseHeightRef = React.useRef(400);
+
+  // Register back navigation handler for expanded response modal
+  useBackHandler(isExpandedModalOpen, () => setIsExpandedModalOpen(false), 25);
+
+  // Close modal on Escape
+  useEffect(() => {
+    if (!isExpandedModalOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setIsExpandedModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isExpandedModalOpen]);
+
+  // Response height mouse drag handler
+  const handleStartResponseResize = (clientY: number) => {
+    isResizingResponseRef.current = true;
+    startResponseYRef.current = clientY;
+    startResponseHeightRef.current = responseHeight;
+
+    const onMouseMove = (e: MouseEvent) => {
+      if (!isResizingResponseRef.current) return;
+      const deltaY = e.clientY - startResponseYRef.current;
+      const newHeight = Math.max(160, Math.min(1000, startResponseHeightRef.current + deltaY));
+      setResponseHeight(newHeight);
+    };
+
+    const onMouseUp = () => {
+      if (!isResizingResponseRef.current) return;
+      isResizingResponseRef.current = false;
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      document.body.style.removeProperty('user-select');
+      document.body.style.removeProperty('cursor');
+      try {
+        setResponseHeight((curr) => {
+          localStorage.setItem('airrest:response_editor_height', String(curr));
+          return curr;
+        });
+      } catch {
+        // ignore
+      }
+    };
+
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'row-resize';
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
+
+  // Response height touch drag handler
+  const handleTouchStartResponseResize = (e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    if (!touch) return;
+    const startY = touch.clientY;
+    const startH = responseHeight;
+
+    const onTouchMove = (ev: TouchEvent) => {
+      const t = ev.touches[0];
+      if (!t) return;
+      const deltaY = t.clientY - startY;
+      const newHeight = Math.max(160, Math.min(1000, startH + deltaY));
+      setResponseHeight(newHeight);
+    };
+
+    const onTouchEnd = () => {
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', onTouchEnd);
+      try {
+        setResponseHeight((curr) => {
+          localStorage.setItem('airrest:response_editor_height', String(curr));
+          return curr;
+        });
+      } catch {
+        // ignore
+      }
+    };
+
+    window.addEventListener('touchmove', onTouchMove, { passive: true });
+    window.addEventListener('touchend', onTouchEnd);
+  };
 
   useEffect(() => {
     setImgDimensions(null);
@@ -328,6 +436,16 @@ export const ResponseViewer: React.FC = () => {
             >
               <Download className="h-3.5 w-3.5 text-tx-muted" />
               <span>Download</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsExpandedModalOpen(true)}
+              className="flex items-center gap-1 rounded-lg border border-line bg-card px-2.5 py-1 text-xs text-tx-secondary hover:bg-hover hover:text-tx-primary transition cursor-pointer"
+              title="Expand response to modal pop-up (Maximize)"
+            >
+              <Maximize2 className="h-3.5 w-3.5 text-tx-muted hover:text-sky-500" />
+              <span>Expand</span>
             </button>
           </div>
         )}
@@ -869,9 +987,35 @@ export const ResponseViewer: React.FC = () => {
                 </button>
               </div>
             ) : (
-              <pre className="rounded-xl border border-line bg-card p-4 font-mono text-xs text-tx-primary overflow-x-auto whitespace-pre-wrap leading-relaxed select-text">
-                {viewMode === 'pretty' ? prettyJson : activeResponse.data}
-              </pre>
+              <div className="space-y-1">
+                <pre
+                  style={{ maxHeight: `${responseHeight}px` }}
+                  className="rounded-xl border border-line bg-card p-4 font-mono text-xs text-tx-primary overflow-x-auto whitespace-pre-wrap leading-relaxed select-text overflow-y-auto"
+                >
+                  {viewMode === 'pretty' ? prettyJson : activeResponse.data}
+                </pre>
+                <div
+                  onMouseDown={(e) => handleStartResponseResize(e.clientY)}
+                  onTouchStart={handleTouchStartResponseResize}
+                  onDoubleClick={() => {
+                    setResponseHeight(400);
+                    try {
+                      localStorage.setItem('airrest:response_editor_height', '400');
+                    } catch {
+                      // ignore
+                    }
+                  }}
+                  className="flex items-center justify-center py-1 cursor-row-resize hover:bg-hover/60 rounded-md transition select-none group"
+                  title="Drag up/down to resize response height (Double-click to reset)"
+                >
+                  <div className="flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-element/50 group-hover:bg-element border border-transparent group-hover:border-line transition">
+                    <GripHorizontal className="h-3.5 w-3.5 text-tx-muted group-hover:text-sky-500 transition" />
+                    <span className="text-[10px] font-mono text-tx-muted group-hover:text-tx-secondary hidden group-hover:inline">
+                      {responseHeight}px (Drag to resize)
+                    </span>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
         ) : (
@@ -896,6 +1040,194 @@ export const ResponseViewer: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* EXPANDED FULL-SCREEN / LARGE RESPONSE MODAL */}
+      {isExpandedModalOpen && activeResponse && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-3 md:p-6 animate-in fade-in duration-150">
+          <div className="flex flex-col w-full max-w-6xl h-[92vh] max-h-[960px] rounded-2xl border border-line bg-surface shadow-2xl overflow-hidden">
+            {/* Modal Header */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-3 bg-element/40 shrink-0">
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="text-sm font-bold uppercase tracking-wider text-tx-primary">Response</span>
+                {getStatusBadge(activeResponse.status, activeResponse.statusText)}
+
+                <div className="flex items-center gap-1 whitespace-nowrap font-mono text-xs text-tx-muted">
+                  <Clock className="h-3.5 w-3.5 text-tx-faint" />
+                  <span>{activeResponse.timeMs} ms</span>
+                </div>
+
+                <div className="flex items-center gap-1 whitespace-nowrap font-mono text-xs text-tx-muted">
+                  <HardDrive className="h-3.5 w-3.5 text-tx-faint" />
+                  <span>{formatBytes(activeResponse.sizeBytes)}</span>
+                </div>
+
+                {/* Subtabs inside Modal Header */}
+                <div className="flex items-center gap-3 ml-2 border-l border-line pl-3 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('body')}
+                    className={`flex items-center gap-1 pb-0.5 border-b-2 font-medium transition ${
+                      activeTab === 'body'
+                        ? 'border-sky-500 text-tx-primary font-semibold'
+                        : 'border-transparent text-tx-muted hover:text-tx-secondary'
+                    }`}
+                  >
+                    <Code2 className="h-3.5 w-3.5" />
+                    <span>Body</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('headers')}
+                    className={`flex items-center gap-1 pb-0.5 border-b-2 font-medium transition ${
+                      activeTab === 'headers'
+                        ? 'border-sky-500 text-tx-primary font-semibold'
+                        : 'border-transparent text-tx-muted hover:text-tx-secondary'
+                    }`}
+                  >
+                    <FileText className="h-3.5 w-3.5" />
+                    <span>Headers</span>
+                    <span className="rounded-full bg-element px-1 text-[10px] text-tx-muted">
+                      {Object.keys(activeResponse.headers || {}).length}
+                    </span>
+                  </button>
+                </div>
+
+                {activeTab === 'body' && isJson && (
+                  <div className="flex rounded-lg border border-line bg-element p-0.5 text-xs ml-1">
+                    <button
+                      type="button"
+                      onClick={() => setViewMode('pretty')}
+                      className={`rounded px-2 py-0.5 transition ${
+                        viewMode === 'pretty'
+                          ? 'bg-card text-sky-600 dark:text-sky-400 font-semibold shadow-sm'
+                          : 'text-tx-muted hover:text-tx-primary'
+                      }`}
+                    >
+                      Pretty
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViewMode('raw')}
+                      className={`rounded px-2 py-0.5 transition ${
+                        viewMode === 'raw'
+                          ? 'bg-card text-sky-600 dark:text-sky-400 font-semibold shadow-sm'
+                          : 'text-tx-muted hover:text-tx-primary'
+                      }`}
+                    >
+                      Raw
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Modal Actions */}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleCopy}
+                  className="flex items-center gap-1 rounded-lg border border-line bg-card px-2.5 py-1.5 text-xs text-tx-secondary hover:bg-hover hover:text-tx-primary transition cursor-pointer"
+                  title="Copy to clipboard"
+                >
+                  {copied ? (
+                    <>
+                      <Check className="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400" />
+                      <span className="text-emerald-600 dark:text-emerald-400 font-semibold">Copied</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3.5 w-3.5 text-tx-muted" />
+                      <span>Copy</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleDownload}
+                  className="flex items-center gap-1 rounded-lg border border-line bg-card px-2.5 py-1.5 text-xs text-tx-secondary hover:bg-hover hover:text-tx-primary transition cursor-pointer"
+                  title="Download response"
+                >
+                  <Download className="h-3.5 w-3.5 text-tx-muted" />
+                  <span>Download</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsExpandedModalOpen(false)}
+                  className="flex items-center gap-1.5 rounded-lg border border-line bg-card px-3 py-1.5 text-xs font-semibold text-tx-primary hover:bg-hover transition cursor-pointer ml-1"
+                  title="Collapse modal (Esc)"
+                >
+                  <Minimize2 className="h-3.5 w-3.5 text-tx-muted" />
+                  <span>Collapse</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 min-h-0 p-5 overflow-auto bg-app">
+              {activeTab === 'body' ? (
+                activeResponse.isImage && activeResponse.blobUrl ? (
+                  <div className="flex min-h-[400px] h-full items-center justify-center overflow-auto rounded-xl border border-line bg-card/60 p-6">
+                    <img
+                      src={activeResponse.blobUrl}
+                      alt="Response Preview"
+                      className="max-h-full max-w-full rounded-lg object-contain shadow-2xl"
+                    />
+                  </div>
+                ) : activeResponse.isBinary ? (
+                  <div className="flex h-full flex-col items-center justify-center rounded-xl border border-dashed border-line bg-card/40 p-8 text-center">
+                    <FileDown className="h-10 w-10 text-amber-500" />
+                    <p className="mt-3 text-sm font-semibold">Binary response data ({formatBytes(activeResponse.sizeBytes)})</p>
+                    <button
+                      type="button"
+                      onClick={handleDownload}
+                      className="mt-4 flex items-center gap-2 rounded-xl bg-sky-500 px-4 py-2 font-semibold text-xs text-white"
+                    >
+                      <Download className="h-4 w-4" />
+                      <span>Download File</span>
+                    </button>
+                  </div>
+                ) : (
+                  <pre className="h-full w-full rounded-xl border border-line bg-card p-4 font-mono text-xs md:text-sm text-tx-primary overflow-auto whitespace-pre-wrap leading-relaxed select-text">
+                    {viewMode === 'pretty' ? prettyJson : activeResponse.data}
+                  </pre>
+                )
+              ) : (
+                <div className="overflow-hidden rounded-xl border border-line bg-surface">
+                  <table className="w-full text-left text-xs font-mono">
+                    <thead className="border-b border-line bg-element text-tx-muted">
+                      <tr>
+                        <th className="px-4 py-2 font-semibold">Header Key</th>
+                        <th className="px-4 py-2 font-semibold">Header Value</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-line">
+                      {Object.entries(activeResponse.headers || {}).map(([key, value]) => (
+                        <tr key={key} className="hover:bg-hover transition">
+                          <td className="px-4 py-2 text-sky-600 dark:text-sky-400 font-medium">{key}</td>
+                          <td className="px-4 py-2 text-tx-secondary break-all">{String(value)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex items-center justify-between border-t border-line px-5 py-2.5 bg-element/30 text-xs text-tx-muted shrink-0">
+              <span className="text-[11px]">Press <kbd className="rounded border border-line bg-card px-1.5 py-0.5 font-mono text-[10px] text-tx-primary">Esc</kbd> or click <b>Collapse</b> to return to workspace.</span>
+              <button
+                type="button"
+                onClick={() => setIsExpandedModalOpen(false)}
+                className="rounded-lg bg-sky-500 hover:bg-sky-600 text-white font-medium px-4 py-1 text-xs transition shadow-sm cursor-pointer"
+              >
+                Collapse
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -34,11 +34,11 @@
 :root.dark, html.dark {
   color-scheme: dark;
   --background: #09090b;
-  --foreground: #ededed;
+  --foreground: #f4f4f5;
 
   /* Surfaces & Backgrounds */
   --bg-app: #09090b;             /* Base root canvas (zinc-950) */
-  --bg-surface: #101014;         /* Main panels, sidebar, header */
+  --bg-surface: #09090b;         /* Main application panels & header (zinc-950) */
   --bg-card: #18181b;            /* Content cards, request editor (zinc-900) */
   --bg-element: #202024;         /* Sub-elements, inner inputs (zinc-850) */
   --bg-hover: #27272a;           /* Interactive item hover (zinc-800) */
@@ -49,7 +49,7 @@
   --border-strong: #3f3f46;      /* Input borders, prominent lines (zinc-700) */
 
   /* Text & Typography */
-  --text-primary: #ededed;       /* High contrast titles, active labels */
+  --text-primary: #f4f4f5;       /* Primary titles, active labels (zinc-100) */
   --text-secondary: #d4d4d8;     /* Body text, table values (zinc-300) */
   --text-muted: #a1a1aa;         /* Captions, labels, timestamps (zinc-400) */
   --text-faint: #71717a;         /* Placeholders, disabled states (zinc-500) */
@@ -81,6 +81,9 @@ select {
   background-position: right 0.65rem center;
   background-size: 0.85rem;
   padding-right: 2rem !important;
+  user-select: auto !important;
+  -webkit-user-select: auto !important;
+  touch-action: manipulation;
 }
 
 html:not(.dark) select {

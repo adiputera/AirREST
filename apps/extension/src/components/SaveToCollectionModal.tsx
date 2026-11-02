@@ -18,6 +18,7 @@ interface SaveToCollectionModalProps {
   onClose: () => void;
   request: ApiRequest;
   isSaveAs?: boolean;
+  onSaved?: () => void;
 }
 
 interface RequestConflictState {
@@ -44,6 +45,7 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
   onClose,
   request,
   isSaveAs = false,
+  onSaved,
 }) => {
   const collections = useApiStore((state) => state.collections);
   const createCollection = useApiStore((state) => state.createCollection);
@@ -211,6 +213,7 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
     setSavedActionText('Saved!');
     setTimeout(() => {
       setIsSaved(false);
+      onSaved?.();
       onClose();
     }, 600);
   };
@@ -238,6 +241,7 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
     setTimeout(() => {
       setIsSaved(false);
       setConflict(null);
+      onSaved?.();
       onClose();
     }, 600);
   };
@@ -267,6 +271,7 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
     setTimeout(() => {
       setIsSaved(false);
       setConflict(null);
+      onSaved?.();
       onClose();
     }, 600);
   };

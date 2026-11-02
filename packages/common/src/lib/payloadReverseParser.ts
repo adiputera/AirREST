@@ -41,6 +41,18 @@ export function inferJsonValueNode(key: string, val: unknown): PayloadNode {
   }
 
   if (typeof val === 'string') {
+    // Check if it's an unwrapped template placeholder
+    if (val.startsWith('__AIRREST_TMPL_{{') && val.endsWith('}}__')) {
+      const tmpl = val.slice('__AIRREST_TMPL_'.length, -'__'.length);
+      return {
+        id,
+        key,
+        type: 'string',
+        value: tmpl,
+        enabled: true,
+      };
+    }
+
     // Check if it's an ISO 8601 Date
     if (ISO_DATE_REGEX.test(val)) {
       const parsed = new Date(val);
@@ -123,6 +135,17 @@ export function inferJsonValueNode(key: string, val: unknown): PayloadNode {
   };
 }
 
+function trySanitizeJson(raw: string): unknown {
+  // 1. Remove single-line comments // and multi-line comments /* */
+  let clean = raw.replace(/\/\*[\s\S]*?\*\/|([^\\:]|^)\/\/.*$/gm, '$1');
+  // 2. Wrap unquoted template variables in objects and lists
+  clean = clean.replace(/:\s*(\{\{[^{}]+\}\})/g, ': "__AIRREST_TMPL_$1__"');
+  clean = clean.replace(/([\[,]\s*)(\{\{[^{}]+\}\})/g, '$1"__AIRREST_TMPL_$2__"');
+  // 3. Remove trailing commas
+  clean = clean.replace(/,\s*([}\]])/g, '$1');
+  return JSON.parse(clean);
+}
+
 /**
  * Reverse parses raw JSON string into a structured PayloadBuilderConfig
  */
@@ -135,10 +158,14 @@ export function jsonToTree(rawJson?: string | null): { config?: PayloadBuilderCo
   let parsed: unknown;
   try {
     parsed = JSON.parse(trimmed);
-  } catch (err: unknown) {
-    return {
-      error: err instanceof Error ? err.message : 'Invalid JSON format',
-    };
+  } catch {
+    try {
+      parsed = trySanitizeJson(trimmed);
+    } catch (err: unknown) {
+      return {
+        error: err instanceof Error ? err.message : 'Invalid JSON format',
+      };
+    }
   }
 
   if (Array.isArray(parsed)) {

@@ -67,7 +67,7 @@ export const Header: React.FC<{ onOpenSidebar?: () => void }> = ({ onOpenSidebar
                   : 'border-sky-500/30 bg-sky-500/10 text-sky-400'
               }`}
             >
-              {isOfflineOnly ? 'Offline Edition' : 'Extension v1.1'}
+              {isOfflineOnly ? 'Offline Edition' : 'Extension'}
             </span>
           </div>
 
