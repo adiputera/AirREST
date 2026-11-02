@@ -4,7 +4,8 @@ const recentNetworkErrors = new Map();
 if (typeof chrome !== 'undefined' && chrome.webRequest?.onErrorOccurred) {
   chrome.webRequest.onErrorOccurred.addListener(
     (details) => {
-      // Keep last 100 failed requests with timestamp
+      // Keep last 100 failed requests with timestamp (delete existing to maintain LRU order)
+      recentNetworkErrors.delete(details.url);
       recentNetworkErrors.set(details.url, {
         error: details.error,
         timestamp: Date.now(),
@@ -34,7 +35,8 @@ if (typeof chrome !== 'undefined' && chrome.webRequest?.onErrorOccurred) {
   chrome.runtime?.onMessage?.addListener((message, _sender, sendResponse) => {
     if (message?.type === 'GET_RECENT_NETWORK_ERROR') {
       const entry = recentNetworkErrors.get(message.url);
-      sendResponse({ error: entry ? entry.error : null });
+      const isFresh = Boolean(entry && Date.now() - entry.timestamp <= 30000);
+      sendResponse({ error: isFresh ? entry.error : null });
     }
   });
 }

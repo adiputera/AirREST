@@ -93,6 +93,7 @@ export const ResponseViewer: React.FC = () => {
   const activeTabRequest = useApiStore((state) => state.tabs.find((t) => t.id === state.activeTabId));
 
   const targetUrl = activeResponse?.requestUrl || activeTabRequest?.url || '';
+  const isSafeTargetUrl = Boolean(targetUrl && /^https?:\/\//i.test(targetUrl));
   const isHttps = targetUrl.toLowerCase().startsWith('https://');
   const { host: targetHost, port: targetPort } = parseUrlDetails(targetUrl);
   const netCategory = activeResponse?.netErrorCategory;
@@ -277,7 +278,7 @@ export const ResponseViewer: React.FC = () => {
       a.href = url;
       a.download = filename;
       a.click();
-      URL.revokeObjectURL(url);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (err: unknown) {
       console.error('Failed to download response:', err);
       setDownloadError(err instanceof Error ? err.message : 'Failed to save file.');
@@ -704,7 +705,7 @@ export const ResponseViewer: React.FC = () => {
                           </span>
                         )}
                       </div>
-                      {targetUrl && (
+                      {isSafeTargetUrl && (
                         <div className="flex items-center gap-2">
                           <a
                             href={targetUrl}
@@ -866,7 +867,7 @@ export const ResponseViewer: React.FC = () => {
                         )}
                       </div>
                       <div className="flex items-center gap-2">
-                        {isHttps && targetUrl && (
+                        {isHttps && isSafeTargetUrl && (
                           <a
                             href={targetUrl}
                             target="_blank"
@@ -928,16 +929,18 @@ export const ResponseViewer: React.FC = () => {
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <a
-                      href={activeResponse.blobUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-1.5 rounded-lg border border-line bg-surface px-2.5 py-1 text-xs text-tx-secondary hover:bg-hover hover:text-tx-primary transition"
-                      title="Open full-resolution image in new browser tab"
-                    >
-                      <ExternalLink className="h-3.5 w-3.5" />
-                      <span>Open in New Tab</span>
-                    </a>
+                    {!activeResponse.contentType?.toLowerCase().includes('svg') && (
+                      <a
+                        href={activeResponse.blobUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-1.5 rounded-lg border border-line bg-surface px-2.5 py-1 text-xs text-tx-secondary hover:bg-hover hover:text-tx-primary transition"
+                        title="Open full-resolution image in new browser tab"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" />
+                        <span>Open in New Tab</span>
+                      </a>
+                    )}
 
                     <button
                       type="button"

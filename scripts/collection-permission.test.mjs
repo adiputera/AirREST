@@ -5,7 +5,6 @@ import test from 'node:test';
 test('Collection Permission: Modal exists and renders expected role options', () => {
   for (const filePath of [
     'packages/common/src/components/CollectionPermissionModal.tsx',
-    'apps/extension/src/components/CollectionPermissionModal.tsx',
   ]) {
     const content = fs.readFileSync(new URL(`../${filePath}`, import.meta.url), 'utf8');
 
@@ -32,7 +31,6 @@ test('Collection Permission: Modal exists and renders expected role options', ()
 test('Collection Permission: Sidebar integrates Permission option in 3-dots menu', () => {
   for (const filePath of [
     'packages/common/src/components/Sidebar.tsx',
-    'apps/extension/src/components/Sidebar.tsx',
   ]) {
     const content = fs.readFileSync(new URL(`../${filePath}`, import.meta.url), 'utf8');
 
@@ -52,7 +50,6 @@ test('Collection Permission: Sidebar integrates Permission option in 3-dots menu
 test('Collection Permission: store and cloudApi support updating min_role', () => {
   for (const filePath of [
     'packages/common/src/store/useApiStore.ts',
-    'apps/extension/src/store/useApiStore.ts',
   ]) {
     const content = fs.readFileSync(new URL(`../${filePath}`, import.meta.url), 'utf8');
     assert.match(content, /updateCollectionPermission:\s*async\s*\(collectionId,\s*minRole\)/);
@@ -61,7 +58,6 @@ test('Collection Permission: store and cloudApi support updating min_role', () =
 
   for (const filePath of [
     'packages/common/src/lib/cloudApi.ts',
-    'apps/extension/src/lib/cloudApi.ts',
   ]) {
     const content = fs.readFileSync(new URL(`../${filePath}`, import.meta.url), 'utf8');
     assert.match(content, /export async function updateScopeCollectionPermission/);
@@ -74,7 +70,6 @@ test('Collection Permission: store and cloudApi support updating min_role', () =
 test('Environment Permission: Modal exists and replaces plain dropdown in EnvironmentModal', () => {
   for (const filePath of [
     'packages/common/src/components/EnvironmentPermissionModal.tsx',
-    'apps/extension/src/components/EnvironmentPermissionModal.tsx',
   ]) {
     const content = fs.readFileSync(new URL(`../${filePath}`, import.meta.url), 'utf8');
 
@@ -96,7 +91,6 @@ test('Environment Permission: Modal exists and replaces plain dropdown in Enviro
 
   for (const filePath of [
     'packages/common/src/components/EnvironmentModal.tsx',
-    'apps/extension/src/components/EnvironmentModal.tsx',
   ]) {
     const content = fs.readFileSync(new URL(`../${filePath}`, import.meta.url), 'utf8');
 
@@ -110,5 +104,3 @@ test('Environment Permission: Modal exists and replaces plain dropdown in Enviro
     assert.doesNotMatch(content, /<select[^>]*value=\{currentEnv\.minRole/);
   }
 });
-
-

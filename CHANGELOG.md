@@ -40,6 +40,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unified Path Variables empty state placeholder to use `:variable` matching the section header hint.
 - Replaced hardcoded `Extension v1.1` header badge with uniform `Extension` badge across extension and shared layout components.
 - Localized Android update banner notification messages to English for consistent global client experience.
+- Hardened native desktop and cloud transport lifecycle with explicit connect timeouts (15s) and request fallback timeouts (30s) in `tauriAdapter.ts` and `cloudApi.ts`.
+- Bounded QuickJS sandbox memory footprint in `quickjsRunner.ts` by directly injecting payload handles via `context.newString` instead of double-JSON template stringification, and added promise cache reset on failure.
+- Cleaned up desktop boilerplate files (`App.css`, `react.svg`) and declared missing `zustand` dependency in `apps/native/package.json`.
+- Migrated 10 test suites in `scripts/*.test.mjs` to target `@airrest/common` shared packages, decoupling extension test specifications from dead duplicate source files.
+- Purged 44 obsolete, unreferenced duplicate source files from `apps/extension/src/{components,lib,store,types}` and transitioned Chrome extension to thin platform adapter architecture over `@airrest/common`.
 
 ### Fixed
 - Fixed JSX duplicate button and closing wrapper elements in `SaveToCollectionModal.tsx`.
@@ -50,6 +55,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Resolved offside HTTP method dropdown positioning on mobile/narrow viewports by replacing native `<select>` with a custom accessible popover dropdown anchored directly to the request bar.
 - Fixed saved request payloads failing to load into Payload Builder: added sanitization for unquoted template variables (`{{variable}}`), comments, and trailing commas in `payloadReverseParser.ts`, synchronized incoming tab/storage payload updates in `PayloadBuilder.tsx`, and removed dummy fallback data.
 - Enhanced Light Mode contrast and text readability across `ScopeSwitcher`, `VariableInput`, `UserMenu`, and `RequestEditor`: replaced low-contrast orange/sky text (`amber-400`, `sky-400`) on white backgrounds with WCAG-compliant adaptive classes (`amber-700 dark:text-amber-400`, `sky-700 dark:text-sky-400`), fixed workspace item gray-on-white text, and aligned container and divider borders with semantic tokens.
+- Hardened Chrome extension sandbox security (`apps/extension/public/manifest.json` and `sandbox.html`): added explicit CSP header and meta directives (`default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'`), enforced `sandbox="allow-scripts"` on iframe injection, and isolated global prototype variables to prevent prototype pollution.
+- Enhanced Chromium network error diagnostics: exported `getChromiumNetworkError` in common fetcher, integrated error classification into `chromeAdapter`, and enforced 30s TTL and bounded LRU ordering in background service worker.
+- Added `AbortSignal` and timeout lifecycle support to common sandbox script runner, cleanly terminating runaway and timed-out scripts.
+- Fixed useless regex character escape in `payloadReverseParser.ts`.
+- Fixed potential native Tauri memory leaks and unhandled Rust ResourceTable entries by explicitly cancelling response body streams on 401 retries and silent token refresh in `cloudApi.ts`.
+- Enforced 16 MiB file size safety limit prior to reading files in `tauriAdapter.openFile` and aligned capabilities in `default.json` (`fs:allow-stat`).
+- Enforced 25 MiB outbound attachment limits for form-data and binary payloads in `fetcher.ts`.
+- Enforced 2 MiB response data bounds in `scriptProtocol.ts` to prevent sandbox payload amplification.
+- Fixed native webview teardown and worker leak by invoking `runtime.dispose()` on window `beforeunload` in `apps/native/src/main.tsx`.
+- Fixed early theme hydration (`initEarlyTheme`) to unwrap `StorageEnvelope.data` so persisted Light/Dark themes apply before initial render without FOUC.
+- Preserved cloud workspace session and cached scopes on transient network failures during `fetchScopes()`.
+- Fixed tab response race conditions when switching or closing tabs during in-flight requests, prevented deleted workspaces from re-entering scope caches, and added safe 1000ms revocation delay for blob downloads.
+- Suppressed top-level SVG blob navigation (`Open in New Tab`) and validated HTTP(S) schemes on diagnostic links in `ResponseViewer.tsx`.
+- Hardened desktop and Android release workflows (`.github/workflows/desktop-release.yml`), synchronized Android `versionCode` formula (`major * 1000000 + minor * 1000 + patch`), and improved `AndroidUpdateBanner` architecture detection (`x86_64`), APK asset validation, and flex/safe-area layout.
+- Enforced global feature policy (`collection.move` and `collection.delete`) in AirREST Hub (`ProjectsView.tsx`) with fail-closed validation and automatic refresh on `403 FEATURE_DISABLED`.
+- Enforced backend RBAC requiring `maintainer` or `admin` role to modify `min_role` on collections and environments (`CanModifyMinRole`), and included required `name` field in `apiUpdateCollectionPermission`.
+- Added automatic OCC `409 Conflict` version recovery in Hub permission and feature policy modals, bounded parallel collection detail fetching (concurrency limit 4) with retry indicator (`detailsLoadFailed`), preselected single target project in Move Collection modal, and wrapped Hub root in `ErrorBoundary`.
 
 ## [1.2.1] - 2026-11-01
 

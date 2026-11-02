@@ -40,7 +40,16 @@ export function initEarlyTheme(): void {
     const raw = localStorage.getItem('air-rest-storage');
     let theme: ThemeMode = 'system';
     if (raw) {
-      const parsed = JSON.parse(raw);
+      let parsed = JSON.parse(raw);
+      if (typeof parsed?.data === 'string') {
+        try {
+          parsed = JSON.parse(parsed.data);
+        } catch {
+          // keep parsed as is
+        }
+      } else if (parsed?.data && typeof parsed.data === 'object') {
+        parsed = parsed.data;
+      }
       if (parsed?.state?.theme) {
         theme = parsed.state.theme;
       }

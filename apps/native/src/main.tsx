@@ -14,6 +14,10 @@ const runtime = createAirrestRuntime({
   edition: 'full',
 });
 
+window.addEventListener('beforeunload', () => {
+  runtime.dispose();
+});
+
 if (__AIRREST_ANDROID__) {
   void onBackButtonPress(({ canGoBack }) => {
     if (dispatchBack()) return;

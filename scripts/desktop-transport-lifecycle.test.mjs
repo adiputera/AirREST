@@ -58,6 +58,10 @@ function loadProductionCloudApi() {
       URL,
       TextEncoder,
       console,
+      AbortController,
+      AbortSignal,
+      setTimeout,
+      clearTimeout,
     },
     { filename: 'cloudApi.ts' }
   );
@@ -1398,6 +1402,7 @@ export async function setupRuntimeModules(customStorage = null) {
     Request,
     URL,
     AbortController,
+    AbortSignal,
     fetch,
     Date,
     Math,
@@ -2402,6 +2407,217 @@ test('T-TAB-ISOLATION: Requests with identical names/methods/urls from different
   assert.equal(afterReclickB.tabs.length, 2);
   assert.equal(afterReclickB.activeTabId, reqBId);
 });
+
+test('T-NAT-CLOUD: 401 retry cancels initial response body and tauriCloudTransport applies connectTimeout and signal', async () => {
+  const { cloudApiModule } = await setupRuntimeModules();
+
+  let bodyCancelled = false;
+  let requestsCount = 0;
+
+  const mockTransport = {
+    fetch: async (url, init) => {
+      requestsCount++;
+      if (url.includes('/api/v1/auth/refresh')) {
+        return new Response(JSON.stringify({
+          data: { token: 'new-token-456', refresh_token: 'new-refresh-789' }
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+
+      if (requestsCount === 1) {
+        // First request returns 401 with cancellable body
+        const mockStream = new ReadableStream({
+          cancel() {
+            bodyCancelled = true;
+          }
+        });
+        return new Response(mockStream, { status: 401 });
+      }
+
+      // Retry request returns 200
+      return new Response(JSON.stringify({ data: { success: true } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+  };
+
+  cloudApiModule.setCloudTransport(mockTransport);
+
+  const res = await cloudApiModule.fetchWithAuth('/api/v1/workspaces', {
+    apiUrl: 'http://127.0.0.1:8080',
+    token: 'expired-token-123',
+    refreshToken: 'valid-refresh-token',
+  });
+
+  assert.equal(res.status, 200);
+  assert.equal(bodyCancelled, true, 'Initial 401 response body stream must be cancelled before retry to avoid Rust ResourceTable leak');
+
+  // Verify tauriCloudTransport options directly
+  const adapterSrc = fs.readFileSync(new URL('../apps/native/src/adapters/tauriAdapter.ts', import.meta.url), 'utf8')
+    .replaceAll('import.meta.url', '"file:///adapter.ts"');
+  let tauriFetchOpts = null;
+  const compiled = ts.transpileModule(adapterSrc, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const exports = {};
+  vm.runInNewContext(compiled, {
+    exports,
+    require: (name) => {
+      if (name === '@tauri-apps/plugin-http') {
+        return {
+          fetch: async (url, opts) => {
+            tauriFetchOpts = opts;
+            return new Response();
+          }
+        };
+      }
+      return {};
+    },
+    __AIRREST_ANDROID__: false,
+    console,
+    AbortSignal,
+    AbortController,
+    setTimeout,
+    clearTimeout,
+  });
+
+  await exports.tauriCloudTransport.fetch('https://api.example.com/sync', { method: 'GET' });
+  assert.equal(tauriFetchOpts?.connectTimeout, 15000, 'tauriCloudTransport must specify connectTimeout: 15000');
+  assert.ok(tauriFetchOpts?.signal, 'tauriCloudTransport must provide timeout signal');
+});
+
+test('T-NAT-LIFECYCLE: tauriAdapter.dispose aborts active workers, dialogFilters converts MIME, and outbound body limits enforced', async () => {
+  // 1. Verify outbound attachment limits in fetcher
+  const fetcherSrc = fs.readFileSync(new URL('../packages/common/src/lib/fetcher.ts', import.meta.url), 'utf8');
+  const compiledFetcher = ts.transpileModule(fetcherSrc, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const fetcherExports = {};
+  vm.runInNewContext(compiledFetcher, {
+    exports: fetcherExports,
+    require: () => ({}),
+    console,
+    Blob,
+    FormData,
+    Headers,
+  });
+
+  assert.equal(fetcherExports.MAX_OUTBOUND_ATTACHMENT_BYTES, 25 * 1024 * 1024);
+
+  const oversizedBlob = new Blob([new Uint8Array(26 * 1024 * 1024)]);
+  assert.throws(
+    () => {
+      fetcherExports.prepareRequest({
+        bodyType: 'form-data',
+        bodyFormData: [{ key: 'file', value: '', type: 'file', enabled: true, file: oversizedBlob, fileName: 'huge.bin' }],
+      }, {});
+    },
+    (err) => {
+      assert.match(err.message, /exceeds the 25 MB payload limit/);
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => {
+      fetcherExports.prepareRequest({
+        bodyType: 'binary',
+        bodyBinaryFile: { name: 'huge.bin', file: oversizedBlob },
+      }, {});
+    },
+    (err) => {
+      assert.match(err.message, /exceeds the 25 MB payload limit/);
+      return true;
+    }
+  );
+
+  // 2. Verify dialogFilters MIME conversion on Android
+  const adapterSrc = fs.readFileSync(new URL('../apps/native/src/adapters/tauriAdapter.ts', import.meta.url), 'utf8')
+    .replaceAll('import.meta.url', '"file:///adapter.ts"');
+  const compiled = ts.transpileModule(adapterSrc, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const exports = {};
+  vm.runInNewContext(compiled, {
+    exports,
+    require: () => ({}),
+    __AIRREST_ANDROID__: true,
+    console,
+    AbortSignal,
+    AbortController,
+  });
+
+  const mimeFilters = exports.dialogFilters({ mimeType: 'application/pdf' });
+  assert.deepEqual(JSON.parse(JSON.stringify(mimeFilters)), [{ name: 'File', extensions: ['application/pdf'] }]);
+
+  // 3. Verify tauriAdapter.dispose() calls tauriScriptExecutor.dispose()
+  let executorDisposed = false;
+  exports.tauriScriptExecutor.dispose = () => { executorDisposed = true; };
+  exports.tauriAdapter.dispose();
+  assert.equal(executorDisposed, true);
+  assert.equal(exports.tauriAdapter.platformId, 'android');
+});
+
+test('T-EXT-SCOPE: fetchScopes preserves workspaceMode, activeScope, and scopesCache when fetchUserTeams throws transient network error', async () => {
+  const { runtimeModule, cloudApiModule } = await setupRuntimeModules();
+  cloudApiModule.setCloudTransport({
+    fetch: async (url) => {
+      if (url.includes('/api/v1/workspaces')) {
+        return new Response(JSON.stringify({ data: [{ id: 'ws-1', name: 'Personal' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.includes('/api/v1/teams')) {
+        throw new Error('Network error: connection reset');
+      }
+      return new Response(JSON.stringify({ data: {} }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    },
+  });
+
+  const adapter = {
+    id: 'test-adapter',
+    hasHostPermission: async () => true,
+    requestHostPermission: async () => true,
+    dispose: () => {},
+  };
+  const runtime = runtimeModule.createAirrestRuntime({ adapter });
+
+  runtime.store.setState({
+    workspaceMode: 'cloud',
+    cloudConfig: {
+      apiUrl: 'http://127.0.0.1:8080',
+      token: 'tok-valid',
+      refreshToken: 'ref-valid',
+      user: { id: 'u1', role: 'user' },
+      activeScope: {
+        type: 'project',
+        id: 'proj-1',
+        teamId: 'team-1',
+        name: 'Core Project',
+        role: 'contributor',
+      },
+      scopesCache: {
+        workspaces: [{ id: 'ws-1', name: 'Personal' }],
+        teams: [{ id: 'team-1', name: 'Core Team' }],
+        teamProjects: { 'team-1': [{ id: 'proj-1', name: 'Core Project', team_id: 'team-1', user_role: 'contributor' }] },
+        fetchedAt: Date.now() - 60000,
+      },
+    },
+  });
+
+  await runtime.store.getState().fetchScopes(true);
+
+  const stateAfter = runtime.store.getState();
+  assert.equal(stateAfter.workspaceMode, 'cloud', 'workspaceMode must remain cloud on transient fetchUserTeams error');
+  assert.equal(stateAfter.cloudConfig.activeScope?.type, 'project', 'activeScope must remain project');
+  assert.equal(stateAfter.cloudConfig.activeScope?.id, 'proj-1', 'activeScope id must remain proj-1');
+  assert.equal(stateAfter.cloudConfig.scopesCache?.teams?.length, 1, 'scopesCache teams must not be overwritten with empty array');
+
+  runtime.dispose();
+});
+
+
 
 
 

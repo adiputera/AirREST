@@ -1700,7 +1700,7 @@
           "Collections"
         ],
         "summary": "Update collection (OCC)",
-        "description": "Updates collection name, description, or `min_role`. Enforces Optimistic Concurrency Control\nvia `base_version`. Returns HTTP 409 Conflict if `base_version` does not match current version.\n",
+        "description": "Updates collection name, description, or `min_role`. Modifying `min_role` in a project scope requires `maintainer` or `admin` role (`403 Forbidden` if a contributor attempts to change `min_role`). Enforces Optimistic Concurrency Control\nvia `base_version`. Returns HTTP 409 Conflict if `base_version` does not match current version.\n",
         "security": [
           {
             "BearerAuth": []
@@ -2464,7 +2464,7 @@
           "Environments"
         ],
         "summary": "Update environment (OCC)",
-        "description": "Updates environment name, variables, and `min_role`. Supports `base_version` OCC.",
+        "description": "Updates environment name, variables, and `min_role`. Modifying `min_role` in a project scope requires `maintainer` or `admin` role (`403 Forbidden` if a contributor attempts to change `min_role`). Supports `base_version` OCC.",
         "security": [
           {
             "BearerAuth": []

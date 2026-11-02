@@ -226,6 +226,9 @@ function component(file, exportName, initialState = {}, api = {}) {
   const state = { ...initialState };
   const effects = [];
   const store = { apiUrl: 'https://example.com', token: 'access', refreshToken: 'refresh', user, selectedTeamId: 't', selectedProjectId: 'p', activeTab: 'teams',
+    featurePolicy: { flags: { 'collection.move': true, 'collection.delete': true, 'collection.export': true }, revision: 1, updated_at: 'now' },
+    featurePolicyFetchedAt: Date.now(),
+    setFeaturePolicy(policy, fetchedAt = Date.now()) { store.featurePolicy = policy; store.featurePolicyFetchedAt = policy ? fetchedAt : null; },
     setSelectedTeamId(id) { store.selectedTeamId = id; store.selectedProjectId = null; },
     setSelectedProjectId(id) { store.selectedProjectId = id; },
     setApiUrl(url) { store.apiUrl = url; },
@@ -368,8 +371,9 @@ test('late team project list cannot switch the selection back to the previous te
 
 test('member assignment finishing after navigation cannot replace the new project members', async () => {
   const members = deferred();
-  const h = projects({ isAssignMemberOpen: true, selectedUserIdToAssign: 'invitee' }, {
-    apiAddProjectMember: async () => {},
+  let addMemberCalled = 0;
+  const h = projects({ isAssignMemberOpen: true, selectedUserIdsToAssign: ['invitee'] }, {
+    apiAddProjectMember: async () => { addMemberCalled++; },
     apiListProjectMembers: () => members.promise,
   });
   function findForm(node) {
@@ -385,6 +389,7 @@ test('member assignment finishing after navigation cannot replace the new projec
   assert.ok(form, 'assignment modal must contain a form');
   const submission = form.props.onSubmit({ preventDefault() {} });
   await tick();
+  assert.equal(addMemberCalled, 1, 'apiAddProjectMember must be called for valid assignment');
   h.store.selectedProjectId = 'new-project';
   h.state.projectMembers = [{ user_id: 'new-member' }];
   members.resolve([{ user_id: 'old-member' }]);
@@ -635,4 +640,88 @@ test('Sidebar renders mobile drawer overlay and handles close and selection', ()
   const openHtml = renderToStaticMarkup(openElement);
   assert.match(openHtml, /Close navigation overlay/);
   assert.match(openHtml, /translate-x-0/);
+});
+
+test('ProjectsView disables Move and Delete buttons when featurePolicy flags are false or policy snapshot is stale', () => {
+  const col = { id: 'col-1', name: 'Alpha Collection', min_role: 'reader', version: 1, items: [] };
+  const h = projects({
+    projectSubTab: 'collections',
+    collections: [col],
+    projects: [{ id: 'p', name: 'Project', user_role: 'admin' }],
+  });
+  h.store.selectedProjectId = 'p';
+
+  // 1. Fresh policy with move=false, delete=false
+  h.store.featurePolicy = { flags: { 'collection.move': false, 'collection.delete': false, 'collection.export': true }, revision: 1, updated_at: 'now' };
+  h.store.featurePolicyFetchedAt = Date.now();
+  let html = renderToStaticMarkup(h.render());
+  assert.doesNotMatch(html, />Move</);
+  assert.doesNotMatch(html, />Delete</);
+
+  // 2. Fresh policy with move=true, delete=true
+  h.store.featurePolicy = { flags: { 'collection.move': true, 'collection.delete': true, 'collection.export': true }, revision: 1, updated_at: 'now' };
+  h.store.featurePolicyFetchedAt = Date.now();
+  html = renderToStaticMarkup(h.render());
+  assert.match(html, />Move</);
+  assert.match(html, />Delete</);
+
+  // 3. Stale policy (>30 minutes): fail-closed
+  h.store.featurePolicyFetchedAt = Date.now() - 31 * 60 * 1000;
+  html = renderToStaticMarkup(h.render());
+  assert.doesNotMatch(html, />Move</);
+  assert.doesNotMatch(html, />Delete</);
+});
+
+test('Move collection modal preselects single destination project and includes placeholder', () => {
+  const h = projects({
+    moveColItem: { id: 'col-1', name: 'Col 1' },
+    targetMoveProjectId: 'p2',
+    projects: [
+      { id: 'p', name: 'Project 1', user_role: 'admin' },
+      { id: 'p2', name: 'Project 2', user_role: 'admin' },
+    ],
+  });
+  h.store.selectedProjectId = 'p';
+
+  const html = renderToStaticMarkup(h.render());
+  assert.match(html, /Select a destination project\.\.\./);
+  assert.match(html, /value="p2"/);
+
+  const moveButton = findElements(h.render(), (n) => n.type === 'button' && renderToStaticMarkup(n).includes('Move Collection'))[0];
+  assert.ok(moveButton, 'Move Collection button must exist');
+  assert.equal(moveButton.props.disabled, false);
+});
+
+test('handleSavePermission recovers from 409 Conflict by updating version and passing collection name', async () => {
+  let passedName = null;
+  const h = projects({
+    permModalItem: { type: 'collection', id: 'col-1', name: 'Secure Collection', currentRole: 'reader', version: 1 },
+    selectedPermRole: 'maintainer',
+    collections: [{ id: 'col-1', name: 'Secure Collection', min_role: 'reader', version: 1 }],
+  }, {
+    apiUpdateCollectionPermission: async (apiUrl, token, colId, name, role, baseVer) => {
+      passedName = name;
+      const err = new Error('conflict: collection modified by another user');
+      err.status = 409;
+      err.data = { version: 5 };
+      throw err;
+    },
+  });
+
+  const form = findElements(h.render(), (n) => n.type === 'form' && renderToStaticMarkup(n).includes('Save Permission'))[0];
+  assert.ok(form, 'Permission form must exist');
+  await form.props.onSubmit({ preventDefault() {} });
+
+  assert.equal(passedName, 'Secure Collection', 'apiUpdateCollectionPermission must receive collection name');
+  assert.equal(h.state.permModalItem.version, 5, 'permModalItem version must update to remote conflicting version');
+  assert.equal(h.state.collections[0].version, 5, 'collections state must update to remote conflicting version');
+  assert.match(h.state.errorMsg, /Conflict: Modified by another user\. Version updated to 5/);
+});
+
+test('SuperadminView renders Access Denied when user is not superadmin', () => {
+  const h = component('apps/hub/src/pages/SuperadminView.tsx', 'SuperadminView');
+  h.store.user = { id: 'u', name: 'Regular User', email: 'u@example.com', role: 'user' };
+  const html = renderToStaticMarkup(h.render());
+  assert.match(html, /Access Denied: Superadmin privileges required/);
+  assert.doesNotMatch(html, /Global Feature Controls/);
 });

@@ -130,7 +130,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
         a.href = url;
         a.download = filename;
         a.click();
-        URL.revokeObjectURL(url);
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
       }
       setSuccessMsg(`Exported "${currentEnv.name}" as Postman environment JSON.`);
       setTimeout(() => setSuccessMsg(null), 3000);

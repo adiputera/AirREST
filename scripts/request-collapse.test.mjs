@@ -9,9 +9,8 @@ const __dirname = path.dirname(__filename);
 
 test('RequestEditor collapse/expand configuration verification', () => {
   const commonPath = path.resolve(__dirname, '../packages/common/src/components/RequestEditor.tsx');
-  const extensionPath = path.resolve(__dirname, '../apps/extension/src/components/RequestEditor.tsx');
 
-  for (const filePath of [commonPath, extensionPath]) {
+  for (const filePath of [commonPath]) {
     assert.ok(fs.existsSync(filePath), `File exists: ${filePath}`);
     const content = fs.readFileSync(filePath, 'utf-8');
 

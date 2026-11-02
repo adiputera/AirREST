@@ -21,7 +21,7 @@ function loadProductionQuickJSRunner(options = {}) {
   const runnerExports = {};
   const requireMap = {
     'quickjs-emscripten': {
-      getQuickJS: async () => {
+      getQuickJS: options.mockGetQuickJS || (async () => {
         const qjs = await getQuickJS();
         if (!options.onGetString) return qjs;
         return {
@@ -42,7 +42,7 @@ function loadProductionQuickJSRunner(options = {}) {
             return rt;
           }
         };
-      }
+      })
     },
     '@airrest/common': protoExports,
     '@airrest/common/protocol': protoExports,
@@ -60,6 +60,7 @@ function loadProductionQuickJSRunner(options = {}) {
 
   return {
     runScriptInQuickJS: runnerExports.runQuickJsGuest,
+    getCachedQuickJS: runnerExports.getCachedQuickJS,
     validateScriptInput: protoExports.validateScriptInput,
     validateScriptOutput: protoExports.validateScriptOutput,
     loadProductionQuickJSRunner,
@@ -639,4 +640,74 @@ test('T-G3 (P3): throwing proxy error with infinite loop in traps returns Script
   assert.equal(result.error, 'Script execution timed out.');
   assert.equal(result.environment.envKey, 'safe');
   assert.ok(duration < 350, `Cleanup interrupt must abort in ~50ms, took ${duration}ms`);
+});
+
+test('T-NAT-QUICKJS: QuickJS module cache resets on error and 2 MiB response executes without double-JSON OOM', async () => {
+  // 1. Verify getCachedQuickJS resets promise on failure
+  let attempt = 0;
+  const mockQuickJS = loadProductionQuickJSRunner({
+    mockGetQuickJS: async () => {
+      attempt++;
+      if (attempt === 1) {
+        throw new Error('Simulated WASM initialization failure');
+      }
+      return getQuickJS();
+    },
+  });
+
+  await assert.rejects(
+    async () => {
+      await mockQuickJS.getCachedQuickJS();
+    },
+    { message: /Simulated WASM initialization failure/ }
+  );
+
+  // Subsequent call must retry and succeed rather than serving cached rejected promise
+  const qjs = await mockQuickJS.getCachedQuickJS();
+  assert.ok(qjs && typeof qjs.newRuntime === 'function', 'Must succeed on second attempt after failure');
+  assert.equal(attempt, 2);
+
+  // 2. Verify large response (2 MiB) is handled via newString without double-stringification / OOM
+  const largeResponseText = 'A'.repeat(2 * 1024 * 1024);
+  const largeResult = await runScriptInQuickJS({
+    script: `
+      const text = pm.response.text();
+      pm.environment.set("text_len", String(text.length));
+    `,
+    environment: {},
+    variables: {},
+    response: {
+      status: 200,
+      statusText: 'OK',
+      headers: { 'content-type': 'text/plain' },
+      data: largeResponseText,
+      timeMs: 10,
+    },
+  });
+
+  assert.equal(largeResult.success, true);
+  assert.equal(largeResult.environment.text_len, String(2 * 1024 * 1024));
+
+  // 3. Verify validateScriptInput bounds response exceeding 2 MiB limit
+  const oversizedResponseInput = {
+    script: 'pm.environment.set("ok", "true");',
+    environment: {},
+    variables: {},
+    response: {
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: 'B'.repeat(3 * 1024 * 1024),
+    },
+  };
+  const val = validateScriptInput(oversizedResponseInput);
+  assert.equal(val.valid, true);
+  assert.ok(
+    oversizedResponseInput.response.data.endsWith('... (truncated)'),
+    'Oversized response data must be truncated'
+  );
+  assert.ok(
+    new TextEncoder().encode(oversizedResponseInput.response.data).length <= 2 * 1024 * 1024,
+    'Truncated response must be <= 2 MiB'
+  );
 });

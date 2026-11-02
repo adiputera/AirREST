@@ -14,7 +14,18 @@ export function getScriptExecutor(): ScriptExecutor | null {
   return injectedScriptExecutor;
 }
 
+interface IframeWaiter {
+  resolve: (iframe: HTMLIFrameElement) => void;
+  reject: (err: Error) => void;
+}
+
+const pendingIframeWaiters: IframeWaiter[] = [];
+
 export function resetSandboxIframe(): void {
+  const waiters = pendingIframeWaiters.splice(0, pendingIframeWaiters.length);
+  for (const w of waiters) {
+    w.reject(new Error('Sandbox iframe was reset or destroyed'));
+  }
   if (sandboxIframe) {
     try {
       sandboxIframe.remove();
@@ -38,30 +49,46 @@ export function getSandboxIframe(): Promise<HTMLIFrameElement> {
       return;
     }
 
+    const timer = setTimeout(() => {
+      const idx = pendingIframeWaiters.findIndex((w) => w.resolve === safeResolve);
+      if (idx !== -1) {
+        pendingIframeWaiters.splice(idx, 1);
+        reject(new Error('Timed out waiting for sandbox iframe readiness'));
+      }
+    }, 3000);
+
+    const safeResolve = (el: HTMLIFrameElement) => {
+      clearTimeout(timer);
+      resolve(el);
+    };
+    const safeReject = (err: Error) => {
+      clearTimeout(timer);
+      reject(err);
+    };
+
+    pendingIframeWaiters.push({ resolve: safeResolve, reject: safeReject });
+
     if (!sandboxIframe) {
       sandboxIframe = document.createElement('iframe');
+      if (typeof sandboxIframe.setAttribute === 'function') {
+        sandboxIframe.setAttribute('sandbox', 'allow-scripts');
+      }
       sandboxIframe.style.display = 'none';
       sandboxIframe.src = 'sandbox.html';
       sandboxIframe.onload = () => {
         isIframeReady = true;
-        resolve(sandboxIframe!);
+        const waiters = pendingIframeWaiters.splice(0, pendingIframeWaiters.length);
+        for (const w of waiters) {
+          w.resolve(sandboxIframe!);
+        }
       };
       sandboxIframe.onerror = (err) => {
-        reject(new Error('Failed to load sandbox iframe: ' + String(err)));
+        const waiters = pendingIframeWaiters.splice(0, pendingIframeWaiters.length);
+        for (const w of waiters) {
+          w.reject(new Error('Failed to load sandbox iframe: ' + String(err)));
+        }
       };
       document.body.appendChild(sandboxIframe);
-    } else {
-      let attempts = 0;
-      const checkInterval = setInterval(() => {
-        attempts++;
-        if (isIframeReady && sandboxIframe) {
-          clearInterval(checkInterval);
-          resolve(sandboxIframe);
-        } else if (attempts > 60) {
-          clearInterval(checkInterval);
-          reject(new Error('Timed out waiting for sandbox iframe readiness'));
-        }
-      }, 50);
     }
   });
 }
@@ -80,7 +107,7 @@ export async function executePreRequestScript(
   script: string,
   environment: Record<string, string> = {},
   variables: Record<string, string> = {},
-  options?: { signal?: AbortSignal; scriptExecutor?: ScriptExecutor }
+  options?: { signal?: AbortSignal; timeoutMs?: number; scriptExecutor?: ScriptExecutor }
 ): Promise<ScriptExecutionResult> {
   if (!script || !script.trim()) {
     return {
@@ -94,11 +121,11 @@ export async function executePreRequestScript(
   if (executor) {
     return executor.execute(
       { script, environment, variables },
-      { signal: options?.signal }
+      { signal: options?.signal, timeoutMs: options?.timeoutMs }
     );
   }
 
-  return runScriptInSandbox(script, undefined, environment, variables);
+  return runScriptInSandbox(script, undefined, environment, variables, options);
 }
 
 /**
@@ -109,7 +136,7 @@ export async function executePostResponseScript(
   response: ApiResponse,
   environment: Record<string, string> = {},
   variables: Record<string, string> = {},
-  options?: { signal?: AbortSignal; scriptExecutor?: ScriptExecutor }
+  options?: { signal?: AbortSignal; timeoutMs?: number; scriptExecutor?: ScriptExecutor }
 ): Promise<ScriptExecutionResult> {
   if (!script || !script.trim()) {
     return {
@@ -134,19 +161,29 @@ export async function executePostResponseScript(
           timeMs: response.timeMs,
         },
       },
-      { signal: options?.signal }
+      { signal: options?.signal, timeoutMs: options?.timeoutMs }
     );
   }
 
-  return runScriptInSandbox(script, response, environment, variables);
+  return runScriptInSandbox(script, response, environment, variables, options);
 }
 
 export async function runScriptInSandbox(
   script: string,
   response: ApiResponse | undefined,
   environment: Record<string, string>,
-  variables: Record<string, string>
+  variables: Record<string, string>,
+  options?: { signal?: AbortSignal; timeoutMs?: number }
 ): Promise<ScriptExecutionResult> {
+  if (options?.signal?.aborted) {
+    return {
+      success: false,
+      error: 'Script execution aborted.',
+      environment,
+      variables,
+    };
+  }
+
   const scriptInput: ScriptInput = {
     script,
     response: response ? {
@@ -172,25 +209,63 @@ export async function runScriptInSandbox(
 
   try {
     const iframe = await getSandboxIframe();
+    if (options?.signal?.aborted) {
+      return {
+        success: false,
+        error: 'Script execution aborted.',
+        environment,
+        variables,
+      };
+    }
+
     const id = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
       ? crypto.randomUUID()
       : Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
 
+    const timeoutMs = options?.timeoutMs ?? 2000;
+
     return new Promise((resolve) => {
       let isSettled = false;
+
+      const cleanup = () => {
+        clearTimeout(timer);
+        if (typeof window !== 'undefined') {
+          window.removeEventListener('message', handleMessage);
+        }
+        if (options?.signal) {
+          options.signal.removeEventListener('abort', onAbort);
+        }
+      };
 
       const timer = setTimeout(() => {
         if (isSettled) return;
         isSettled = true;
-        window.removeEventListener('message', handleMessage);
+        cleanup();
         resetSandboxIframe();
         resolve({
           success: false,
-          error: 'Script timed out after 2000ms.',
+          error: `Script timed out after ${timeoutMs}ms.`,
           environment,
           variables,
         });
-      }, 2000);
+      }, timeoutMs);
+
+      const onAbort = () => {
+        if (isSettled) return;
+        isSettled = true;
+        cleanup();
+        resetSandboxIframe();
+        resolve({
+          success: false,
+          error: 'Script execution aborted.',
+          environment,
+          variables,
+        });
+      };
+
+      if (options?.signal) {
+        options.signal.addEventListener('abort', onAbort, { once: true });
+      }
 
       const handleMessage = (event: MessageEvent) => {
         // Enforce source check: message must come strictly from the target iframe content window
@@ -200,14 +275,15 @@ export async function runScriptInSandbox(
 
         if (isSettled) return;
         isSettled = true;
-        clearTimeout(timer);
-        window.removeEventListener('message', handleMessage);
+        cleanup();
 
         const validated = validateScriptOutput(event.data, scriptInput);
         resolve(validated);
       };
 
-      window.addEventListener('message', handleMessage);
+      if (typeof window !== 'undefined') {
+        window.addEventListener('message', handleMessage);
+      }
 
       iframe.contentWindow?.postMessage(
         {

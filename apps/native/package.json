@@ -21,7 +21,8 @@
     "@tauri-apps/plugin-updater": "^2.14.1",
     "quickjs-emscripten": "^0.31.0",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
