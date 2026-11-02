@@ -1,6 +1,6 @@
 {
   "name": "airrest",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -57,7 +57,9 @@
     "test:collection-permission": "node --test scripts/collection-permission.test.mjs",
     "test:theme": "node --test scripts/theme-resolution.test.mjs",
     "test:payload-builder": "node --test scripts/payload-builder.test.mjs",
-    "test:all": "npm run test:security-clients && npm run test:extension-lifecycle && npm run test:extension-storage && npm run test:extension-fetcher && npm run test:cloud-compression && npm run test:feature-policy && npm run test:hub && npm run test:desktop && npm run test:sidebar-search && npm run test:sidebar-dropdown-placement && npm run test:scope-switcher-placement && npm run test:tab-response-cache && npm run test:path-variables && npm run test:request-collapse && npm run test:collection-permission && npm run test:theme && npm run test:payload-builder"
+    "test:collection-sync-retry": "node --test scripts/collection-sync-retry.test.mjs",
+    "test:environment-draft-sync": "node --test scripts/environment-draft-sync.test.mjs",
+    "test:all": "npm run test:security-clients && npm run test:extension-lifecycle && npm run test:extension-storage && npm run test:extension-fetcher && npm run test:cloud-compression && npm run test:feature-policy && npm run test:hub && npm run test:desktop && npm run test:sidebar-search && npm run test:sidebar-dropdown-placement && npm run test:scope-switcher-placement && npm run test:tab-response-cache && npm run test:path-variables && npm run test:request-collapse && npm run test:collection-permission && npm run test:theme && npm run test:payload-builder && npm run test:collection-sync-retry && npm run test:environment-draft-sync"
   },
   "devDependencies": {
     "eslint": "^9",

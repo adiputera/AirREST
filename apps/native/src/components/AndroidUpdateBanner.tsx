@@ -140,15 +140,20 @@ export function AndroidUpdateBanner({
   const newVer = updateAvailable.tag_name;
   const rawDownloadUrl = pickAndroidApkUrl(updateAvailable.assets, updateAvailable.html_url);
   const downloadUrl = rawDownloadUrl.startsWith('https://') ? rawDownloadUrl : '';
-  if (!downloadUrl) return null;
+  const releasePageUrl = updateAvailable.html_url?.startsWith('https://')
+    ? updateAvailable.html_url
+    : downloadUrl;
+  if (!releasePageUrl && !downloadUrl) return null;
 
   const handleDownload = async () => {
-    if (!downloadUrl || !downloadUrl.startsWith('https://')) return;
+    // Redirect to GitHub release page in browser to avoid in-app webview / Custom Tab download stall (stuck at 100%)
+    const targetUrl = releasePageUrl || downloadUrl;
+    if (!targetUrl || !targetUrl.startsWith('https://')) return;
     setDownloading(true);
     try {
-      await openUrl(downloadUrl);
+      await openUrl(targetUrl);
     } catch {
-      window.open(downloadUrl, '_blank', 'noopener,noreferrer');
+      window.open(targetUrl, '_blank', 'noopener,noreferrer');
     } finally {
       setDownloading(false);
     }

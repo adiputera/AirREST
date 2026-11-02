@@ -124,7 +124,7 @@ export const tauriTestTransport: TestTransport = {
   },
 };
 
-function combineSignals(signal?: AbortSignal | null, timeoutMs = 120000): AbortSignal | undefined {
+function combineSignals(signal?: AbortSignal | null, timeoutMs = 300000): AbortSignal | undefined {
   if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
     const timeoutSignal = AbortSignal.timeout(timeoutMs);
     if (!signal) return timeoutSignal;
@@ -148,7 +148,7 @@ export const tauriCloudTransport: CloudTransport = {
     // maxRedirections: 0 prevents reqwest / Tauri HTTP from automatically following redirects,
     // avoiding credential leaks or unintended host transitions.
     // connectTimeout: 15000 guards against hanging TCP handshakes.
-    const signal = combineSignals(init.signal as AbortSignal, 120000);
+    const signal = combineSignals(init.signal as AbortSignal, 300000);
     return tauriFetch(url, {
       method: init.method,
       headers: init.headers,

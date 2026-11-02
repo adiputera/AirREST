@@ -529,6 +529,8 @@ export function createApiStore(
   const boundAdapter = options.adapter || adapterParam;
 
   const envSyncDebounceTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+  const envSyncInFlight: Record<string, boolean> = {};
+  const envSyncQueued: Record<string, boolean> = {};
   const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
   let isStoreDisposed = false;
 
@@ -621,6 +623,12 @@ export function createApiStore(
       clearTimeout(envSyncDebounceTimers[id]);
       delete envSyncDebounceTimers[id];
     }
+    for (const id of Object.keys(envSyncInFlight)) {
+      delete envSyncInFlight[id];
+    }
+    for (const id of Object.keys(envSyncQueued)) {
+      delete envSyncQueued[id];
+    }
     for (const timer of pendingTimers) {
       clearTimeout(timer);
     }
@@ -643,62 +651,81 @@ export function createApiStore(
       delete envSyncDebounceTimers[envId];
 
       if (isStoreDisposed) return;
-      const { workspaceMode, cloudConfig, environments } = get();
+      const { workspaceMode, cloudConfig } = get();
       if (workspaceMode !== 'cloud' || !cloudConfig.token) return;
 
-      const currentEnv = environments.find((e) => e.id === envId);
-      if (!currentEnv) return;
-
-      const operation = beginAsyncOperation();
-      try {
-        const res = await updateScopeEnvironment(
-          cloudConfig.apiUrl,
-          cloudConfig.token,
-          envId,
-          {
-            name: currentEnv.name,
-            variables: sanitizeVariablesForUpstream(currentEnv.variables),
-            min_role: currentEnv.minRole,
-            base_version: currentEnv.version || 1,
-          },
-          cloudConfig.refreshToken,
-          operation.controller.signal
-        );
-
-        if (!isAsyncOperationCurrent(operation)) return;
-
-        if (res && typeof res.version === 'number') {
-          set((s) => {
-            if (!isAsyncOperationCurrent(operation)) return {};
-            return {
-              environments: s.environments.map((e) =>
-                e.id === envId ? { ...e, version: res.version } : e
-              ),
-            };
-          });
-        }
-      } catch (err: any) {
-        if (!isAsyncOperationCurrent(operation)) return;
-        if (err?.status === 409) {
-          const remote = getRemoteEnvironment(err.data);
-          console.warn('Environment sync conflict requires explicit resolution:', err);
-          set((state) => {
-            if (!isAsyncOperationCurrent(operation)) return {};
-            return {
-              syncStatus: 'error',
-              syncError: 'Environment changes conflict with a newer server version. Review the conflict before saving again.',
-              environmentOccConflict: remote
-                ? { local: state.environments.find((environment) => environment.id === envId) || currentEnv, remote }
-                : null,
-            };
-          });
-          return;
-        }
-        console.error('Failed to sync updated environment to cloud:', err);
-      } finally {
-        completeAsyncOperation(operation);
+      if (envSyncInFlight[envId]) {
+        envSyncQueued[envId] = true;
+        return;
       }
-    }, 300);
+
+      const executeSync = async () => {
+        if (isStoreDisposed) return;
+        const state = get();
+        if (state.workspaceMode !== 'cloud' || !state.cloudConfig.token) return;
+
+        const currentEnv = state.environments.find((e) => e.id === envId);
+        if (!currentEnv) return;
+
+        envSyncInFlight[envId] = true;
+        const operation = beginAsyncOperation();
+        try {
+          const res = await updateScopeEnvironment(
+            state.cloudConfig.apiUrl,
+            state.cloudConfig.token,
+            envId,
+            {
+              name: currentEnv.name,
+              variables: sanitizeVariablesForUpstream(currentEnv.variables),
+              min_role: currentEnv.minRole,
+              base_version: currentEnv.version || 1,
+            },
+            state.cloudConfig.refreshToken,
+            operation.controller.signal
+          );
+
+          if (!isAsyncOperationCurrent(operation)) return;
+
+          if (res && typeof res.version === 'number') {
+            set((s) => {
+              if (!isAsyncOperationCurrent(operation)) return {};
+              return {
+                environments: s.environments.map((e) =>
+                  e.id === envId ? { ...e, version: res.version } : e
+                ),
+              };
+            });
+          }
+        } catch (err: any) {
+          if (!isAsyncOperationCurrent(operation)) return;
+          if (err?.status === 409) {
+            const remote = getRemoteEnvironment(err.data);
+            console.warn('Environment sync conflict requires explicit resolution:', err);
+            set((currentState) => {
+              if (!isAsyncOperationCurrent(operation)) return {};
+              return {
+                syncStatus: 'error',
+                syncError: 'Environment changes conflict with a newer server version. Review the conflict before saving again.',
+                environmentOccConflict: remote
+                  ? { local: currentState.environments.find((environment) => environment.id === envId) || currentEnv, remote }
+                  : null,
+              };
+            });
+            return;
+          }
+          console.error('Failed to sync updated environment to cloud:', err);
+        } finally {
+          completeAsyncOperation(operation);
+          delete envSyncInFlight[envId];
+          if (envSyncQueued[envId]) {
+            delete envSyncQueued[envId];
+            void executeSync();
+          }
+        }
+      };
+
+      await executeSync();
+    }, 1200);
   }
 
   const store = create<ApiStoreState>()(
@@ -1177,6 +1204,42 @@ export function createApiStore(
         const requestedScope = cloudConfig.activeScope;
         set({ syncStatus: 'syncing', syncError: null });
         try {
+          // Push any pending collections in the active cloud scope before pulling
+          const currentCols = get().collections || [];
+          const pendingCols = currentCols.filter(
+            (c) => c._syncStatus === 'pending' || (c._origin === 'cloud' && typeof c.version !== 'number')
+          );
+
+          if (pendingCols.length > 0) {
+            for (const pendingCol of pendingCols) {
+              if (!isAsyncOperationCurrent(operation)) return;
+              try {
+                await batchImportToScope(
+                  cloudConfig.apiUrl,
+                  cloudConfig.token,
+                  requestedScope,
+                  [pendingCol],
+                  cloudConfig.refreshToken,
+                  operation.controller.signal
+                );
+                if (!isAsyncOperationCurrent(operation)) return;
+                set((state) => ({
+                  collections: state.collections.map((c) =>
+                    c.id === pendingCol.id ? { ...c, _syncStatus: 'synced' } : c
+                  ),
+                }));
+              } catch (pushErr: any) {
+                if (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation)) return;
+                console.warn(`Failed to push pending collection "${pendingCol.name}" to cloud:`, pushErr);
+                set({
+                  syncStatus: 'error',
+                  syncError: pushErr.message || `Failed to upload pending collection "${pendingCol.name}"`,
+                });
+                return;
+              }
+            }
+          }
+
           // For all cloud scopes (workspace & project):
           // Pull lightweight collection list (metadata only: id, name, version, updated_at),
           // then fetch each modified/new collection 1-by-1 to prevent Vercel FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE.
@@ -1215,6 +1278,7 @@ export function createApiStore(
                 minRole: colMeta.min_role || existing.minRole,
                 version: serverVersion ?? existing.version,
                 updatedAt: serverUpdatedAt || existing.updatedAt,
+                _syncStatus: 'synced',
               });
               continue;
             }
@@ -1230,7 +1294,10 @@ export function createApiStore(
               );
               if (!isAsyncOperationCurrent(operation)) return;
               if (detail && !detail.deleted_at) {
-                pulledCols.push(buildCollectionFromDetails(detail));
+                pulledCols.push({
+                  ...buildCollectionFromDetails(detail),
+                  _syncStatus: 'synced',
+                });
               }
             } catch (colErr) {
               if (!isAsyncOperationCurrent(operation)) return;
@@ -1247,9 +1314,17 @@ export function createApiStore(
                 updatedAt: existing?.updatedAt || 0,
                 _origin: 'cloud',
                 isPartial: true,
+                _syncStatus: 'synced',
               });
             }
           }
+
+          // Safety guard: Retain any local pending collections that haven't appeared in colList yet
+          const serverColIds = new Set(colList.map((c) => c.id));
+          const stillPendingCols = (get().collections || []).filter(
+            (c) => !serverColIds.has(c.id) && (c._syncStatus === 'pending' || typeof c.version !== 'number')
+          );
+          const finalCols = [...pulledCols, ...stillPendingCols];
 
           const envList = await fetchScopeEnvironments(
             cloudConfig.apiUrl,
@@ -1288,7 +1363,7 @@ export function createApiStore(
             ...(get().scopeCache || {}),
             [scopeKey]: {
               ...currentScopeCache,
-              collections: pulledCols,
+              collections: finalCols,
               environments: preservedEnvs,
               activeEnvironmentId: targetActiveId,
               lastSyncedAt: Date.now(),
@@ -1299,7 +1374,7 @@ export function createApiStore(
           };
 
           set({
-            collections: pulledCols,
+            collections: finalCols,
             environments: preservedEnvs,
             activeEnvironmentId: targetActiveId,
             scopeCache: updatedScopeCache,
@@ -2377,6 +2452,8 @@ export function createApiStore(
           } catch (err: any) {
             if (!isAsyncOperationCurrent(operation)) return env.id;
             console.error('Failed to sync environment to cloud:', err);
+            set({ syncStatus: 'error', syncError: err.message || 'Failed to sync environment to cloud' });
+            throw err;
           } finally {
             completeAsyncOperation(operation);
           }
@@ -3446,6 +3523,7 @@ export function createApiStore(
           }
         }
 
+        const isCloud = workspaceMode === 'cloud';
         const newCol: Collection = {
           id: generateId(),
           name: name.trim() || 'New Collection',
@@ -3453,13 +3531,14 @@ export function createApiStore(
           items: [],
           createdAt: Date.now(),
           updatedAt: Date.now(),
-          _origin: workspaceMode === 'offline' ? 'offline' : 'cloud',
+          _origin: isCloud ? 'cloud' : 'offline',
+          _syncStatus: isCloud ? 'pending' : 'synced',
         };
         set((state) => ({
           collections: [newCol, ...state.collections],
         }));
 
-        if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
+        if (!isOfflineOnly && isCloud && cloudConfig.token && cloudConfig.activeScope) {
           const operation = beginAsyncOperation();
           batchImportToScope(
             cloudConfig.apiUrl,
@@ -3468,9 +3547,23 @@ export function createApiStore(
             [newCol],
             cloudConfig.refreshToken,
             operation.controller.signal
-          ).catch((err) => {
+          ).then(() => {
+            if (!isAsyncOperationCurrent(operation) || isStoreDisposed) return;
+            set((state) => ({
+              collections: state.collections.map((c) =>
+                c.id === newCol.id ? { ...c, _syncStatus: 'synced' } : c
+              ),
+            }));
+          }).catch((err) => {
             if (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation)) return;
             console.error('Failed to sync created collection to cloud:', err);
+            set((state) => ({
+              collections: state.collections.map((c) =>
+                c.id === newCol.id ? { ...c, _syncStatus: 'pending' } : c
+              ),
+              syncStatus: 'error',
+              syncError: err.message || 'Failed to sync created collection to cloud',
+            }));
           }).finally(() => {
             completeAsyncOperation(operation);
           });
@@ -3515,9 +3608,23 @@ export function createApiStore(
               [updatedCol],
               cloudConfig.refreshToken,
               operation.controller.signal
-            ).catch((err) => {
+            ).then(() => {
+              if (!isAsyncOperationCurrent(operation) || isStoreDisposed) return;
+              set((state) => ({
+                collections: state.collections.map((c) =>
+                  c.id === id ? { ...c, _syncStatus: 'synced' } : c
+                ),
+              }));
+            }).catch((err) => {
               if (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation)) return;
               console.error('Failed to sync renamed collection to cloud:', err);
+              set((state) => ({
+                collections: state.collections.map((c) =>
+                  c.id === id ? { ...c, _syncStatus: 'pending' } : c
+                ),
+                syncStatus: 'error',
+                syncError: err.message || 'Failed to sync renamed collection to cloud',
+              }));
             }).finally(() => {
               completeAsyncOperation(operation);
             });
@@ -3592,9 +3699,23 @@ export function createApiStore(
               [updatedCol],
               cloudConfig.refreshToken,
               operation.controller.signal
-            ).catch((err) => {
+            ).then(() => {
+              if (!isAsyncOperationCurrent(operation) || isStoreDisposed) return;
+              set((state) => ({
+                collections: state.collections.map((c) =>
+                  c.id === collectionId ? { ...c, _syncStatus: 'synced' } : c
+                ),
+              }));
+            }).catch((err) => {
               if (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation)) return;
               console.error('Failed to sync created folder to cloud:', err);
+              set((state) => ({
+                collections: state.collections.map((c) =>
+                  c.id === collectionId ? { ...c, _syncStatus: 'pending' } : c
+                ),
+                syncStatus: 'error',
+                syncError: err.message || 'Failed to sync created folder to cloud',
+              }));
             }).finally(() => {
               completeAsyncOperation(operation);
             });
@@ -3695,9 +3816,23 @@ export function createApiStore(
               [updatedCol],
               cloudConfig.refreshToken,
               operation.controller.signal
-            ).catch((err) => {
+            ).then(() => {
+              if (!isAsyncOperationCurrent(operation) || isStoreDisposed) return;
+              set((state) => ({
+                collections: state.collections.map((c) =>
+                  c.id === collectionId ? { ...c, _syncStatus: 'synced' } : c
+                ),
+              }));
+            }).catch((err) => {
               if (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation)) return;
               console.error('Failed to sync created request to cloud:', err);
+              set((state) => ({
+                collections: state.collections.map((c) =>
+                  c.id === collectionId ? { ...c, _syncStatus: 'pending' } : c
+                ),
+                syncStatus: 'error',
+                syncError: err.message || 'Failed to sync created request to cloud',
+              }));
             }).finally(() => {
               completeAsyncOperation(operation);
             });
@@ -3772,9 +3907,23 @@ export function createApiStore(
               [updatedCol],
               cloudConfig.refreshToken,
               batchOp.controller.signal
-            ).catch((err) => {
+            ).then(() => {
+              if (!isAsyncOperationCurrent(batchOp) || isStoreDisposed) return;
+              set((state) => ({
+                collections: state.collections.map((c) =>
+                  c.id === collectionId ? { ...c, _syncStatus: 'synced' } : c
+                ),
+              }));
+            }).catch((err) => {
               if (!isAsyncOperationCurrent(batchOp)) return;
               console.error('Failed to sync item deletion to cloud:', err);
+              set((state) => ({
+                collections: state.collections.map((c) =>
+                  c.id === collectionId ? { ...c, _syncStatus: 'pending' } : c
+                ),
+                syncStatus: 'error',
+                syncError: err.message || 'Failed to sync item deletion to cloud',
+              }));
             }).finally(() => {
               completeAsyncOperation(batchOp);
             });
@@ -3859,9 +4008,23 @@ export function createApiStore(
               [updatedCol],
               cloudConfig.refreshToken,
               operation.controller.signal
-            ).catch((err) => {
+            ).then(() => {
+              if (!isAsyncOperationCurrent(operation) || isStoreDisposed) return;
+              set((state) => ({
+                collections: state.collections.map((c) =>
+                  c.id === collectionId ? { ...c, _syncStatus: 'synced' } : c
+                ),
+              }));
+            }).catch((err) => {
               if (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation)) return;
               console.error('Failed to sync renamed item to cloud:', err);
+              set((state) => ({
+                collections: state.collections.map((c) =>
+                  c.id === collectionId ? { ...c, _syncStatus: 'pending' } : c
+                ),
+                syncStatus: 'error',
+                syncError: err.message || 'Failed to sync renamed item to cloud',
+              }));
             }).finally(() => {
               completeAsyncOperation(operation);
             });
@@ -3980,9 +4143,23 @@ export function createApiStore(
               [updatedCol],
               cloudConfig.refreshToken,
               operation.controller.signal
-            ).catch((err) => {
+            ).then(() => {
+              if (!isAsyncOperationCurrent(operation) || isStoreDisposed) return;
+              set((state) => ({
+                collections: state.collections.map((c) =>
+                  c.id === collectionId ? { ...c, _syncStatus: 'synced' } : c
+                ),
+              }));
+            }).catch((err) => {
               if (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation)) return;
               console.error('Failed to sync updated collection item to cloud:', err);
+              set((state) => ({
+                collections: state.collections.map((c) =>
+                  c.id === collectionId ? { ...c, _syncStatus: 'pending' } : c
+                ),
+                syncStatus: 'error',
+                syncError: err.message || 'Failed to sync updated collection item to cloud',
+              }));
             }).finally(() => {
               completeAsyncOperation(operation);
             });
@@ -4012,19 +4189,26 @@ export function createApiStore(
         if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
           if (!hasScopePermission(cloudConfig.activeScope, 'collection:write', workspaceMode, cloudConfig.user?.role)) {
             console.warn('Insufficient permissions to add collections in project scope');
-            return;
+            throw new Error('Insufficient permissions to add collections in project scope (requires collection:write)');
           }
         }
 
+        const isCloud = workspaceMode === 'cloud';
         const taggedCol: Collection = {
           ...collection,
-          _origin: get().workspaceMode === 'offline' ? 'offline' : 'cloud',
+          _origin: isCloud ? 'cloud' : 'offline',
+          _syncStatus: isCloud ? 'pending' : 'synced',
         };
-        set((state) => ({
-          collections: [taggedCol, ...state.collections],
-        }));
+        set((state) => {
+          const exists = state.collections.some((c) => c.id === taggedCol.id);
+          return {
+            collections: exists
+              ? state.collections.map((c) => (c.id === taggedCol.id ? taggedCol : c))
+              : [taggedCol, ...state.collections],
+          };
+        });
 
-        if (!isOfflineOnly && workspaceMode === 'cloud' && cloudConfig.token && cloudConfig.activeScope) {
+        if (!isOfflineOnly && isCloud && cloudConfig.token && cloudConfig.activeScope) {
           const operation = beginAsyncOperation();
           const targetScope = cloudConfig.activeScope;
           try {
@@ -4039,10 +4223,22 @@ export function createApiStore(
             );
             if (!isAsyncOperationCurrent(operation) || isStoreDisposed) return;
             if (get().cloudConfig.activeScope?.id !== targetScope.id) return;
+            set((state) => ({
+              collections: state.collections.map((c) =>
+                c.id === taggedCol.id ? { ...c, _syncStatus: 'synced' } : c
+              ),
+            }));
             await get().pullCloudDelta();
           } catch (err: any) {
             if (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation) || isStoreDisposed) return;
-            set({ syncStatus: 'error', syncError: err.message || 'Failed to sync collection to cloud' });
+            set((state) => ({
+              collections: state.collections.map((c) =>
+                c.id === taggedCol.id ? { ...c, _syncStatus: 'pending' } : c
+              ),
+              syncStatus: 'error',
+              syncError: err.message || 'Failed to sync collection to cloud',
+            }));
+            throw err;
           } finally {
             completeAsyncOperation(operation);
           }
@@ -4068,13 +4264,15 @@ export function createApiStore(
           .map((i) => i.id)
           .filter((id) => id && !newIds.has(id));
 
+        const isCloud = state.workspaceMode === 'cloud';
         const replacedCol: Collection = {
           ...newCollection,
           id: existingId,
           name: newCollection.name,
           items: alignedItems,
           updatedAt: Date.now(),
-          _origin: get().workspaceMode === 'offline' ? 'offline' : 'cloud',
+          _origin: isCloud ? 'cloud' : 'offline',
+          _syncStatus: isCloud ? 'pending' : 'synced',
         };
 
         set((s) => ({
@@ -4111,10 +4309,22 @@ export function createApiStore(
               operation.controller.signal
             );
             if (!isAsyncOperationCurrent(operation)) return;
+            set((state) => ({
+              collections: state.collections.map((c) =>
+                c.id === existingId ? { ...c, _syncStatus: 'synced' } : c
+              ),
+            }));
             await get().pullCloudDelta();
           } catch (err: any) {
             if (!isAsyncOperationCurrent(operation)) return;
-            set({ syncStatus: 'error', syncError: err.message || 'Failed to sync replaced collection' });
+            set((state) => ({
+              collections: state.collections.map((c) =>
+                c.id === existingId ? { ...c, _syncStatus: 'pending' } : c
+              ),
+              syncStatus: 'error',
+              syncError: err.message || 'Failed to sync replaced collection',
+            }));
+            throw err;
           } finally {
             completeAsyncOperation(operation);
           }

@@ -198,8 +198,15 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
         }
 
         const incomingCol = importPostmanCollection(jsonText);
+        const existingPendingCol = collections.find(
+          (c) => c.name.trim().toLowerCase() === incomingCol.name.trim().toLowerCase() && c._syncStatus === 'pending'
+        );
+        if (existingPendingCol) {
+          incomingCol.id = existingPendingCol.id;
+        }
+
         const existingCol = collections.find(
-          (c) => c.name.trim().toLowerCase() === incomingCol.name.trim().toLowerCase()
+          (c) => c.name.trim().toLowerCase() === incomingCol.name.trim().toLowerCase() && c._syncStatus !== 'pending' && c.id !== incomingCol.id
         );
 
         if (existingCol) {

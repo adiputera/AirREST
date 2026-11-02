@@ -95,6 +95,11 @@ test('T-NAT-ANDROID: pickAndroidApkUrl prioritizes x86_64 on x86_64 userAgent, r
   assert.match(source, /finally\s*\{\s*setDownloading\(false\);\s*\}/, 'handleDownload must reset downloading state in finally block');
   assert.match(
     source,
+    /const targetUrl = releasePageUrl \|\| downloadUrl;/,
+    'handleDownload must prioritize releasePageUrl to avoid in-app webview download stalls'
+  );
+  assert.match(
+    source,
     /const hasApk = Boolean\(\s*release\.assets\?\.some\(\(a\) => a\.name\.endsWith\('\.apk'\) && a\.browser_download_url\?\.startsWith\('https:\/\/'\)\),\s*\);\s*if \(hasApk\) \{\s*localStorage\.setItem\(LAST_CHECK_KEY/,
     'LAST_CHECK_KEY and updateAvailable must only be set when release has at least one https .apk asset'
   );
