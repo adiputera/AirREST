@@ -31,6 +31,8 @@ export interface BinaryFileData {
   needsReselection?: boolean;
 }
 
+export type ThemeMode = 'system' | 'light' | 'dark';
+
 export type RawType = 'text' | 'json' | 'xml' | 'html';
 
 export type BodyType = 'none' | 'json' | 'xml' | 'raw' | 'x-www-form-urlencoded' | 'form-data' | 'binary' | 'graphql';

@@ -265,64 +265,64 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
       }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150 select-none"
     >
-      <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+      <div className="w-full max-w-lg rounded-2xl border border-line bg-surface p-6 shadow-2xl">
         {/* Header */}
-        <div className="flex items-start justify-between pb-4 border-b border-zinc-800/80">
+        <div className="flex items-start justify-between pb-4 border-b border-line">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-500/20 bg-amber-500/10 text-amber-400">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-500/20 bg-amber-500/10 text-amber-500 dark:text-amber-400">
               <FolderInput className="h-5 w-5" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-zinc-100">Move Collection</h3>
-              <p className="text-xs text-zinc-400 mt-0.5">
-                Relocate <span className="font-semibold text-zinc-200">&ldquo;{collection.name}&rdquo;</span> to another workspace.
+              <h3 className="text-sm font-bold text-tx-primary">Move Collection</h3>
+              <p className="text-xs text-tx-muted mt-0.5">
+                Relocate <span className="font-semibold text-tx-primary">&ldquo;{collection.name}&rdquo;</span> to another workspace.
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
             disabled={isSubmitting}
-            className="rounded-lg p-1 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900 transition"
+            className="rounded-lg p-1 text-tx-muted hover:text-tx-primary hover:bg-hover transition"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
         {/* Source info */}
-        <div className="mt-4 rounded-xl border border-zinc-850 bg-zinc-900/40 p-3 flex items-center justify-between">
+        <div className="mt-4 rounded-xl border border-line bg-card p-3 flex items-center justify-between">
           <div className="flex items-center gap-2.5 min-w-0">
-            <Folder className="h-4 w-4 text-amber-400 shrink-0" />
+            <Folder className="h-4 w-4 text-amber-500 dark:text-amber-400 shrink-0" />
             <div className="min-w-0">
-              <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-semibold">
+              <div className="text-[11px] uppercase tracking-wider text-tx-muted font-semibold">
                 Current Location
               </div>
-              <div className="text-xs font-bold text-zinc-200 truncate">{sourceInfo.title}</div>
-              <div className="text-[11px] text-zinc-400 truncate">{sourceInfo.subtitle}</div>
+              <div className="text-xs font-bold text-tx-primary truncate">{sourceInfo.title}</div>
+              <div className="text-[11px] text-tx-muted truncate">{sourceInfo.subtitle}</div>
             </div>
           </div>
-          <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-[10px] font-bold text-zinc-300">
+          <span className="rounded-full bg-element px-2 py-0.5 text-[10px] font-bold text-tx-secondary">
             {sourceInfo.badge}
           </span>
         </div>
 
         {/* Target selection */}
         <div className="mt-4">
-          <label className="block text-xs font-semibold text-zinc-300 mb-2">
+          <label className="block text-xs font-semibold text-tx-secondary mb-2">
             Select Destination Workspace
           </label>
 
           {isLoadingTargets ? (
-            <div className="flex items-center justify-center py-8 text-zinc-400 gap-2">
-              <Loader2 className="h-4 w-4 animate-spin text-sky-400" />
+            <div className="flex items-center justify-center py-8 text-tx-muted gap-2">
+              <Loader2 className="h-4 w-4 animate-spin text-sky-500 dark:text-sky-400" />
               <span className="text-xs">Loading available workspaces...</span>
             </div>
           ) : targetOptions.length === 0 ? (
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4 text-center">
-              <AlertCircle className="h-6 w-6 text-zinc-500 mx-auto" />
-              <div className="text-xs font-bold text-zinc-300 mt-2">
+            <div className="rounded-xl border border-line bg-card/30 p-4 text-center">
+              <AlertCircle className="h-6 w-6 text-tx-muted mx-auto" />
+              <div className="text-xs font-bold text-tx-secondary mt-2">
                 No Other Workspaces Available
               </div>
-              <p className="text-[11px] text-zinc-400 mt-1 leading-relaxed">
+              <p className="text-[11px] text-tx-muted mt-1 leading-relaxed">
                 Create another offline workspace or connect to a cloud account to move this collection.
               </p>
             </div>
@@ -339,23 +339,23 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
                     className={`flex items-center justify-between p-2.5 rounded-xl border cursor-pointer transition ${
                       isSelected
                         ? isOfflineTarget
-                          ? 'border-amber-500/50 bg-amber-500/10 text-white'
-                          : 'border-sky-500/50 bg-sky-500/10 text-white'
-                        : 'border-zinc-800/80 bg-zinc-900/30 hover:bg-zinc-900 text-zinc-300'
+                          ? 'border-amber-500/50 bg-amber-500/10 text-tx-primary'
+                          : 'border-sky-500/50 bg-sky-500/10 text-tx-primary'
+                        : 'border-line bg-card hover:bg-hover text-tx-secondary'
                     }`}
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
                       {isOfflineTarget ? (
-                        <Laptop className={`h-4 w-4 shrink-0 ${isSelected ? 'text-amber-400' : 'text-zinc-500'}`} />
+                        <Laptop className={`h-4 w-4 shrink-0 ${isSelected ? 'text-amber-500 dark:text-amber-400' : 'text-tx-muted'}`} />
                       ) : opt.scope.type === 'workspace' ? (
-                        <User className={`h-4 w-4 shrink-0 ${isSelected ? 'text-sky-400' : 'text-zinc-500'}`} />
+                        <User className={`h-4 w-4 shrink-0 ${isSelected ? 'text-sky-500 dark:text-sky-400' : 'text-tx-muted'}`} />
                       ) : (
-                        <Building2 className={`h-4 w-4 shrink-0 ${isSelected ? 'text-indigo-400' : 'text-zinc-500'}`} />
+                        <Building2 className={`h-4 w-4 shrink-0 ${isSelected ? 'text-indigo-500 dark:text-indigo-400' : 'text-tx-muted'}`} />
                       )}
                       <div className="min-w-0">
-                        <div className="text-xs font-bold truncate">{opt.label}</div>
+                        <div className="text-xs font-bold truncate text-tx-primary">{opt.label}</div>
                         {opt.subLabel && (
-                          <div className="text-[10px] text-zinc-400 truncate">{opt.subLabel}</div>
+                          <div className="text-[10px] text-tx-muted truncate">{opt.subLabel}</div>
                         )}
                       </div>
                     </div>
@@ -364,11 +364,11 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
                         className={`text-[9px] font-bold px-2 py-0.5 rounded uppercase tracking-wider shrink-0 ${
                           isOfflineTarget
                             ? isSelected
-                              ? 'bg-amber-500/20 text-amber-300'
-                              : 'bg-amber-500/10 text-amber-400/80 border border-amber-500/20'
+                              ? 'bg-amber-500/20 text-amber-600 dark:text-amber-300'
+                              : 'bg-amber-500/10 text-amber-600 dark:text-amber-400/80 border border-amber-500/20'
                             : isSelected
-                            ? 'bg-sky-500/20 text-sky-300'
-                            : 'bg-zinc-800 text-zinc-400'
+                            ? 'bg-sky-500/20 text-sky-600 dark:text-sky-300'
+                            : 'bg-element text-tx-muted'
                         }`}
                       >
                         {opt.role}
@@ -383,26 +383,26 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
 
         {/* Error notice */}
         {!canMove && (
-          <div className="mt-3.5 flex items-center gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-400">
+          <div className="mt-3.5 flex items-center gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-500 dark:text-rose-400">
             <AlertCircle className="h-4 w-4 shrink-0" />
             <span>You have read-only access to this collection and cannot move it to another workspace.</span>
           </div>
         )}
 
         {errorMsg && (
-          <div className="mt-3.5 flex items-center gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-400">
+          <div className="mt-3.5 flex items-center gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-500 dark:text-rose-400">
             <AlertCircle className="h-4 w-4 shrink-0" />
             <span>{errorMsg}</span>
           </div>
         )}
 
         {/* Footer actions */}
-        <div className="mt-6 flex items-center justify-end gap-2.5 pt-4 border-t border-zinc-800/80">
+        <div className="mt-6 flex items-center justify-end gap-2.5 pt-4 border-t border-line">
           <button
             type="button"
             onClick={onClose}
             disabled={isSubmitting}
-            className="rounded-xl px-4 py-2 text-xs font-medium text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200 transition"
+            className="rounded-xl px-4 py-2 text-xs font-medium text-tx-muted hover:bg-hover hover:text-tx-primary transition"
           >
             Cancel
           </button>

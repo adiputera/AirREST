@@ -96,12 +96,12 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
       }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in duration-150"
     >
-      <div className="relative w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl shadow-black/90">
+      <div className="relative w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl border border-line-strong bg-card p-6 shadow-2xl shadow-black/90">
         {/* Close Button */}
         <button
           onClick={onClose}
           disabled={isLoading}
-          className="absolute right-4 top-4 rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white transition disabled:opacity-50"
+          className="absolute right-4 top-4 rounded-lg p-1.5 text-tx-muted hover:bg-hover hover:text-tx-primary transition disabled:opacity-50"
           title="Close"
         >
           <X className="h-4 w-4" />
@@ -113,8 +113,8 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
             <User className="h-5 w-5" />
           </div>
           <div>
-            <h3 className="text-base font-semibold text-zinc-100">Edit Profile</h3>
-            <p className="text-xs text-zinc-400">Update your account display name.</p>
+            <h3 className="text-base font-semibold text-tx-primary">Edit Profile</h3>
+            <p className="text-xs text-tx-muted">Update your account display name.</p>
           </div>
         </div>
 
@@ -130,35 +130,35 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Email (Read-Only) */}
           <div>
-            <label className="block text-xs font-medium text-zinc-300 mb-1.5">
+            <label className="block text-xs font-medium text-tx-secondary mb-1.5">
               Email Address
             </label>
             <div className="relative">
-              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-zinc-500">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-tx-muted">
                 <Mail className="h-4 w-4" />
               </div>
               <input
                 type="email"
                 value={user?.email || ''}
                 disabled
-                className="w-full rounded-xl border border-zinc-800/80 bg-zinc-900/40 pl-9 pr-10 py-2.5 text-xs text-zinc-400 cursor-not-allowed select-none"
+                className="w-full rounded-xl border border-line bg-element/50 pl-9 pr-10 py-2.5 text-xs text-tx-muted cursor-not-allowed select-none"
               />
-              <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-zinc-600">
+              <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-tx-faint">
                 <Lock className="h-3.5 w-3.5" />
               </div>
             </div>
-            <p className="mt-1 text-[11px] text-zinc-500">
+            <p className="mt-1 text-[11px] text-tx-faint">
               Email address cannot be changed.
             </p>
           </div>
 
           {/* Display Name */}
           <div>
-            <label className="block text-xs font-medium text-zinc-300 mb-1.5">
+            <label className="block text-xs font-medium text-tx-secondary mb-1.5">
               Display Name
             </label>
             <div className="relative">
-              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-zinc-500">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-tx-muted">
                 <User className="h-4 w-4" />
               </div>
               <input
@@ -168,7 +168,7 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
                 placeholder="Enter display name"
                 disabled={isLoading}
                 maxLength={100}
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 pl-9 pr-3 py-2.5 text-xs text-zinc-100 placeholder-zinc-500 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition disabled:opacity-50"
+                className="w-full rounded-xl border border-line bg-element pl-9 pr-3 py-2.5 text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition disabled:opacity-50"
                 required
                 autoFocus
               />
@@ -176,12 +176,12 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
           </div>
 
           {/* Actions */}
-          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-zinc-800/80">
+          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-line">
             <button
               type="button"
               onClick={onClose}
               disabled={isLoading}
-              className="rounded-xl border border-zinc-800 px-4 py-2 text-xs font-medium text-zinc-300 hover:bg-zinc-900 hover:text-white transition disabled:opacity-50"
+              className="rounded-xl border border-line px-4 py-2 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition disabled:opacity-50"
             >
               Cancel
             </button>

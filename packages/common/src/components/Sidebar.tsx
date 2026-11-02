@@ -42,6 +42,7 @@ import { canModifyCollection, hasScopePermission } from '../lib/jwt';
 import { getDefaultPlatformAdapter } from '../lib/fetcher';
 import { ScopeSwitcher } from './ScopeSwitcher';
 import { UserMenu } from './UserMenu';
+import { MobileThemeSegmentedControl } from './ThemeToggle';
 import { ModeSelectorModal } from './ModeSelectorModal';
 import { CloudAuthModal } from './CloudAuthModal';
 import { isOfflineOnly } from '../lib/edition';
@@ -369,14 +370,14 @@ const FolderItem: React.FC<FolderItemProps> = ({
       <div className="select-none">
         {isEditing ? (
           <div
-            className="flex items-center gap-1.5 py-1 px-2 rounded-md bg-zinc-900 border border-sky-500/40 text-xs font-medium my-0.5"
+            className="flex items-center gap-1.5 py-1 px-2 rounded-md bg-card border border-sky-500/40 text-xs font-medium my-0.5"
             style={{ paddingLeft: `${Math.max(level * 12, 8)}px` }}
             onClick={(e) => e.stopPropagation()}
           >
             {isOpen ? (
-              <FolderOpen className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+              <FolderOpen className="h-3.5 w-3.5 text-sky-500 dark:text-sky-400 shrink-0" />
             ) : (
-              <Folder className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+              <Folder className="h-3.5 w-3.5 text-sky-500 dark:text-sky-400 shrink-0" />
             )}
             <input
               type="text"
@@ -390,12 +391,12 @@ const FolderItem: React.FC<FolderItemProps> = ({
                   setIsEditing(false);
                 }
               }}
-              className="flex-1 min-w-0 rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-100 focus:outline-none focus:ring-1 focus:ring-sky-400"
+              className="flex-1 min-w-0 rounded bg-element px-1.5 py-0.5 text-xs text-tx-primary focus:outline-none focus:ring-1 focus:ring-sky-400"
             />
             <button
               type="button"
               onClick={handleConfirmRename}
-              className="p-1 text-emerald-400 hover:text-emerald-300 transition"
+              className="p-1 text-emerald-500 dark:text-emerald-400 hover:text-emerald-600 dark:hover:text-emerald-300 transition"
               title="Save name"
             >
               <Check className="h-3.5 w-3.5" />
@@ -406,7 +407,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
                 setEditingName(item.name);
                 setIsEditing(false);
               }}
-              className="p-1 text-zinc-400 hover:text-zinc-200 transition"
+              className="p-1 text-tx-muted hover:text-tx-primary transition"
               title="Cancel"
             >
               <X className="h-3.5 w-3.5" />
@@ -423,12 +424,12 @@ const FolderItem: React.FC<FolderItemProps> = ({
             onClick={() => onToggleFolder(item.id, item)}
             className={`group relative flex items-center gap-1.5 py-1 px-2 rounded-md transition text-xs font-medium ${
               isForbidden
-                ? 'cursor-not-allowed bg-rose-500/10 text-rose-300'
+                ? 'cursor-not-allowed bg-rose-500/10 text-rose-500 dark:text-rose-300'
                 : isBeingDragged
-                ? 'opacity-40 bg-zinc-900/60 cursor-grabbing'
+                ? 'opacity-40 bg-element cursor-grabbing'
                 : dropPosition === 'inside'
-                ? 'bg-sky-500/20 ring-1 ring-sky-400/60 text-white cursor-pointer'
-                : 'hover:bg-zinc-900/80 text-zinc-300 hover:text-white cursor-pointer'
+                ? 'bg-sky-500/20 ring-1 ring-sky-400/60 text-tx-primary cursor-pointer'
+                : 'hover:bg-hover text-tx-secondary hover:text-tx-primary cursor-pointer'
             }`}
             style={{ paddingLeft: `${Math.max(level * 12, 8)}px` }}
           >
@@ -443,17 +444,17 @@ const FolderItem: React.FC<FolderItemProps> = ({
               </div>
             )}
             {isOpen ? (
-              <ChevronDown className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
+              <ChevronDown className="h-3.5 w-3.5 text-tx-muted shrink-0" />
             ) : (
-              <ChevronRight className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
+              <ChevronRight className="h-3.5 w-3.5 text-tx-muted shrink-0" />
             )}
             {isOpen ? (
-              <FolderOpen className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+              <FolderOpen className="h-3.5 w-3.5 text-sky-500 dark:text-sky-400 shrink-0" />
             ) : (
-              <Folder className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+              <Folder className="h-3.5 w-3.5 text-sky-500 dark:text-sky-400 shrink-0" />
             )}
             <span
-              className="truncate flex-1"
+              className="truncate flex-1 text-tx-primary"
               title={canEdit ? `${item.name} (Double-click to rename)` : item.name}
               onDoubleClick={(e) => {
                 e.stopPropagation();
@@ -464,7 +465,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
             >
               {item.name}
             </span>
-            <span className="text-[10px] text-zinc-500 font-mono mr-1">
+            <span className="text-[10px] text-tx-muted font-mono mr-1">
               {item.items?.length || 0}
             </span>
 
@@ -485,7 +486,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
                     }
                     setIsMenuOpen(!isMenuOpen);
                   }}
-                  className="rounded p-0.5 text-zinc-400 hover:text-sky-400 hover:bg-zinc-800 transition"
+                  className="rounded p-0.5 text-tx-muted hover:text-sky-500 hover:bg-hover transition"
                   title="Folder options"
                 >
                   <MoreVertical className="h-3.5 w-3.5" />
@@ -505,7 +506,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
                       onClick={(e) => e.stopPropagation()}
                       className={`absolute right-0 ${
                         openUpward ? 'bottom-full mb-1 origin-bottom-right' : 'top-full mt-1 origin-top-right'
-                      } z-50 w-44 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-xl animate-in fade-in zoom-in-95 duration-100`}
+                      } z-50 w-44 rounded-lg border border-line bg-card p-1 shadow-xl animate-in fade-in zoom-in-95 duration-100`}
                     >
                       {canEdit && (
                         <>
@@ -517,28 +518,28 @@ const FolderItem: React.FC<FolderItemProps> = ({
                               setIsEditing(true);
                               setEditingName(item.name);
                             }}
-                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition"
+                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-tx-secondary hover:bg-hover hover:text-sky-500 transition"
                           >
-                            <Pencil className="h-3.5 w-3.5 text-sky-400" />
+                            <Pencil className="h-3.5 w-3.5 text-sky-500 dark:text-sky-400" />
                             <span>Rename Folder</span>
                           </button>
                           <button
                             type="button"
                             onClick={handleCreateRequest}
-                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition"
+                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-tx-secondary hover:bg-hover hover:text-sky-500 transition"
                           >
-                            <FileCode className="h-3.5 w-3.5 text-sky-400" />
+                            <FileCode className="h-3.5 w-3.5 text-sky-500 dark:text-sky-400" />
                             <span>New Request</span>
                           </button>
                           <button
                             type="button"
                             onClick={handleStartCreateSubfolder}
-                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-amber-400 transition"
+                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-tx-secondary hover:bg-hover hover:text-amber-500 transition"
                           >
-                            <FolderPlus className="h-3.5 w-3.5 text-amber-400" />
+                            <FolderPlus className="h-3.5 w-3.5 text-amber-500 dark:text-amber-400" />
                             <span>New Subfolder</span>
                           </button>
-                          <div className="my-1 border-t border-zinc-800/80" />
+                          <div className="my-1 border-t border-line" />
                         </>
                       )}
                       <button
@@ -755,10 +756,10 @@ const FolderItem: React.FC<FolderItemProps> = ({
       }}
       className={`group relative flex items-center gap-2 py-1.5 px-2 rounded-md transition text-xs ${
         isForbidden
-          ? 'cursor-not-allowed bg-rose-500/10 text-rose-300'
+          ? 'cursor-not-allowed bg-rose-500/10 text-rose-500 dark:text-rose-300'
           : isBeingDragged
-          ? 'opacity-40 bg-zinc-900/60 cursor-grabbing'
-          : 'hover:bg-zinc-900 text-zinc-300 hover:text-white cursor-pointer'
+          ? 'opacity-40 bg-element cursor-grabbing'
+          : 'hover:bg-hover text-tx-secondary hover:text-tx-primary cursor-pointer'
       }`}
       style={{ paddingLeft: `${Math.max(level * 12, 8)}px` }}
     >
@@ -774,7 +775,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
       )}
       <MethodBadge method={item.request.method} size="sm" />
       <span
-        className="truncate flex-1 group-hover:text-zinc-100"
+        className="truncate flex-1 group-hover:text-tx-primary"
         title={canEdit ? `${item.name} (Double-click to rename)` : item.name}
         onDoubleClick={(e) => {
           e.stopPropagation();
@@ -802,7 +803,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
               }
               setIsMenuOpen(!isMenuOpen);
             }}
-            className="rounded p-0.5 text-zinc-500 hover:text-sky-400 hover:bg-zinc-800 transition"
+            className="rounded p-0.5 text-tx-muted hover:text-sky-500 hover:bg-hover transition"
             title="Request options"
           >
             <MoreVertical className="h-3 w-3" />
@@ -822,7 +823,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
                 onClick={(e) => e.stopPropagation()}
                 className={`absolute right-0 ${
                   openUpward ? 'bottom-full mb-1 origin-bottom-right' : 'top-full mt-1 origin-top-right'
-                } z-50 w-40 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-xl animate-in fade-in zoom-in-95 duration-100`}
+                } z-50 w-40 rounded-lg border border-line bg-card p-1 shadow-xl animate-in fade-in zoom-in-95 duration-100`}
               >
                 <button
                   type="button"
@@ -832,9 +833,9 @@ const FolderItem: React.FC<FolderItemProps> = ({
                     setIsEditing(true);
                     setEditingName(item.name);
                   }}
-                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-sky-400 transition"
+                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-tx-secondary hover:bg-hover hover:text-sky-500 transition"
                 >
-                  <Pencil className="h-3.5 w-3.5 text-sky-400" />
+                  <Pencil className="h-3.5 w-3.5 text-sky-500 dark:text-sky-400" />
                   <span>Rename Request</span>
                 </button>
                 <button
@@ -844,12 +845,12 @@ const FolderItem: React.FC<FolderItemProps> = ({
                     setIsMenuOpen(false);
                     onRequestMove(item, collectionId);
                   }}
-                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 hover:text-amber-400 transition"
+                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-tx-secondary hover:bg-hover hover:text-amber-500 transition"
                 >
-                  <FolderInput className="h-3.5 w-3.5 text-amber-400" />
+                  <FolderInput className="h-3.5 w-3.5 text-amber-500 dark:text-amber-400" />
                   <span>Move Request</span>
                 </button>
-                <div className="my-1 border-t border-zinc-800/80" />
+                <div className="my-1 border-t border-line" />
                 <button
                   type="button"
                   onClick={(e) => {
@@ -857,16 +858,16 @@ const FolderItem: React.FC<FolderItemProps> = ({
                     setIsMenuOpen(false);
                     onRequestDelete(item);
                   }}
-                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-rose-400 hover:bg-rose-500/10 transition"
+                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-rose-500 hover:bg-rose-500/10 transition"
                 >
-                  <Trash2 className="h-3.5 w-3.5 text-rose-400" />
+                  <Trash2 className="h-3.5 w-3.5 text-rose-500" />
                   <span>Delete Request</span>
                 </button>
               </div>
             </>
           )}
         </div>
-        <ArrowUpRight className="h-3 w-3 text-zinc-600 group-hover:text-zinc-400 transition" />
+        <ArrowUpRight className="h-3 w-3 text-tx-faint group-hover:text-tx-muted transition" />
       </div>
       )}
     </div>
@@ -1145,9 +1146,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
   };
 
   return (
-    <aside className="flex h-full w-80 max-w-[85vw] md:w-72 flex-col border-r border-zinc-800 bg-zinc-950/70 select-none">
+    <aside className="flex h-full w-80 max-w-[85vw] md:w-72 flex-col border-r border-line bg-surface select-none">
       {/* Workspace Switcher, Sync & Account Section (Mobile only) */}
-      <div className="md:hidden border-b border-zinc-800 p-2 pt-[max(env(safe-area-inset-top),10px)] bg-zinc-900/40">
+      <div className="md:hidden border-b border-line p-2 pt-[max(env(safe-area-inset-top),10px)] bg-surface/90">
         <div className="flex items-center gap-1.5 w-full">
           {/* Workspace Switcher */}
           <div className="flex-1 min-w-0">
@@ -1168,7 +1169,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
               type="button"
               aria-label="Close collections panel"
               onClick={onClose}
-              className="rounded-lg p-1.5 text-zinc-400 hover:text-white hover:bg-zinc-800 transition shrink-0"
+              className="rounded-lg p-1.5 text-tx-muted hover:text-tx-primary hover:bg-hover transition shrink-0"
             >
               <X className="h-4 w-4" />
             </button>
@@ -1176,19 +1177,22 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
         </div>
       </div>
 
+      {/* Mobile Theme Segmented Control Row */}
+      <MobileThemeSegmentedControl />
+
       {/* Switcher Tabs */}
-      <div className="flex border-b border-zinc-800 p-2 gap-1.5">
+      <div className="flex border-b border-line p-2 gap-1.5">
         <button
           onClick={() => setSidebarTab('collections')}
           className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-semibold transition ${
             sidebarTab === 'collections'
-              ? 'bg-zinc-800/90 text-white shadow-sm'
-              : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
+              ? 'bg-card text-tx-primary shadow-xs'
+              : 'text-tx-muted hover:bg-hover hover:text-tx-primary'
           }`}
         >
           <Layers className="h-3.5 w-3.5" />
           <span>Collections</span>
-          <span className="rounded-full bg-zinc-700/60 px-1.5 text-[10px] text-zinc-300">
+          <span className="rounded-full bg-element px-1.5 text-[10px] text-tx-secondary">
             {collections.length}
           </span>
         </button>
@@ -1197,13 +1201,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
           onClick={() => setSidebarTab('history')}
           className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-semibold transition ${
             sidebarTab === 'history'
-              ? 'bg-zinc-800/90 text-white shadow-sm'
-              : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
+              ? 'bg-card text-tx-primary shadow-xs'
+              : 'text-tx-muted hover:bg-hover hover:text-tx-primary'
           }`}
         >
           <Clock className="h-3.5 w-3.5" />
           <span>History</span>
-          <span className="rounded-full bg-zinc-700/60 px-1.5 text-[10px] text-zinc-300">
+          <span className="rounded-full bg-element px-1.5 text-[10px] text-tx-secondary">
             {history.length}
           </span>
         </button>
@@ -1766,19 +1770,21 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
                     <div
                       key={item.id}
                       onClick={() => openRequestInTab(item.request, item.response)}
-                      className="group flex flex-col gap-1 rounded-lg border border-zinc-850/80 bg-zinc-900/40 p-2 hover:bg-zinc-850 hover:border-zinc-700 cursor-pointer transition"
+                      className="group flex flex-col gap-1 rounded-lg border border-line bg-card/60 p-2 hover:bg-hover hover:border-line-strong cursor-pointer transition"
                     >
                       <div className="flex items-center justify-between gap-1.5">
                         <div className="flex items-center gap-1.5 min-w-0">
                           <MethodBadge method={item.request.method} size="sm" />
-                          <span className="text-xs font-medium text-zinc-300 truncate">
+                          <span className="text-xs font-medium text-tx-primary truncate">
                             {item.request.name || item.request.url}
                           </span>
                         </div>
                         {status !== undefined && (
                           <span
                             className={`text-[10px] font-mono font-bold px-1 rounded ${
-                              isOk ? 'text-emerald-400 bg-emerald-500/10' : 'text-rose-400 bg-rose-500/10'
+                              isOk
+                                ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10'
+                                : 'text-rose-600 dark:text-rose-400 bg-rose-500/10'
                             }`}
                           >
                             {status || 'ERR'}
@@ -1786,7 +1792,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
                         )}
                       </div>
 
-                      <div className="flex items-center justify-between text-[10px] text-zinc-500 font-mono">
+                      <div className="flex items-center justify-between text-[10px] text-tx-muted font-mono">
                         <span className="truncate max-w-[150px]">{item.request.url}</span>
                         <span>{item.response?.timeMs ? `${item.response.timeMs}ms` : ''}</span>
                       </div>

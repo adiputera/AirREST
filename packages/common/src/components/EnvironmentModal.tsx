@@ -298,7 +298,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-      <div className="flex h-[min(580px,90dvh)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950 shadow-2xl md:flex-row">
+      <div className="flex h-[min(580px,90dvh)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl md:flex-row">
         {/* Hidden File Picker for Import */}
         <input
           type="file"
@@ -309,11 +309,11 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
         />
 
         {/* Left Side: Environment List */}
-        <div className="flex max-h-[35%] w-full flex-col border-b border-zinc-850 bg-zinc-900/40 p-3 md:max-h-none md:w-64 md:border-b-0 md:border-r md:p-4">
-          <div className="flex items-center justify-between pb-3 border-b border-zinc-850">
+        <div className="flex max-h-[35%] w-full flex-col border-b border-line bg-card/40 p-3 md:max-h-none md:w-64 md:border-b-0 md:border-r md:p-4">
+          <div className="flex items-center justify-between pb-3 border-b border-line">
             <div className="flex items-center gap-2">
-              <Globe className="h-4 w-4 text-sky-400" />
-              <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-300">
+              <Globe className="h-4 w-4 text-sky-500 dark:text-sky-400" />
+              <h2 className="text-xs font-bold uppercase tracking-wider text-tx-secondary">
                 Environments
               </h2>
             </div>
@@ -322,14 +322,14 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                 <>
                   <button
                     onClick={handleImportFileClick}
-                    className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800 hover:text-sky-300 transition"
+                    className="rounded-lg p-1 text-tx-muted hover:bg-hover hover:text-sky-500 transition"
                     title="Import Postman Environment (.json)"
                   >
                     <Upload className="h-3.5 w-3.5" />
                   </button>
                   <button
                     onClick={() => setIsAddingEnv(true)}
-                    className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800 hover:text-white transition"
+                    className="rounded-lg p-1 text-tx-muted hover:bg-hover hover:text-tx-primary transition"
                     title="Create Environment"
                   >
                     <Plus className="h-4 w-4" />
@@ -340,7 +340,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
           </div>
 
           {isAddingEnv && (
-            <div className="mt-3 flex flex-col gap-2 rounded-xl border border-zinc-700 bg-zinc-900/90 p-2.5">
+            <div className="mt-3 flex flex-col gap-2 rounded-xl border border-line bg-card p-2.5">
               <input
                 type="text"
                 value={newEnvName}
@@ -348,15 +348,15 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                 onKeyDown={(e) => e.key === 'Enter' && handleCreateEnv()}
                 placeholder="Environment name..."
                 autoFocus
-                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-100 placeholder-zinc-500 focus:border-sky-500 focus:outline-none"
+                className="w-full rounded-lg border border-line bg-element px-2 py-1 text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none"
               />
               {isProjectScope && (
-                <div className="flex items-center gap-1.5 text-[10px] text-zinc-400">
-                  <Shield className="h-3 w-3 text-zinc-400 shrink-0" />
+                <div className="flex items-center gap-1.5 text-[10px] text-tx-muted">
+                  <Shield className="h-3 w-3 text-tx-muted shrink-0" />
                   <button
                     type="button"
                     onClick={() => setIsNewEnvPermModalOpen(true)}
-                    className="flex items-center justify-between w-full rounded border border-zinc-800 bg-zinc-950 px-2 py-1 text-[11px] text-zinc-300 hover:border-zinc-700 transition"
+                    className="flex items-center justify-between w-full rounded border border-line bg-card px-2 py-1 text-[11px] text-tx-secondary hover:border-line-strong transition"
                   >
                     <span>
                       Access:{' '}
@@ -368,14 +368,14 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                             ? '🟡 Contributor+'
                             : '🟢 All Members (Reader+)'}
                     </span>
-                    <span className="text-[10px] text-sky-400 font-semibold">Change</span>
+                    <span className="text-[10px] text-sky-500 dark:text-sky-400 font-semibold">Change</span>
                   </button>
                 </div>
               )}
               <div className="flex justify-end gap-1.5 pt-1">
                 <button
                   onClick={() => setIsAddingEnv(false)}
-                  className="rounded px-2 py-0.5 text-[11px] text-zinc-400 hover:text-white"
+                  className="rounded px-2 py-0.5 text-[11px] text-tx-muted hover:text-tx-primary"
                 >
                   Cancel
                 </button>
@@ -399,36 +399,36 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                   key={env.id}
                   onClick={() => setSelectedEnvId(env.id)}
                   className={`group flex items-center justify-between rounded-xl px-3 py-2 text-xs cursor-pointer transition ${isSelected
-                      ? 'bg-zinc-800/90 text-white font-semibold'
-                      : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
+                      ? 'bg-element text-tx-primary font-semibold'
+                      : 'text-tx-muted hover:bg-hover hover:text-tx-secondary'
                     }`}
                 >
                   <div className="flex items-center gap-2 min-w-0">
-                    <Layers className="h-3.5 w-3.5 shrink-0 text-zinc-500 group-hover:text-sky-400" />
+                    <Layers className="h-3.5 w-3.5 shrink-0 text-tx-muted group-hover:text-sky-500" />
                     <span className="truncate">{env.name}</span>
                   </div>
 
                   <div className="flex items-center gap-1.5">
                     {env.minRole === 'admin' && (
-                      <span className="flex items-center gap-0.5 text-[9px] text-rose-400 bg-rose-500/10 px-1.5 py-0.5 rounded border border-rose-500/30 font-medium shrink-0" title="Admin only access">
+                      <span className="flex items-center gap-0.5 text-[9px] text-rose-500 dark:text-rose-400 bg-rose-500/10 px-1.5 py-0.5 rounded border border-rose-500/30 font-medium shrink-0" title="Admin only access">
                         <Shield className="h-2.5 w-2.5" />
                         Admin
                       </span>
                     )}
                     {env.minRole === 'maintainer' && (
-                      <span className="flex items-center gap-0.5 text-[9px] text-sky-400 bg-sky-500/10 px-1.5 py-0.5 rounded border border-sky-500/30 font-medium shrink-0" title="Maintainer and Admin access">
+                      <span className="flex items-center gap-0.5 text-[9px] text-sky-600 dark:text-sky-400 bg-sky-500/10 px-1.5 py-0.5 rounded border border-sky-500/30 font-medium shrink-0" title="Maintainer and Admin access">
                         <Shield className="h-2.5 w-2.5" />
                         Maintainer
                       </span>
                     )}
                     {env.minRole === 'contributor' && (
-                      <span className="flex items-center gap-0.5 text-[9px] text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/30 font-medium shrink-0" title="Contributor, Maintainer, and Admin access">
+                      <span className="flex items-center gap-0.5 text-[9px] text-amber-600 dark:text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/30 font-medium shrink-0" title="Contributor, Maintainer, and Admin access">
                         <Shield className="h-2.5 w-2.5" />
                         Contrib+
                       </span>
                     )}
                     {isActive && (
-                      <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20 shrink-0">
+                      <span className="flex items-center gap-1 text-[10px] text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20 shrink-0">
                         <Check className="h-2.5 w-2.5" />
                         Active
                       </span>
@@ -441,17 +441,17 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
 
           {/* Quick Import Link on Left Footer */}
           {!isCreateDisabled && (
-            <div className="pt-3 border-t border-zinc-850 flex items-center justify-between text-[11px] text-zinc-400">
+            <div className="pt-3 border-t border-line flex items-center justify-between text-[11px] text-tx-muted">
               <button
                 onClick={handleImportFileClick}
-                className="flex items-center gap-1.5 text-sky-400 hover:text-sky-300 transition"
+                className="flex items-center gap-1.5 text-sky-500 dark:text-sky-400 hover:text-sky-600 dark:hover:text-sky-300 transition"
               >
                 <Upload className="h-3 w-3" />
                 <span>Import File</span>
               </button>
               <button
                 onClick={() => setIsPasteModalOpen(true)}
-                className="flex items-center gap-1 text-zinc-400 hover:text-zinc-200 transition"
+                className="flex items-center gap-1 text-tx-muted hover:text-tx-primary transition"
               >
                 <FileCode className="h-3 w-3" />
                 <span>Paste JSON</span>
@@ -461,8 +461,8 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
         </div>
 
         {/* Right Side: Variable Table & Edit */}
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-zinc-950 p-3 md:p-6">
-          <div className="flex items-center justify-between border-b border-zinc-850 pb-4">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface p-3 md:p-6">
+          <div className="flex items-center justify-between border-b border-line pb-4">
             {currentEnv ? (
               <div className="flex flex-wrap items-center gap-3">
                 <input
@@ -470,7 +470,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                   value={currentEnv.name}
                   disabled={isEnvReadOnly}
                   onChange={(e) => updateEnvironment(currentEnv.id, { name: e.target.value })}
-                  className="bg-transparent font-bold text-sm text-zinc-100 focus:outline-none focus:border-b focus:border-sky-500 px-1 py-0.5 rounded disabled:opacity-80"
+                  className="bg-transparent font-bold text-sm text-tx-primary focus:outline-none focus:border-b focus:border-sky-500 px-1 py-0.5 rounded disabled:opacity-80"
                 />
                 <button
                   onClick={() =>
@@ -479,8 +479,8 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                     )
                   }
                   className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition ${activeEnvironmentId === currentEnv.id
-                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                      : 'border border-zinc-800 bg-zinc-900 text-zinc-400 hover:text-white'
+                      ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30'
+                      : 'border border-line bg-card text-tx-secondary hover:text-tx-primary hover:bg-hover'
                     }`}
                 >
                   {activeEnvironmentId === currentEnv.id ? 'Active Environment' : 'Set as Active'}
@@ -491,7 +491,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                     type="button"
                     disabled={isEnvReadOnly || !canWriteEnv}
                     onClick={() => setIsPermModalOpen(true)}
-                    className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/80 px-2.5 py-1 text-xs hover:border-zinc-700 hover:bg-zinc-850 transition disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+                    className="flex items-center gap-1.5 rounded-lg border border-line bg-card px-2.5 py-1 text-xs hover:border-line-strong hover:bg-hover transition disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
                     title={
                       !canWriteEnv
                         ? 'Contributor, Maintainer, or Admin access required to change access restrictions'
@@ -502,16 +502,16 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                   >
                     <Shield
                       className={`h-3.5 w-3.5 shrink-0 ${currentEnv.minRole === 'admin'
-                          ? 'text-rose-400'
+                          ? 'text-rose-500 dark:text-rose-400'
                           : currentEnv.minRole === 'maintainer'
-                            ? 'text-sky-400'
+                            ? 'text-sky-500 dark:text-sky-400'
                             : currentEnv.minRole === 'contributor'
-                              ? 'text-amber-400'
-                              : 'text-emerald-400'
+                              ? 'text-amber-500 dark:text-amber-400'
+                              : 'text-emerald-500 dark:text-emerald-400'
                         }`}
                     />
-                    <span className="text-zinc-400 text-[11px]">Access:</span>
-                    <span className="font-semibold text-zinc-200">
+                    <span className="text-tx-muted text-[11px]">Access:</span>
+                    <span className="font-semibold text-tx-secondary">
                       {currentEnv.minRole === 'admin'
                         ? '🔴 Admin Only'
                         : currentEnv.minRole === 'maintainer'
@@ -524,24 +524,24 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                 )}
 
                 {isEnvReadOnly && (
-                  <span className="flex items-center gap-1 rounded-md border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-400">
+                  <span className="flex items-center gap-1 rounded-md border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400">
                     <Lock className="h-3 w-3" />
                     Read Only
                   </span>
                 )}
               </div>
             ) : (
-              <div className="text-xs text-zinc-400">Select an environment</div>
+              <div className="text-xs text-tx-muted">Select an environment</div>
             )}
 
             <div className="flex items-center gap-2">
               {currentEnv && (
                 <button
                   onClick={handleExportEnv}
-                  className="flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs font-medium text-zinc-300 hover:bg-zinc-800 hover:text-white transition"
+                  className="flex items-center gap-1 rounded-lg border border-line bg-card px-2.5 py-1 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition"
                   title="Export as Postman Environment (.json)"
                 >
-                  <Download className="h-3.5 w-3.5 text-zinc-400" />
+                  <Download className="h-3.5 w-3.5 text-tx-muted" />
                   <span>Export</span>
                 </button>
               )}
@@ -550,7 +550,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                 <button
                   onClick={() => setShowDeleteConfirm(true)}
                   disabled={isEnvReadOnly || !canDeleteEnv}
-                  className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-900 hover:text-rose-400 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                  className="rounded-lg p-1.5 text-tx-muted hover:bg-hover hover:text-rose-500 disabled:opacity-40 disabled:cursor-not-allowed transition"
                   title={!canDeleteEnv ? 'Insufficient permission to delete environment' : isEnvReadOnly ? 'Higher permission required to delete this restricted environment' : 'Delete Environment'}
                 >
                   <Trash2 className="h-4 w-4" />
@@ -558,7 +558,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
               )}
               <button
                 onClick={onClose}
-                className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-900 hover:text-white transition"
+                className="rounded-lg p-1.5 text-tx-muted hover:bg-hover hover:text-tx-primary transition"
               >
                 <X className="h-5 w-5" />
               </button>
@@ -567,14 +567,14 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
 
           {/* Feedback alerts */}
           {errorMsg && (
-            <div className="mt-3 flex items-center gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 p-2.5 text-xs text-rose-300">
+            <div className="mt-3 flex items-center gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 p-2.5 text-xs text-rose-600 dark:text-rose-300">
               <AlertCircle className="h-4 w-4 shrink-0" />
               <span>{errorMsg}</span>
             </div>
           )}
 
           {successMsg && (
-            <div className="mt-3 flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-2.5 text-xs text-emerald-300">
+            <div className="mt-3 flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-2.5 text-xs text-emerald-600 dark:text-emerald-300">
               <CheckCircle2 className="h-4 w-4 shrink-0" />
               <span>{successMsg}</span>
             </div>
@@ -584,12 +584,12 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
           {isPasteModalOpen ? (
             <div className="flex flex-1 flex-col space-y-3 mt-4">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-zinc-300">
+                <span className="text-xs font-semibold text-tx-secondary">
                   Paste Postman Environment JSON:
                 </span>
                 <button
                   onClick={() => setIsPasteModalOpen(false)}
-                  className="text-xs text-zinc-500 hover:text-zinc-300"
+                  className="text-xs text-tx-muted hover:text-tx-primary"
                 >
                   Cancel
                 </button>
@@ -603,12 +603,12 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                   })
                 }
                 placeholder='{\n  "name": "My Environment",\n  "values": [\n    { "key": "baseUrl", "value": "https://api.example.com" }\n  ]\n}'
-                className="flex-1 rounded-xl border border-zinc-800 bg-zinc-900/90 p-3 font-mono text-xs text-zinc-100 placeholder-zinc-500 focus:border-sky-500 focus:outline-none resize-none"
+                className="flex-1 rounded-xl border border-line bg-card p-3 font-mono text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none resize-none"
               />
               <div className="flex justify-end gap-2">
                 <button
                   onClick={() => setIsPasteModalOpen(false)}
-                  className="rounded-xl px-4 py-2 text-xs font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+                  className="rounded-xl px-4 py-2 text-xs font-medium text-tx-muted hover:bg-hover hover:text-tx-primary"
                 >
                   Cancel
                 </button>
@@ -624,8 +624,8 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
           ) : currentEnv ? (
             <div className="flex flex-1 flex-col overflow-hidden mt-4">
               <div className="flex items-center justify-between mb-2">
-                <p className="text-[11px] text-zinc-400">
-                  <span className="text-sky-300 font-semibold">Initial Value</span> syncs to cloud. <span className="text-amber-300 font-semibold">Current Value</span> is local to this session (used in requests &amp; scripts, never pushed upstream).
+                <p className="text-[11px] text-tx-muted">
+                  <span className="text-sky-600 dark:text-sky-300 font-semibold">Initial Value</span> syncs to cloud. <span className="text-amber-600 dark:text-amber-300 font-semibold">Current Value</span> is local to this session (used in requests &amp; scripts, never pushed upstream).
                 </p>
                 <div className="flex items-center gap-1.5 shrink-0">
                   <button
@@ -635,10 +635,10 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                       setSuccessMsg('Reset all current values to initial values');
                       setTimeout(() => setSuccessMsg(null), 2500);
                     }}
-                    className="flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900/80 px-2 py-1 text-[11px] font-medium text-zinc-400 hover:bg-zinc-850 hover:text-white transition"
+                    className="flex items-center gap-1 rounded-lg border border-line bg-card px-2 py-1 text-[11px] font-medium text-tx-muted hover:bg-hover hover:text-tx-primary transition"
                     title="Reset all current values in this environment to their initial values"
                   >
-                    <RotateCcw className="h-3 w-3 text-sky-400" />
+                    <RotateCcw className="h-3 w-3 text-sky-500 dark:text-sky-400" />
                     <span>Reset All</span>
                   </button>
                   <button
@@ -649,42 +649,42 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                       setSuccessMsg('Persisted all current values to initial values and synced to cloud');
                       setTimeout(() => setSuccessMsg(null), 2500);
                     }}
-                    className="flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900/80 px-2 py-1 text-[11px] font-medium text-zinc-400 hover:bg-zinc-850 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition"
+                    className="flex items-center gap-1 rounded-lg border border-line bg-card px-2 py-1 text-[11px] font-medium text-tx-muted hover:bg-hover hover:text-tx-primary disabled:opacity-40 disabled:cursor-not-allowed transition"
                     title={isEnvReadOnly ? 'Read only in cloud scope' : 'Copy all current values to initial values and sync to cloud'}
                   >
-                    <UploadCloud className="h-3 w-3 text-emerald-400" />
+                    <UploadCloud className="h-3 w-3 text-emerald-500 dark:text-emerald-400" />
                     <span>Persist All</span>
                   </button>
                 </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto rounded-xl border border-zinc-850 bg-zinc-900/30">
+              <div className="flex-1 overflow-y-auto rounded-xl border border-line bg-card/30">
                 <table className="w-full text-left text-xs">
-                  <thead className="border-b border-zinc-800 bg-zinc-900/70 text-zinc-400">
+                  <thead className="border-b border-line bg-element text-tx-muted">
                     <tr>
                       <th className="w-10 px-3 py-2 text-center">Use</th>
                       <th className="w-40 px-3 py-2 font-medium">Variable Name</th>
                       <th className="px-3 py-2 font-medium">
                         <div className="flex items-center gap-1.5">
                           <span>Initial Value</span>
-                          <span className="rounded bg-sky-500/10 px-1 py-0.5 text-[9px] font-normal text-sky-400 border border-sky-500/20">Synced to Cloud</span>
+                          <span className="rounded bg-sky-500/10 px-1 py-0.5 text-[9px] font-normal text-sky-600 dark:text-sky-400 border border-sky-500/20">Synced to Cloud</span>
                         </div>
                       </th>
                       <th className="px-3 py-2 font-medium">
                         <div className="flex items-center gap-1.5">
                           <span>Current Value</span>
-                          <span className="rounded bg-amber-500/10 px-1 py-0.5 text-[9px] font-normal text-amber-300 border border-amber-500/20">Local Session</span>
+                          <span className="rounded bg-amber-500/10 px-1 py-0.5 text-[9px] font-normal text-amber-600 dark:text-amber-300 border border-amber-500/20">Local Session</span>
                         </div>
                       </th>
                       <th className="w-20 px-2 py-2 text-center font-medium">Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-zinc-850">
+                  <tbody className="divide-y divide-line">
                     {currentEnv.variables.map((v) => {
                       const initialVal = v.initialValue ?? v.value ?? '';
                       const currentVal = v.currentValue !== undefined ? v.currentValue : initialVal;
                       return (
-                        <tr key={v.id} className="group hover:bg-zinc-900/50 transition">
+                        <tr key={v.id} className="group hover:bg-hover transition">
                           <td className="px-3 py-1.5 text-center">
                             <input
                               type="checkbox"
@@ -695,7 +695,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                                   enabled: e.target.checked,
                                 })
                               }
-                              className="h-3.5 w-3.5 rounded border-zinc-700 bg-zinc-900 text-sky-500 accent-sky-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+                              className="h-3.5 w-3.5 rounded border-line bg-card text-sky-500 accent-sky-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                             />
                           </td>
                           <td className="px-2 py-1.5">
@@ -709,7 +709,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                                 })
                               }
                               placeholder="e.g. baseUrl"
-                              className="w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-sky-400 placeholder-zinc-600 focus:bg-zinc-900 focus:outline-none focus:ring-1 focus:ring-sky-500/50 disabled:opacity-60 disabled:cursor-not-allowed"
+                              className="w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-sky-600 dark:text-sky-400 placeholder-tx-faint focus:bg-card focus:outline-none focus:ring-1 focus:ring-sky-500/50 disabled:opacity-60 disabled:cursor-not-allowed"
                             />
                           </td>
                           <td className="px-2 py-1.5">
@@ -727,7 +727,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                                 });
                               }}
                               placeholder="e.g. https://api.example.com"
-                              className="w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-zinc-200 placeholder-zinc-600 focus:bg-zinc-900 focus:outline-none focus:ring-1 focus:ring-sky-500/50 disabled:opacity-60 disabled:cursor-not-allowed"
+                              className="w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-tx-primary placeholder-tx-faint focus:bg-card focus:outline-none focus:ring-1 focus:ring-sky-500/50 disabled:opacity-60 disabled:cursor-not-allowed"
                             />
                           </td>
                           <td className="px-2 py-1.5">
@@ -740,7 +740,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                                 })
                               }
                               placeholder="Local value..."
-                              className="w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-amber-300 placeholder-zinc-600 focus:bg-zinc-900 focus:outline-none focus:ring-1 focus:ring-amber-500/50"
+                              className="w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-amber-600 dark:text-amber-300 placeholder-tx-faint focus:bg-card focus:outline-none focus:ring-1 focus:ring-amber-500/50"
                             />
                           </td>
                           <td className="px-2 py-1.5 text-center">
@@ -752,7 +752,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                                     currentValue: initialVal,
                                   })
                                 }
-                                className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-sky-300 transition"
+                                className="rounded p-1 text-tx-muted hover:bg-hover hover:text-sky-500 transition"
                                 title="Reset Current Value to Initial Value"
                               >
                                 <RotateCcw className="h-3 w-3" />
@@ -766,7 +766,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                                     value: currentVal,
                                   })
                                 }
-                                className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-emerald-400 disabled:opacity-20 disabled:cursor-not-allowed transition"
+                                className="rounded p-1 text-tx-muted hover:bg-hover hover:text-emerald-500 disabled:opacity-20 disabled:cursor-not-allowed transition"
                                 title={isEnvReadOnly ? 'Read only in cloud scope' : 'Persist Current Value to Initial Value (syncs to cloud)'}
                               >
                                 <UploadCloud className="h-3 w-3" />
@@ -775,7 +775,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                                 type="button"
                                 onClick={() => removeEnvironmentVariable(currentEnv.id, v.id)}
                                 disabled={isEnvReadOnly}
-                                className="rounded p-1 text-zinc-600 opacity-60 hover:bg-zinc-800 hover:text-rose-400 group-hover:opacity-100 disabled:opacity-20 disabled:cursor-not-allowed transition"
+                                className="rounded p-1 text-tx-muted opacity-60 hover:bg-hover hover:text-rose-500 group-hover:opacity-100 disabled:opacity-20 disabled:cursor-not-allowed transition"
                                 title={isEnvReadOnly ? 'Read only' : 'Delete variable'}
                               >
                                 <Trash2 className="h-3.5 w-3.5" />
@@ -794,17 +794,17 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
                   type="button"
                   disabled={isEnvReadOnly}
                   onClick={() => addEnvironmentVariable(currentEnv.id)}
-                  className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-1.5 text-xs font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                  className="flex items-center gap-1.5 rounded-lg border border-line bg-card px-3 py-1.5 text-xs font-medium text-tx-muted hover:bg-hover hover:text-tx-primary disabled:opacity-40 disabled:cursor-not-allowed transition"
                   title={isEnvReadOnly ? 'Read only' : 'Add Variable'}
                 >
-                  <Plus className="h-3.5 w-3.5 text-sky-400" />
+                  <Plus className="h-3.5 w-3.5 text-sky-500 dark:text-sky-400" />
                   <span>Add Variable</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={onClose}
-                  className="rounded-xl bg-zinc-800 px-4 py-1.5 text-xs font-semibold text-zinc-200 hover:bg-zinc-700 transition"
+                  className="rounded-xl border border-line bg-element px-4 py-1.5 text-xs font-semibold text-tx-primary hover:bg-hover transition"
                 >
                   Done
                 </button>

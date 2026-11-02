@@ -99,7 +99,7 @@ export const TabBar: React.FC = () => {
     <>
       <div
         onContextMenu={handleBarContextMenu}
-        className="flex h-8 w-full items-center border-b border-zinc-800 bg-zinc-950 px-2 overflow-x-auto scrollbar-none"
+        className="flex h-8 w-full items-center border-b border-line bg-surface px-2 overflow-x-auto scrollbar-none"
       >
         <div className="flex items-center gap-1.5 flex-1 min-w-0">
           {safeTabs.filter(Boolean).map((tab) => {
@@ -118,8 +118,8 @@ export const TabBar: React.FC = () => {
                 onContextMenu={(e) => handleTabContextMenu(e, tab.id)}
                 onAuxClick={(e) => handleTabAuxClick(e, tab.id)}
                 className={`group flex items-center gap-1.5 max-w-[205px] cursor-pointer rounded-t-md border-t-2 px-2.5 py-1 text-xs font-medium transition-all select-none ${isActive
-                    ? 'border-sky-500 bg-zinc-900 text-zinc-100 shadow-sm'
-                    : 'border-transparent bg-zinc-950/40 text-zinc-400 hover:bg-zinc-900/60 hover:text-zinc-200'
+                    ? 'border-sky-500 bg-card text-tx-primary shadow-xs'
+                    : 'border-transparent bg-element/50 text-tx-muted hover:bg-hover hover:text-tx-primary'
                   }`}
               >
                 <MethodBadge method={tab.method} size="sm" />
@@ -137,7 +137,7 @@ export const TabBar: React.FC = () => {
                 <button
                   type="button"
                   aria-label={`Actions for ${displayName}`}
-                  className="rounded p-1 text-zinc-400 hover:bg-zinc-800 md:hidden"
+                  className="rounded p-1 text-tx-muted hover:bg-hover md:hidden"
                   onClick={(e) => {
                     e.stopPropagation();
                     const rect = e.currentTarget.getBoundingClientRect();
@@ -154,7 +154,7 @@ export const TabBar: React.FC = () => {
                     e.stopPropagation();
                     closeTab(tab.id);
                   }}
-                  className="ml-auto rounded p-0.5 text-zinc-500 opacity-60 hover:bg-zinc-800 hover:text-zinc-200 group-hover:opacity-100 transition"
+                  className="ml-auto rounded p-0.5 text-tx-muted opacity-60 hover:bg-hover hover:text-tx-primary group-hover:opacity-100 transition"
                   title="Close tab"
                 >
                   <X className="h-3 w-3" />
@@ -165,7 +165,7 @@ export const TabBar: React.FC = () => {
 
           <button
             onClick={() => createTab()}
-            className="flex h-6 w-6 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200 transition"
+            className="flex h-6 w-6 items-center justify-center rounded-md text-tx-muted hover:bg-hover hover:text-tx-primary transition"
             title="Create New Request Tab"
           >
             <Plus className="h-3.5 w-3.5" />
@@ -178,7 +178,7 @@ export const TabBar: React.FC = () => {
         <div
           ref={menuRef}
           style={{ top: contextMenu.y, left: contextMenu.x }}
-          className="fixed z-50 min-w-[190px] rounded-xl border border-zinc-800 bg-zinc-950/95 p-1 shadow-2xl backdrop-blur-xl ring-1 ring-white/10 select-none animate-in fade-in zoom-in-95 duration-100"
+          className="fixed z-50 min-w-[190px] rounded-xl border border-line bg-surface/95 p-1 shadow-2xl backdrop-blur-xl ring-1 ring-black/5 dark:ring-white/10 select-none animate-in fade-in zoom-in-95 duration-100"
           onClick={(e) => e.stopPropagation()}
         >
           {contextMenu.tabId ? (
@@ -188,9 +188,9 @@ export const TabBar: React.FC = () => {
                   closeTab(contextMenu.tabId!);
                   setContextMenu(null);
                 }}
-                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-800/80 hover:text-zinc-100 transition text-left"
+                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition text-left"
               >
-                <X className="h-3.5 w-3.5 text-zinc-400" />
+                <X className="h-3.5 w-3.5 text-tx-muted" />
                 <span>Close Tab</span>
               </button>
 
@@ -200,9 +200,9 @@ export const TabBar: React.FC = () => {
                   closeOtherTabs(contextMenu.tabId!);
                   setContextMenu(null);
                 }}
-                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-800/80 hover:text-zinc-100 transition disabled:opacity-35 disabled:cursor-not-allowed text-left"
+                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition disabled:opacity-35 disabled:cursor-not-allowed text-left"
               >
-                <Layers className="h-3.5 w-3.5 text-zinc-400" />
+                <Layers className="h-3.5 w-3.5 text-tx-muted" />
                 <span>Close Other Tabs</span>
               </button>
 
@@ -212,9 +212,9 @@ export const TabBar: React.FC = () => {
                   closeTabsToRight(contextMenu.tabId!);
                   setContextMenu(null);
                 }}
-                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-800/80 hover:text-zinc-100 transition disabled:opacity-35 disabled:cursor-not-allowed text-left"
+                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition disabled:opacity-35 disabled:cursor-not-allowed text-left"
               >
-                <ArrowRight className="h-3.5 w-3.5 text-zinc-400" />
+                <ArrowRight className="h-3.5 w-3.5 text-tx-muted" />
                 <span>Close Tabs to the Right</span>
               </button>
 
@@ -223,22 +223,22 @@ export const TabBar: React.FC = () => {
                   closeAllTabs();
                   setContextMenu(null);
                 }}
-                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-rose-400/90 hover:bg-rose-500/10 hover:text-rose-300 transition text-left"
+                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 hover:text-rose-700 dark:hover:text-rose-300 transition text-left"
               >
-                <Trash2 className="h-3.5 w-3.5 text-rose-400/80" />
+                <Trash2 className="h-3.5 w-3.5 text-rose-500 dark:text-rose-400/80" />
                 <span>Close All Tabs</span>
               </button>
 
-              <div className="h-px bg-zinc-850 my-1 mx-1" />
+              <div className="h-px bg-line my-1 mx-1" />
 
               <button
                 onClick={() => {
                   duplicateTab(contextMenu.tabId!);
                   setContextMenu(null);
                 }}
-                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-800/80 hover:text-zinc-100 transition text-left"
+                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition text-left"
               >
-                <Copy className="h-3.5 w-3.5 text-zinc-400" />
+                <Copy className="h-3.5 w-3.5 text-tx-muted" />
                 <span>Duplicate Tab</span>
               </button>
 
@@ -247,9 +247,9 @@ export const TabBar: React.FC = () => {
                   createTab();
                   setContextMenu(null);
                 }}
-                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-800/80 hover:text-zinc-100 transition text-left"
+                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition text-left"
               >
-                <Plus className="h-3.5 w-3.5 text-zinc-400" />
+                <Plus className="h-3.5 w-3.5 text-tx-muted" />
                 <span>New Request Tab</span>
               </button>
             </>
@@ -260,9 +260,9 @@ export const TabBar: React.FC = () => {
                   createTab();
                   setContextMenu(null);
                 }}
-                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-800/80 hover:text-zinc-100 transition text-left"
+                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition text-left"
               >
-                <Plus className="h-3.5 w-3.5 text-zinc-400" />
+                <Plus className="h-3.5 w-3.5 text-tx-muted" />
                 <span>New Request Tab</span>
               </button>
 
@@ -271,9 +271,9 @@ export const TabBar: React.FC = () => {
                   closeAllTabs();
                   setContextMenu(null);
                 }}
-                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-rose-400/90 hover:bg-rose-500/10 hover:text-rose-300 transition text-left"
+                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 hover:text-rose-700 dark:hover:text-rose-300 transition text-left"
               >
-                <Trash2 className="h-3.5 w-3.5 text-rose-400/80" />
+                <Trash2 className="h-3.5 w-3.5 text-rose-500 dark:text-rose-400/80" />
                 <span>Close All Tabs</span>
               </button>
             </>

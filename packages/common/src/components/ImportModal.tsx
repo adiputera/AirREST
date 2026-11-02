@@ -354,20 +354,20 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-      <div className="max-h-[90dvh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-4 shadow-2xl md:p-6">
+      <div className="max-h-[90dvh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-line bg-surface p-4 shadow-2xl md:p-6">
         {conflict ? (
           conflict.type === 'environment' ? (
             /* Environment Conflict Resolution View */
             <div>
               {/* Header */}
-              <div className="flex items-center justify-between border-b border-zinc-850 pb-4">
+              <div className="flex items-center justify-between border-b border-line pb-4">
                 <div className="flex items-center gap-2.5">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500/10 text-amber-500 dark:text-amber-400 border border-amber-500/20">
                     <AlertTriangle className="h-5 w-5" />
                   </div>
                   <div>
-                    <h2 className="text-base font-semibold text-zinc-100">Environment Already Exists</h2>
-                    <p className="text-xs text-zinc-400">
+                    <h2 className="text-base font-semibold text-tx-primary">Environment Already Exists</h2>
+                    <p className="text-xs text-tx-muted">
                       An environment named <span className="font-semibold text-zinc-200">"{conflict.existingEnv.name}"</span> already exists in your workspace.
                     </p>
                   </div>
@@ -828,26 +828,26 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
           /* Normal Import View */
           <div>
             {/* Header */}
-            <div className="flex items-center justify-between border-b border-zinc-850 pb-4">
+            <div className="flex items-center justify-between border-b border-line pb-4">
               <div className="flex items-center gap-2.5">
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-sky-500/10 text-sky-400 border border-sky-500/20">
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-sky-500/10 text-sky-500 dark:text-sky-400 border border-sky-500/20">
                   <Upload className="h-5 w-5" />
                 </div>
                 <div>
-                  <h2 className="text-base font-semibold text-zinc-100">Import Requests & Environments</h2>
-                  <p className="text-xs text-zinc-400">Import Postman Collections, Environments, or raw cURL commands</p>
+                  <h2 className="text-base font-semibold text-tx-primary">Import Requests & Environments</h2>
+                  <p className="text-xs text-tx-muted">Import Postman Collections, Environments, or raw cURL commands</p>
                 </div>
               </div>
               <button
                 onClick={handleModalClose}
-                className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors"
+                className="rounded-lg p-1.5 text-tx-muted hover:bg-hover hover:text-tx-primary transition-colors"
               >
                 <X className="h-5 w-5" />
               </button>
             </div>
 
             {/* Tab Selection */}
-            <div className="mt-4 flex border-b border-zinc-850 gap-4 text-xs font-medium text-zinc-400">
+            <div className="mt-4 flex border-b border-line gap-4 text-xs font-medium text-tx-muted">
               <button
                 onClick={() => {
                   setActiveImportTab('postman');
@@ -856,11 +856,11 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
                 }}
                 className={`flex items-center gap-2 pb-2.5 transition border-b-2 ${
                   activeImportTab === 'postman'
-                    ? 'border-sky-500 text-zinc-100 font-semibold'
-                    : 'border-transparent hover:text-zinc-200'
+                    ? 'border-sky-500 text-tx-primary font-semibold'
+                    : 'border-transparent hover:text-tx-secondary'
                 }`}
               >
-                <FileJson className="h-4 w-4 text-sky-400" />
+                <FileJson className="h-4 w-4 text-sky-500 dark:text-sky-400" />
                 <span>Postman Collection or Environment (.json)</span>
               </button>
 
@@ -872,11 +872,11 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
                 }}
                 className={`flex items-center gap-2 pb-2.5 transition border-b-2 ${
                   activeImportTab === 'curl'
-                    ? 'border-sky-500 text-zinc-100 font-semibold'
-                    : 'border-transparent hover:text-zinc-200'
+                    ? 'border-sky-500 text-tx-primary font-semibold'
+                    : 'border-transparent hover:text-tx-secondary'
                 }`}
               >
-                <Terminal className="h-4 w-4 text-amber-400" />
+                <Terminal className="h-4 w-4 text-amber-500 dark:text-amber-400" />
                 <span>cURL Command</span>
               </button>
             </div>
@@ -913,16 +913,16 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
                     e.stopPropagation();
                   }}
                   onDrop={handleFileDrop}
-                  className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-zinc-700 bg-zinc-900/60 p-4 text-center transition hover:border-sky-500/50 hover:bg-zinc-900 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                  className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-line bg-card/60 p-4 text-center transition hover:border-sky-500/50 hover:bg-hover focus:outline-none focus:ring-1 focus:ring-sky-500"
                 >
-                  <FileJson className="h-5 w-5 text-sky-400" />
-                  <span className="text-xs font-medium text-zinc-300">
+                  <FileJson className="h-5 w-5 text-sky-500 dark:text-sky-400" />
+                  <span className="text-xs font-medium text-tx-secondary">
                     Choose or drag a Postman Collection or Environment .json file
                   </span>
                 </div>
 
                 <div>
-                  <label className="mb-1.5 block text-xs font-medium text-zinc-300">
+                  <label className="mb-1.5 block text-xs font-medium text-tx-secondary">
                     Or paste Postman Collection or Environment JSON directly:
                   </label>
                   <textarea
@@ -934,7 +934,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
                       })
                     }
                     placeholder='Paste Postman Collection JSON (with "info", "item") OR Postman Environment JSON (with "name", "values"). Auto-detected automatically!'
-                    className="h-44 w-full rounded-xl border border-zinc-800 bg-zinc-900/90 p-3 font-mono text-xs text-zinc-200 placeholder-zinc-500 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition resize-none"
+                    className="h-44 w-full rounded-xl border border-line bg-card p-3 font-mono text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition resize-none"
                   />
                 </div>
               </div>
@@ -943,7 +943,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
             {/* Tab 2: cURL Command */}
             {activeImportTab === 'curl' && (
               <div className="mt-4 space-y-4">
-                <label className="block text-xs font-medium text-zinc-300">
+                <label className="block text-xs font-medium text-tx-secondary">
                   Paste raw cURL command from terminal, DevTools, or documentation:
                 </label>
 
@@ -956,21 +956,21 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
                     })
                   }
                   placeholder={`curl -X POST "https://api.example.com/v1/resource" \\\n  -H "Authorization: Bearer token" \\\n  -d '{"name": "value"}'`}
-                  className="h-52 w-full rounded-xl border border-zinc-800 bg-zinc-900/90 p-3 font-mono text-xs text-zinc-200 placeholder-zinc-500 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition resize-none"
+                  className="h-52 w-full rounded-xl border border-line bg-card p-3 font-mono text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition resize-none"
                 />
               </div>
             )}
 
             {/* Alerts */}
             {errorMsg && (
-              <div className="mt-3 flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-300">
+              <div className="mt-3 flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-600 dark:text-rose-300">
                 <AlertCircle className="h-4 w-4 shrink-0" />
                 <span>{errorMsg}</span>
               </div>
             )}
 
             {successMsg && (
-              <div className="mt-3 flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-300">
+              <div className="mt-3 flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-600 dark:text-emerald-300">
                 <CheckCircle2 className="h-4 w-4 shrink-0" />
                 <span>{successMsg}</span>
               </div>
@@ -980,7 +980,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
             <div className="mt-6 flex justify-end gap-2.5">
               <button
                 onClick={handleModalClose}
-                className="rounded-xl px-4 py-2 text-xs font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition"
+                className="rounded-xl px-4 py-2 text-xs font-medium text-tx-muted hover:bg-hover hover:text-tx-primary transition"
               >
                 Cancel
               </button>

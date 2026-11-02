@@ -43,6 +43,7 @@ AirREST is an API testing client that runs directly inside Google Chrome as a Ma
 - **Keyboard Shortcuts**: Quick dispatch with <kbd>Ctrl + Enter</kbd> (Windows/Linux) or <kbd>Cmd + Enter</kbd> (macOS).
 
 ### 2. 📝 Flexible Request Body Formats
+- **Visual Payload Builder (`JSON` & `XML`)**: Form-based tree builder with type safety (`string`, `number`, `boolean`, `date` with ISO-8601/Unix formats, `list`, `object`, `null`), flexible Root (`Object` vs `List`), recursive nested objects and lists, XML attribute toggling (`[Attr]`), auto-escape for XML entities, and a mobile-friendly 3-way segmented control (`[ 📝 Builder ]` <-> `[ 👁️ Result Preview ]` <-> `[ 💻 Raw ]`) with seamless two-way reverse parsing from raw payloads.
 - **JSON**: Code editor with 1-click **Beautify JSON** formatting, syntax validation, and **Tab / Shift+Tab keyboard indentation** support (2-space indents, multi-line block indent/outdent, and native Undo/Redo preservation).
 - **GraphQL (`bodyType = 'graphql'`)**: Split-pane interface for GraphQL Query/Mutation and JSON Variables, complete with **Prettify Query** and **Beautify Variables** actions, plus Tab indentation support. Sets `Content-Type: application/json` and `POST` method automatically.
 - **XML (`bodyType = 'xml'`)**: Dedicated editor with 1-click **Beautify XML** formatting and Tab indentation.

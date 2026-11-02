@@ -1,47 +1,110 @@
 @import "tailwindcss";
 @source "../src";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ==========================================================================
+   Semantic Theme Tokens (AirREST Design System)
+   ========================================================================== */
+
 :root {
+  color-scheme: light;
+  --background: #fbfbfc;
+  --foreground: #09090b;
+
+  /* Surfaces & Backgrounds */
+  --bg-app: #f4f4f5;             /* Base root canvas behind panels (zinc-100) */
+  --bg-surface: #ffffff;         /* Main application panels & header */
+  --bg-card: #ffffff;            /* Content cards, request editor sections */
+  --bg-element: #f4f4f5;         /* Subtle sub-elements, input backgrounds */
+  --bg-hover: #ececee;           /* Interactive item hover state */
+  --bg-active: #e4e4e7;          /* Selected/active item background */
+
+  /* Borders & Dividers */
+  --border-subtle: #e4e4e7;      /* Clean subtle dividers (zinc-200) */
+  --border-strong: #d4d4d8;      /* Input borders, prominent lines (zinc-300) */
+
+  /* Text & Typography */
+  --text-primary: #09090b;       /* High contrast titles, active labels (zinc-950) */
+  --text-secondary: #27272a;     /* Body text, table values (zinc-800) */
+  --text-muted: #71717a;         /* Captions, labels, timestamps (zinc-500) */
+  --text-faint: #a1a1aa;         /* Placeholders, disabled states (zinc-400) */
+}
+
+:root.dark, html.dark {
   color-scheme: dark;
   --background: #09090b;
   --foreground: #ededed;
+
+  /* Surfaces & Backgrounds */
+  --bg-app: #09090b;             /* Base root canvas (zinc-950) */
+  --bg-surface: #101014;         /* Main panels, sidebar, header */
+  --bg-card: #18181b;            /* Content cards, request editor (zinc-900) */
+  --bg-element: #202024;         /* Sub-elements, inner inputs (zinc-850) */
+  --bg-hover: #27272a;           /* Interactive item hover (zinc-800) */
+  --bg-active: #27272a;          /* Selected/active item background */
+
+  /* Borders & Dividers */
+  --border-subtle: #27272a;      /* Clean subtle dividers (zinc-800) */
+  --border-strong: #3f3f46;      /* Input borders, prominent lines (zinc-700) */
+
+  /* Text & Typography */
+  --text-primary: #ededed;       /* High contrast titles, active labels */
+  --text-secondary: #d4d4d8;     /* Body text, table values (zinc-300) */
+  --text-muted: #a1a1aa;         /* Captions, labels, timestamps (zinc-400) */
+  --text-faint: #71717a;         /* Placeholders, disabled states (zinc-500) */
 }
 
-html {
-  color-scheme: dark;
+@theme {
+  --color-app: var(--bg-app);
+  --color-surface: var(--bg-surface);
+  --color-card: var(--bg-card);
+  --color-element: var(--bg-element);
+  --color-hover: var(--bg-hover);
+  --color-active: var(--bg-active);
+
+  --color-line: var(--border-subtle);
+  --color-line-strong: var(--border-strong);
+
+  --color-tx-primary: var(--text-primary);
+  --color-tx-secondary: var(--text-secondary);
+  --color-tx-muted: var(--text-muted);
+  --color-tx-faint: var(--text-faint);
 }
 
-/* Force dark color scheme on all native form elements and inputs */
-select, input, textarea, button, option, optgroup {
-  color-scheme: dark;
-}
-
-/* Clean cross-platform styling for select elements (WebKitGTK, Linux, Safari, Chrome) */
+/* Cross-platform styling for select elements (WebKitGTK, Linux, Safari, Chrome) */
 select {
   -webkit-appearance: none;
   -moz-appearance: none;
   appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23a1a1aa' stroke-width='2'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 0.65rem center;
   background-size: 0.85rem;
   padding-right: 2rem !important;
 }
 
-/* Ensure dropdown options always render in dark mode */
+html:not(.dark) select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2371717a' stroke-width='2'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
+}
+
+html.dark select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23a1a1aa' stroke-width='2'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
+}
+
+/* Ensure dropdown options adapt to active theme */
 option {
-  background-color: #18181b;
-  color: #ededed;
+  background-color: var(--bg-card);
+  color: var(--text-primary);
 }
 
 optgroup {
-  background-color: #18181b;
-  color: #a1a1aa;
+  background-color: var(--bg-card);
+  color: var(--text-muted);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--bg-app);
+  color: var(--text-primary);
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   user-select: none;
 }

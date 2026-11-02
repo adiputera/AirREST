@@ -8,13 +8,41 @@ interface MethodBadgeProps {
 }
 
 export const METHOD_COLORS: Record<HttpMethod, { text: string; bg: string; border: string }> = {
-  GET: { text: 'text-emerald-400', bg: 'bg-emerald-500/15', border: 'border-emerald-500/30' },
-  POST: { text: 'text-sky-400', bg: 'bg-sky-500/15', border: 'border-sky-500/30' },
-  PUT: { text: 'text-amber-400', bg: 'bg-amber-500/15', border: 'border-amber-500/30' },
-  PATCH: { text: 'text-violet-400', bg: 'bg-violet-500/15', border: 'border-violet-500/30' },
-  DELETE: { text: 'text-rose-400', bg: 'bg-rose-500/15', border: 'border-rose-500/30' },
-  HEAD: { text: 'text-teal-400', bg: 'bg-teal-500/15', border: 'border-teal-500/30' },
-  OPTIONS: { text: 'text-indigo-400', bg: 'bg-indigo-500/15', border: 'border-indigo-500/30' },
+  GET: {
+    text: 'text-emerald-700 dark:text-emerald-400',
+    bg: 'bg-emerald-500/10 dark:bg-emerald-500/15',
+    border: 'border-emerald-500/25 dark:border-emerald-500/30',
+  },
+  POST: {
+    text: 'text-sky-700 dark:text-sky-400',
+    bg: 'bg-sky-500/10 dark:bg-sky-500/15',
+    border: 'border-sky-500/25 dark:border-sky-500/30',
+  },
+  PUT: {
+    text: 'text-amber-700 dark:text-amber-400',
+    bg: 'bg-amber-500/10 dark:bg-amber-500/15',
+    border: 'border-amber-500/25 dark:border-amber-500/30',
+  },
+  PATCH: {
+    text: 'text-violet-700 dark:text-violet-400',
+    bg: 'bg-violet-500/10 dark:bg-violet-500/15',
+    border: 'border-violet-500/25 dark:border-violet-500/30',
+  },
+  DELETE: {
+    text: 'text-rose-700 dark:text-rose-400',
+    bg: 'bg-rose-500/10 dark:bg-rose-500/15',
+    border: 'border-rose-500/25 dark:border-rose-500/30',
+  },
+  HEAD: {
+    text: 'text-teal-700 dark:text-teal-400',
+    bg: 'bg-teal-500/10 dark:bg-teal-500/15',
+    border: 'border-teal-500/25 dark:border-teal-500/30',
+  },
+  OPTIONS: {
+    text: 'text-indigo-700 dark:text-indigo-400',
+    bg: 'bg-indigo-500/10 dark:bg-indigo-500/15',
+    border: 'border-indigo-500/25 dark:border-indigo-500/30',
+  },
 };
 
 export const MethodBadge: React.FC<MethodBadgeProps> = ({ method, size = 'sm', className = '' }) => {

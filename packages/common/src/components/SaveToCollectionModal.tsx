@@ -278,26 +278,26 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-      <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl">
+      <div className="w-full max-w-md rounded-2xl border border-line bg-surface p-6 shadow-2xl">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-zinc-850 pb-4">
+        <div className="flex items-center justify-between border-b border-line pb-4">
           <div className="flex items-center gap-2.5">
             <div className={`flex h-9 w-9 items-center justify-center rounded-lg border ${
               conflict
-                ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                : 'bg-sky-500/10 text-sky-400 border-sky-500/20'
+                ? 'bg-amber-500/10 text-amber-500 dark:text-amber-400 border-amber-500/20'
+                : 'bg-sky-500/10 text-sky-500 dark:text-sky-400 border-sky-500/20'
             }`}>
               {conflict ? <AlertTriangle className="h-5 w-5" /> : <Bookmark className="h-5 w-5" />}
             </div>
             <div>
-              <h2 className="text-base font-semibold text-zinc-100">
+              <h2 className="text-base font-semibold text-tx-primary">
                 {conflict
                   ? 'Request Conflict'
                   : isSaveAs
                   ? 'Save Request As'
                   : 'Save Request'}
               </h2>
-              <p className="text-xs text-zinc-400">
+              <p className="text-xs text-tx-muted">
                 {conflict
                   ? 'A duplicate request was detected in this collection'
                   : isSaveAs
@@ -308,7 +308,7 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors"
+            className="rounded-lg p-1.5 text-tx-muted hover:bg-hover hover:text-tx-primary transition-colors"
           >
             <X className="h-5 w-5" />
           </button>
@@ -317,30 +317,30 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
         {/* Conflict Resolution View */}
         {conflict ? (
           <div className="mt-4 space-y-4">
-            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3.5 text-xs text-amber-300">
-              <div className="flex items-center gap-2 font-semibold text-amber-200">
-                <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3.5 text-xs text-amber-700 dark:text-amber-300">
+              <div className="flex items-center gap-2 font-semibold text-amber-800 dark:text-amber-200">
+                <AlertTriangle className="h-4 w-4 text-amber-500 dark:text-amber-400 shrink-0" />
                 <span>Request already exists</span>
               </div>
-              <p className="mt-1 text-[11px] text-amber-300/90 leading-relaxed">
+              <p className="mt-1 text-[11px] text-amber-800/90 dark:text-amber-300/90 leading-relaxed">
                 A request with the same HTTP method and name already exists in this collection.
                 Do you want to replace it or save it as a copy?
               </p>
             </div>
 
             {/* Existing request card */}
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/80 p-3">
-              <div className="text-[10px] uppercase tracking-wider font-semibold text-zinc-400 mb-1.5">
+            <div className="rounded-xl border border-line bg-card p-3">
+              <div className="text-[10px] uppercase tracking-wider font-semibold text-tx-muted mb-1.5">
                 Existing Request
               </div>
               <div className="flex items-center gap-2.5">
                 <MethodBadge method={conflict.existingRequest.method as HttpMethod} />
-                <span className="font-mono text-xs font-medium text-zinc-200 truncate">
+                <span className="font-mono text-xs font-medium text-tx-primary truncate">
                   {conflict.existingRequest.name}
                 </span>
               </div>
               {conflict.existingRequest.path && (
-                <div className="mt-1.5 text-[11px] text-zinc-500 truncate">
+                <div className="mt-1.5 text-[11px] text-tx-muted truncate">
                   Location: {conflict.existingRequest.path}
                 </div>
               )}
@@ -348,25 +348,25 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
 
             {/* Options explanation */}
             <div className="space-y-2 text-xs">
-              <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3 flex items-start gap-2.5">
-                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-500/10 text-sky-400 shrink-0 mt-0.5">
+              <div className="rounded-xl border border-line bg-card/60 p-3 flex items-start gap-2.5">
+                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-500/10 text-sky-500 dark:text-sky-400 shrink-0 mt-0.5">
                   <Copy className="h-3.5 w-3.5" />
                 </div>
                 <div>
-                  <div className="font-semibold text-zinc-200">Save Copy</div>
-                  <div className="text-[11px] text-zinc-400 mt-0.5">
-                    Save as a new request named <span className="font-mono text-sky-300">"{conflict.suggestedCopyName}"</span>.
+                  <div className="font-semibold text-tx-primary">Save Copy</div>
+                  <div className="text-[11px] text-tx-muted mt-0.5">
+                    Save as a new request named <span className="font-mono text-sky-600 dark:text-sky-300">"{conflict.suggestedCopyName}"</span>.
                   </div>
                 </div>
               </div>
 
-              <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3 flex items-start gap-2.5">
-                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500/10 text-amber-400 shrink-0 mt-0.5">
+              <div className="rounded-xl border border-line bg-card/60 p-3 flex items-start gap-2.5">
+                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500/10 text-amber-500 dark:text-amber-400 shrink-0 mt-0.5">
                   <RefreshCw className="h-3.5 w-3.5" />
                 </div>
                 <div>
-                  <div className="font-semibold text-zinc-200">Replace</div>
-                  <div className="text-[11px] text-zinc-400 mt-0.5">
+                  <div className="font-semibold text-tx-primary">Replace</div>
+                  <div className="text-[11px] text-tx-muted mt-0.5">
                     Overwrite the existing request in-place with current settings.
                   </div>
                 </div>
@@ -374,11 +374,11 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
             </div>
 
             {/* Conflict Footer Actions */}
-            <div className="mt-6 flex items-center justify-between pt-2 border-t border-zinc-850">
+            <div className="mt-6 flex items-center justify-between pt-2 border-t border-line">
               <button
                 type="button"
                 onClick={() => setConflict(null)}
-                className="rounded-xl px-3.5 py-2 text-xs font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition"
+                className="rounded-xl px-3.5 py-2 text-xs font-medium text-tx-muted hover:bg-hover hover:text-tx-primary transition"
               >
                 Back
               </button>
@@ -387,11 +387,11 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
                   type="button"
                   onClick={handleResolveCopy}
                   disabled={isSaved}
-                  className="flex items-center gap-1.5 rounded-xl border border-sky-500/40 bg-sky-500/10 px-3.5 py-2 text-xs font-semibold text-sky-300 hover:bg-sky-500/20 active:scale-95 transition disabled:opacity-50"
+                  className="flex items-center gap-1.5 rounded-xl border border-sky-500/40 bg-sky-500/10 px-3.5 py-2 text-xs font-semibold text-sky-600 dark:text-sky-300 hover:bg-sky-500/20 active:scale-95 transition disabled:opacity-50"
                 >
                   {isSaved && savedActionText === 'Saved copy!' ? (
                     <>
-                      <Check className="h-3.5 w-3.5 text-sky-400" />
+                      <Check className="h-3.5 w-3.5 text-sky-500 dark:text-sky-400" />
                       <span>Saved!</span>
                     </>
                   ) : (
@@ -427,7 +427,7 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
           <>
             <div className="mt-4 space-y-4">
               {!canWriteScope && (
-                <div className="flex items-center gap-2 rounded-xl border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-400">
+                <div className="flex items-center gap-2 rounded-xl border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-600 dark:text-amber-400">
                   <AlertCircle className="h-4 w-4 shrink-0" />
                   <span>Project scope is read-only for your role (reader). Saving is disabled.</span>
                 </div>
@@ -435,7 +435,7 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
 
               {/* Request Name */}
               <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
+                <label className="block text-xs font-semibold text-tx-secondary mb-1.5">
                   Request Name
                 </label>
                 <input
@@ -443,21 +443,21 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
                   value={requestName}
                   onChange={(e) => setRequestName(e.target.value)}
                   placeholder="e.g. Authenticate User, Get Todo List"
-                  className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 p-2.5 font-mono text-xs text-zinc-100 placeholder-zinc-500 focus:border-sky-500 focus:outline-none"
+                  className="w-full rounded-xl border border-line bg-card p-2.5 font-mono text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none"
                 />
               </div>
 
               {/* Collection Picker / Create new */}
               <div>
                 <div className="flex items-center justify-between mb-1.5">
-                  <label className="block text-xs font-semibold text-zinc-300">
+                  <label className="block text-xs font-semibold text-tx-secondary">
                     Collection
                   </label>
                   {canWriteScope && collections.length > 0 && (
                     <button
                       type="button"
                       onClick={() => setIsCreatingCollection(!isCreatingCollection)}
-                      className="text-[11px] text-sky-400 hover:text-sky-300 transition flex items-center gap-1"
+                      className="text-[11px] text-sky-500 dark:text-sky-400 hover:text-sky-600 dark:hover:text-sky-300 transition flex items-center gap-1"
                     >
                       {isCreatingCollection ? 'Select Existing' : '+ New Collection'}
                     </button>
@@ -472,7 +472,7 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
                       onChange={(e) => setNewCollectionName(e.target.value)}
                       placeholder="Enter new collection name..."
                       autoFocus
-                      className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 p-2.5 text-xs text-zinc-100 placeholder-zinc-500 focus:border-sky-500 focus:outline-none"
+                      className="w-full rounded-xl border border-line bg-card p-2.5 text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none"
                     />
                   </div>
                 ) : (
@@ -483,12 +483,12 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
                       setSelectedFolderId('');
                     }}
                     disabled={!canWriteScope}
-                    className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 p-2.5 text-xs text-zinc-200 focus:border-sky-500 focus:outline-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-full rounded-xl border border-line bg-card p-2.5 text-xs text-tx-primary focus:border-sky-500 focus:outline-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {collections.map((col) => {
                       const isWritable = canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role);
                       return (
-                        <option key={col.id} value={col.id} disabled={!isWritable} className="bg-zinc-900 text-zinc-200">
+                        <option key={col.id} value={col.id} disabled={!isWritable} className="bg-card text-tx-primary">
                           {col.name} {isWritable ? `(${(col.items || []).length} items)` : '(Read-only)'}
                         </option>
                       );
@@ -500,17 +500,17 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
               {/* Folder Selection (if existing collection selected and has folders) */}
               {!isCreatingCollection && folders.length > 0 && (
                 <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
+                  <label className="block text-xs font-semibold text-tx-secondary mb-1.5">
                     Target Folder (Optional)
                   </label>
                   <select
                     value={selectedFolderId}
                     onChange={(e) => setSelectedFolderId(e.target.value)}
-                    className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 p-2.5 text-xs text-zinc-200 focus:border-sky-500 focus:outline-none cursor-pointer"
+                    className="w-full rounded-xl border border-line bg-card p-2.5 text-xs text-tx-primary focus:border-sky-500 focus:outline-none cursor-pointer"
                   >
                     <option value="">Root (No folder)</option>
                     {folders.map((f) => (
-                      <option key={f.id} value={f.id} className="bg-zinc-900 text-zinc-200">
+                      <option key={f.id} value={f.id} className="bg-card text-tx-primary">
                         📁 {f.name}
                       </option>
                     ))}
@@ -519,7 +519,7 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
               )}
 
               {errorMsg && (
-                <div className="flex items-center gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-400">
+                <div className="flex items-center gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-500 dark:text-rose-400">
                   <AlertCircle className="h-4 w-4 shrink-0" />
                   <span>{errorMsg}</span>
                 </div>
@@ -531,10 +531,31 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
               <button
                 type="button"
                 onClick={onClose}
-                className="rounded-xl px-4 py-2 text-xs font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition"
+                className="rounded-xl px-4 py-2 text-xs font-medium text-tx-muted hover:bg-hover hover:text-tx-primary transition"
               >
                 Cancel
               </button>
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={!canWriteScope || (isCreatingCollection && !newCollectionName.trim()) || (!isCreatingCollection && !selectedCollectionId)}
+                className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-5 py-2 text-xs font-semibold text-white shadow-lg shadow-sky-500/20 hover:from-sky-400 hover:to-blue-500 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed transition"
+              >
+                {isSaved ? (
+                  <>
+                    <Check className="h-3.5 w-3.5 text-white" />
+                    <span>Saved!</span>
+                  </>
+                ) : (
+                  <>
+                    <Bookmark className="h-3.5 w-3.5" />
+                    <span>{isSaveAs ? 'Save Copy' : 'Save to Collection'}</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </>
+        )}
               <button
                 type="button"
                 onClick={handleSave}

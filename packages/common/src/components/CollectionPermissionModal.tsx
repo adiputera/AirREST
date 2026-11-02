@@ -123,27 +123,27 @@ export const CollectionPermissionModal: React.FC<CollectionPermissionModalProps>
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150 select-none"
     >
       <div
-        className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl"
+        className="w-full max-w-md rounded-2xl border border-line bg-surface p-6 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between pb-3 border-b border-zinc-850">
+        <div className="flex items-center justify-between pb-3 border-b border-line">
           <div className="flex items-center gap-2">
-            <Shield className="h-4 w-4 text-sky-400" />
-            <h3 className="text-sm font-bold text-zinc-100">Collection Permission</h3>
+            <Shield className="h-4 w-4 text-sky-500 dark:text-sky-400" />
+            <h3 className="text-sm font-bold text-tx-primary">Collection Permission</h3>
           </div>
           <button
             type="button"
             onClick={onClose}
             disabled={isSubmitting}
-            className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800 hover:text-white transition disabled:opacity-40"
+            className="rounded-lg p-1 text-tx-muted hover:bg-hover hover:text-tx-primary transition disabled:opacity-40"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <p className="text-xs text-zinc-400 my-4 leading-relaxed">
+        <p className="text-xs text-tx-muted my-4 leading-relaxed">
           Configure the minimum project role required to view and sync{' '}
-          <strong className="text-zinc-200">"{collection.name}"</strong>.
+          <strong className="text-tx-primary">"{collection.name}"</strong>.
         </p>
 
         <form onSubmit={handleSave} className="space-y-4">
@@ -161,10 +161,10 @@ export const CollectionPermissionModal: React.FC<CollectionPermissionModalProps>
                   }}
                   className={`flex items-start gap-3 p-3 rounded-xl border transition ${
                     isOptionDisabled
-                      ? 'opacity-40 cursor-not-allowed border-zinc-800/60 bg-zinc-900/20'
+                      ? 'opacity-40 cursor-not-allowed border-line bg-card/20'
                       : isSelected
                       ? 'border-sky-500/60 bg-sky-500/10 cursor-pointer shadow-sm'
-                      : 'border-zinc-800/80 bg-zinc-900/40 hover:border-zinc-700/80 cursor-pointer'
+                      : 'border-line bg-card hover:bg-hover cursor-pointer'
                   }`}
                   title={isOptionDisabled ? `Higher role required to assign ${opt.role}` : undefined}
                 >
@@ -175,16 +175,16 @@ export const CollectionPermissionModal: React.FC<CollectionPermissionModalProps>
                     checked={isSelected}
                     disabled={isOptionDisabled || isSubmitting}
                     onChange={() => setSelectedRole(opt.role)}
-                    className="mt-0.5 text-sky-500 focus:ring-0 focus:ring-offset-0 bg-zinc-900 border-zinc-700 cursor-pointer"
+                    className="mt-0.5 text-sky-500 focus:ring-0 focus:ring-offset-0 bg-card border-line cursor-pointer"
                   />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-semibold text-zinc-200">{opt.title}</span>
+                      <span className="text-xs font-semibold text-tx-primary">{opt.title}</span>
                       <span className={`rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider ${opt.badgeClass}`}>
                         {opt.role}
                       </span>
                     </div>
-                    <p className="text-[11px] text-zinc-400 mt-0.5 leading-snug">{opt.desc}</p>
+                    <p className="text-[11px] text-tx-muted mt-0.5 leading-snug">{opt.desc}</p>
                   </div>
                 </label>
               );
@@ -192,17 +192,17 @@ export const CollectionPermissionModal: React.FC<CollectionPermissionModalProps>
           </div>
 
           {errorMsg && (
-            <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-2.5 text-xs text-rose-300">
+            <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-2.5 text-xs text-rose-500 dark:text-rose-300">
               {errorMsg}
             </div>
           )}
 
-          <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-zinc-850">
+          <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-line">
             <button
               type="button"
               onClick={onClose}
               disabled={isSubmitting}
-              className="rounded-xl px-4 py-2 text-xs font-semibold text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition disabled:opacity-40"
+              className="rounded-xl px-4 py-2 text-xs font-semibold text-tx-muted hover:bg-hover hover:text-tx-primary transition disabled:opacity-40"
             >
               Cancel
             </button>
