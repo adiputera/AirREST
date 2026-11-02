@@ -34,6 +34,28 @@ export function applyTheme(theme: ThemeMode): void {
   root.style.colorScheme = resolved;
 }
 
+export function initEarlyTheme(): void {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+  try {
+    const raw = localStorage.getItem('air-rest-storage');
+    let theme: ThemeMode = 'system';
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed?.state?.theme) {
+        theme = parsed.state.theme;
+      }
+    }
+    applyTheme(theme);
+  } catch {
+    applyTheme('system');
+  }
+}
+
+// Auto-run early theme application on initial module evaluation in browser environments
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+  initEarlyTheme();
+}
+
 export function getNextThemeMode(current: ThemeMode): ThemeMode {
   switch (current) {
     case 'system':

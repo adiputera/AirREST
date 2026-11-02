@@ -279,8 +279,8 @@ export const VariableInput: React.FC<VariableInputProps> = ({
                     data-resolved={token.isResolved ? 'true' : 'false'}
                     data-resolved-val={token.resolvedValue || ''}
                     className={`font-semibold cursor-help transition-colors ${token.isResolved
-                        ? 'text-amber-400 bg-amber-400/15'
-                        : 'text-rose-400 bg-rose-400/15'
+                        ? 'text-amber-700 dark:text-amber-400 bg-amber-500/15'
+                        : 'text-rose-600 dark:text-rose-400 bg-rose-500/15'
                       }`}
                   >
                     {token.text}
@@ -352,11 +352,11 @@ export const VariableInput: React.FC<VariableInputProps> = ({
             }}
             className="pointer-events-none max-w-sm rounded-xl border border-zinc-800 bg-zinc-950/95 p-3 shadow-2xl backdrop-blur-md text-xs select-none transition-all duration-75"
           >
-            <div className="flex items-center gap-2 border-b border-zinc-800 pb-2 mb-2">
+            <div className="flex items-center gap-2 border-b border-line pb-2 mb-2">
               <div
                 className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md ${hoveredVar.isResolved
-                    ? 'bg-amber-500/15 text-amber-400 border border-amber-500/20'
-                    : 'bg-rose-500/15 text-rose-400 border border-rose-500/20'
+                    ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20'
+                    : 'bg-rose-500/15 text-rose-600 dark:text-rose-400 border border-rose-500/20'
                   }`}
               >
                 {hoveredVar.varName.startsWith('$') ? (
@@ -369,10 +369,10 @@ export const VariableInput: React.FC<VariableInputProps> = ({
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="font-mono font-bold text-zinc-100">
+                  <span className="font-mono font-bold text-tx-primary">
                     {`{{${hoveredVar.varName}}}`}
                   </span>
-                  <span className="text-[10px] text-zinc-400">
+                  <span className="text-[10px] text-tx-muted">
                     ({hoveredVar.scope})
                   </span>
                 </div>
@@ -386,8 +386,8 @@ export const VariableInput: React.FC<VariableInputProps> = ({
                 if (initialVal !== undefined) {
                   return (
                     <div className="flex items-start gap-1.5">
-                      <span className="text-zinc-500 shrink-0">Initial Value:</span>
-                      <span className="break-all font-medium text-zinc-300">
+                      <span className="text-tx-muted shrink-0">Initial Value:</span>
+                      <span className="break-all font-medium text-tx-primary">
                         {initialVal || '(empty string)'}
                       </span>
                     </div>
@@ -396,9 +396,9 @@ export const VariableInput: React.FC<VariableInputProps> = ({
                 return null;
               })()}
               <div className="flex items-start gap-1.5">
-                <span className="text-zinc-500 shrink-0">Current Value:</span>
+                <span className="text-tx-muted shrink-0">Current Value:</span>
                 <span
-                  className={`break-all font-medium ${hoveredVar.isResolved ? 'text-amber-300' : 'text-rose-400 italic'
+                  className={`break-all font-medium ${hoveredVar.isResolved ? 'text-amber-700 dark:text-amber-300' : 'text-rose-600 dark:text-rose-400 italic'
                     }`}
                 >
                   {hoveredVar.isResolved
@@ -409,8 +409,8 @@ export const VariableInput: React.FC<VariableInputProps> = ({
             </div>
 
             {!hoveredVar.isResolved && (
-              <div className="mt-2 text-[10px] text-zinc-500 border-t border-zinc-850 pt-1.5 font-sans leading-relaxed">
-                Add this variable in the <span className="text-sky-400 font-semibold">Environments</span> modal or extract it in tests with <code className="text-emerald-400 font-mono">pm.environment.set(&apos;{hoveredVar.varName}&apos;, ...)</code>.
+              <div className="mt-2 text-[10px] text-tx-muted border-t border-line pt-1.5 font-sans leading-relaxed">
+                Add this variable in the <span className="text-sky-600 dark:text-sky-400 font-semibold">Environments</span> modal or extract it in tests with <code className="text-emerald-600 dark:text-emerald-400 font-mono">pm.environment.set(&apos;{hoveredVar.varName}&apos;, ...)</code>.
               </div>
             )}
           </div>,
@@ -420,23 +420,23 @@ export const VariableInput: React.FC<VariableInputProps> = ({
       {/* Resolved Variables Chip Preview */}
       {showPreview && uniqueVars.length > 0 && (
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5 px-0.5">
-          <span className="text-[10px] font-medium text-zinc-500">Variables:</span>
+          <span className="text-[10px] font-medium text-tx-muted">Variables:</span>
           {uniqueVars.map((v, i) => (
             <span
               key={i}
               className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-medium border ${v.isResolved
-                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
-                  : 'border-rose-500/30 bg-rose-500/10 text-rose-400'
+                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                  : 'border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-400'
                 }`}
             >
               {v.isResolved ? (
-                <CheckCircle2 className="h-3 w-3 text-amber-400 shrink-0" />
+                <CheckCircle2 className="h-3 w-3 text-amber-600 dark:text-amber-400 shrink-0" />
               ) : (
-                <AlertCircle className="h-3 w-3 text-rose-400 shrink-0" />
+                <AlertCircle className="h-3 w-3 text-rose-600 dark:text-rose-400 shrink-0" />
               )}
               <span>{`{{${v.varName}}}`}</span>
-              <span className="text-zinc-500">→</span>
-              <span className="max-w-[150px] truncate text-zinc-200" title={v.resolvedValue}>
+              <span className="text-tx-muted">→</span>
+              <span className="max-w-[150px] truncate text-tx-primary" title={v.resolvedValue}>
                 {v.isResolved ? v.resolvedValue || '""' : 'unresolved'}
               </span>
             </span>

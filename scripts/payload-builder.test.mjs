@@ -20,6 +20,9 @@ function loadModule(relativePath, mockModules = {}, extraGlobals = {}) {
       exports,
       require: (id) => {
         if (mockModules[id]) return mockModules[id];
+        if (id === './payloadCompiler' || id === '@/lib/payloadCompiler') {
+          return loadModule('../packages/common/src/lib/payloadCompiler.ts', mockModules, extraGlobals);
+        }
         if (id.startsWith('@/lib/') || id.startsWith('./') || id.startsWith('../')) {
           return mockModules[id] || {};
         }
@@ -401,4 +404,31 @@ test('payloadReverseParser: xmlToTree detects root tag, attributes, and repeated
   assert.equal(nodeMap.get('item').children.length, 2);
   assert.equal(nodeMap.get('item').children[0].value, 'First');
   assert.equal(nodeMap.get('item').children[1].value, 'Second');
+});
+
+test('payloadReverseParser: jsonToTree successfully parses template variables and comments without dummy fallback', () => {
+  const parser = loadModule('../packages/common/src/lib/payloadReverseParser.ts');
+
+  const rawJsonWithTemplates = `{\n  // User credentials\n  "userId": {{userId}},\n  "name": "{{name}}",\n  "active": {{isActive}},\n  "tags": [ {{tag1}}, "manual" ],\n}`;
+  const { config, error } = parser.jsonToTree(rawJsonWithTemplates);
+
+  assert.equal(error, undefined);
+  assert.equal(config.rootType, 'object');
+
+  const nodeMap = new Map(config.nodes.map((n) => [n.key, n]));
+  assert.equal(nodeMap.get('userId').value, '{{userId}}');
+  assert.equal(nodeMap.get('name').value, '{{name}}');
+  assert.equal(nodeMap.get('active').value, '{{isActive}}');
+  assert.equal(nodeMap.get('tags').type, 'list');
+  assert.equal(nodeMap.get('tags').children[0].value, '{{tag1}}');
+});
+
+test('payloadCompiler: createInitialPayloadConfig creates clean empty structure without dummy records', () => {
+  const compiler = loadModule('../packages/common/src/lib/payloadCompiler.ts');
+
+  const emptyObj = compiler.createInitialPayloadConfig('object');
+  assert.equal(emptyObj.nodes.length, 0);
+
+  const emptyList = compiler.createInitialPayloadConfig('list');
+  assert.equal(emptyList.nodes.length, 0);
 });

@@ -831,7 +831,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
         message={
           <span>
             Are you sure you want to delete environment{' '}
-            <strong className="text-zinc-200">"{currentEnv?.name}"</strong>? All variables defined in this environment will be permanently removed.
+            <strong className="text-tx-primary">"{currentEnv?.name}"</strong>? All variables defined in this environment will be permanently removed.
           </span>
         }
         confirmText="Delete Environment"

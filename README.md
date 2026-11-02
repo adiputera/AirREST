@@ -7,7 +7,7 @@
 > A fast, lightweight, and modern browser-based REST API testing studio packaged as a **Google Chrome Extension (Manifest V3)** and standalone web client with optional cloud team synchronization. Built with **React 19**, **Vite**, **Tailwind CSS v4**, **Zustand**, and a **Go + PostgreSQL** backend.
 
 [![GitHub Repository](https://img.shields.io/badge/GitHub-adiputera%2FAirREST-181717?logo=github)](https://github.com/adiputera/AirREST)
-[![Version](https://img.shields.io/badge/Version-1.2.1-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.3.0-blue.svg)](CHANGELOG.md)
 [![Manifest V3](https://img.shields.io/badge/Chrome%20Extension-Manifest%20V3-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=white)](https://vitejs.dev/)
@@ -38,7 +38,7 @@ AirREST is an API testing client that runs directly inside Google Chrome as a Ma
 - **Tab Management**: Context menu with options for New Request Tab, Duplicate Tab, Close Tab, Close Other Tabs, Close Tabs to the Right, and Close All Tabs, plus middle-click closing.
 - **HTTP Methods**: Full support for `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, and `OPTIONS`.
 - **Bidirectional URL & Query Sync**: Editing query parameters in the URL input updates the key-value table automatically, and edits within the table update the URL query string in real time. Supports multi-value keys, templated variables (`{{var}}`), and parameter toggling.
-- **Unsaved Modifications Tracker**: Visual indicator dot (`●`) marks tabs with unsaved edits. Pressing <kbd>Ctrl + S</kbd> / <kbd>Cmd + S</kbd> saves updates directly into the source collection item.
+- **Unsaved Modifications Tracker & Safe Close**: Visual indicator dot (`●`) marks tabs with unsaved edits. Closing a dirty tab triggers an interactive confirmation dialog with options to **Save**, **Close Tab** (discard changes), or **Cancel** to prevent accidental data loss. Pressing <kbd>Ctrl + S</kbd> / <kbd>Cmd + S</kbd> saves updates directly into the source collection item.
 - **Request Safety & Cancellation**: Inflight requests can be cancelled on demand via the **Cancel** button using native `AbortController`. Built-in 30-second execution deadlines and a 10 MiB streamed response body limit protect against memory overflow and hung connections.
 - **Keyboard Shortcuts**: Quick dispatch with <kbd>Ctrl + Enter</kbd> (Windows/Linux) or <kbd>Cmd + Enter</kbd> (macOS).
 
@@ -283,6 +283,20 @@ pm.environment.set("lastRequestTimestamp", now);
 - **Project Administration**: Manage projects and assign members in batch with granular RBAC permissions (`Admin`, `Maintainer`, `Contributor`, `Reader`).
 - **Resource Permissions**: Configure minimum role requirements per collection and environment.
 - **Superadmin Tools**: User account management, password resets, and system overview.
+
+### 12. 🎨 Theme Mode Customization (Dark / Light / System)
+- **Theme Switcher**: Instant switching between **System Default**, **Dark Mode**, and **Light Mode** via the dedicated header action toggle and user account menu.
+- **Adaptive UI Design**: High-contrast dark theme alongside an elegant light theme across all editor tabs, modals, tables, and sidebars using semantic CSS variables.
+- **Automated OS Preference Sync**: Automatically detects and synchronizes with OS/browser color scheme changes (`prefers-color-scheme`).
+
+### 13. 🌳 Visual Payload Builder (JSON & XML)
+- **Interactive Tree Construction**: Visually assemble complex nested payloads (objects, arrays/lists, strings, numbers, booleans, dates, null) without manual JSON syntax wrangling.
+- **Format Presets & Date Pickers**: Configure dynamic dates into ISO-8601, Date Only (`YYYY-MM-DD`), or Unix timestamp formats with a single click.
+- **XML Attribute Support**: Toggle attributes (`[Attr]`) and automatic XML entity escaping for XML requests.
+- **Seamless 3-Way Mode Switching**: Defaults cleanly to **Raw Editor** for full fidelity (preserving custom comments, whitespace, and template tokens), with 1-click toggling to **Builder** and **Result Preview**.
+- **Template Variables & Sanitization**: Retains unquoted Postman/AirREST template syntax (e.g. `{{userId}}`, `{{token}}`), comments, and trailing commas during reverse parsing without corrupting saved data.
+- **Draggable Height Resizing**: Tactile inline drag handles (`GripHorizontal`) allow smoothly expanding or shrinking both the Payload editor and Response viewer height (140px to 800px / 1000px), with `localStorage` persistence and double-click to reset.
+- **Full-Screen 4-Arrow Expand Modal (`⤢`)**: Dedicated 4-arrow Expand button (`Maximize2`) in both Payload and Response toolbars opens a spacious, distraction-free modal dialog (`h-[92vh] max-w-6xl`) with integrated Beautify, Copy, and keyboard shortcuts (<kbd>Esc</kbd>) for seamless editing and review of large payloads.
 
 ---
 

@@ -122,11 +122,11 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onOpenLogin }) => {
   const getRoleBadgeStyle = (role?: string | null) => {
     switch (String(role || 'member').toLowerCase()) {
       case 'superadmin':
-        return 'border-purple-500/30 bg-purple-500/10 text-purple-400';
+        return 'border-purple-500/30 bg-purple-500/10 text-purple-700 dark:text-purple-400';
       case 'admin':
-        return 'border-sky-500/30 bg-sky-500/10 text-sky-400';
+        return 'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-400';
       default:
-        return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400';
+        return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400';
     }
   };
 

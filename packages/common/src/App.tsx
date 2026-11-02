@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
@@ -26,9 +26,20 @@ export const App: React.FC = () => {
   const createTab = activeStore((state) => state.createTab);
   const workspaceMode = activeStore((state) => state.workspaceMode);
   const cloudToken = activeStore((state) => state.cloudConfig.token);
+  const activeScope = activeStore((state) => state.cloudConfig.activeScope);
+  const pullCloudDelta = activeStore((state) => state.pullCloudDelta);
   const refreshFeaturePolicy = activeStore((state) => state.refreshFeaturePolicy);
   const theme = activeStore((state) => state.theme || 'system');
+  const hasInitialPulledRef = useRef(false);
   useBackHandler(sidebarOpen, () => setSidebarOpen(false), 10);
+
+  // Initial background delta sync on app startup when opened with an active cloud session
+  useEffect(() => {
+    if (!hasHydrated || workspaceMode !== 'cloud' || !cloudToken || !activeScope) return;
+    if (hasInitialPulledRef.current) return;
+    hasInitialPulledRef.current = true;
+    void pullCloudDelta();
+  }, [hasHydrated, workspaceMode, cloudToken, activeScope, pullCloudDelta]);
 
   useEffect(() => {
     applyTheme(theme);

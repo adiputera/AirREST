@@ -9,6 +9,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-02
+
+### Added
+- **Theme Switcher & Semantic Color Palette (Dark, Light, & System)**:
+  - Added theme switching support across desktop, web, and extension clients with options for `System`, `Light`, and `Dark` modes.
+  - Implemented `DesktopThemeToggle` and integrated theme controls into header and user profile menus.
+  - Added dynamic system preference resolution (`theme.ts`) that listens to OS color scheme changes (`prefers-color-scheme`) and persists user choices.
+  - Migrated UI components to theme tokens (`bg-surface`, `bg-card`, `border-line`, `text-tx-primary`, `text-tx-secondary`, `text-tx-muted`, `hover:bg-hover`).
+  - Added unit test suite for theme persistence and DOM resolution in `scripts/theme-resolution.test.mjs`.
+- **Visual Payload Builder for JSON & XML**:
+  - Interactive tree-based form builder (`PayloadBuilder.tsx`, `PayloadNodeRow.tsx`, `PayloadTypeBadge.tsx`, `DateConfigPopover.tsx`) supporting nested objects, lists, and primitives (`string`, `number`, `boolean`, `date`, `null`).
+  - Date preset formatting popover supporting ISO-8601, Date Only (`YYYY-MM-DD`), and Unix timestamp configurations.
+  - XML attribute toggling (`[Attr]`) and automated XML entity escaping.
+  - Responsive 3-way segmented control (`[ 💻 Raw ]`, `[ 📝 Builder ]`, `[ 👁️ Result Preview ]`) defaulting cleanly to Raw editor mode to preserve user comments and formatting.
+  - Bidirectional compilation (`payloadCompiler.ts`) and two-way reverse parsing (`payloadReverseParser.ts`) converting existing raw JSON and XML structures into editable node trees.
+  - Added unit test suite in `scripts/payload-builder.test.mjs`.
+- **Automatic Startup Cloud Delta Sync**:
+  - Added automatic non-blocking background delta synchronization (`pullCloudDelta`) in `App.tsx` on initial startup and rehydration for active cloud sessions, ensuring team collections and environments are always up to date without requiring manual sync button clicks.
+- **Full-Screen Expand Modals & Draggable Height Resizing for Payload & Response**:
+  - Added a 4-arrow Expand button (`Maximize2`) in both the Request Payload toolbar (`PayloadBuilder.tsx`) and the Response Viewer (`ResponseViewer.tsx`) to open a spacious, distraction-free modal pop-up dialog (`h-[92vh] max-w-6xl`) for inspecting and editing large JSON/XML structures.
+  - Integrated `Beautify JSON` / `Beautify XML`, one-click `Copy`, byte size indicators, segmented view controls (`Raw`, `Builder`, `Preview`), and `Esc` shortcut / back navigation handlers directly inside the modal.
+  - Added tactile draggable height resize handles (`GripHorizontal`) at the bottom of the payload editor and response viewer with mouse/touch drag support, persistence in `localStorage` (`airrest:payload_editor_height`, `airrest:response_editor_height`), and double-click to reset.
+- **Unsaved Changes Confirmation Dialog on Tab Close**:
+  - Added an interactive confirmation modal when closing tabs with unsaved modifications (`isRequestModified`), preventing accidental loss of in-flight changes.
+  - Features three choices: **Save** (saves directly to the source collection or prompts `SaveToCollectionModal` for new requests before closing), **Close Tab** (discards unsaved modifications and closes), and **Cancel** (keeps the tab open).
+  - Fully integrated with keyboard navigation (<kbd>Esc</kbd>) and platform back navigation handlers.
+
+### Changed
+- Unified Path Variables empty state placeholder to use `:variable` matching the section header hint.
+- Replaced hardcoded `Extension v1.1` header badge with uniform `Extension` badge across extension and shared layout components.
+- Localized Android update banner notification messages to English for consistent global client experience.
+
+### Fixed
+- Fixed JSX duplicate button and closing wrapper elements in `SaveToCollectionModal.tsx`.
+- Updated test runner mock resolution in `payload-builder.test.mjs`.
+- Updated responsive header and sidebar layout assertions in `scope-switcher-placement.test.mjs` to validate semantic theme tokens.
+- Fixed Content Security Policy (CSP) inline script violation in Chrome Extension MV3 by initializing themes via synchronous JS module execution (`initEarlyTheme`).
+- Resolved mobile Environment selector opening issues by replacing native `<select>` with an interactive accessible popover dropdown.
+- Resolved offside HTTP method dropdown positioning on mobile/narrow viewports by replacing native `<select>` with a custom accessible popover dropdown anchored directly to the request bar.
+- Fixed saved request payloads failing to load into Payload Builder: added sanitization for unquoted template variables (`{{variable}}`), comments, and trailing commas in `payloadReverseParser.ts`, synchronized incoming tab/storage payload updates in `PayloadBuilder.tsx`, and removed dummy fallback data.
+- Enhanced Light Mode contrast and text readability across `ScopeSwitcher`, `VariableInput`, `UserMenu`, and `RequestEditor`: replaced low-contrast orange/sky text (`amber-400`, `sky-400`) on white backgrounds with WCAG-compliant adaptive classes (`amber-700 dark:text-amber-400`, `sky-700 dark:text-sky-400`), fixed workspace item gray-on-white text, and aligned container and divider borders with semantic tokens.
+
 ## [1.2.1] - 2026-11-01
 
 ### Changed
