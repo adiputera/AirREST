@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -30,7 +31,7 @@ type App struct {
 func New(ctx context.Context) (*App, error) {
 	cfg, err := config.Load()
 	if err != nil {
-		return nil, fmt.Errorf("failed to load configuration: %w", err)
+		return nil, &StartupError{Stage: StageConfig, Err: fmt.Errorf("failed to load configuration: %w", err)}
 	}
 
 	pool, err := postgres.ConnectWithPoolConfig(
@@ -41,7 +42,11 @@ func New(ctx context.Context) (*App, error) {
 		cfg.SkipMigrations,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize database pool: %w", err)
+		stage := StageDatabase
+		if errors.Is(err, postgres.ErrMigrationFailed) {
+			stage = StageMigration
+		}
+		return nil, &StartupError{Stage: stage, Err: fmt.Errorf("failed to initialize database pool: %w", err)}
 	}
 
 	// Initialize Repositories
@@ -69,7 +74,7 @@ func New(ctx context.Context) (*App, error) {
 	if err := authService.BootstrapSuperadmin(bootstrapCtx, cfg.SuperadminEmail, cfg.SuperadminPassword, cfg.SuperadminName); err != nil {
 		bootstrapCancel()
 		pool.Close()
-		return nil, fmt.Errorf("failed to bootstrap superadmin account: %w", err)
+		return nil, &StartupError{Stage: StageBootstrap, Err: fmt.Errorf("failed to bootstrap superadmin account: %w", err)}
 	}
 	bootstrapCancel()
 

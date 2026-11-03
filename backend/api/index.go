@@ -2,6 +2,8 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -9,8 +11,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/adiputera/airrest-backend/config"
 	"github.com/adiputera/airrest-backend/core/app"
 )
+
+// errInitializing is returned while another request is performing initialization.
+var errInitializing = errors.New("initialization in progress")
 
 type appInitializer struct {
 	mu           sync.Mutex
@@ -18,11 +24,13 @@ type appInitializer struct {
 	initializing bool
 	retryAt      time.Time
 	failures     uint
+	lastErr      error
+	timeout      time.Duration
 	initialize   func(context.Context) (*app.App, error)
 	now          func() time.Time
 }
 
-var runtimeApp = &appInitializer{initialize: app.New, now: time.Now}
+var runtimeApp = &appInitializer{initialize: app.New, now: time.Now, timeout: config.InitTimeout()}
 
 // get permits one attempt at a time and caches only successful initialization.
 func (s *appInitializer) get(ctx context.Context) (*app.App, error) {
@@ -32,13 +40,22 @@ func (s *appInitializer) get(ctx context.Context) (*app.App, error) {
 		s.mu.Unlock()
 		return a, nil
 	}
-	if s.initializing || s.now().Before(s.retryAt) {
+	if s.initializing {
 		s.mu.Unlock()
-		return nil, fmt.Errorf("initialization pending or backing off")
+		return nil, errInitializing
+	}
+	if s.now().Before(s.retryAt) {
+		lastErr := s.lastErr
+		s.mu.Unlock()
+		return nil, fmt.Errorf("initialization backing off: %w", lastErr)
 	}
 	s.initializing = true
 	s.mu.Unlock()
-	initCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	timeout := s.timeout
+	if timeout <= 0 {
+		timeout = config.StartupTimeout
+	}
+	initCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	a, err := s.initialize(initCtx)
 	if err == nil && a == nil {
@@ -59,11 +76,13 @@ func (s *appInitializer) get(ctx context.Context) (*app.App, error) {
 			s.failures++
 		}
 		s.retryAt = s.now().Add(delay)
+		s.lastErr = err
 		slog.Error("failed to initialize backend", "error", err, "retry_after", delay)
 		return nil, err
 	}
 	s.application = a
 	s.failures = 0
+	s.lastErr = nil
 	return a, nil
 }
 
@@ -78,10 +97,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	application, initErr := runtimeApp.get(r.Context())
 
 	if initErr != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Retry-After", "1")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = w.Write([]byte(`{"success":false,"error":{"code":"SERVICE_UNAVAILABLE","message":"Failed to initialize database connection"}}`))
+		writeInitError(w, initErr)
 		return
 	}
 
@@ -95,4 +111,44 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	// Forward incoming request to the Chi router
 	application.Router.ServeHTTP(w, r)
+}
+
+// initFailure is the nested error object returned while the backend cannot initialize.
+type initFailure struct {
+	Code    string `json:"code"`
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
+}
+
+// describeInitError maps an initialization error to a client-safe reason and message.
+// Raw errors stay in server logs only.
+func describeInitError(err error) (string, string) {
+	if errors.Is(err, errInitializing) {
+		return "INITIALIZING", "Service is initializing, retry shortly"
+	}
+	switch app.StageOf(err) {
+	case app.StageConfig:
+		return string(app.StageConfig), "Server configuration is invalid"
+	case app.StageDatabase:
+		return string(app.StageDatabase), "Failed to initialize database connection"
+	case app.StageMigration:
+		return string(app.StageMigration), "Database migration failed"
+	case app.StageBootstrap:
+		return string(app.StageBootstrap), "Initial administrator bootstrap failed"
+	default:
+		return "INITIALIZATION_FAILED", "Service initialization failed"
+	}
+}
+
+// writeInitError writes the 503 SERVICE_UNAVAILABLE envelope for initialization failures.
+func writeInitError(w http.ResponseWriter, err error) {
+	reason, message := describeInitError(err)
+	body, _ := json.Marshal(map[string]any{
+		"success": false,
+		"error":   initFailure{Code: "SERVICE_UNAVAILABLE", Reason: reason, Message: message},
+	})
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", "1")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_, _ = w.Write(body)
 }

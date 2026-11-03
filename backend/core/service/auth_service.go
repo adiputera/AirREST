@@ -193,6 +193,12 @@ func (s *AuthService) BootstrapSuperadmin(ctx context.Context, email, password, 
 	}
 
 	if err := s.userRepo.Create(ctx, superUser); err != nil {
+		// Concurrent cold starts may race between the count check and the insert.
+		// If another instance already created a superadmin, treat bootstrap as complete.
+		if recount, countErr := s.userRepo.CountSuperadmins(ctx); countErr == nil && recount > 0 {
+			slog.Info("superadmin account bootstrapped concurrently by another instance")
+			return nil
+		}
 		return fmt.Errorf("failed to create superadmin user: %w", err)
 	}
 

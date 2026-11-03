@@ -14,7 +14,7 @@ import (
 )
 
 func TestSyncHandler_Validation(t *testing.T) {
-	syncService := service.NewSyncService(nil, nil, nil, nil, nil)
+	syncService := service.NewSyncService(nil, nil, nil)
 	syncHandler := NewSyncHandler(syncService)
 
 	user := &domain.User{

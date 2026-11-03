@@ -75,7 +75,7 @@ info:
 
     ### Session revocation and resource limits
      Both access and refresh JWTs carry a nonnegative integer token_version matching users.token_version. Missing or stale versions are rejected with 401. Password changes and administrator resets atomically increment the version and revoke existing sessions. A self-service password change returns a replacement token pair for the current device; administrator resets revoke every target-device session. Profile changes do not revoke sessions. Refresh tokens can be reused until expiry or account-wide revocation; they are not single-use. Clients clear tokens and sign in again after a rejected refresh.
-     Requests are limited to 4 MiB (including chunked bodies), 16 concurrent handlers per instance, and 300 seconds (5 minutes). Oversized bodies return 413 PAYLOAD_TOO_LARGE. Collection sync push/import also accept a single `Content-Encoding: gzip` member: compressed bytes are limited to 3,000,000 and decoded JSON to 16 MiB; requests must contain exactly one JSON document. Collection list/detail and sync pull responses use identity up to 4 MiB or gzip up to 3,000,000 bytes, with a 16 MiB decoded serialization cap. If no accepted representation fits, the server returns 413 RESPONSE_PAYLOAD_TOO_LARGE; if identity and gzip are both excluded, it returns 406 NOT_ACCEPTABLE. Saturation returns 503 SERVER_BUSY with Retry-After: 1; timeouts return 503 REQUEST_TIMEOUT. Proxy limits may be smaller. Serverless initialization attempts are serialized with a 20-second deadline and retries after 1, 2, 4, 8, 16, then 30 seconds; requests during attempts/backoff receive 503 and Retry-After: 1, retaining the nested SERVICE_UNAVAILABLE envelope.
+     Requests are limited to 4 MiB (including chunked bodies), 16 concurrent handlers per instance, and 300 seconds (5 minutes). Oversized bodies return 413 PAYLOAD_TOO_LARGE. Collection sync push/import also accept a single `Content-Encoding: gzip` member: compressed bytes are limited to 3,000,000 and decoded JSON to 16 MiB; requests must contain exactly one JSON document. Collection list/detail and sync pull responses use identity up to 4 MiB or gzip up to 3,000,000 bytes, with a 16 MiB decoded serialization cap. If no accepted representation fits, the server returns 413 RESPONSE_PAYLOAD_TOO_LARGE; if identity and gzip are both excluded, it returns 406 NOT_ACCEPTABLE. Saturation returns 503 SERVER_BUSY with Retry-After: 1; timeouts return 503 REQUEST_TIMEOUT. Proxy limits may be smaller. Serverless initialization attempts are serialized with a 20-second deadline (120 seconds when boot migrations are enabled) and retries after 1, 2, 4, 8, 16, then 30 seconds; requests during attempts/backoff receive 503 and Retry-After: 1, retaining the nested SERVICE_UNAVAILABLE envelope with an additive `reason` (INITIALIZING, CONFIG_INVALID, DATABASE_UNAVAILABLE, MIGRATION_FAILED, BOOTSTRAP_FAILED, INITIALIZATION_FAILED).
     Contributors cannot delete collections/environments or move collections. Request/folder deletion is collection:write authoring. Moves require collection:move and min_role access in both project scopes; private scopes require ownership (superadmins bypass role/ownership restrictions).
 servers:
   - url: http://localhost:8080
@@ -3723,6 +3723,16 @@ components:
                   properties:
                     code:
                       const: SERVICE_UNAVAILABLE
+                    reason:
+                      type: string
+                      description: Initialization stage that failed; during backoff, the last failure.
+                      enum:
+                      - INITIALIZING
+                      - CONFIG_INVALID
+                      - DATABASE_UNAVAILABLE
+                      - MIGRATION_FAILED
+                      - BOOTSTRAP_FAILED
+                      - INITIALIZATION_FAILED
                     message:
                       type: string
     Unauthorized:
