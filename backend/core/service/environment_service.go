@@ -168,6 +168,13 @@ func (s *EnvironmentService) Update(ctx context.Context, user *domain.User, env 
 		if env.MinRole != "" && !CanAccessEnv(role, env.MinRole) {
 			return nil, ErrEnvAccessDenied
 		}
+
+		// Modifying MinRole requires admin or maintainer role
+		if env.MinRole != "" && env.MinRole != existing.MinRole {
+			if !CanModifyMinRole(role) {
+				return nil, ErrEnvAccessDenied
+			}
+		}
 	}
 
 	if env.Name == "" {
@@ -182,7 +189,7 @@ func (s *EnvironmentService) Update(ctx context.Context, user *domain.User, env 
 
 	env.LastModifiedBy = &user.ID
 	if baseVersion <= 0 {
-		baseVersion = existing.Version
+		return existing, postgres.ErrVersionConflict
 	}
 	err = s.envRepo.Update(ctx, env, baseVersion)
 	if err != nil {

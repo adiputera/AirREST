@@ -19,20 +19,28 @@ function loadUrlParams() {
 const urlParams = loadUrlParams();
 
 function loadFetcher(fetchImpl, hostPermissionResult = null) {
-  const source = fs.readFileSync(new URL('../apps/extension/src/lib/fetcher.ts', import.meta.url), 'utf8');
+  const source = fs.readFileSync(new URL('../packages/common/src/lib/fetcher.ts', import.meta.url), 'utf8');
   const compiled = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
   const exports = {};
   vm.runInNewContext(compiled, {
     exports,
-    require: (id) => id === '@/lib/blobManager'
-      ? { trackBlobUrl: (url) => url }
-      : id === '@/lib/hostPermissions'
-        ? { hasHostPermission: async () => hostPermissionResult }
-      : id === '@/lib/urlParams'
-        ? urlParams
-      : require(id),
+    require: (id) => {
+      if (id.includes('blobManager')) {
+        return {
+          createTrackedBlobUrl: (blob, track) => (track ? track('blob:test') : 'blob:test'),
+          trackBlobUrl: (url) => url,
+        };
+      }
+      if (id.includes('urlParams')) {
+        return urlParams;
+      }
+      if (id === '@/lib/hostPermissions') {
+        return { hasHostPermission: async () => hostPermissionResult };
+      }
+      return require(id);
+    },
     fetch: fetchImpl,
     Response,
     Blob,
@@ -49,7 +57,12 @@ function loadFetcher(fetchImpl, hostPermissionResult = null) {
     console,
     Map,
     Date,
-  }, { filename: 'apps/extension/src/lib/fetcher.ts' });
+    chrome: {
+      permissions: {
+        contains: async () => hostPermissionResult,
+      },
+    },
+  }, { filename: 'packages/common/src/lib/fetcher.ts' });
   return exports;
 }
 
@@ -246,4 +259,46 @@ test('T-C2 (C2): bounded memory for recent network errors enforces FIFO eviction
   assert.equal(swExports.size, 100, 'service-worker.js recentNetworkErrors must be capped at 100 entries');
   assert.equal(swExports.hasOldest, false, 'service worker must evict oldest entry (FIFO)');
   assert.equal(swExports.hasLatest, true, 'service worker must preserve latest entry');
+});
+
+test('T-EXT-ERR: executeApiRequest with chromeAdapter classifies Chromium net::ERR_CERT_AUTHORITY_INVALID', async () => {
+  const targetUrl = 'https://self-signed.badssl.com/test';
+  const fetchImpl = async () => {
+    throw new TypeError('Failed to fetch');
+  };
+
+  const fetcher = loadFetcher(fetchImpl);
+  const { executeApiRequest, recordLocalRecentError } = fetcher;
+
+  // Simulate Chromium webRequest error recording in memory
+  recordLocalRecentError(targetUrl, 'net::ERR_CERT_AUTHORITY_INVALID');
+
+  // Load chromeAdapter with access to the fetcher's getChromiumNetworkError and categorizeNetworkError
+  const adapterSource = fs.readFileSync(new URL('../apps/extension/src/adapters/chromeAdapter.ts', import.meta.url), 'utf8');
+  const compiledAdapter = ts.transpileModule(adapterSource, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const adapterExports = {};
+  vm.runInNewContext(compiledAdapter, {
+    exports: adapterExports,
+    require: (id) => (id === '@airrest/common' ? fetcher : require(id)),
+    fetch: fetchImpl,
+    Blob: class {},
+    URL: { createObjectURL: () => '', revokeObjectURL: () => {} },
+    document: {},
+  }, { filename: 'chromeAdapter.ts' });
+
+  const { chromeAdapter } = adapterExports;
+
+  const res = await executeApiRequest(
+    { ...binaryRequest(), url: targetUrl, method: 'GET', bodyType: 'none' },
+    {},
+    undefined,
+    chromeAdapter
+  );
+
+  assert.equal(res.isError, true);
+  assert.equal(res.netErrorCategory, 'ssl');
+  assert.equal(res.netErrorCode, 'net::ERR_CERT_AUTHORITY_INVALID');
+  assert.equal(res.failureKind, 'transport');
 });

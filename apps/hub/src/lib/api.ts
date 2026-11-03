@@ -32,6 +32,20 @@ export interface ApiFetchOptions extends RequestInit {
   refreshToken?: string | null;
 }
 
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+  data?: any;
+
+  constructor(message: string, status: number, code?: string, data?: any) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
+    this.data = data;
+  }
+}
+
 function unwrapData<T>(json: any): T {
   if (json && typeof json === 'object' && 'data' in json && json.data !== undefined) {
     return json.data as T;
@@ -44,6 +58,10 @@ function extractError(json: any, fallback: string): string {
   if (json?.error?.message) return json.error.message;
   if (json?.message) return json.message;
   return fallback;
+}
+
+function createApiError(json: any, status: number, fallback: string): ApiError {
+  return new ApiError(extractError(json, fallback), status, json?.code, json?.data);
 }
 
 export const DEFAULT_API_URL: string =
@@ -407,7 +425,14 @@ export async function apiListAllUsers(apiUrl: string, token: string, refreshToke
 export async function apiGetFeaturePolicy(apiUrl: string, token: string, refreshToken?: string): Promise<FeaturePolicy> {
   const res = await fetchWithAuth('/api/v1/admin/feature-policy', { apiUrl, token, refreshToken });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(extractError(json, 'Failed to load feature controls'));
+  if (!res.ok) throw createApiError(json, res.status, 'Failed to load feature controls');
+  return unwrapData<FeaturePolicy>(json);
+}
+
+export async function apiGetClientFeaturePolicy(apiUrl: string, token: string, refreshToken?: string): Promise<FeaturePolicy> {
+  const res = await fetchWithAuth('/api/v1/feature-policy', { apiUrl, token, refreshToken });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw createApiError(json, res.status, 'Failed to load feature policy');
   return unwrapData<FeaturePolicy>(json);
 }
 
@@ -426,7 +451,7 @@ export async function apiUpdateFeaturePolicy(
     body: JSON.stringify({ base_revision: baseRevision, flags }),
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(extractError(json, 'Failed to save feature controls'));
+  if (!res.ok) throw createApiError(json, res.status, 'Failed to save feature controls');
   return unwrapData<FeaturePolicy>(json);
 }
 
@@ -537,14 +562,19 @@ export async function apiGetCollection(
     refreshToken,
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(extractError(json, 'Failed to fetch collection'));
-  return unwrapData<Collection>(json);
+  if (!res.ok) throw createApiError(json, res.status, 'Failed to fetch collection');
+  const col = unwrapData<Collection>(json);
+  if (col && typeof col === 'object') {
+    col.items = Array.isArray(col.items) ? col.items : [];
+  }
+  return col;
 }
 
 export async function apiUpdateCollectionPermission(
   apiUrl: string,
   token: string,
   collectionId: string,
+  name: string,
   minRole: ProjectRole,
   baseVersion: number,
   refreshToken?: string
@@ -554,10 +584,10 @@ export async function apiUpdateCollectionPermission(
     apiUrl,
     token,
     refreshToken,
-    body: JSON.stringify({ min_role: minRole, base_version: baseVersion }),
+    body: JSON.stringify({ name, min_role: minRole, base_version: baseVersion }),
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(extractError(json, 'Failed to update collection permission'));
+  if (!res.ok) throw createApiError(json, res.status, 'Failed to update collection permission');
   return unwrapData<Collection>(json);
 }
 
@@ -582,7 +612,7 @@ export async function apiMoveCollection(
   });
   if (!res.ok) {
     const json = await res.json().catch(() => ({}));
-    throw new Error(extractError(json, 'Failed to move collection'));
+    throw createApiError(json, res.status, 'Failed to move collection');
   }
 }
 
@@ -598,7 +628,7 @@ export async function apiListProjectEnvironments(
     refreshToken,
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(extractError(json, 'Failed to list environments'));
+  if (!res.ok) throw createApiError(json, res.status, 'Failed to list environments');
   const data = unwrapData<any>(json);
   return (Array.isArray(data) ? data : []) as Environment[];
 }
@@ -619,7 +649,7 @@ export async function apiUpdateEnvironmentPermission(
     body: JSON.stringify({ min_role: minRole, base_version: baseVersion }),
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(extractError(json, 'Failed to update environment permission'));
+  if (!res.ok) throw createApiError(json, res.status, 'Failed to update environment permission');
   return unwrapData<Environment>(json);
 }
 
@@ -636,7 +666,7 @@ export async function apiDeleteCollection(
     refreshToken,
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(extractError(json, 'Failed to delete collection'));
+  if (!res.ok) throw createApiError(json, res.status, 'Failed to delete collection');
   return unwrapData<{ message: string }>(json);
 }
 
@@ -653,6 +683,6 @@ export async function apiDeleteEnvironment(
     refreshToken,
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(extractError(json, 'Failed to delete environment'));
+  if (!res.ok) throw createApiError(json, res.status, 'Failed to delete environment');
   return unwrapData<{ message: string }>(json);
 }

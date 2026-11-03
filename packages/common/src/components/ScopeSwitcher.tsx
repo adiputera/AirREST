@@ -377,32 +377,32 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
               setIsOpen(next);
               if (next && !isOfflineOnly && cloudConfig.token) loadScopes(false);
             }}
-            className="group flex flex-1 min-w-0 items-center justify-between gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/90 px-2.5 py-1.5 text-xs text-zinc-200 hover:border-zinc-700 hover:bg-zinc-800 hover:text-white transition shadow-sm"
+            className="group flex flex-1 min-w-0 items-center justify-between gap-1.5 rounded-lg border border-line bg-card/90 px-2.5 py-1.5 text-xs text-tx-secondary hover:border-line-strong hover:bg-hover hover:text-tx-primary transition shadow-sm"
             title="Switch Workspace"
           >
             <div className="flex items-center gap-2 min-w-0">
               {isOffline ? (
-                <Laptop className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+                <Laptop className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
               ) : activeScope?.type === 'project' ? (
-                <Users className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
+                <Users className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
               ) : (
-                <User className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+                <User className="h-3.5 w-3.5 text-sky-600 dark:text-sky-400 shrink-0" />
               )}
 
               <span className="font-semibold truncate max-w-[80px] sm:max-w-[100px] xl:max-w-[140px]">{scopeLabel}</span>
 
               {isOffline ? (
-                <span className="rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 px-1 py-0.2 text-[9px] font-bold uppercase tracking-wider shrink-0">
+                <span className="rounded bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20 px-1 py-0.2 text-[9px] font-bold uppercase tracking-wider shrink-0">
                   Offline
                 </span>
               ) : scopeRole ? (
                 <span
                   className={`rounded px-1 py-0.2 text-[9px] font-bold uppercase tracking-wider shrink-0 ${
                     scopeRole === 'admin' || scopeRole === 'owner'
-                      ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                      ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20'
                       : scopeRole === 'reader'
-                      ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-                      : 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
+                      ? 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border border-rose-500/20'
+                      : 'bg-sky-500/10 text-sky-700 dark:text-sky-400 border border-sky-500/20'
                   }`}
                 >
                   {scopeRole}
@@ -411,7 +411,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
             </div>
 
             <ChevronDown
-              className={`h-3.5 w-3.5 text-zinc-400 transition-transform shrink-0 ${
+              className={`h-3.5 w-3.5 text-tx-muted transition-transform shrink-0 ${
                 isOpen ? 'rotate-180' : ''
               }`}
             />
@@ -424,10 +424,10 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
               disabled={syncStatus === 'syncing'}
               className={`flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] font-medium transition ${
                 syncStatus === 'syncing'
-                  ? 'border-sky-500/30 bg-sky-500/10 text-sky-400'
+                  ? 'border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-400'
                   : syncStatus === 'error'
-                  ? 'border-rose-500/30 bg-rose-500/10 text-rose-400 hover:bg-rose-500/20'
-                  : 'border-zinc-800 bg-zinc-900/80 text-zinc-300 hover:border-sky-500/30 hover:bg-zinc-850 hover:text-white'
+                  ? 'border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-400 hover:bg-rose-500/20'
+                  : 'border-line bg-card/80 text-tx-secondary hover:border-sky-500/30 hover:bg-hover hover:text-tx-primary'
               }`}
               title={
                 syncError
@@ -439,27 +439,27 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
             >
               {syncStatus === 'syncing' ? (
                 <>
-                  <RefreshCw className="h-3 w-3 animate-spin text-sky-400" />
+                  <RefreshCw className="h-3 w-3 animate-spin text-sky-600 dark:text-sky-400" />
                   <span className="hidden xl:inline">Syncing</span>
                 </>
               ) : syncStatus === 'error' ? (
                 <>
-                  <AlertTriangle className="h-3 w-3 text-rose-400" />
+                  <AlertTriangle className="h-3 w-3 text-rose-600 dark:text-rose-400" />
                   <span className="hidden xl:inline">Retry</span>
                 </>
               ) : (
                 <>
-                  <RefreshCw className="h-3 w-3 text-emerald-400" />
-                  <span className="hidden xl:inline text-emerald-400">Sync Online</span>
+                  <RefreshCw className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+                  <span className="hidden xl:inline text-emerald-700 dark:text-emerald-400">Sync Online</span>
                 </>
               )}
             </button>
           ) : !isOfflineOnly ? (
             <div
-              className="flex items-center gap-1.5 rounded-lg border border-amber-500/20 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-400 select-none"
+              className="flex items-center gap-1.5 rounded-lg border border-amber-500/20 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-700 dark:text-amber-400 select-none"
               title="Currently in Offline Workspace"
             >
-              <span className="h-1.5 w-1.5 rounded-full bg-amber-400"></span>
+              <span className="h-1.5 w-1.5 rounded-full bg-amber-500 dark:bg-amber-400"></span>
               <span className="hidden xl:inline">Offline</span>
             </div>
           ) : null}
@@ -467,27 +467,27 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
 
         {/* Floating Scope Switcher Dropdown */}
         {isOpen && (
-          <div className="absolute left-0 top-full mt-2 w-72 sm:w-80 max-w-[calc(100vw-1.5rem)] rounded-xl border border-zinc-800 bg-zinc-950 p-2 shadow-2xl shadow-black/90 z-50 animate-in fade-in zoom-in-95 duration-100">
+          <div className="absolute left-0 top-full mt-2 w-72 sm:w-80 max-w-[calc(100vw-1.5rem)] rounded-xl border border-line bg-surface p-2 shadow-2xl z-50 animate-in fade-in zoom-in-95 duration-100">
             {/* Search Scope */}
             <div className="relative mb-2">
-              <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-zinc-500" />
+              <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-tx-muted" />
               <input
                 type="text"
                 placeholder="Search workspaces & projects..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="w-full rounded-lg border border-zinc-800 bg-zinc-900/90 pl-8 pr-2.5 py-1.5 text-xs text-zinc-200 placeholder-zinc-500 focus:border-sky-500 focus:outline-none"
+                className="w-full rounded-lg border border-line bg-card pl-8 pr-2.5 py-1.5 text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none"
               />
             </div>
 
             <div className="max-h-[calc(100dvh-7rem)] md:max-h-80 overflow-y-auto space-y-3 pr-1">
               {/* Section 1: Offline Workspaces */}
               <div>
-                <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-amber-400 flex items-center justify-between">
+                <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400 flex items-center justify-between">
                   <div className="flex items-center gap-1.5">
-                    <Laptop className="h-3 w-3 text-amber-400" />
+                    <Laptop className="h-3 w-3 text-amber-600 dark:text-amber-400" />
                     <span>Offline Workspaces</span>
-                    <span className="rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 px-1 py-0.2 text-[9px] font-medium lowercase">
+                    <span className="rounded bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20 px-1 py-0.2 text-[9px] font-medium lowercase">
                       {offlineWorkspaces.length}
                     </span>
                   </div>
@@ -497,7 +497,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                       setIsCreatingWs(true);
                       setEditingWsId(null);
                     }}
-                    className="flex items-center gap-1 text-[10px] font-medium text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 px-1.5 py-0.5 rounded transition"
+                    className="flex items-center gap-1 text-[10px] font-medium text-amber-700 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-300 hover:bg-amber-500/10 px-1.5 py-0.5 rounded transition"
                     title="Create new offline workspace"
                   >
                     <Plus className="h-3 w-3" />
@@ -507,8 +507,8 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
 
                 {/* Inline Create Input */}
                 {isCreatingWs && (
-                  <div className="p-2 my-1 rounded-lg border border-amber-500/30 bg-amber-950/20 animate-in fade-in duration-100">
-                    <div className="text-[10px] text-amber-400/90 font-medium mb-1">
+                  <div className="p-2 my-1 rounded-lg border border-amber-500/30 bg-amber-500/5 dark:bg-amber-950/20 animate-in fade-in duration-100">
+                    <div className="text-[10px] text-amber-700 dark:text-amber-400/90 font-medium mb-1">
                       New Offline Workspace Name
                     </div>
                     <div className="flex items-center gap-1.5">
@@ -525,12 +525,12 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                             setNewWsName('');
                           }
                         }}
-                        className="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-100 placeholder-zinc-500 focus:border-amber-400 focus:outline-none"
+                        className="flex-1 rounded-md border border-line bg-card px-2 py-1 text-xs text-tx-primary placeholder-tx-faint focus:border-amber-500 focus:outline-none"
                       />
                       <button
                         onClick={handleCreateWorkspace}
                         disabled={!newWsName.trim()}
-                        className="rounded-md bg-amber-500 px-2.5 py-1 text-xs font-semibold text-zinc-950 hover:bg-amber-400 disabled:opacity-40 transition"
+                        className="rounded-md bg-amber-600 hover:bg-amber-500 dark:bg-amber-500 dark:hover:bg-amber-400 px-2.5 py-1 text-xs font-semibold text-white dark:text-zinc-950 disabled:opacity-40 transition"
                       >
                         Add
                       </button>
@@ -539,7 +539,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                           setIsCreatingWs(false);
                           setNewWsName('');
                         }}
-                        className="rounded-md p-1 text-zinc-400 hover:text-white transition"
+                        className="rounded-md p-1 text-tx-muted hover:text-tx-primary transition"
                         title="Cancel"
                       >
                         <X className="h-3.5 w-3.5" />
@@ -558,7 +558,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                       return (
                         <div
                           key={ws.id}
-                          className="flex items-center gap-1.5 p-1 rounded-lg bg-zinc-900 border border-amber-500/30 my-0.5"
+                          className="flex items-center gap-1.5 p-1 rounded-lg bg-card border border-amber-500/30 my-0.5"
                         >
                           <input
                             type="text"
@@ -569,18 +569,18 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                               if (e.key === 'Enter') handleRenameWorkspace(ws.id);
                               if (e.key === 'Escape') setEditingWsId(null);
                             }}
-                            className="flex-1 rounded px-1.5 py-0.5 text-xs bg-zinc-800 text-zinc-100 focus:outline-none focus:ring-1 focus:ring-amber-400"
+                            className="flex-1 rounded px-1.5 py-0.5 text-xs bg-element text-tx-primary focus:outline-none focus:ring-1 focus:ring-amber-500"
                           />
                           <button
                             onClick={() => handleRenameWorkspace(ws.id)}
-                            className="p-1 text-emerald-400 hover:text-emerald-300 transition"
+                            className="p-1 text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 transition"
                             title="Save name"
                           >
                             <Check className="h-3.5 w-3.5" />
                           </button>
                           <button
                             onClick={() => setEditingWsId(null)}
-                            className="p-1 text-zinc-400 hover:text-zinc-200 transition"
+                            className="p-1 text-tx-muted hover:text-tx-primary transition"
                             title="Cancel"
                           >
                             <X className="h-3.5 w-3.5" />
@@ -595,15 +595,15 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                         onClick={() => handleSelectOfflineWorkspace(ws.id)}
                         className={`group w-full flex items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-xs transition cursor-pointer ${
                           isSelected
-                            ? 'bg-amber-500/10 text-amber-300 font-semibold border border-amber-500/30'
-                            : 'text-zinc-300 hover:bg-zinc-900 hover:text-white border border-transparent'
+                            ? 'bg-amber-500/10 text-amber-800 dark:text-amber-300 font-semibold border border-amber-500/30'
+                            : 'text-tx-secondary hover:bg-hover hover:text-tx-primary border border-transparent'
                         }`}
                       >
                         <div className="flex items-center gap-2 truncate min-w-0 mr-2">
-                          <Laptop className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+                          <Laptop className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
                           <span className="truncate">{ws.name}</span>
                           {isSelected && (
-                            <span className="rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1 py-0.2 text-[9px] font-bold uppercase shrink-0">
+                            <span className="rounded bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-500/30 px-1 py-0.2 text-[9px] font-bold uppercase shrink-0">
                               Active
                             </span>
                           )}
@@ -618,14 +618,14 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                                 setEditingWsId(ws.id);
                                 setEditingWsName(ws.name);
                               }}
-                              className="p-1 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 transition"
+                              className="p-1 rounded text-tx-muted hover:text-tx-primary hover:bg-hover transition"
                               title="Rename workspace"
                             >
                               <Pencil className="h-3 w-3" />
                             </button>
                             <button
                               onClick={(e) => handleDuplicateWorkspace(ws, e)}
-                              className="p-1 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 transition"
+                              className="p-1 rounded text-tx-muted hover:text-tx-primary hover:bg-hover transition"
                               title="Duplicate workspace"
                             >
                               <Copy className="h-3 w-3" />
@@ -636,7 +636,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                                   e.stopPropagation();
                                   setDeletingWs(ws);
                                 }}
-                                className="p-1 rounded text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 transition"
+                                className="p-1 rounded text-tx-muted hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-500/10 transition"
                                 title="Delete workspace"
                               >
                                 <Trash2 className="h-3 w-3" />
@@ -645,7 +645,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                           </div>
 
                           {isSelected && (
-                            <Check className="h-3.5 w-3.5 text-amber-400 shrink-0 group-hover:hidden" />
+                            <Check className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 shrink-0 group-hover:hidden" />
                           )}
                         </div>
                       </div>
@@ -653,7 +653,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                   })}
 
                   {filteredOfflineWorkspaces.length === 0 && (
-                    <div className="py-2 text-center text-xs text-zinc-500">
+                    <div className="py-2 text-center text-xs text-tx-muted">
                       No matching offline workspace found.
                     </div>
                   )}
@@ -663,7 +663,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
               {/* Section 2: Online Workspaces (Cloud Sync) - Omitted in offline-only edition */}
               {!isOfflineOnly && (
                 <div>
-                  <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-sky-400 flex items-center justify-between border-t border-zinc-850 pt-2">
+                  <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-sky-700 dark:text-sky-400 flex items-center justify-between border-t border-line pt-2">
                     <span>Online Workspaces</span>
                     {cloudConfig.token && (
                       <button
@@ -673,7 +673,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                         }}
                         disabled={isLoadingScopes}
                         title="Refresh teams and personal workspaces list"
-                        className="flex items-center gap-1 px-1.5 py-0.5 rounded text-sky-400/80 hover:text-sky-300 hover:bg-sky-500/10 transition"
+                        className="flex items-center gap-1 px-1.5 py-0.5 rounded text-sky-700 dark:text-sky-400 hover:text-sky-800 dark:hover:text-sky-300 hover:bg-sky-500/10 transition"
                       >
                         <RefreshCw className={`h-3 w-3 ${isLoadingScopes ? 'animate-spin' : ''}`} />
                         <span className="text-[9px] font-semibold uppercase tracking-wider">Refresh Teams</span>
@@ -683,18 +683,18 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
 
                   {cloudConfig.token ? (
                     isLoadingScopes ? (
-                      <div className="flex items-center justify-center py-6 text-xs text-zinc-500 gap-2">
-                        <Loader2 className="h-4 w-4 animate-spin text-sky-400" />
+                      <div className="flex items-center justify-center py-6 text-xs text-tx-muted gap-2">
+                        <Loader2 className="h-4 w-4 animate-spin text-sky-600 dark:text-sky-400" />
                         <span>Loading online workspaces...</span>
                       </div>
                     ) : (
                       <div className="space-y-3 mt-1">
                         {/* Personal Cloud Workspaces */}
                         <div>
-                          <div className="px-2 py-0.5 text-[10px] font-semibold text-zinc-400 flex items-center justify-between">
+                          <div className="px-2 py-0.5 text-[10px] font-semibold text-tx-muted flex items-center justify-between">
                             <div className="flex items-center gap-1.5">
                               <span>Personal</span>
-                              <span className="rounded bg-sky-500/10 text-sky-400 border border-sky-500/20 px-1 py-0.2 text-[9px] font-medium lowercase">
+                              <span className="rounded bg-sky-500/10 text-sky-700 dark:text-sky-400 border border-sky-500/20 px-1 py-0.2 text-[9px] font-medium lowercase">
                                 {workspaces.length}
                               </span>
                             </div>
@@ -705,7 +705,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                                 setEditingCloudWsId(null);
                                 setCloudWsError(null);
                               }}
-                              className="flex items-center gap-1 text-[10px] font-medium text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 px-1.5 py-0.5 rounded transition"
+                              className="flex items-center gap-1 text-[10px] font-medium text-sky-700 dark:text-sky-400 hover:text-sky-800 dark:hover:text-sky-300 hover:bg-sky-500/10 px-1.5 py-0.5 rounded transition"
                               title="Create new online workspace"
                             >
                               <Plus className="h-3 w-3" />
@@ -715,8 +715,8 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
 
                           {/* Inline Create Input for Cloud Workspace */}
                           {isCreatingCloudWs && (
-                            <div className="p-2 my-1 rounded-lg border border-sky-500/30 bg-sky-950/20 animate-in fade-in duration-100">
-                              <div className="text-[10px] text-sky-400/90 font-medium mb-1">
+                            <div className="p-2 my-1 rounded-lg border border-sky-500/30 bg-sky-500/5 dark:bg-sky-950/20 animate-in fade-in duration-100">
+                              <div className="text-[10px] text-sky-700 dark:text-sky-400/90 font-medium mb-1">
                                 New Online Workspace Name
                               </div>
                               <div className="flex items-center gap-1.5">
@@ -734,12 +734,12 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                                       setCloudWsError(null);
                                     }
                                   }}
-                                  className="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-100 placeholder-zinc-500 focus:border-sky-400 focus:outline-none"
+                                  className="flex-1 rounded-md border border-line bg-card px-2 py-1 text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none"
                                 />
                                 <button
                                   onClick={handleCreateCloudWorkspace}
                                   disabled={!newCloudWsName.trim() || isSubmittingCloudWs}
-                                  className="flex items-center gap-1 rounded-md bg-sky-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-sky-400 disabled:opacity-40 transition"
+                                  className="flex items-center gap-1 rounded-md bg-sky-600 hover:bg-sky-500 dark:bg-sky-500 dark:hover:bg-sky-400 px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-40 transition"
                                 >
                                   {isSubmittingCloudWs ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Add'}
                                 </button>
@@ -749,14 +749,14 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                                     setNewCloudWsName('');
                                     setCloudWsError(null);
                                   }}
-                                  className="rounded-md p-1 text-zinc-400 hover:text-white transition"
+                                  className="rounded-md p-1 text-tx-muted hover:text-tx-primary transition"
                                   title="Cancel"
                                 >
                                   <X className="h-3.5 w-3.5" />
                                 </button>
                               </div>
                               {cloudWsError && (
-                                <div className="text-[10px] text-rose-400 mt-1">{cloudWsError}</div>
+                                <div className="text-[10px] text-rose-600 dark:text-rose-400 mt-1">{cloudWsError}</div>
                               )}
                             </div>
                           )}
@@ -774,7 +774,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                                 return (
                                   <div
                                     key={ws.id}
-                                    className="flex items-center gap-1.5 p-1 rounded-lg bg-zinc-900 border border-sky-500/30 my-0.5"
+                                    className="flex items-center gap-1.5 p-1 rounded-lg bg-card border border-sky-500/30 my-0.5"
                                   >
                                     <input
                                       type="text"
@@ -785,19 +785,19 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                                         if (e.key === 'Enter') handleRenameCloudWorkspace(ws.id);
                                         if (e.key === 'Escape') setEditingCloudWsId(null);
                                       }}
-                                      className="flex-1 rounded px-1.5 py-0.5 text-xs bg-zinc-800 text-zinc-100 focus:outline-none focus:ring-1 focus:ring-sky-400"
+                                      className="flex-1 rounded px-1.5 py-0.5 text-xs bg-element text-tx-primary focus:outline-none focus:ring-1 focus:ring-sky-500"
                                     />
                                     <button
                                       onClick={() => handleRenameCloudWorkspace(ws.id)}
                                       disabled={isSubmittingCloudWs}
-                                      className="p-1 text-emerald-400 hover:text-emerald-300 transition"
+                                      className="p-1 text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 transition"
                                       title="Save name"
                                     >
                                       {isSubmittingCloudWs ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
                                     </button>
                                     <button
                                       onClick={() => setEditingCloudWsId(null)}
-                                      className="p-1 text-zinc-400 hover:text-zinc-200 transition"
+                                      className="p-1 text-tx-muted hover:text-tx-primary transition"
                                       title="Cancel"
                                     >
                                       <X className="h-3.5 w-3.5" />
@@ -819,15 +819,15 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                                   }
                                   className={`group w-full flex items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-xs transition cursor-pointer ${
                                     isSelected
-                                      ? 'bg-sky-500/10 text-sky-300 font-semibold border border-sky-500/20'
-                                      : 'text-zinc-300 hover:bg-zinc-900 hover:text-white border border-transparent'
+                                      ? 'bg-sky-500/10 text-sky-800 dark:text-sky-300 font-semibold border border-sky-500/20'
+                                      : 'text-tx-secondary hover:bg-hover hover:text-tx-primary border border-transparent'
                                   }`}
                                 >
                                   <div className="flex items-center gap-2 truncate min-w-0 mr-2">
-                                    <User className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+                                    <User className="h-3.5 w-3.5 text-sky-600 dark:text-sky-400 shrink-0" />
                                     <span className="truncate">{ws.name}</span>
                                     {ws.is_default && (
-                                      <span className="rounded bg-sky-500/10 text-sky-400/80 border border-sky-500/20 px-1 py-0.2 text-[8px] font-semibold shrink-0">
+                                      <span className="rounded bg-sky-500/10 text-sky-700 dark:text-sky-400/80 border border-sky-500/20 px-1 py-0.2 text-[8px] font-semibold shrink-0">
                                         Default
                                       </span>
                                     )}
@@ -843,7 +843,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                                           setEditingCloudWsName(ws.name);
                                           setCloudWsError(null);
                                         }}
-                                        className="p-1 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 transition"
+                                        className="p-1 rounded text-tx-muted hover:text-tx-primary hover:bg-hover transition"
                                         title="Rename workspace"
                                       >
                                         <Pencil className="h-3 w-3" />
@@ -854,7 +854,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                                             e.stopPropagation();
                                             setDeletingCloudWs(ws);
                                           }}
-                                          className="p-1 rounded text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 transition"
+                                          className="p-1 rounded text-tx-muted hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-500/10 transition"
                                           title="Delete workspace"
                                         >
                                           <Trash2 className="h-3 w-3" />
@@ -862,10 +862,10 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                                       )}
                                     </div>
 
-                                    <span className="rounded bg-sky-500/10 text-sky-400 border border-sky-500/20 px-1 py-0.2 text-[9px] uppercase font-bold group-hover:hidden">
+                                    <span className="rounded bg-sky-500/10 text-sky-700 dark:text-sky-400 border border-sky-500/20 px-1 py-0.2 text-[9px] uppercase font-bold group-hover:hidden">
                                       Online
                                     </span>
-                                    {isSelected && <Check className="h-3.5 w-3.5 text-sky-400 shrink-0 group-hover:hidden" />}
+                                    {isSelected && <Check className="h-3.5 w-3.5 text-sky-600 dark:text-sky-400 shrink-0 group-hover:hidden" />}
                                   </div>
                                 </div>
                               );
@@ -876,9 +876,9 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                         {/* Team Projects 2-Level Accordion */}
                         {filteredTeams.length > 0 && (
                           <div className="space-y-1.5">
-                            <div className="px-2 py-0.5 text-[10px] font-semibold text-zinc-400 flex items-center justify-between">
+                            <div className="px-2 py-0.5 text-[10px] font-semibold text-tx-muted flex items-center justify-between">
                               <span>Team Projects</span>
-                              <span className="text-[9px] text-zinc-500 font-normal">
+                              <span className="text-[9px] text-tx-faint font-normal">
                                 Click team to expand
                               </span>
                             </div>
@@ -894,7 +894,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                               return (
                                 <div
                                   key={team.id}
-                                  className="rounded-lg border border-zinc-800/70 bg-zinc-900/30 overflow-hidden transition"
+                                  className="rounded-lg border border-line bg-card/60 dark:bg-card/40 overflow-hidden transition"
                                 >
                                   {/* Team Accordion Header */}
                                   <div
@@ -907,43 +907,43 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                                         handleToggleTeam(team.id);
                                       }
                                     }}
-                                    className="w-full flex items-center justify-between px-2.5 py-1.5 text-left text-xs font-semibold text-zinc-200 hover:bg-zinc-850 hover:text-white transition group select-none cursor-pointer"
+                                    className="w-full flex items-center justify-between px-2.5 py-1.5 text-left text-xs font-semibold text-tx-primary hover:bg-hover transition group select-none cursor-pointer"
                                   >
                                     <div className="flex items-center gap-2 min-w-0 flex-1 mr-1">
                                       <ChevronRight
-                                        className={`h-3.5 w-3.5 text-zinc-400 transition-transform duration-150 shrink-0 ${
-                                          isExpanded ? 'rotate-90 text-indigo-400' : 'group-hover:text-zinc-200'
+                                        className={`h-3.5 w-3.5 text-tx-muted transition-transform duration-150 shrink-0 ${
+                                          isExpanded ? 'rotate-90 text-indigo-600 dark:text-indigo-400' : 'group-hover:text-tx-primary'
                                         }`}
                                       />
-                                      <Users className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
+                                      <Users className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
                                       <span className="truncate">{team.name}</span>
                                     </div>
 
                                     <div className="flex items-center gap-1.5 shrink-0">
                                       {isTeamActive && (
                                         <span
-                                          className="h-1.5 w-1.5 rounded-full bg-indigo-400 shrink-0"
+                                          className="h-1.5 w-1.5 rounded-full bg-indigo-500 dark:bg-indigo-400 shrink-0"
                                           title="Active team scope"
                                         />
                                       )}
                                       {isLoadingThisTeam ? (
-                                        <Loader2 className="h-3 w-3 animate-spin text-indigo-400" />
+                                        <Loader2 className="h-3 w-3 animate-spin text-indigo-600 dark:text-indigo-400" />
                                       ) : projs !== undefined && (projs.length > 0 || fetchedTeamsRef.current.has(team.id)) ? (
                                         <div className="flex items-center gap-1">
                                           <button
                                             type="button"
                                             onClick={(e) => handleRefreshTeamProjects(team.id, e)}
-                                            className="p-1 rounded text-zinc-500 hover:text-indigo-400 hover:bg-zinc-800 transition"
+                                            className="p-1 rounded text-tx-muted hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-hover transition"
                                             title={`Refresh ${team.name} projects`}
                                           >
                                             <RefreshCw className="h-2.5 w-2.5" />
                                           </button>
-                                          <span className="rounded-full bg-zinc-800/80 px-1.5 py-0.2 text-[9px] font-mono text-zinc-400">
+                                          <span className="rounded-full bg-element px-1.5 py-0.2 text-[9px] font-mono text-tx-secondary">
                                             {projs.length}
                                           </span>
                                         </div>
                                       ) : (
-                                        <span className="rounded bg-zinc-800/60 px-1.5 py-0.5 text-[9px] text-zinc-400 font-medium">
+                                        <span className="rounded bg-element px-1.5 py-0.5 text-[9px] text-tx-secondary font-medium">
                                           Load
                                         </span>
                                       )}
@@ -952,24 +952,24 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
 
                                   {/* Accordion Content: Projects */}
                                   {isExpanded && (
-                                    <div className="border-t border-zinc-800/60 bg-zinc-950/40 p-1 space-y-0.5 animate-in fade-in duration-100">
+                                    <div className="border-t border-line bg-element/30 p-1 space-y-0.5 animate-in fade-in duration-100">
                                       {isLoadingThisTeam && (!projs || projs.length === 0) ? (
-                                        <div className="flex items-center justify-center py-2.5 text-xs text-zinc-500 gap-1.5">
-                                          <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-400" />
+                                        <div className="flex items-center justify-center py-2.5 text-xs text-tx-muted gap-1.5">
+                                          <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-600 dark:text-indigo-400" />
                                           <span>Loading projects...</span>
                                         </div>
                                       ) : !projs && !fetchedTeamsRef.current.has(team.id) ? (
-                                        <div className="py-2 text-center text-[11px] text-zinc-500 italic">
+                                        <div className="py-2 text-center text-[11px] text-tx-muted italic">
                                           <button
                                             type="button"
                                             onClick={() => handleToggleTeam(team.id)}
-                                            className="text-indigo-400 hover:underline"
+                                            className="text-indigo-600 dark:text-indigo-400 hover:underline"
                                           >
                                             Click to load projects
                                           </button>
                                         </div>
                                       ) : projs && projs.length === 0 ? (
-                                        <div className="py-2 text-center text-[11px] text-zinc-500 italic">
+                                        <div className="py-2 text-center text-[11px] text-tx-muted italic">
                                           No projects in this team.
                                         </div>
                                       ) : projs ? (
@@ -1001,25 +1001,25 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                                                 }
                                                 className={`w-full flex items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-xs transition ${
                                                   isSelected
-                                                    ? 'bg-indigo-500/20 text-indigo-300 font-semibold border border-indigo-500/30'
-                                                    : 'text-zinc-300 hover:bg-zinc-850 hover:text-white border border-transparent'
+                                                    ? 'bg-indigo-500/15 text-indigo-800 dark:text-indigo-300 font-semibold border border-indigo-500/30'
+                                                    : 'text-tx-secondary hover:bg-hover hover:text-tx-primary border border-transparent'
                                                 }`}
                                               >
                                                 <div className="flex items-center gap-2 truncate">
-                                                  <FolderGit2 className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+                                                  <FolderGit2 className="h-3.5 w-3.5 text-tx-muted shrink-0" />
                                                   <span className="truncate">{proj.name}</span>
                                                 </div>
                                                 <div className="flex items-center gap-1.5 shrink-0">
-                                                  <span className="rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-1 py-0.2 text-[9px] uppercase font-bold">
+                                                  <span className="rounded bg-indigo-500/10 text-indigo-700 dark:text-indigo-400 border border-indigo-500/20 px-1 py-0.2 text-[9px] uppercase font-bold">
                                                     Online
                                                   </span>
                                                   {proj.user_role && (
-                                                    <span className="rounded bg-zinc-800 px-1 py-0.2 text-[9px] text-zinc-400 uppercase font-medium">
+                                                    <span className="rounded bg-element px-1 py-0.2 text-[9px] text-tx-secondary uppercase font-medium">
                                                       {proj.user_role}
                                                     </span>
                                                   )}
                                                   {isSelected && (
-                                                    <Check className="h-3.5 w-3.5 text-indigo-400" />
+                                                    <Check className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
                                                   )}
                                                 </div>
                                               </button>
@@ -1035,21 +1035,21 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                         )}
 
                         {filteredWorkspaces.length === 0 && filteredTeams.length === 0 && (
-                          <div className="py-3 text-center text-xs text-zinc-500">
+                          <div className="py-3 text-center text-xs text-tx-muted">
                             No online workspaces or team projects found.
                           </div>
                         )}
                       </div>
                     )
                   ) : (
-                    <div className="mt-2 rounded-xl border border-dashed border-zinc-800 bg-zinc-900/40 p-3 text-center">
-                      <div className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg bg-sky-500/10 text-sky-400 mb-2 border border-sky-500/20">
+                    <div className="mt-2 rounded-xl border border-dashed border-line bg-card/50 p-3 text-center">
+                      <div className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg bg-sky-500/10 text-sky-600 dark:text-sky-400 mb-2 border border-sky-500/20">
                         <Cloud className="h-4 w-4" />
                       </div>
-                      <div className="text-xs font-semibold text-zinc-200">
+                      <div className="text-xs font-semibold text-tx-primary">
                         Online Cloud Workspaces
                       </div>
-                      <p className="mt-1 text-[11px] text-zinc-400 leading-relaxed">
+                      <p className="mt-1 text-[11px] text-tx-muted leading-relaxed">
                         Connect your account to access synced workspaces &amp; team projects.
                       </p>
                       <button
@@ -1069,15 +1069,15 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
 
             {/* Footer Controls */}
             {!isOfflineOnly && cloudConfig.token && (
-              <div className="mt-2 border-t border-zinc-800 pt-1.5">
+              <div className="mt-2 border-t border-line pt-1.5">
                 <button
                   onClick={() => {
                     setIsOpen(false);
                     logoutCloud();
                   }}
-                  className="w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-rose-400 hover:bg-rose-500/10 transition"
+                  className="w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 transition"
                 >
-                  <LogOut className="h-3.5 w-3.5 text-rose-400" />
+                  <LogOut className="h-3.5 w-3.5 text-rose-600 dark:text-rose-400" />
                   <span>Sign Out &amp; Disconnect</span>
                 </button>
               </div>
@@ -1094,7 +1094,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
         title="Delete Offline Workspace"
         message={
           <span>
-            Are you sure you want to delete <strong className="text-zinc-100">{deletingWs?.name}</strong>?
+            Are you sure you want to delete <strong className="text-tx-primary">{deletingWs?.name}</strong>?
             All collections, environments, tabs, and history within this workspace will be permanently removed.
           </span>
         }
@@ -1110,7 +1110,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
         title="Delete Cloud Workspace"
         message={
           <span>
-            Are you sure you want to delete <strong className="text-zinc-100">{deletingCloudWs?.name}</strong>?
+            Are you sure you want to delete <strong className="text-tx-primary">{deletingCloudWs?.name}</strong>?
             All collections and environments inside this cloud workspace will be permanently removed.
           </span>
         }

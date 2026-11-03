@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ShieldAlert, Plus, Search, Loader2, UserCheck, X, Eye, EyeOff, KeyRound, AlertCircle, Trash2, AlertTriangle, Save, Pencil } from 'lucide-react';
 import { useHubStore } from '../store/useHubStore';
 import { apiListAllUsers, apiProvisionUser, apiUpdateUser, apiResetUserPassword, apiDeleteUser, apiGetFeaturePolicy, apiUpdateFeaturePolicy } from '../lib/api';
@@ -48,8 +48,18 @@ export const SuperadminView: React.FC = () => {
   const [isLoadingFeaturePolicy, setIsLoadingFeaturePolicy] = useState(false);
   const [isSavingFeaturePolicy, setIsSavingFeaturePolicy] = useState(false);
 
+  const resetTimerRef = useRef<NodeJS.Timeout | number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (resetTimerRef.current) {
+        clearTimeout(resetTimerRef.current as any);
+      }
+    };
+  }, []);
+
   const loadUsers = async () => {
-    if (!token) return;
+    if (!token || currentUser?.role !== 'superadmin') return;
     setIsLoading(true);
     setLoadError(null);
     try {
@@ -63,7 +73,7 @@ export const SuperadminView: React.FC = () => {
   };
 
   const loadFeaturePolicy = async (clearError = true) => {
-    if (!token) return;
+    if (!token || currentUser?.role !== 'superadmin') return;
     setIsLoadingFeaturePolicy(true);
     if (clearError) setFeaturePolicyError(null);
     try {
@@ -78,21 +88,28 @@ export const SuperadminView: React.FC = () => {
   };
 
   useEffect(() => {
-    loadUsers();
-    loadFeaturePolicy();
-  }, [apiUrl, token]);
+    if (currentUser?.role === 'superadmin') {
+      loadUsers();
+      loadFeaturePolicy();
+    }
+  }, [apiUrl, token, currentUser?.role]);
 
   const saveFeaturePolicy = async () => {
-    if (!token || !featurePolicy || !featureFlags) return;
+    if (!token || !featurePolicy || !featureFlags || currentUser?.role !== 'superadmin') return;
     setIsSavingFeaturePolicy(true);
     setFeaturePolicyError(null);
     try {
       const policy = await apiUpdateFeaturePolicy(apiUrl, token, featurePolicy.revision, featureFlags, refreshToken || undefined);
       setFeaturePolicy(policy);
       setFeatureFlags(policy.flags);
-    } catch (err: unknown) {
-      setFeaturePolicyError(err instanceof Error ? err.message : 'Failed to save feature controls');
-      await loadFeaturePolicy(false);
+    } catch (err: any) {
+      if (err?.status === 409 && err?.data) {
+        setFeaturePolicy(err.data);
+        if (err.data.flags) setFeatureFlags(err.data.flags);
+        setFeaturePolicyError('Conflict: Feature policy was modified by another administrator. Form refreshed with latest revision.');
+      } else {
+        setFeaturePolicyError(err instanceof Error ? err.message : 'Failed to save feature controls');
+      }
     } finally {
       setIsSavingFeaturePolicy(false);
     }
@@ -186,6 +203,10 @@ export const SuperadminView: React.FC = () => {
   };
 
   const handleCloseResetPassword = () => {
+    if (resetTimerRef.current) {
+      clearTimeout(resetTimerRef.current as any);
+      resetTimerRef.current = null;
+    }
     setResetUser(null);
     setResetPassword('');
     setShowResetPassword(false);
@@ -206,7 +227,10 @@ export const SuperadminView: React.FC = () => {
         return;
       }
       setResetSuccessMsg(`Password for ${resetUser.email} has been updated. All of their sessions are signed out.`);
-      setTimeout(() => {
+      if (resetTimerRef.current) {
+        clearTimeout(resetTimerRef.current as any);
+      }
+      resetTimerRef.current = setTimeout(() => {
         handleCloseResetPassword();
       }, 1500);
     } catch (err: any) {
@@ -246,6 +270,14 @@ export const SuperadminView: React.FC = () => {
       u.email.toLowerCase().includes(search.toLowerCase()) ||
       u.name.toLowerCase().includes(search.toLowerCase())
   );
+
+  if (currentUser?.role !== 'superadmin') {
+    return (
+      <div className="flex flex-1 items-center justify-center p-6 text-zinc-400">
+        Access Denied: Superadmin privileges required.
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8 bg-zinc-950">

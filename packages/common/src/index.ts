@@ -27,3 +27,8 @@ export * from './lib/scriptRunner';
 export * from './lib/scriptProtocol';
 export * from './lib/hostPermissions';
 export * from './lib/backNavigation';
+export * from './lib/theme';
+export * from './lib/payloadCompiler';
+export * from './lib/payloadReverseParser';
+export * from './components/payload';
+export * from './components/ThemeToggle';

@@ -9,11 +9,6 @@ test('Responsive Header and Sidebar layout parity (Mobile vs Desktop)', () => {
       header: 'packages/common/src/components/Header.tsx',
       sidebar: 'packages/common/src/components/Sidebar.tsx',
     },
-    {
-      scopeSwitcher: 'apps/extension/src/components/ScopeSwitcher.tsx',
-      header: 'apps/extension/src/components/Header.tsx',
-      sidebar: 'apps/extension/src/components/Sidebar.tsx',
-    },
   ];
 
   for (const { scopeSwitcher, header, sidebar } of targetFiles) {
@@ -36,7 +31,7 @@ test('Responsive Header and Sidebar layout parity (Mobile vs Desktop)', () => {
     );
     assert.match(
       headerContent,
-      /className="flex flex-1 min-w-0 items-center gap-1\.5 rounded-lg border border-zinc-800 bg-zinc-900\/90 px-2\.5 py-1 md:hidden"/,
+      /className="flex flex-1 min-w-0 items-center gap-1\.5 rounded-lg border border-(?:zinc-800|line) bg-(?:zinc-900\/90|card\/90) px-2\.5 py-1 md:hidden"/,
       `${header} mobile environment switcher must expand with flex-1 min-w-0 and be md:hidden`
     );
 
@@ -65,7 +60,7 @@ test('Responsive Header and Sidebar layout parity (Mobile vs Desktop)', () => {
     // 4. Verify Sidebar top Workspace & Account section is strictly mobile-only (md:hidden)
     assert.match(
       sidebarContent,
-      /<div className="md:hidden border-b border-zinc-800[^"]*bg-zinc-900\/40">/,
+      /<div className="md:hidden border-b border-(?:zinc-800|line)[^"]*bg-(?:zinc-900\/40|surface\/90)">/,
       `${sidebar} top workspace & account section must be md:hidden so desktop sidebar is untouched`
     );
     assert.match(

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import { User } from '../types';
+import { User, FeaturePolicy } from '../types';
 import { DEFAULT_API_URL, registerHubTokenRefresh, registerHubAuthEvicted, invalidateHubSession } from '../lib/api';
 
 export type HubTab = 'teams' | 'projects' | 'superadmin';
@@ -13,6 +13,8 @@ const signedOutState = {
   activeTab: 'teams' as HubTab,
   selectedTeamId: null,
   selectedProjectId: null,
+  featurePolicy: null,
+  featurePolicyFetchedAt: null,
 };
 
 interface HubStoreState {
@@ -26,6 +28,9 @@ interface HubStoreState {
   selectedTeamId: string | null;
   selectedProjectId: string | null;
 
+  featurePolicy: FeaturePolicy | null;
+  featurePolicyFetchedAt: number | null;
+
   setApiUrl: (url: string) => void;
   setAuth: (user: User, token: string, refreshToken: string, expiresAt: string) => void;
   updateUser: (user: User) => void;
@@ -34,6 +39,7 @@ interface HubStoreState {
   setActiveTab: (tab: HubTab) => void;
   setSelectedTeamId: (teamId: string | null) => void;
   setSelectedProjectId: (projectId: string | null) => void;
+  setFeaturePolicy: (policy: FeaturePolicy | null, fetchedAt?: number) => void;
 }
 
 export const useHubStore = create<HubStoreState>()(
@@ -48,6 +54,9 @@ export const useHubStore = create<HubStoreState>()(
       activeTab: 'teams',
       selectedTeamId: null,
       selectedProjectId: null,
+
+      featurePolicy: null,
+      featurePolicyFetchedAt: null,
 
       setApiUrl: (url) => set((state) => {
         const apiUrl = url.trim().replace(/\/+$/, '') || DEFAULT_API_URL;
@@ -74,6 +83,8 @@ export const useHubStore = create<HubStoreState>()(
       })),
       setSelectedTeamId: (selectedTeamId) => set({ selectedTeamId, selectedProjectId: null }),
       setSelectedProjectId: (selectedProjectId) => set({ selectedProjectId }),
+      setFeaturePolicy: (featurePolicy, fetchedAt = Date.now()) =>
+        set({ featurePolicy, featurePolicyFetchedAt: featurePolicy ? fetchedAt : null }),
     }),
     {
       name: 'airrest-hub-storage-v1',
@@ -86,6 +97,8 @@ export const useHubStore = create<HubStoreState>()(
         user: state.user,
         selectedTeamId: state.selectedTeamId,
         selectedProjectId: state.selectedProjectId,
+        featurePolicy: state.featurePolicy,
+        featurePolicyFetchedAt: state.featurePolicyFetchedAt,
       }),
       merge: (persistedState: any, currentState) => {
         const merged = { ...currentState, ...(persistedState as object) };

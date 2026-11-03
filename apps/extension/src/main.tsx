@@ -1,9 +1,11 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { createAirrestRuntime, AirrestProvider } from '@airrest/common';
+import { createAirrestRuntime, AirrestProvider, initEarlyTheme } from '@airrest/common';
 import { chromeAdapter } from './adapters/chromeAdapter';
 import App from './App';
 import './index.css';
+
+initEarlyTheme();
 
 const edition = ((import.meta.env.VITE_AIRREST_EDITION || import.meta.env.VITE_APP_EDITION || 'full') as 'offline' | 'full');
 

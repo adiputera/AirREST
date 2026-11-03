@@ -28,7 +28,25 @@ export function isNewerVersion(remote: string, current: string): boolean {
   return false;
 }
 
-export function pickAndroidApkUrl(assets: GitHubAsset[] = [], fallbackHtmlUrl: string): string {
+export function pickAndroidApkUrl(
+  assets: GitHubAsset[] = [],
+  fallbackHtmlUrl: string,
+  userAgent?: string,
+): string {
+  const ua = typeof userAgent === 'string'
+    ? userAgent
+    : typeof navigator !== 'undefined'
+      ? navigator.userAgent || ''
+      : '';
+  const isX86 = /x86_64|x86/i.test(ua);
+
+  if (isX86) {
+    const x86 = assets.find(
+      (a) => a.name.endsWith('.apk') && (a.name.includes('x86_64') || a.name.includes('x86')),
+    );
+    if (x86) return x86.browser_download_url;
+  }
+
   // Prefer ARM64 APK (phones/tablets), then universal APK, then any APK
   const arm64 = assets.find(
     (a) => a.name.endsWith('.apk') && (a.name.includes('arm64') || a.name.includes('aarch64')),
@@ -61,6 +79,7 @@ export function AndroidUpdateBanner({
 
   useEffect(() => {
     let isMounted = true;
+    const controller = new AbortController();
 
     async function checkForUpdates() {
       try {
@@ -73,7 +92,6 @@ export function AndroidUpdateBanner({
           return;
         }
 
-        const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 6000);
 
         const response = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
@@ -87,13 +105,18 @@ export function AndroidUpdateBanner({
         if (!response.ok) return;
 
         const release = (await response.json()) as GitHubRelease;
-        localStorage.setItem(LAST_CHECK_KEY, String(now));
 
         if (!isMounted) return;
 
-        if (release.tag_name && isNewerVersion(release.tag_name, currentVersion)) {
-          if (dismissedVer !== release.tag_name) {
-            setUpdateAvailable(release);
+        const hasApk = Boolean(
+          release.assets?.some((a) => a.name.endsWith('.apk') && a.browser_download_url?.startsWith('https://')),
+        );
+        if (hasApk) {
+          localStorage.setItem(LAST_CHECK_KEY, String(now));
+          if (release.tag_name && isNewerVersion(release.tag_name, currentVersion)) {
+            if (dismissedVer !== release.tag_name) {
+              setUpdateAvailable(release);
+            }
           }
         }
       } catch {
@@ -105,20 +128,34 @@ export function AndroidUpdateBanner({
 
     return () => {
       isMounted = false;
+      controller.abort();
     };
   }, [repo, currentVersion]);
 
   if (!updateAvailable || dismissed) return null;
 
+  const hasApk = Boolean(updateAvailable.assets?.some((a) => a.name.endsWith('.apk')));
+  if (!hasApk) return null;
+
   const newVer = updateAvailable.tag_name;
-  const downloadUrl = pickAndroidApkUrl(updateAvailable.assets, updateAvailable.html_url);
+  const rawDownloadUrl = pickAndroidApkUrl(updateAvailable.assets, updateAvailable.html_url);
+  const downloadUrl = rawDownloadUrl.startsWith('https://') ? rawDownloadUrl : '';
+  const releasePageUrl = updateAvailable.html_url?.startsWith('https://')
+    ? updateAvailable.html_url
+    : downloadUrl;
+  if (!releasePageUrl && !downloadUrl) return null;
 
   const handleDownload = async () => {
+    // Redirect to GitHub release page in browser to avoid in-app webview / Custom Tab download stall (stuck at 100%)
+    const targetUrl = releasePageUrl || downloadUrl;
+    if (!targetUrl || !targetUrl.startsWith('https://')) return;
     setDownloading(true);
     try {
-      await openUrl(downloadUrl);
+      await openUrl(targetUrl);
     } catch {
-      window.open(downloadUrl, '_blank');
+      window.open(targetUrl, '_blank', 'noopener,noreferrer');
+    } finally {
+      setDownloading(false);
     }
   };
 

@@ -24,9 +24,9 @@ export const KeyValueEditor: React.FC<KeyValueEditorProps> = ({
 }) => {
   return (
     <div className="space-y-2">
-      <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950">
+      <div className="overflow-hidden rounded-xl border border-line bg-card">
         <table className="w-full text-left text-xs">
-          <thead className="border-b border-zinc-800 bg-zinc-900/60 text-zinc-400">
+          <thead className="border-b border-line bg-element text-tx-muted">
             <tr>
               <th className="w-10 px-3 py-2 text-center">Use</th>
               <th className="px-3 py-2 font-medium">Key</th>
@@ -34,15 +34,15 @@ export const KeyValueEditor: React.FC<KeyValueEditorProps> = ({
               <th className="w-10 px-3 py-2 text-center"></th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-zinc-850">
+          <tbody className="divide-y divide-line">
             {(Array.isArray(items) ? items : []).filter(Boolean).map((item, index) => (
-              <tr key={item.id || index} className="group hover:bg-zinc-900/40 transition">
+              <tr key={item.id || index} className="group hover:bg-hover transition">
                 <td className="px-3 py-1.5 text-center">
                   <input
                     type="checkbox"
                     checked={item.enabled ?? true}
                     onChange={(e) => onUpdate(item.id, { enabled: e.target.checked })}
-                    className="h-3.5 w-3.5 rounded border-zinc-700 bg-zinc-900 text-sky-500 focus:ring-0 focus:ring-offset-0 cursor-pointer accent-sky-500"
+                    className="h-3.5 w-3.5 rounded border-line-strong bg-element text-sky-500 focus:ring-0 focus:ring-offset-0 cursor-pointer accent-sky-500"
                   />
                 </td>
                 <td className="px-2 py-1.5">
@@ -64,7 +64,7 @@ export const KeyValueEditor: React.FC<KeyValueEditorProps> = ({
                 <td className="px-2 py-1.5 text-center">
                   <button
                     onClick={() => onRemove(item.id)}
-                    className="rounded p-1 text-zinc-600 opacity-60 hover:bg-zinc-800 hover:text-rose-400 group-hover:opacity-100 transition"
+                    className="rounded p-1 text-tx-faint opacity-60 hover:bg-hover hover:text-rose-500 group-hover:opacity-100 transition"
                     title="Delete row"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -79,9 +79,9 @@ export const KeyValueEditor: React.FC<KeyValueEditorProps> = ({
       <button
         type="button"
         onClick={onAdd}
-        className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-1.5 text-xs font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition"
+        className="flex items-center gap-1.5 rounded-lg border border-line bg-element px-3 py-1.5 text-xs font-medium text-tx-muted hover:bg-hover hover:text-tx-primary transition"
       >
-        <Plus className="h-3.5 w-3.5 text-sky-400" />
+        <Plus className="h-3.5 w-3.5 text-sky-500 dark:text-sky-400" />
         <span>Add Row</span>
       </button>
     </div>

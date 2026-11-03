@@ -31,5 +31,21 @@ Whenever asked to perform a code audit, security scan, reliability scan, or arch
    - **Never Stage, Commit, or Push**: NEVER add, commit, or push any files or directories inside `docs/` to Git.
    - **Never Modify `.gitignore` to Un-ignore Docs**: NEVER alter `.gitignore` to whitelist or track `docs/` (e.g., never add `!docs/*` or `!docs/*.md`). The `docs/` folder is deliberately ignored by design.
 
+## Mandatory Changelog & Version Maintenance
+
+Whenever changes, features, refactors, or bug fixes are made to the codebase:
+
+1. **Dual Changelog Synchronization**:
+   - `CHANGELOG.md`: Always update for any changes across the entire repository (extension, native app, hub, backend, shared libraries).
+   - `CHROMEWEBSTORE.md`: Update **ONLY** for changes affecting the browser extension (`apps/extension` and extension-facing shared modules). Strictly exclude backend, hub, or desktop-only changes.
+
+2. **Git Commit and Tag Decision Rules**:
+   - **Uncommitted Version**: If the latest version in `package.json`/`manifest.json` is still uncommitted in the working tree, append the new changes under that version's section in the changelogs.
+   - **Committed Version & Tag Equality**: If the latest version has already been committed:
+     - Check the latest commit against the latest Git tag.
+     - **If Latest Commit == Latest Tag**: The previous release is finalized. Bump the version number (e.g., in `package.json`, `apps/extension/package.json`, `apps/extension/public/manifest.json`) and initialize a new version entry in `CHANGELOG.md` and `CHROMEWEBSTORE.md`.
+     - **If Latest Commit is Ahead of Latest Tag**: There are un-tagged commits ahead of the last release tag. **Explicitly ask the user for confirmation** whether the version needs to be bumped or if the new changes should be added to the current unreleased version before updating.
+
+
 
 

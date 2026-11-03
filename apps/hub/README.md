@@ -33,14 +33,14 @@ From the repository root:
 # Start Hub in development mode (http://localhost:5173)
 npm run dev:hub
  
-# Build Hub for production (hub/dist/)
+# Build Hub for production (apps/hub/dist/)
 npm run build:hub
 ```
  
-Or directly inside `hub/`:
+Or directly inside `apps/hub/`:
  
 ```bash
-cd hub
+cd apps/hub
 npm run dev
 npm run build
 ```
@@ -52,10 +52,10 @@ npm run build
 AirREST Hub deploys seamlessly to Vercel as a single-page application:
  
 1. In the [Vercel Dashboard](https://vercel.com/dashboard), import the repository.
-2. Set **Root Directory** to **`hub`**.
+2. Set **Root Directory** to **`apps/hub`**.
 3. Framework Preset: **Vite**.
 4. *(Optional)* Set **Environment Variables**: `VITE_API_URL` with your deployed backend URL (e.g. `https://airrest-backend.vercel.app`).
-5. Single-page application route rewrites are pre-configured in `hub/vercel.json`.
+5. Single-page application route rewrites are pre-configured in `apps/hub/vercel.json`.
 6. Click **Deploy**!
  
 ---

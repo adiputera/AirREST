@@ -71,6 +71,20 @@ func TestCollectionPermissionRules(t *testing.T) {
 	if err := colService.CheckPermission(ctx, superadmin, nil, &projID, true); err != nil {
 		t.Fatalf("expected superadmin to have project write access, got: %v", err)
 	}
+
+	// 2. Modifying MinRole on collections requires admin or maintainer role
+	if !CanModifyMinRole(domain.ProjectRoleAdmin) {
+		t.Fatalf("expected admin to be able to modify min_role")
+	}
+	if !CanModifyMinRole(domain.ProjectRoleMaintainer) {
+		t.Fatalf("expected maintainer to be able to modify min_role")
+	}
+	if CanModifyMinRole(domain.ProjectRoleContributor) {
+		t.Fatalf("expected contributor NOT to be able to modify min_role")
+	}
+	if CanModifyMinRole(domain.ProjectRoleReader) {
+		t.Fatalf("expected reader NOT to be able to modify min_role")
+	}
 }
 
 func TestReorderItemPermissionRules(t *testing.T) {
@@ -145,6 +159,20 @@ func TestEnvironmentAccessRules(t *testing.T) {
 	}
 	if !CanAccessEnv(domain.ProjectRoleAdmin, domain.ProjectRoleAdmin) {
 		t.Fatalf("admin should be able to access admin-level environment")
+	}
+
+	// 5. MinRole modification on environments requires admin or maintainer role
+	if !CanModifyMinRole(domain.ProjectRoleAdmin) {
+		t.Fatalf("expected admin to be able to modify environment min_role")
+	}
+	if !CanModifyMinRole(domain.ProjectRoleMaintainer) {
+		t.Fatalf("expected maintainer to be able to modify environment min_role")
+	}
+	if CanModifyMinRole(domain.ProjectRoleContributor) {
+		t.Fatalf("expected contributor NOT to be able to modify environment min_role")
+	}
+	if CanModifyMinRole(domain.ProjectRoleReader) {
+		t.Fatalf("expected reader NOT to be able to modify environment min_role")
 	}
 }
 

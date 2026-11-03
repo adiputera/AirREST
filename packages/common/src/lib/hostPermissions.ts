@@ -1,3 +1,10 @@
+function getChromePermissions(): any {
+  if (typeof globalThis !== 'undefined' && (globalThis as any).chrome?.permissions) {
+    return (globalThis as any).chrome.permissions;
+  }
+  return undefined;
+}
+
 export function getHostPermissionPattern(url: string): string | null {
   try {
     const parsed = new URL(url);
@@ -21,9 +28,10 @@ export async function hasHostPermission(url: string): Promise<boolean | null> {
     }
     return null;
   }
-  if (typeof chrome === 'undefined' || !chrome.permissions?.contains) return null;
+  const permissions = getChromePermissions();
+  if (!permissions?.contains) return null;
   try {
-    return await chrome.permissions.contains({ origins: [origin] });
+    return await permissions.contains({ origins: [origin] });
   } catch {
     return null;
   }
@@ -31,9 +39,10 @@ export async function hasHostPermission(url: string): Promise<boolean | null> {
 
 export async function requestHostPermission(url: string): Promise<boolean> {
   const origin = getHostPermissionPattern(url);
-  if (!origin || typeof chrome === 'undefined' || !chrome.permissions?.request) return false;
+  const permissions = getChromePermissions();
+  if (!origin || !permissions?.request) return false;
   try {
-    return await chrome.permissions.request({ origins: [origin] });
+    return await permissions.request({ origins: [origin] });
   } catch {
     return false;
   }

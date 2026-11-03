@@ -2,6 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval';" />
     <title>AirREST Script Sandbox</title>
   </head>
   <body>
@@ -9,7 +10,10 @@
       function isValidOrigin(origin) {
         if (!origin || typeof origin !== 'string' || origin === 'null') return false;
         if (origin.startsWith('chrome-extension://')) return true;
-        if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
+        // Allow localhost only during development / test runners
+        if (location.protocol === 'http:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+          if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
+        }
         return false;
       }
 
@@ -20,8 +24,10 @@
         const { id, script, response, environment = {}, variables = {} } = event.data;
         if (!id || !script) return;
 
-        const currentEnv = Object.assign({}, environment);
-        const currentVars = Object.assign({}, variables);
+        const currentEnv = Object.create(null);
+        Object.assign(currentEnv, environment || {});
+        const currentVars = Object.create(null);
+        Object.assign(currentVars, variables || {});
 
         function isForbiddenKey(k) {
           return k === '__proto__' || k === 'constructor' || k === 'prototype';
@@ -29,22 +35,40 @@
 
         const pm = {
           environment: {
-            get: function (k) { return currentEnv[k]; },
+            get: function (k) {
+              return Object.prototype.hasOwnProperty.call(currentEnv, k) ? currentEnv[k] : undefined;
+            },
             set: function (k, v) {
               if (isForbiddenKey(k)) return;
               currentEnv[k] = String(v);
             },
             unset: function (k) { delete currentEnv[k]; },
             has: function (k) { return Object.prototype.hasOwnProperty.call(currentEnv, k); },
-            toObject: function () { return Object.assign({}, currentEnv); }
+            toObject: function () {
+              const res = {};
+              for (const key of Object.keys(currentEnv)) {
+                res[key] = currentEnv[key];
+              }
+              return res;
+            }
           },
           variables: {
-            get: function (k) { return currentVars[k] !== undefined ? currentVars[k] : currentEnv[k]; },
+            get: function (k) {
+              if (Object.prototype.hasOwnProperty.call(currentVars, k)) return currentVars[k];
+              if (Object.prototype.hasOwnProperty.call(currentEnv, k)) return currentEnv[k];
+              return undefined;
+            },
             set: function (k, v) {
               if (isForbiddenKey(k)) return;
               currentVars[k] = String(v);
             },
-            toObject: function () { return Object.assign({}, currentVars); }
+            toObject: function () {
+              const res = {};
+              for (const key of Object.keys(currentVars)) {
+                res[key] = currentVars[key];
+              }
+              return res;
+            }
           },
           response: response ? {
             code: response.status,
@@ -101,13 +125,17 @@
             if (isForbiddenKey(k)) return;
             currentEnv[k] = String(v);
           },
-          getEnvironmentVariable: function (k) { return currentEnv[k]; },
+          getEnvironmentVariable: function (k) {
+            return Object.prototype.hasOwnProperty.call(currentEnv, k) ? currentEnv[k] : undefined;
+          },
           clearEnvironmentVariable: function (k) { delete currentEnv[k]; },
           setGlobalVariable: function (k, v) {
             if (isForbiddenKey(k)) return;
             currentVars[k] = String(v);
           },
-          getGlobalVariable: function (k) { return currentVars[k]; },
+          getGlobalVariable: function (k) {
+            return Object.prototype.hasOwnProperty.call(currentVars, k) ? currentVars[k] : undefined;
+          },
           clearGlobalVariable: function (k) { delete currentVars[k]; }
         };
 
@@ -137,8 +165,8 @@
             event.source.postMessage({
               id: id,
               success: true,
-              environment: currentEnv,
-              variables: currentVars
+              environment: Object.assign({}, currentEnv),
+              variables: Object.assign({}, currentVars)
             }, targetOrigin);
           }
         } catch (err) {
@@ -157,8 +185,8 @@
               id: id,
               success: false,
               error: errorMessage,
-              environment: currentEnv,
-              variables: currentVars
+              environment: Object.assign({}, currentEnv),
+              variables: Object.assign({}, currentVars)
             }, targetOrigin);
           }
         }

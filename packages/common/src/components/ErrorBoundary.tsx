@@ -59,31 +59,31 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       const errorMessage = this.state.error?.message || 'An unexpected rendering error occurred.';
 
       return (
-        <div className="flex flex-1 h-full w-full items-center justify-center p-6 bg-zinc-950 text-zinc-100 select-none">
-          <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-900/80 p-6 shadow-2xl backdrop-blur-md">
+        <div className="flex flex-1 h-full w-full items-center justify-center p-6 bg-app text-tx-primary select-none">
+          <div className="w-full max-w-lg rounded-2xl border border-line-strong bg-card p-6 shadow-2xl backdrop-blur-md">
             <div className="flex items-start gap-4">
               <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-rose-500/20 bg-rose-500/10 text-rose-400">
                 <AlertTriangle className="h-6 w-6" />
               </div>
 
               <div className="flex-1 min-w-0">
-                <h3 className="text-base font-semibold text-zinc-100">{title}</h3>
-                <p className="mt-1 text-xs text-zinc-400 leading-relaxed">
+                <h3 className="text-base font-semibold text-tx-primary">{title}</h3>
+                <p className="mt-1 text-xs text-tx-muted leading-relaxed">
                   AirREST encountered an unexpected error while displaying this component. Your saved data is intact.
                 </p>
 
-                <div className="mt-3 rounded-lg border border-zinc-800/80 bg-zinc-950/80 p-3 font-mono text-[11px] text-rose-300 break-words">
+                <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 font-mono text-[11px] text-rose-400 break-words">
                   {errorMessage}
                 </div>
               </div>
             </div>
 
             {/* Action Buttons */}
-            <div className="mt-5 flex items-center justify-between border-t border-zinc-800/80 pt-4">
+            <div className="mt-5 flex items-center justify-between border-t border-line pt-4">
               <button
                 type="button"
                 onClick={this.toggleDetails}
-                className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition"
+                className="flex items-center gap-1.5 text-xs text-tx-muted hover:text-tx-primary transition"
               >
                 <span>Technical details</span>
                 {this.state.showDetails ? (
@@ -97,7 +97,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                 <button
                   type="button"
                   onClick={this.handleReset}
-                  className="flex items-center gap-1.5 rounded-xl border border-zinc-800 bg-zinc-800/80 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-700 hover:text-white transition shadow-sm"
+                  className="flex items-center gap-1.5 rounded-xl border border-line bg-element px-3 py-1.5 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition shadow-sm"
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
                   <span>Try Again</span>
@@ -115,16 +115,16 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
             {/* Collapsible Technical Details */}
             {this.state.showDetails && (
-              <div className="mt-4 max-h-48 overflow-y-auto rounded-lg border border-zinc-850 bg-black/60 p-3 text-[10px] font-mono text-zinc-400 space-y-2">
+              <div className="mt-4 max-h-48 overflow-y-auto rounded-lg border border-line bg-element/60 p-3 text-[10px] font-mono text-tx-muted space-y-2">
                 {this.state.error?.stack && (
                   <div>
-                    <div className="text-zinc-300 font-semibold mb-1">Stack Trace:</div>
+                    <div className="text-tx-secondary font-semibold mb-1">Stack Trace:</div>
                     <pre className="whitespace-pre-wrap">{this.state.error.stack}</pre>
                   </div>
                 )}
                 {this.state.errorInfo?.componentStack && (
                   <div>
-                    <div className="text-zinc-300 font-semibold mb-1">Component Stack:</div>
+                    <div className="text-tx-secondary font-semibold mb-1">Component Stack:</div>
                     <pre className="whitespace-pre-wrap">{this.state.errorInfo.componentStack}</pre>
                   </div>
                 )}

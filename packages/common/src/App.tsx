@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
@@ -11,6 +11,7 @@ import { useApiStore } from './store/useApiStore';
 import { useStoreContext } from './store/storeContext';
 import { onStorageCommit } from './lib/storage';
 import { useBackHandler } from './lib/backNavigation';
+import { applyTheme, subscribeToSystemTheme } from './lib/theme';
 
 export const App: React.FC = () => {
   const contextStore = useStoreContext();
@@ -25,8 +26,29 @@ export const App: React.FC = () => {
   const createTab = activeStore((state) => state.createTab);
   const workspaceMode = activeStore((state) => state.workspaceMode);
   const cloudToken = activeStore((state) => state.cloudConfig.token);
+  const activeScope = activeStore((state) => state.cloudConfig.activeScope);
+  const pullCloudDelta = activeStore((state) => state.pullCloudDelta);
   const refreshFeaturePolicy = activeStore((state) => state.refreshFeaturePolicy);
+  const theme = activeStore((state) => state.theme || 'system');
+  const hasInitialPulledRef = useRef(false);
   useBackHandler(sidebarOpen, () => setSidebarOpen(false), 10);
+
+  // Initial background delta sync on app startup when opened with an active cloud session
+  useEffect(() => {
+    if (!hasHydrated || workspaceMode !== 'cloud' || !cloudToken || !activeScope) return;
+    if (hasInitialPulledRef.current) return;
+    hasInitialPulledRef.current = true;
+    void pullCloudDelta();
+  }, [hasHydrated, workspaceMode, cloudToken, activeScope, pullCloudDelta]);
+
+  useEffect(() => {
+    applyTheme(theme);
+    if (theme === 'system') {
+      return subscribeToSystemTheme(() => {
+        applyTheme('system');
+      });
+    }
+  }, [theme]);
 
   useEffect(() => setSidebarOpen(false), [activeTabId]);
 
@@ -82,7 +104,7 @@ export const App: React.FC = () => {
 
   if (!hasHydrated) {
     return (
-      <div className="flex h-screen w-screen items-center justify-center bg-zinc-950 text-zinc-400">
+      <div className="flex h-screen w-screen items-center justify-center bg-app text-tx-muted">
         <div className="flex items-center gap-3">
           <div className="h-5 w-5 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
           <span className="text-sm font-medium">Loading AirREST...</span>
@@ -93,7 +115,7 @@ export const App: React.FC = () => {
 
   return (
     <ErrorBoundary fallbackTitle="AirREST Workspace Error">
-      <div className="relative flex h-[100dvh] w-screen flex-col overflow-hidden bg-zinc-950 text-zinc-100 select-none">
+      <div className="relative flex h-[100dvh] w-screen flex-col overflow-hidden bg-app text-tx-primary select-none">
         {/* Top Application Header */}
         <ErrorBoundary fallbackTitle="Header Error">
           <Header onOpenSidebar={() => setSidebarOpen(true)} />
@@ -103,9 +125,9 @@ export const App: React.FC = () => {
         <div className="flex flex-1 overflow-hidden">
           {/* Left Sidebar (Collections & History) */}
           {sidebarOpen && (
-            <button type="button" aria-label="Close collections panel" className="fixed inset-0 z-40 bg-black/70 md:hidden" onClick={() => setSidebarOpen(false)} />
+            <button type="button" aria-label="Close collections panel" className="fixed inset-0 z-40 bg-black/60 md:hidden" onClick={() => setSidebarOpen(false)} />
           )}
-          <div className={`${sidebarOpen ? 'fixed inset-y-0 left-0 z-40 flex flex-col bg-zinc-950' : 'hidden'} md:relative md:z-auto md:block`}>
+          <div className={`${sidebarOpen ? 'fixed inset-y-0 left-0 z-40 flex flex-col bg-surface' : 'hidden'} md:relative md:z-auto md:block`}>
             <div className="min-h-0 flex-1 md:h-full">
               <ErrorBoundary fallbackTitle="Sidebar Error">
                 <Sidebar onClose={() => setSidebarOpen(false)} />
@@ -114,7 +136,7 @@ export const App: React.FC = () => {
           </div>
 
           {/* Right Studio Panel (Tabs, Request, Response) */}
-          <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-zinc-950">
+          <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-app">
             <ErrorBoundary fallbackTitle="Studio Panel Error">
               <TabBar />
               {tabs && tabs.length > 0 ? (

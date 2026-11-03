@@ -7,7 +7,128 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [1.3.2] - 2026-11-03
+
+### Fixed
+- **Repository Audit Remediations & Security Hardening**:
+  - **Backend OCC Concurrency Enforcement**: Hardened `UpdateEnvironment` in `backend/core/service/environment_service.go` to reject update requests without or with invalid `base_version` (`baseVersion <= 0`) with `409 Conflict`, aligning with `backend/API_CONTRACT.md`; updated `backend/openapi.yaml` and `backend/openapi.json`.
+  - **PostgreSQL Error Sanitization**: Sanitized raw PostgreSQL driver errors in `backend/core/middleware/auth.go` and `backend/core/handler/admin_handler.go` to avoid exposing database internals in HTTP 500 error responses.
+  - **Versioned Migration Tracking**: Added `schema_migrations` tracking table to `backend/core/repository/postgres/db.go` so executed SQL migrations run once per version rather than re-executing across application pool initializations.
+  - **Postman API Test Collection Parity & Fixes**: Fixed path array parameter corruption in `backend/airrest_api_collection.json` sync pull item; updated disabled registration assertion to expect 403 `REGISTRATION_DISABLED`; expanded collection to cover all backend routes including Environments, Workspaces, Teams, Projects, and Collection operations.
+  - **Extension Sandbox Origin Hardening**: Restricted localhost origin acceptance in `apps/extension/public/sandbox.html` to development/HTTP environments so packaged production builds accept messages exclusively from extension origins.
+  - **Tooling, Types & Linter Alignment**: Expanded `eslint.config.mjs` to lint `apps/extension/public/service-worker.js`; added missing `VITE_AIRREST_EDITION` to `apps/extension/src/vite-env.d.ts`; updated version bump script `scripts/bump-desktop-version.mjs` to maintain `apps/hub/package.json`, `README.md` version badge, and Postman export version metadata in sync.
+  - **Handler Unit Testing**: Implemented table-driven handler unit test suites across `auth_handler_test.go`, `environment_handler_test.go`, `workspace_handler_test.go`, `sync_handler_test.go`, `user_handler_test.go`, `team_handler_test.go`, and `project_handler_test.go`.
+- **Serverless Cold-Start Migration Races & Startup Diagnostics**:
+  - **Concurrency-Safe Boot Migrations**: `backend/core/repository/postgres/db.go` now applies each migration in its own transaction guarded by a transaction-scoped advisory lock (`pg_advisory_xact_lock`, pooler-safe) and re-checks `schema_migrations` after acquiring it, eliminating `schema_migrations_pkey` duplicate-key failures when multiple instances cold-start against the same database. Tracking-table creation is serialized as well, and recording uses `ON CONFLICT DO NOTHING`.
+  - **Fail-Fast DDL Locks**: Migrations set `lock_timeout = 5s` and `statement_timeout = 60s` so DDL waiting behind live traffic aborts and retries instead of queueing production queries behind an `ACCESS EXCLUSIVE` lock request.
+  - **Migration-Aware Initialization Deadline**: Added `config.InitTimeout()`; serverless (`backend/api/index.go`) and standalone (`backend/cmd/server/main.go`) startup use 20 seconds when `SKIP_MIGRATIONS=true` and 120 seconds when boot migrations may run (previously a fixed 20 s caused `context deadline exceeded` on large migrations).
+  - **Idempotent Superadmin Bootstrap**: `BootstrapSuperadmin` treats a concurrent creation by another instance as success instead of failing initialization.
+  - **Startup Failure Reasons**: The `503 SERVICE_UNAVAILABLE` initialization envelope now includes an additive `reason` (`INITIALIZING`, `CONFIG_INVALID`, `DATABASE_UNAVAILABLE`, `MIGRATION_FAILED`, `BOOTSTRAP_FAILED`, `INITIALIZATION_FAILED`) with client-safe messages; backoff responses report the last failure stage. `code` is unchanged. Synchronized `backend/openapi.yaml`, `backend/openapi.json`, and `backend/API_CONTRACT.md`.
+  - **Tests & Docs**: Added integration tests for concurrent migrations, lock-timeout fail-fast, and concurrent superadmin bootstrap, plus unit tests for startup failure reasons; documented the Vercel Preview-runs-migrations / Production-skips-migrations release flow in `backend/README.md`.
+  - **Handler Test Build Fix**: Corrected stale `service.NewSyncService` and `service.NewWorkspaceService` constructor calls in `backend/core/handler/sync_handler_test.go` and `workspace_handler_test.go` so the `core/handler` test package compiles and `go vet ./...` passes.
+
+## [1.3.1] - 2026-11-02
+
+### Added
+- **Explicit Save & Discard Controls for Environment Variables (Name & Initial Value)**:
+  - Replaced eager keystroke cloud pushes with local draft buffering (`draftKeys`, `draftInitialValues`) in `EnvironmentModal`.
+  - Added inline Save ($\checkmark$ / <kbd>Enter</kbd>) and Discard ($\times$ / <kbd>Esc</kbd>) action buttons on every variable row, lighting up dynamically whenever variable name or initial value differs from its saved state.
+  - Added visual dirty state indicators with amber boundary styling on modified variable name and initial value inputs.
+  - Introduced an **Unsaved Variable Changes Confirmation Dialog** with **Save Changes**, **Discard**, and **Cancel** options, safeguarding against accidental loss of edits when clicking Done, the close button, pressing <kbd>Esc</kbd>, Android back navigation, or switching environments in the sidebar list.
+  - Retained instant local reflection for Current Value without cloud push.
+  - Added automated unit test suite in `scripts/environment-draft-sync.test.mjs`.
+
+### Changed
+- **Extended Request and Cloud Synchronization Deadlines to 5 Minutes (300s)**:
+  - Extended backend request execution deadline (`RequestTimeout`) in `backend/core/middleware/limits.go` from 120 seconds (2 minutes) to 300 seconds (5 minutes) matching Vercel Hobby serverless maximum execution limits.
+  - Configured explicit `maxDuration: 300` in `backend/vercel.json` for the serverless function handler (`api/index.go`).
+  - Extended shared client cloud sync request deadline (`getDefaultCloudSignal`) in `packages/common/src/lib/cloudApi.ts` from 120,000ms to 300,000ms (5 minutes).
+  - Extended desktop transport fallback timeout in `apps/native/src/adapters/tauriAdapter.ts` (`combineSignals`) from 120,000ms to 300,000ms (5 minutes).
+  - Extended client test request execution deadline (`REQUEST_TIMEOUT_MS`) in `packages/common/src/lib/fetcher.ts` from 120 seconds to 300 seconds (5 minutes).
+  - Synchronized API contract specifications and documentation in `backend/API_CONTRACT.md`, `backend/openapi.yaml`, and `backend/openapi.json`.
+
+### Fixed
+- **Collection Import Error Handling & Cloud Push Retry**:
+  - Prevented premature closing of `ImportModal` when batch upload (`POST /api/v1/sync/import-batch`) times out or encounters network errors; `addCollection`, `replaceCollection`, and `addEnvironment` now propagate errors so `ImportModal` remains open with the error message and preserves user input.
+  - Added `_syncStatus: 'pending'` tracking for un-synced and pending collections in cloud workspace scopes.
+  - Fixed sync retry flow in `pullCloudDelta`: clicking the Sync/Retry button in `ScopeSwitcher` now proactively attempts re-uploading un-synced collections via `batchImportToScope` before pulling delta changes, preventing data loss.
+  - Protected un-synced and pending collections from being wiped out or overwritten by server pulls in `pullCloudDelta`.
+  - Avoided false conflict modal triggers when re-attempting imports of failed/pending collections in `ImportModal`.
+  - Added visual pending sync indicator in `Sidebar` collection headers with one-click retry trigger.
+  - Added unit test suite in `scripts/collection-sync-retry.test.mjs`.
+- **Android APK Update Browser Redirect**:
+  - Redirected APK download flow in `AndroidUpdateBanner` to open the GitHub Release web page (`html_url`) in the external browser rather than directly streaming the binary `.apk` URL into in-app webviews / Chrome Custom Tabs.
+  - Resolved download stalls (freezing at 100%) caused by in-app browser sandbox limitations and missing package installation hand-offs.
+  - Added regression test assertion in `scripts/android-update-banner.test.mjs`.
+- **Optimistic Concurrency Control (OCC) Cloud Sync Concurrency**:
+  - Increased `scheduleEnvironmentCloudSync` debounce timeout from `300ms` to `1200ms` in `useApiStore.ts`.
+  - Added in-flight request lock (`envSyncInFlight`) and queued sync serialization (`envSyncQueued`) to prevent overlapping sync requests from dispatching stale `base_version` payloads that triggered 409 conflict popups while editing.
+
+## [1.3.0] - 2026-11-02
+
+### Added
+- **Theme Switcher & Semantic Color Palette (Dark, Light, & System)**:
+  - Added theme switching support across desktop, web, and extension clients with options for `System`, `Light`, and `Dark` modes.
+  - Implemented `DesktopThemeToggle` and integrated theme controls into header and user profile menus.
+  - Added dynamic system preference resolution (`theme.ts`) that listens to OS color scheme changes (`prefers-color-scheme`) and persists user choices.
+  - Migrated UI components to theme tokens (`bg-surface`, `bg-card`, `border-line`, `text-tx-primary`, `text-tx-secondary`, `text-tx-muted`, `hover:bg-hover`).
+  - Added unit test suite for theme persistence and DOM resolution in `scripts/theme-resolution.test.mjs`.
+- **Visual Payload Builder for JSON & XML**:
+  - Interactive tree-based form builder (`PayloadBuilder.tsx`, `PayloadNodeRow.tsx`, `PayloadTypeBadge.tsx`, `DateConfigPopover.tsx`) supporting nested objects, lists, and primitives (`string`, `number`, `boolean`, `date`, `null`).
+  - Date preset formatting popover supporting ISO-8601, Date Only (`YYYY-MM-DD`), and Unix timestamp configurations.
+  - XML attribute toggling (`[Attr]`) and automated XML entity escaping.
+  - Responsive 3-way segmented control (`[ 💻 Raw ]`, `[ 📝 Builder ]`, `[ 👁️ Result Preview ]`) defaulting cleanly to Raw editor mode to preserve user comments and formatting.
+  - Bidirectional compilation (`payloadCompiler.ts`) and two-way reverse parsing (`payloadReverseParser.ts`) converting existing raw JSON and XML structures into editable node trees.
+  - Added unit test suite in `scripts/payload-builder.test.mjs`.
+- **Automatic Startup Cloud Delta Sync**:
+  - Added automatic non-blocking background delta synchronization (`pullCloudDelta`) in `App.tsx` on initial startup and rehydration for active cloud sessions, ensuring team collections and environments are always up to date without requiring manual sync button clicks.
+- **Full-Screen Expand Modals & Draggable Height Resizing for Payload & Response**:
+  - Added a 4-arrow Expand button (`Maximize2`) in both the Request Payload toolbar (`PayloadBuilder.tsx`) and the Response Viewer (`ResponseViewer.tsx`) to open a spacious, distraction-free modal pop-up dialog (`h-[92vh] max-w-6xl`) for inspecting and editing large JSON/XML structures.
+  - Integrated `Beautify JSON` / `Beautify XML`, one-click `Copy`, byte size indicators, segmented view controls (`Raw`, `Builder`, `Preview`), and `Esc` shortcut / back navigation handlers directly inside the modal.
+  - Added tactile draggable height resize handles (`GripHorizontal`) at the bottom of the payload editor and response viewer with mouse/touch drag support, persistence in `localStorage` (`airrest:payload_editor_height`, `airrest:response_editor_height`), and double-click to reset.
+- **Unsaved Changes Confirmation Dialog on Tab Close**:
+  - Added an interactive confirmation modal when closing tabs with unsaved modifications (`isRequestModified`), preventing accidental loss of in-flight changes.
+  - Features three choices: **Save** (saves directly to the source collection or prompts `SaveToCollectionModal` for new requests before closing), **Close Tab** (discards unsaved modifications and closes), and **Cancel** (keeps the tab open).
+  - Fully integrated with keyboard navigation (<kbd>Esc</kbd>) and platform back navigation handlers.
+
+### Changed
+- Unified Path Variables empty state placeholder to use `:variable` matching the section header hint.
+- Replaced hardcoded `Extension v1.1` header badge with uniform `Extension` badge across extension and shared layout components.
+- Localized Android update banner notification messages to English for consistent global client experience.
+- Extended cloud API request deadline and client transport fallback timeouts from 30 seconds to 120 seconds (2 minutes) across backend limits middleware (`RequestTimeout`), shared cloud client (`getDefaultCloudSignal`), and desktop transport adapter (`tauriAdapter.ts`) to accommodate large collection batch imports.
+- Extended client test request execution deadline (`REQUEST_TIMEOUT_MS`) from 30 seconds to 120 seconds (2 minutes) in `fetcher.ts` to accommodate long-running target APIs and reporting tasks.
+- Hardened native desktop and cloud transport lifecycle with explicit connect timeouts (15s) and request fallback timeouts (120s) in `tauriAdapter.ts` and `cloudApi.ts`.
+- Bounded QuickJS sandbox memory footprint in `quickjsRunner.ts` by directly injecting payload handles via `context.newString` instead of double-JSON template stringification, and added promise cache reset on failure.
+- Cleaned up desktop boilerplate files (`App.css`, `react.svg`) and declared missing `zustand` dependency in `apps/native/package.json`.
+- Migrated 10 test suites in `scripts/*.test.mjs` to target `@airrest/common` shared packages, decoupling extension test specifications from dead duplicate source files.
+- Purged 44 obsolete, unreferenced duplicate source files from `apps/extension/src/{components,lib,store,types}` and transitioned Chrome extension to thin platform adapter architecture over `@airrest/common`.
+
+### Fixed
+- Fixed JSX duplicate button and closing wrapper elements in `SaveToCollectionModal.tsx`.
+- Updated test runner mock resolution in `payload-builder.test.mjs`.
+- Updated responsive header and sidebar layout assertions in `scope-switcher-placement.test.mjs` to validate semantic theme tokens.
+- Fixed Content Security Policy (CSP) inline script violation in Chrome Extension MV3 by initializing themes via synchronous JS module execution (`initEarlyTheme`).
+- Resolved mobile Environment selector opening issues by replacing native `<select>` with an interactive accessible popover dropdown.
+- Resolved offside HTTP method dropdown positioning on mobile/narrow viewports by replacing native `<select>` with a custom accessible popover dropdown anchored directly to the request bar.
+- Fixed saved request payloads failing to load into Payload Builder: added sanitization for unquoted template variables (`{{variable}}`), comments, and trailing commas in `payloadReverseParser.ts`, synchronized incoming tab/storage payload updates in `PayloadBuilder.tsx`, and removed dummy fallback data.
+- Enhanced Light Mode contrast and text readability across `ScopeSwitcher`, `VariableInput`, `UserMenu`, and `RequestEditor`: replaced low-contrast orange/sky text (`amber-400`, `sky-400`) on white backgrounds with WCAG-compliant adaptive classes (`amber-700 dark:text-amber-400`, `sky-700 dark:text-sky-400`), fixed workspace item gray-on-white text, and aligned container and divider borders with semantic tokens.
+- Hardened Chrome extension sandbox security (`apps/extension/public/manifest.json` and `sandbox.html`): added explicit CSP header and meta directives (`default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'`), enforced `sandbox="allow-scripts"` on iframe injection, and isolated global prototype variables to prevent prototype pollution.
+- Enhanced Chromium network error diagnostics: exported `getChromiumNetworkError` in common fetcher, integrated error classification into `chromeAdapter`, and enforced 30s TTL and bounded LRU ordering in background service worker.
+- Added `AbortSignal` and timeout lifecycle support to common sandbox script runner, cleanly terminating runaway and timed-out scripts.
+- Fixed useless regex character escape in `payloadReverseParser.ts`.
+- Fixed potential native Tauri memory leaks and unhandled Rust ResourceTable entries by explicitly cancelling response body streams on 401 retries and silent token refresh in `cloudApi.ts`.
+- Enforced 16 MiB file size safety limit prior to reading files in `tauriAdapter.openFile` and aligned capabilities in `default.json` (`fs:allow-stat`).
+- Enforced 25 MiB outbound attachment limits for form-data and binary payloads in `fetcher.ts`.
+- Enforced 2 MiB response data bounds in `scriptProtocol.ts` to prevent sandbox payload amplification.
+- Fixed native webview teardown and worker leak by invoking `runtime.dispose()` on window `beforeunload` in `apps/native/src/main.tsx`.
+- Fixed early theme hydration (`initEarlyTheme`) to unwrap `StorageEnvelope.data` so persisted Light/Dark themes apply before initial render without FOUC.
+- Preserved cloud workspace session and cached scopes on transient network failures during `fetchScopes()`.
+- Fixed tab response race conditions when switching or closing tabs during in-flight requests, prevented deleted workspaces from re-entering scope caches, and added safe 1000ms revocation delay for blob downloads.
+- Suppressed top-level SVG blob navigation (`Open in New Tab`) and validated HTTP(S) schemes on diagnostic links in `ResponseViewer.tsx`.
+- Hardened desktop and Android release workflows (`.github/workflows/desktop-release.yml`), synchronized Android `versionCode` formula (`major * 1000000 + minor * 1000 + patch`), and improved `AndroidUpdateBanner` architecture detection (`x86_64`), APK asset validation, and flex/safe-area layout.
+- Enforced global feature policy (`collection.move` and `collection.delete`) in AirREST Hub (`ProjectsView.tsx`) with fail-closed validation and automatic refresh on `403 FEATURE_DISABLED`.
+- Enforced backend RBAC requiring `maintainer` or `admin` role to modify `min_role` on collections and environments (`CanModifyMinRole`), and included required `name` field in `apiUpdateCollectionPermission`.
+- Added automatic OCC `409 Conflict` version recovery in Hub permission and feature policy modals, bounded parallel collection detail fetching (concurrency limit 4) with retry indicator (`detailsLoadFailed`), preselected single target project in Move Collection modal, and wrapped Hub root in `ErrorBoundary`.
 
 ## [1.2.1] - 2026-11-01
 

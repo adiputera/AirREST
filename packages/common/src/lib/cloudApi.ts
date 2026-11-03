@@ -11,18 +11,30 @@ export function getCloudTransport(): CloudTransport | null {
   return injectedCloudTransport;
 }
 
+function getDefaultCloudSignal(): AbortSignal | undefined {
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+    return AbortSignal.timeout(300000);
+  }
+  if (typeof AbortController !== 'undefined') {
+    return new AbortController().signal;
+  }
+  return undefined;
+}
+
 async function cloudFetch(url: string, init: RequestInit): Promise<Response> {
+  const signal = (init.signal as AbortSignal) || getDefaultCloudSignal();
   let response: Response;
   if (injectedCloudTransport) {
     response = await injectedCloudTransport.fetch(url, {
       method: init.method || 'GET',
       headers: (init.headers instanceof Headers ? Object.fromEntries(init.headers.entries()) : (init.headers || {})) as Record<string, string>,
       body: init.body,
-      signal: (init.signal as AbortSignal) || new AbortController().signal,
+      signal,
     });
   } else {
     response = await fetch(url, {
       ...init,
+      signal,
       redirect: 'manual',
     });
   }
@@ -345,6 +357,13 @@ export async function fetchWithAuth(
     try {
       const result = await handleSilentRefresh(base, refreshToken);
       if (result.token) {
+        try {
+          if (response.body && !response.bodyUsed) {
+            await response.body.cancel();
+          }
+        } catch {
+          // ignore stream cancel error
+        }
         headers.set('Authorization', `Bearer ${result.token}`);
         // Retry the original request
         response = await cloudFetch(url, requestInit);
@@ -377,17 +396,35 @@ async function handleSilentRefresh(apiUrl: string, refreshTokenStr: string): Pro
 
   const refreshPromise = (async (): Promise<SilentRefreshResult> => {
     try {
+      const refreshSignal = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+        ? AbortSignal.timeout(15000)
+        : (typeof AbortController !== 'undefined' ? new AbortController().signal : undefined);
       const res = await cloudFetch(`${base}/api/v1/auth/refresh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refresh_token: refreshTokenStr }),
+        signal: refreshSignal,
       });
 
       if (res.status === 401 || res.status === 403) {
+        try {
+          if (res.body && !res.bodyUsed) {
+            await res.body.cancel();
+          }
+        } catch {
+          // ignore stream cancel error
+        }
         return { token: null, evicted: true };
       }
 
       if (!res.ok) {
+        try {
+          if (res.body && !res.bodyUsed) {
+            await res.body.cancel();
+          }
+        } catch {
+          // ignore stream cancel error
+        }
         return { token: null, evicted: false };
       }
 
