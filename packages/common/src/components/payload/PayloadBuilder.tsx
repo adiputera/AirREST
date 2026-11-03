@@ -11,7 +11,6 @@ import {
   RotateCcw,
   Maximize2,
   Minimize2,
-  GripHorizontal,
   X,
 } from 'lucide-react';
 import { PayloadBuilderConfig, PayloadNode } from '../../types/payloadBuilder';
@@ -25,13 +24,14 @@ import {
 import { jsonToTree, xmlToTree } from '../../lib/payloadReverseParser';
 import { PayloadNodeRow } from './PayloadNodeRow';
 import { handleCodeEditorKeyDown } from '../../lib/editorHelper';
-import { beautifyJson, beautifyXml } from '../../lib/formatters';
+import { beautifyJson, beautifyXml, sanitizeRelaxedJson } from '../../lib/formatters';
 import { useBackHandler } from '../../lib/backNavigation';
+import { CodeEditor, CodeEditorHandle } from '../editor/CodeEditor';
 
 interface PayloadBuilderProps {
   format: 'json' | 'xml';
   bodyContent: string;
-  onBodyContentChange: (newContent: string) => void;
+  onBodyContentChange: (newContent: string, isDiscrete?: boolean) => void;
 }
 
 type ViewMode = 'builder' | 'preview' | 'raw';
@@ -56,30 +56,71 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
   const [rawText, setRawText] = useState(bodyContent || '');
   const [isExpandedModalOpen, setIsExpandedModalOpen] = useState(false);
 
-  // Drag-to-resize editor height (persisted in localStorage)
-  const [editorHeight, setEditorHeight] = useState<number>(() => {
-    try {
-      const saved = localStorage.getItem('airrest:payload_editor_height');
-      if (saved) {
-        const val = parseInt(saved, 10);
-        if (!isNaN(val) && val >= 140 && val <= 800) return val;
-      }
-    } catch {
-      // ignore
-    }
-    return 260;
-  });
-
-  const isResizingRef = useRef(false);
-  const startYRef = useRef(0);
-  const startHeightRef = useRef(260);
-
   // Initialize builder tree configuration
   const [builderConfig, setBuilderConfig] = useState<PayloadBuilderConfig>(() => {
     return initialParse.config || createInitialPayloadConfig('object');
   });
 
   const isInternalUpdateRef = useRef(false);
+  const validateTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const codeEditorRef = useRef<CodeEditorHandle>(null);
+  const modalCodeEditorRef = useRef<CodeEditorHandle>(null);
+
+  // Lightweight debounced real-time syntax validation for raw editor (500ms idle delay)
+  // Validates syntax directly without generating heavy AST trees or triggering re-renders during typing
+  const triggerValidation = useCallback(
+    (text: string, delay = 500) => {
+      if (validateTimerRef.current) {
+        clearTimeout(validateTimerRef.current);
+      }
+      validateTimerRef.current = setTimeout(() => {
+        const trimmed = text.trim();
+        if (!trimmed) {
+          setParseError(null);
+          return;
+        }
+
+        if (format === 'json') {
+          try {
+            JSON.parse(trimmed);
+            setParseError(null);
+          } catch {
+            try {
+              const clean = sanitizeRelaxedJson(trimmed);
+              JSON.parse(clean);
+              setParseError(null);
+            } catch (cleanErr: unknown) {
+              setParseError(cleanErr instanceof Error ? cleanErr.message : 'Invalid JSON format');
+            }
+          }
+        } else {
+          // Fast XML validation via DOMParser without building full AST
+          if (typeof DOMParser !== 'undefined') {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(trimmed, 'application/xml');
+            const pErr = doc.querySelector('parsererror');
+            if (pErr) {
+              setParseError(pErr.textContent?.split('\n')[0] || 'Invalid XML syntax');
+            } else {
+              setParseError(null);
+            }
+          } else {
+            const res = xmlToTree(trimmed);
+            setParseError(res.error || null);
+          }
+        }
+      }, delay);
+    },
+    [format]
+  );
+
+  useEffect(() => {
+    return () => {
+      if (validateTimerRef.current) {
+        clearTimeout(validateTimerRef.current);
+      }
+    };
+  }, []);
 
   // Register back navigation handler for expanded modal
   useBackHandler(isExpandedModalOpen, () => setIsExpandedModalOpen(false), 25);
@@ -183,7 +224,7 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
         setParseError(`Beautify JSON error: ${res.error}`);
       } else {
         setRawText(res.formatted);
-        onBodyContentChange(res.formatted);
+        onBodyContentChange(res.formatted, true);
         setParseError(null);
       }
     } else {
@@ -192,7 +233,7 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
         setParseError(`Beautify XML error: ${res.error}`);
       } else {
         setRawText(res.formatted);
-        onBodyContentChange(res.formatted);
+        onBodyContentChange(res.formatted, true);
         setParseError(null);
       }
     }
@@ -206,73 +247,9 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Resize handler (Mouse)
-  const handleStartResize = (clientY: number) => {
-    isResizingRef.current = true;
-    startYRef.current = clientY;
-    startHeightRef.current = editorHeight;
 
-    const onMouseMove = (e: MouseEvent) => {
-      if (!isResizingRef.current) return;
-      const deltaY = e.clientY - startYRef.current;
-      const newHeight = Math.max(140, Math.min(800, startHeightRef.current + deltaY));
-      setEditorHeight(newHeight);
-    };
 
-    const onMouseUp = () => {
-      if (!isResizingRef.current) return;
-      isResizingRef.current = false;
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-      document.body.style.removeProperty('user-select');
-      document.body.style.removeProperty('cursor');
-      try {
-        setEditorHeight((curr) => {
-          localStorage.setItem('airrest:payload_editor_height', String(curr));
-          return curr;
-        });
-      } catch {
-        // ignore
-      }
-    };
 
-    document.body.style.userSelect = 'none';
-    document.body.style.cursor = 'row-resize';
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
-  };
-
-  // Resize handler (Touch)
-  const handleTouchStart = (e: React.TouchEvent) => {
-    const touch = e.touches[0];
-    if (!touch) return;
-    const startY = touch.clientY;
-    const startH = editorHeight;
-
-    const onTouchMove = (ev: TouchEvent) => {
-      const t = ev.touches[0];
-      if (!t) return;
-      const deltaY = t.clientY - startY;
-      const newHeight = Math.max(140, Math.min(800, startH + deltaY));
-      setEditorHeight(newHeight);
-    };
-
-    const onTouchEnd = () => {
-      window.removeEventListener('touchmove', onTouchMove);
-      window.removeEventListener('touchend', onTouchEnd);
-      try {
-        setEditorHeight((curr) => {
-          localStorage.setItem('airrest:payload_editor_height', String(curr));
-          return curr;
-        });
-      } catch {
-        // ignore
-      }
-    };
-
-    window.addEventListener('touchmove', onTouchMove, { passive: true });
-    window.addEventListener('touchend', onTouchEnd);
-  };
 
   // Add Root Field / Item
   const handleAddRootNode = () => {
@@ -455,7 +432,7 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
 
       {/* Tree Node List Container */}
       <div
-        style={!isModal ? { maxHeight: `${editorHeight}px` } : undefined}
+        style={!isModal ? { maxHeight: '360px' } : undefined}
         className={`rounded-xl border border-line bg-surface p-2 space-y-1 overflow-y-auto ${
           isModal ? 'flex-1 min-h-0' : ''
         }`}
@@ -503,7 +480,7 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
       </div>
 
       <pre
-        style={!isModal ? { height: `${editorHeight}px` } : undefined}
+        style={!isModal ? { minHeight: '180px', maxHeight: '400px' } : undefined}
         className={`w-full overflow-auto rounded-xl border border-line bg-element p-3.5 font-mono text-xs text-tx-primary select-text leading-relaxed ${
           isModal ? 'flex-1 min-h-0' : ''
         }`}
@@ -515,43 +492,56 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
 
   const renderRawView = (isModal: boolean) => (
     <div className={`space-y-2 ${isModal ? 'flex-1 min-h-0 flex flex-col' : ''}`}>
-      <div className="flex items-center justify-between text-[11px] text-tx-muted shrink-0">
-        <span>Edit raw {format.toUpperCase()} payload or paste from external source:</span>
-        <button
-          type="button"
-          onClick={handleSyncFromRaw}
-          className="flex items-center gap-1 text-xs text-sky-600 dark:text-sky-400 hover:underline font-semibold"
-        >
-          <RotateCcw className="h-3 w-3" />
-          <span>Sync to Builder</span>
-        </button>
+      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-tx-muted shrink-0">
+        <span>Edit raw {format.toUpperCase()} payload with line numbers & code folding:</span>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => (isModal ? modalCodeEditorRef.current?.foldAll() : codeEditorRef.current?.foldAll())}
+            className="flex items-center gap-1 rounded-md border border-line bg-card px-2 py-0.5 text-xs text-tx-muted hover:text-tx-primary hover:bg-hover transition cursor-pointer"
+            title="Collapse all objects and lists"
+          >
+            <Minimize2 className="h-3 w-3" />
+            <span>Collapse All</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => (isModal ? modalCodeEditorRef.current?.unfoldAll() : codeEditorRef.current?.unfoldAll())}
+            className="flex items-center gap-1 rounded-md border border-line bg-card px-2 py-0.5 text-xs text-tx-muted hover:text-tx-primary hover:bg-hover transition cursor-pointer"
+            title="Expand all objects and lists"
+          >
+            <Maximize2 className="h-3 w-3" />
+            <span>Expand All</span>
+          </button>
+          <button
+            type="button"
+            onClick={handleSyncFromRaw}
+            className="flex items-center gap-1 text-xs text-sky-600 dark:text-sky-400 hover:underline font-semibold ml-1 pl-2 border-l border-line"
+          >
+            <RotateCcw className="h-3 w-3" />
+            <span>Sync to Builder</span>
+          </button>
+        </div>
       </div>
 
-      <textarea
+      <CodeEditor
+        ref={isModal ? modalCodeEditorRef : codeEditorRef}
         value={rawText}
-        onChange={(e) => {
-          setRawText(e.target.value);
-          onBodyContentChange(e.target.value);
-          if (parseError) setParseError(null);
+        onChange={(val) => {
+          isInternalUpdateRef.current = true;
+          setRawText(val);
+          onBodyContentChange(val);
+          triggerValidation(val, 500);
         }}
-        onKeyDown={(e) =>
-          handleCodeEditorKeyDown(e, {
-            onChange: (val) => {
-              setRawText(val);
-              onBodyContentChange(val);
-              if (parseError) setParseError(null);
-            },
-          })
-        }
-        style={!isModal ? { height: `${editorHeight}px`, minHeight: '140px' } : undefined}
-        className={`w-full rounded-xl border border-line bg-card p-3 font-mono text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition leading-relaxed ${
-          isModal ? 'flex-1 min-h-0 resize-none' : 'resize-y'
-        }`}
+        language={format}
+        height={!isModal ? 240 : '100%'}
+        minHeight={!isModal ? 140 : undefined}
         placeholder={
           format === 'json'
             ? '{\n  "title": "foo",\n  "count": 1\n}'
             : '<request>\n  <title>foo</title>\n</request>'
         }
+        className={isModal ? 'flex-1 min-h-0' : ''}
       />
     </div>
   );
@@ -660,32 +650,9 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
       {viewMode === 'preview' && renderPreviewView(false)}
       {viewMode === 'raw' && renderRawView(false)}
 
-      {/* Draggable Height Resize Handle */}
-      <div
-        onMouseDown={(e) => handleStartResize(e.clientY)}
-        onTouchStart={handleTouchStart}
-        onDoubleClick={() => {
-          setEditorHeight(260);
-          try {
-            localStorage.setItem('airrest:payload_editor_height', '260');
-          } catch {
-            // ignore
-          }
-        }}
-        className="flex items-center justify-center py-1 cursor-row-resize hover:bg-hover/60 rounded-md transition select-none group"
-        title="Drag up/down to resize height (Double-click to reset)"
-      >
-        <div className="flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-element/50 group-hover:bg-element border border-transparent group-hover:border-line transition">
-          <GripHorizontal className="h-3.5 w-3.5 text-tx-muted group-hover:text-sky-500 transition" />
-          <span className="text-[10px] font-mono text-tx-muted group-hover:text-tx-secondary hidden group-hover:inline">
-            {editorHeight}px (Drag to resize)
-          </span>
-        </div>
-      </div>
-
       {/* EXPANDED FULL-SCREEN / LARGE MODAL POP-UP */}
       {isExpandedModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-3 md:p-6 animate-in fade-in duration-150">
+        <div data-payload-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-3 md:p-6 animate-in fade-in duration-150">
           <div className="flex flex-col w-full max-w-6xl h-[92vh] max-h-[960px] rounded-2xl border border-line bg-surface shadow-2xl overflow-hidden">
             {/* Modal Top Header */}
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-3 bg-element/40 shrink-0">

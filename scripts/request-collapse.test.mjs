@@ -35,6 +35,10 @@ test('RequestEditor collapse/expand configuration verification', () => {
 
     // 5. Must conditionally render subtab panels {!isConfigCollapsed && (
     assert.ok(content.includes('{!isConfigCollapsed && ('), `${filePath} wraps subtab panels with {!isConfigCollapsed && (`);
+
+    // 6. Must accept and notify onCollapseChange prop
+    assert.ok(content.includes('onCollapseChange?: (collapsed: boolean) => void'), `${filePath} defines onCollapseChange prop`);
+    assert.ok(content.includes('onCollapseChange?.(isConfigCollapsed)'), `${filePath} notifies onCollapseChange on state change`);
   }
 });
 

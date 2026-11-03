@@ -27,6 +27,7 @@ import {
   Lock,
   Shield,
   AlertTriangle,
+  GripVertical,
 } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
 import { CollectionItem, ApiRequest, Collection } from '../types/api';
@@ -132,6 +133,18 @@ export function calculateOpenUpward(element: HTMLElement | null, menuHeight = 15
   const spaceAbove = rect.top - containerTop - marginBuffer;
 
   return spaceBelow < menuHeight && spaceAbove > spaceBelow;
+}
+
+export const DEFAULT_SIDEBAR_WIDTH = 288;
+export const MIN_SIDEBAR_WIDTH = 220;
+export const MAX_SIDEBAR_WIDTH = 800;
+
+export function clampSidebarWidth(
+  width: number,
+  winWidth = typeof window !== 'undefined' ? window.innerWidth : 1200
+): number {
+  const maxAllowed = Math.min(MAX_SIDEBAR_WIDTH, Math.max(380, Math.floor(winWidth * 0.55)));
+  return Math.max(MIN_SIDEBAR_WIDTH, Math.min(maxAllowed, Math.round(width)));
 }
 
 interface FolderItemProps {
@@ -929,6 +942,123 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
   const [collapsedCollections, setCollapsedCollections] = useState<Record<string, boolean>>({});
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({});
 
+  // Desktop Sidebar drag-to-resize (persisted in localStorage)
+  const [isDesktop, setIsDesktop] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.innerWidth >= 768 : true
+  );
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('airrest:sidebar_width');
+      if (saved) {
+        const val = parseInt(saved, 10);
+        if (!isNaN(val)) return clampSidebarWidth(val);
+      }
+    } catch {
+      // ignore
+    }
+    return DEFAULT_SIDEBAR_WIDTH;
+  });
+
+  const [isResizing, setIsResizing] = useState(false);
+  const isResizingSidebarRef = useRef(false);
+  const startSidebarXRef = useRef(0);
+  const startSidebarWidthRef = useRef(DEFAULT_SIDEBAR_WIDTH);
+  const latestSidebarWidthRef = useRef(sidebarWidth);
+  latestSidebarWidthRef.current = sidebarWidth;
+
+  useEffect(() => {
+    const handleResize = () => {
+      const desktop = window.innerWidth >= 768;
+      setIsDesktop(desktop);
+      if (desktop) {
+        setSidebarWidth((curr) => clampSidebarWidth(curr, window.innerWidth));
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      document.body.style.removeProperty('user-select');
+      document.body.style.removeProperty('cursor');
+    };
+  }, []);
+
+  const handleStartSidebarResize = (clientX: number) => {
+    isResizingSidebarRef.current = true;
+    startSidebarXRef.current = clientX;
+    startSidebarWidthRef.current = latestSidebarWidthRef.current;
+    setIsResizing(true);
+
+    const onMouseMove = (e: MouseEvent) => {
+      if (!isResizingSidebarRef.current) return;
+      const deltaX = e.clientX - startSidebarXRef.current;
+      const newWidth = clampSidebarWidth(startSidebarWidthRef.current + deltaX, window.innerWidth);
+      latestSidebarWidthRef.current = newWidth;
+      setSidebarWidth(newWidth);
+    };
+
+    const onMouseUp = () => {
+      if (!isResizingSidebarRef.current) return;
+      isResizingSidebarRef.current = false;
+      setIsResizing(false);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      document.body.style.removeProperty('user-select');
+      document.body.style.removeProperty('cursor');
+      try {
+        localStorage.setItem('airrest:sidebar_width', String(latestSidebarWidthRef.current));
+      } catch {
+        // ignore
+      }
+    };
+
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
+
+  const handleTouchStartSidebarResize = (e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    if (!touch) return;
+    isResizingSidebarRef.current = true;
+    startSidebarXRef.current = touch.clientX;
+    startSidebarWidthRef.current = latestSidebarWidthRef.current;
+    setIsResizing(true);
+
+    const onTouchMove = (ev: TouchEvent) => {
+      if (!isResizingSidebarRef.current) return;
+      const moveTouch = ev.touches[0];
+      if (!moveTouch) return;
+      const deltaX = moveTouch.clientX - startSidebarXRef.current;
+      const newWidth = clampSidebarWidth(startSidebarWidthRef.current + deltaX, window.innerWidth);
+      latestSidebarWidthRef.current = newWidth;
+      setSidebarWidth(newWidth);
+    };
+
+    const onTouchEnd = () => {
+      if (!isResizingSidebarRef.current) return;
+      isResizingSidebarRef.current = false;
+      setIsResizing(false);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', onTouchEnd);
+      document.body.style.removeProperty('user-select');
+      document.body.style.removeProperty('cursor');
+      try {
+        localStorage.setItem('airrest:sidebar_width', String(latestSidebarWidthRef.current));
+      } catch {
+        // ignore
+      }
+    };
+
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+    window.addEventListener('touchmove', onTouchMove, { passive: true });
+    window.addEventListener('touchend', onTouchEnd);
+  };
+
   const handleConfirmRenameCol = (colId: string) => {
     const trimmed = editingColName.trim();
     if (trimmed) {
@@ -1146,7 +1276,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
   };
 
   return (
-    <aside className="flex h-full w-80 max-w-[85vw] md:w-72 flex-col border-r border-line bg-surface select-none">
+    <aside
+      className={`relative flex h-full ${
+        isDesktop ? 'shrink-0' : 'w-80 max-w-[85vw]'
+      } flex-col border-r border-line bg-surface select-none`}
+      style={{
+        width: isDesktop ? `${sidebarWidth}px` : undefined,
+      }}
+    >
       {/* Workspace Switcher, Sync & Account Section (Mobile only) */}
       <div className="md:hidden border-b border-line p-2 pt-[max(env(safe-area-inset-top),10px)] bg-surface/90">
         <div className="flex items-center gap-1.5 w-full">
@@ -1808,7 +1945,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
                       </div>
 
                       <div className="flex items-center justify-between text-[10px] text-tx-muted font-mono">
-                        <span className="truncate max-w-[150px]">{item.request.url}</span>
+                        <span className="truncate flex-1 min-w-0 mr-2">{item.request.url}</span>
                         <span>{item.response?.timeMs ? `${item.response.timeMs}ms` : ''}</span>
                       </div>
                     </div>
@@ -1922,6 +2059,84 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
             onClose={() => setIsCloudAuthOpen(false)}
           />
         </>
+      )}
+
+      {/* Drag-to-resize handle (Desktop only) */}
+      {isDesktop && (
+        <div
+          role="separator"
+          tabIndex={0}
+          aria-orientation="vertical"
+          aria-valuenow={sidebarWidth}
+          aria-valuemin={MIN_SIDEBAR_WIDTH}
+          aria-valuemax={MAX_SIDEBAR_WIDTH}
+          aria-label="Resize collection sidebar width"
+          title="Drag left/right to resize sidebar (Double-click to reset)"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            handleStartSidebarResize(e.clientX);
+          }}
+          onTouchStart={(e) => {
+            handleTouchStartSidebarResize(e);
+          }}
+          onDoubleClick={() => {
+            setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
+            try {
+              localStorage.setItem('airrest:sidebar_width', String(DEFAULT_SIDEBAR_WIDTH));
+            } catch {
+              // ignore
+            }
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowLeft') {
+              e.preventDefault();
+              setSidebarWidth((curr) => {
+                const next = clampSidebarWidth(curr - 16);
+                try {
+                  localStorage.setItem('airrest:sidebar_width', String(next));
+                } catch {
+                  // ignore
+                }
+                return next;
+              });
+            } else if (e.key === 'ArrowRight') {
+              e.preventDefault();
+              setSidebarWidth((curr) => {
+                const next = clampSidebarWidth(curr + 16);
+                try {
+                  localStorage.setItem('airrest:sidebar_width', String(next));
+                } catch {
+                  // ignore
+                }
+                return next;
+              });
+            } else if (e.key === 'Enter' || e.key === ' ' || e.key === 'Home') {
+              e.preventDefault();
+              setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
+              try {
+                localStorage.setItem('airrest:sidebar_width', String(DEFAULT_SIDEBAR_WIDTH));
+              } catch {
+                // ignore
+              }
+            }
+          }}
+          className="absolute top-0 -right-1.5 bottom-0 w-3 cursor-col-resize z-20 group select-none flex items-center justify-center focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-500"
+        >
+          <div
+            className={`h-full w-[2px] transition-colors duration-150 ${
+              isResizing ? 'bg-sky-500 shadow-[0_0_8px_rgba(14,165,233,0.5)]' : 'bg-transparent group-hover:bg-sky-400/70'
+            }`}
+          />
+          {/* Tooltip badge while hovering or resizing */}
+          <div
+            className={`pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 z-40 items-center gap-1.5 rounded-md border border-line bg-card/95 px-2 py-1 text-[10px] font-mono text-tx-secondary shadow-lg backdrop-blur whitespace-nowrap transition-opacity duration-150 ${
+              isResizing ? 'flex opacity-100' : 'hidden group-hover:flex'
+            }`}
+          >
+            <GripVertical className="h-3 w-3 text-sky-400" />
+            <span>{sidebarWidth}px</span>
+          </div>
+        </div>
       )}
     </aside>
   );

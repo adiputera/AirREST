@@ -337,6 +337,12 @@ export interface ApiStoreState {
   history: HistoryItem[];
   sidebarTab: 'collections' | 'history';
 
+  // Request Undo & Redo
+  canUndoActiveRequest: boolean;
+  canRedoActiveRequest: boolean;
+  undoActiveRequest: () => void;
+  redoActiveRequest: () => void;
+
   // Theming
   theme: ThemeMode;
   setTheme: (theme: ThemeMode) => void;
@@ -390,11 +396,11 @@ export interface ApiStoreState {
   updateAuth: (auth: Partial<AuthConfig>) => void;
   setBodyType: (type: BodyType) => void;
   setRawType: (rawType: RawType) => void;
-  setBodyContent: (content: string) => void;
-  setGraphqlQuery: (query: string) => void;
-  setGraphqlVariables: (variables: string) => void;
-  setPreRequestScript: (script: string) => void;
-  setPostResponseScript: (script: string) => void;
+  setBodyContent: (content: string, isDiscrete?: boolean) => void;
+  setGraphqlQuery: (query: string, isDiscrete?: boolean) => void;
+  setGraphqlVariables: (variables: string, isDiscrete?: boolean) => void;
+  setPreRequestScript: (script: string, isDiscrete?: boolean) => void;
+  setPostResponseScript: (script: string, isDiscrete?: boolean) => void;
 
   // Form-Data & Binary Items
   updateFormDataItem: (id: string, updates: Partial<FormDataItem>) => void;
@@ -533,6 +539,66 @@ export function createApiStore(
   const envSyncQueued: Record<string, boolean> = {};
   const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
   let isStoreDisposed = false;
+
+  interface TabUndoEntry {
+    past: ApiRequest[];
+    future: ApiRequest[];
+  }
+  const tabUndoHistory: Record<string, TabUndoEntry> = {};
+  const undoTypingTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+  const MAX_UNDO_HISTORY = 50;
+
+  function isRequestIdentical(a: ApiRequest, b: ApiRequest): boolean {
+    if (a.name !== b.name || a.method !== b.method || a.url !== b.url) return false;
+    if (a.bodyType !== b.bodyType || a.rawType !== b.rawType || a.bodyContent !== b.bodyContent) return false;
+    if (a.graphqlQuery !== b.graphqlQuery || a.graphqlVariables !== b.graphqlVariables) return false;
+    if (a.preRequestScript !== b.preRequestScript || a.postResponseScript !== b.postResponseScript) return false;
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+
+  function pushTabSnapshot(tabId: string, currentTab: ApiRequest, isTyping = false) {
+    if (isStoreDisposed || !tabId || !currentTab) return;
+    if (!tabUndoHistory[tabId]) {
+      tabUndoHistory[tabId] = { past: [], future: [] };
+    }
+    const history = tabUndoHistory[tabId];
+
+    if (isTyping) {
+      if (undoTypingTimers[tabId]) {
+        clearTimeout(undoTypingTimers[tabId]);
+        undoTypingTimers[tabId] = setTimeout(() => {
+          delete undoTypingTimers[tabId];
+        }, 500);
+        return;
+      }
+
+      history.past.push(cloneRequestPreservingAttachments(currentTab));
+      if (history.past.length > MAX_UNDO_HISTORY) {
+        history.past.shift();
+      }
+      history.future = [];
+
+      undoTypingTimers[tabId] = setTimeout(() => {
+        delete undoTypingTimers[tabId];
+      }, 500);
+    } else {
+      if (undoTypingTimers[tabId]) {
+        clearTimeout(undoTypingTimers[tabId]);
+        delete undoTypingTimers[tabId];
+      }
+
+      const last = history.past[history.past.length - 1];
+      if (last && isRequestIdentical(last, currentTab)) {
+        return;
+      }
+
+      history.past.push(cloneRequestPreservingAttachments(currentTab));
+      if (history.past.length > MAX_UNDO_HISTORY) {
+        history.past.shift();
+      }
+      history.future = [];
+    }
+  }
 
   function safeSetTimeout(fn: () => void, ms: number): ReturnType<typeof setTimeout> {
     const timer = setTimeout(() => {
@@ -744,6 +810,8 @@ export function createApiStore(
       collections: [],
       history: [],
       sidebarTab: 'collections',
+      canUndoActiveRequest: false,
+      canRedoActiveRequest: false,
       theme: 'system',
       setTheme: (newTheme: ThemeMode) => {
         applyTheme(newTheme);
@@ -791,6 +859,13 @@ export function createApiStore(
         }
 
         invalidateAsyncOperations();
+        for (const key of Object.keys(tabUndoHistory)) {
+          delete tabUndoHistory[key];
+        }
+        for (const key of Object.keys(undoTypingTimers)) {
+          clearTimeout(undoTypingTimers[key]);
+          delete undoTypingTimers[key];
+        }
         set({ isSwitchingWorkspace: true });
 
         if (workspaceMode === 'offline') {
@@ -1931,6 +2006,13 @@ export function createApiStore(
         }
 
         invalidateAsyncOperations();
+        for (const key of Object.keys(tabUndoHistory)) {
+          delete tabUndoHistory[key];
+        }
+        for (const key of Object.keys(undoTypingTimers)) {
+          clearTimeout(undoTypingTimers[key]);
+          delete undoTypingTimers[key];
+        }
         set({ isSwitchingWorkspace: true });
 
         const updatedOfflineCache = { ...(offlineScopeCache || {}) };
@@ -2000,6 +2082,8 @@ export function createApiStore(
           tabResponses: {},
           isLoading: false,
           history: targetEntry.history || [],
+          canUndoActiveRequest: false,
+          canRedoActiveRequest: false,
           syncStatus: 'idle',
           syncError: null,
         });
@@ -2625,6 +2709,8 @@ export function createApiStore(
         set((state) => ({
           activeTabId,
           activeResponse: state.tabResponses?.[activeTabId] || null,
+          canUndoActiveRequest: (tabUndoHistory[activeTabId]?.past?.length ?? 0) > 0,
+          canRedoActiveRequest: (tabUndoHistory[activeTabId]?.future?.length ?? 0) > 0,
         }));
       },
 
@@ -2655,6 +2741,8 @@ export function createApiStore(
           tabs: [...state.tabs, newReq],
           activeTabId: newReq.id,
           activeResponse: null,
+          canUndoActiveRequest: false,
+          canRedoActiveRequest: false,
         }));
       },
 
@@ -2665,6 +2753,12 @@ export function createApiStore(
           activeRequestOperation = null;
           activeRequestTabId = null;
           aborted = true;
+        }
+
+        delete tabUndoHistory[id];
+        if (undoTypingTimers[id]) {
+          clearTimeout(undoTypingTimers[id]);
+          delete undoTypingTimers[id];
         }
 
         set((state) => {
@@ -2690,6 +2784,8 @@ export function createApiStore(
               activeTabId: '',
               activeResponse: null,
               tabResponses: nextTabResponses,
+              canUndoActiveRequest: false,
+              canRedoActiveRequest: false,
               ...(shouldResetLoading ? { isLoading: false } : {}),
             };
           }
@@ -2706,6 +2802,8 @@ export function createApiStore(
             activeTabId: newActiveId,
             activeResponse: nextTabResponses[newActiveId] || null,
             tabResponses: nextTabResponses,
+            canUndoActiveRequest: (tabUndoHistory[newActiveId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[newActiveId]?.future?.length ?? 0) > 0,
             ...(shouldResetLoading ? { isLoading: false } : {}),
           };
         });
@@ -2718,6 +2816,18 @@ export function createApiStore(
           activeRequestOperation = null;
           activeRequestTabId = null;
           aborted = true;
+        }
+
+        for (const key of Object.keys(tabUndoHistory)) {
+          if (key !== id) {
+            delete tabUndoHistory[key];
+          }
+        }
+        for (const key of Object.keys(undoTypingTimers)) {
+          if (key !== id) {
+            clearTimeout(undoTypingTimers[key]);
+            delete undoTypingTimers[key];
+          }
         }
 
         set((state) => {
@@ -2745,6 +2855,8 @@ export function createApiStore(
             activeTabId: id,
             activeResponse: nextTabResponses[id] || null,
             tabResponses: nextTabResponses,
+            canUndoActiveRequest: (tabUndoHistory[id]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[id]?.future?.length ?? 0) > 0,
             ...(shouldResetLoading ? { isLoading: false } : {}),
           };
         });
@@ -2755,6 +2867,14 @@ export function createApiStore(
           activeRequestOperation.controller.abort();
           activeRequestOperation = null;
           activeRequestTabId = null;
+        }
+
+        for (const key of Object.keys(tabUndoHistory)) {
+          delete tabUndoHistory[key];
+        }
+        for (const key of Object.keys(undoTypingTimers)) {
+          clearTimeout(undoTypingTimers[key]);
+          delete undoTypingTimers[key];
         }
 
         set((state) => {
@@ -2773,6 +2893,8 @@ export function createApiStore(
             activeResponse: null,
             tabResponses: {},
             isLoading: false,
+            canUndoActiveRequest: false,
+            canRedoActiveRequest: false,
           };
         });
       },
@@ -2783,6 +2905,18 @@ export function createApiStore(
           if (index === -1) return state;
           const remainingTabs = state.tabs.slice(0, index + 1);
           const remainingIds = new Set(remainingTabs.map((t) => t.id));
+
+          for (const key of Object.keys(tabUndoHistory)) {
+            if (!remainingIds.has(key)) {
+              delete tabUndoHistory[key];
+            }
+          }
+          for (const key of Object.keys(undoTypingTimers)) {
+            if (!remainingIds.has(key)) {
+              clearTimeout(undoTypingTimers[key]);
+              delete undoTypingTimers[key];
+            }
+          }
 
           let shouldResetLoading = false;
           if (activeRequestOperation && activeRequestTabId && !remainingIds.has(activeRequestTabId)) {
@@ -2812,6 +2946,8 @@ export function createApiStore(
             activeTabId: nextActiveId,
             activeResponse: nextTabResponses[nextActiveId] || null,
             tabResponses: nextTabResponses,
+            canUndoActiveRequest: (tabUndoHistory[nextActiveId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[nextActiveId]?.future?.length ?? 0) > 0,
             ...(shouldResetLoading ? { isLoading: false } : {}),
           };
         });
@@ -2839,12 +2975,36 @@ export function createApiStore(
             tabs: newTabs,
             activeTabId: duplicatedTab.id,
             activeResponse: null,
+            canUndoActiveRequest: false,
+            canRedoActiveRequest: false,
           };
         });
       },
 
       updateActiveRequest: (updates) => {
         set((state) => {
+          const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (currentTab) {
+            if (updates.id !== undefined && updates.id !== state.activeTabId) {
+              if (tabUndoHistory[state.activeTabId]) {
+                tabUndoHistory[updates.id] = tabUndoHistory[state.activeTabId];
+                delete tabUndoHistory[state.activeTabId];
+              }
+              if (undoTypingTimers[state.activeTabId]) {
+                undoTypingTimers[updates.id] = undoTypingTimers[state.activeTabId];
+                delete undoTypingTimers[state.activeTabId];
+              }
+            } else {
+              let isTyping = false;
+              if (updates.name !== undefined) {
+                isTyping = Math.abs((updates.name || '').length - (currentTab.name || '').length) <= 1;
+              } else if (updates.url !== undefined) {
+                isTyping = Math.abs((updates.url || '').length - (currentTab.url || '').length) <= 1;
+              }
+              pushTabSnapshot(currentTab.id, currentTab, isTyping);
+            }
+          }
+
           const nextActiveTabId = updates.id !== undefined ? updates.id : state.activeTabId;
           let nextTabResponses = state.tabResponses;
           if (updates.id !== undefined && updates.id !== state.activeTabId && state.tabResponses?.[state.activeTabId]) {
@@ -2864,341 +3024,598 @@ export function createApiStore(
               }
               return { ...tab, ...updates, updatedAt: Date.now() };
             }),
+            canUndoActiveRequest: (tabUndoHistory[nextActiveTabId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[nextActiveTabId]?.future?.length ?? 0) > 0,
           };
         });
       },
 
       updateParam: (id, updates) => {
-        set((state) => ({
-          tabs: state.tabs.map((tab) => {
-            if (tab.id !== state.activeTabId) return tab;
-            const updatedParams = tab.params.map((p) => (p.id === id ? { ...p, ...updates } : p));
-            const updatedUrl = buildUrlWithParams(tab.url, updatedParams);
-            return { ...tab, params: updatedParams, url: updatedUrl, updatedAt: Date.now() };
-          }),
-        }));
+        set((state) => {
+          const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (currentTab) {
+            pushTabSnapshot(currentTab.id, currentTab, true);
+          }
+          return {
+            tabs: state.tabs.map((tab) => {
+              if (tab.id !== state.activeTabId) return tab;
+              const updatedParams = tab.params.map((p) => (p.id === id ? { ...p, ...updates } : p));
+              const updatedUrl = buildUrlWithParams(tab.url, updatedParams);
+              return { ...tab, params: updatedParams, url: updatedUrl, updatedAt: Date.now() };
+            }),
+            canUndoActiveRequest: (tabUndoHistory[state.activeTabId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[state.activeTabId]?.future?.length ?? 0) > 0,
+          };
+        });
       },
 
       addParam: () => {
-        set((state) => ({
-          tabs: state.tabs.map((tab) => {
-            if (tab.id !== state.activeTabId) return tab;
-            const updatedParams = [...tab.params, { id: generateId(), key: '', value: '', enabled: true }];
-            const updatedUrl = buildUrlWithParams(tab.url, updatedParams);
-            return {
-              ...tab,
-              params: updatedParams,
-              url: updatedUrl,
-              updatedAt: Date.now(),
-            };
-          }),
-        }));
+        set((state) => {
+          const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (currentTab) {
+            pushTabSnapshot(currentTab.id, currentTab, false);
+          }
+          return {
+            tabs: state.tabs.map((tab) => {
+              if (tab.id !== state.activeTabId) return tab;
+              const updatedParams = [...tab.params, { id: generateId(), key: '', value: '', enabled: true }];
+              const updatedUrl = buildUrlWithParams(tab.url, updatedParams);
+              return {
+                ...tab,
+                params: updatedParams,
+                url: updatedUrl,
+                updatedAt: Date.now(),
+              };
+            }),
+            canUndoActiveRequest: (tabUndoHistory[state.activeTabId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[state.activeTabId]?.future?.length ?? 0) > 0,
+          };
+        });
       },
 
       removeParam: (id) => {
-        set((state) => ({
-          tabs: state.tabs.map((tab) => {
-            if (tab.id !== state.activeTabId) return tab;
-            const updatedParams = tab.params.filter((p) => p.id !== id);
-            const updatedUrl = buildUrlWithParams(tab.url, updatedParams);
-            return {
-              ...tab,
-              params: updatedParams,
-              url: updatedUrl,
-              updatedAt: Date.now(),
-            };
-          }),
-        }));
+        set((state) => {
+          const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (currentTab) {
+            pushTabSnapshot(currentTab.id, currentTab, false);
+          }
+          return {
+            tabs: state.tabs.map((tab) => {
+              if (tab.id !== state.activeTabId) return tab;
+              const updatedParams = tab.params.filter((p) => p.id !== id);
+              const updatedUrl = buildUrlWithParams(tab.url, updatedParams);
+              return {
+                ...tab,
+                params: updatedParams,
+                url: updatedUrl,
+                updatedAt: Date.now(),
+              };
+            }),
+            canUndoActiveRequest: (tabUndoHistory[state.activeTabId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[state.activeTabId]?.future?.length ?? 0) > 0,
+          };
+        });
       },
 
       updatePathVariable: (id, updates) => {
-        set((state) => ({
-          tabs: state.tabs.map((tab) => {
-            if (tab.id !== state.activeTabId) return tab;
-            const updatedPathVars = (tab.pathVariables || []).map((pv) =>
-              pv.id === id ? { ...pv, ...updates } : pv
-            );
-            return {
-              ...tab,
-              pathVariables: updatedPathVars,
-              updatedAt: Date.now(),
-            };
-          }),
-        }));
+        set((state) => {
+          const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (currentTab) {
+            pushTabSnapshot(currentTab.id, currentTab, true);
+          }
+          return {
+            tabs: state.tabs.map((tab) => {
+              if (tab.id !== state.activeTabId) return tab;
+              const updatedPathVars = (tab.pathVariables || []).map((pv) =>
+                pv.id === id ? { ...pv, ...updates } : pv
+              );
+              return {
+                ...tab,
+                pathVariables: updatedPathVars,
+                updatedAt: Date.now(),
+              };
+            }),
+            canUndoActiveRequest: (tabUndoHistory[state.activeTabId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[state.activeTabId]?.future?.length ?? 0) > 0,
+          };
+        });
       },
 
       updateHeader: (id, updates) => {
-        set((state) => ({
-          tabs: state.tabs.map((tab) => {
-            if (tab.id !== state.activeTabId) return tab;
-            const updatedHeaders = tab.headers.map((h) => (h.id === id ? { ...h, ...updates } : h));
-            return { ...tab, headers: updatedHeaders, updatedAt: Date.now() };
-          }),
-        }));
+        set((state) => {
+          const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (currentTab) {
+            pushTabSnapshot(currentTab.id, currentTab, true);
+          }
+          return {
+            tabs: state.tabs.map((tab) => {
+              if (tab.id !== state.activeTabId) return tab;
+              const updatedHeaders = tab.headers.map((h) => (h.id === id ? { ...h, ...updates } : h));
+              return { ...tab, headers: updatedHeaders, updatedAt: Date.now() };
+            }),
+            canUndoActiveRequest: (tabUndoHistory[state.activeTabId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[state.activeTabId]?.future?.length ?? 0) > 0,
+          };
+        });
       },
 
       addHeader: () => {
-        set((state) => ({
-          tabs: state.tabs.map((tab) => {
-            if (tab.id !== state.activeTabId) return tab;
-            return {
-              ...tab,
-              headers: [...tab.headers, { id: generateId(), key: '', value: '', enabled: true }],
-              updatedAt: Date.now(),
-            };
-          }),
-        }));
+        set((state) => {
+          const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (currentTab) {
+            pushTabSnapshot(currentTab.id, currentTab, false);
+          }
+          return {
+            tabs: state.tabs.map((tab) => {
+              if (tab.id !== state.activeTabId) return tab;
+              return {
+                ...tab,
+                headers: [...tab.headers, { id: generateId(), key: '', value: '', enabled: true }],
+                updatedAt: Date.now(),
+              };
+            }),
+            canUndoActiveRequest: (tabUndoHistory[state.activeTabId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[state.activeTabId]?.future?.length ?? 0) > 0,
+          };
+        });
       },
 
       removeHeader: (id) => {
-        set((state) => ({
-          tabs: state.tabs.map((tab) => {
-            if (tab.id !== state.activeTabId) return tab;
-            return {
-              ...tab,
-              headers: tab.headers.filter((h) => h.id !== id),
-              updatedAt: Date.now(),
-            };
-          }),
-        }));
+        set((state) => {
+          const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (currentTab) {
+            pushTabSnapshot(currentTab.id, currentTab, false);
+          }
+          return {
+            tabs: state.tabs.map((tab) => {
+              if (tab.id !== state.activeTabId) return tab;
+              return {
+                ...tab,
+                headers: tab.headers.filter((h) => h.id !== id),
+                updatedAt: Date.now(),
+              };
+            }),
+            canUndoActiveRequest: (tabUndoHistory[state.activeTabId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[state.activeTabId]?.future?.length ?? 0) > 0,
+          };
+        });
       },
 
       updateAuth: (authUpdates) => {
-        set((state) => ({
-          tabs: state.tabs.map((tab) => {
-            if (tab.id !== state.activeTabId) return tab;
-            return {
-              ...tab,
-              auth: { ...tab.auth, ...authUpdates },
-              updatedAt: Date.now(),
-            };
-          }),
-        }));
+        set((state) => {
+          const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (currentTab) {
+            const isTyping = authUpdates.type === undefined;
+            pushTabSnapshot(currentTab.id, currentTab, isTyping);
+          }
+          return {
+            tabs: state.tabs.map((tab) => {
+              if (tab.id !== state.activeTabId) return tab;
+              return {
+                ...tab,
+                auth: { ...tab.auth, ...authUpdates },
+                updatedAt: Date.now(),
+              };
+            }),
+            canUndoActiveRequest: (tabUndoHistory[state.activeTabId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[state.activeTabId]?.future?.length ?? 0) > 0,
+          };
+        });
       },
 
       setBodyType: (bodyType) => {
-        set((state) => ({
-          tabs: state.tabs.map((tab) => {
-            if (tab.id !== state.activeTabId) return tab;
-            let rawType = tab.rawType || 'text';
-            if (bodyType === 'json') rawType = 'json';
-            else if (bodyType === 'xml') rawType = 'xml';
-            const method = (bodyType === 'graphql' || bodyType === 'form-data' || bodyType === 'x-www-form-urlencoded') && tab.method === 'GET' ? 'POST' : tab.method;
+        set((state) => {
+          const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (currentTab && currentTab.bodyType !== bodyType) {
+            pushTabSnapshot(currentTab.id, currentTab, false);
+          }
+          return {
+            tabs: state.tabs.map((tab) => {
+              if (tab.id !== state.activeTabId) return tab;
+              let rawType = tab.rawType || 'text';
+              if (bodyType === 'json') rawType = 'json';
+              else if (bodyType === 'xml') rawType = 'xml';
+              const method = (bodyType === 'graphql' || bodyType === 'form-data' || bodyType === 'x-www-form-urlencoded') && tab.method === 'GET' ? 'POST' : tab.method;
 
-            let bodyUrlEncoded = tab.bodyUrlEncoded;
-            if (bodyType === 'x-www-form-urlencoded') {
-              const hasRealItems =
-                bodyUrlEncoded &&
-                bodyUrlEncoded.some(
-                  (item) => String(item?.key ?? '').trim() || String(item?.value ?? '').trim()
-                );
-              if (!hasRealItems) {
-                const trimmedBody = (tab.bodyContent || '').trim();
-                if (trimmedBody.startsWith('{')) {
-                  try {
-                    const parsed = JSON.parse(trimmedBody);
-                    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-                      const items: KeyValuePair[] = Object.entries(parsed).map(([k, v]) => ({
-                        id: generateId(),
-                        key: k,
-                        value: typeof v === 'object' ? JSON.stringify(v) : String(v ?? ''),
-                        enabled: true,
-                      }));
-                      if (items.length > 0) bodyUrlEncoded = items;
+              let bodyUrlEncoded = tab.bodyUrlEncoded;
+              if (bodyType === 'x-www-form-urlencoded') {
+                const hasRealItems =
+                  bodyUrlEncoded &&
+                  bodyUrlEncoded.some(
+                    (item) => String(item?.key ?? '').trim() || String(item?.value ?? '').trim()
+                  );
+                if (!hasRealItems) {
+                  const trimmedBody = (tab.bodyContent || '').trim();
+                  if (trimmedBody.startsWith('{')) {
+                    try {
+                      const parsed = JSON.parse(trimmedBody);
+                      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+                        const items: KeyValuePair[] = Object.entries(parsed).map(([k, v]) => ({
+                          id: generateId(),
+                          key: k,
+                          value: typeof v === 'object' ? JSON.stringify(v) : String(v ?? ''),
+                          enabled: true,
+                        }));
+                        if (items.length > 0) bodyUrlEncoded = items;
+                      }
+                    } catch {
+                      // ignore JSON parse error
                     }
-                  } catch {
-                    // ignore JSON parse error
+                  } else if (trimmedBody.includes('=')) {
+                    try {
+                      const params = new URLSearchParams(trimmedBody);
+                      const items: KeyValuePair[] = [];
+                      params.forEach((v, k) => {
+                        items.push({ id: generateId(), key: k, value: v, enabled: true });
+                      });
+                      if (items.length > 0) bodyUrlEncoded = items;
+                    } catch {
+                      // ignore
+                    }
                   }
-                } else if (trimmedBody.includes('=')) {
-                  try {
-                    const params = new URLSearchParams(trimmedBody);
-                    const items: KeyValuePair[] = [];
-                    params.forEach((v, k) => {
-                      items.push({ id: generateId(), key: k, value: v, enabled: true });
-                    });
-                    if (items.length > 0) bodyUrlEncoded = items;
-                  } catch {
-                    // ignore
-                  }
+                }
+
+                if (!bodyUrlEncoded || bodyUrlEncoded.length === 0) {
+                  bodyUrlEncoded = [{ id: generateId(), key: '', value: '', enabled: true }];
                 }
               }
 
-              if (!bodyUrlEncoded || bodyUrlEncoded.length === 0) {
-                bodyUrlEncoded = [{ id: generateId(), key: '', value: '', enabled: true }];
-              }
-            }
-
-            return { ...tab, bodyType, rawType, method, bodyUrlEncoded, updatedAt: Date.now() };
-          }),
-        }));
+              return { ...tab, bodyType, rawType, method, bodyUrlEncoded, updatedAt: Date.now() };
+            }),
+            canUndoActiveRequest: (tabUndoHistory[state.activeTabId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[state.activeTabId]?.future?.length ?? 0) > 0,
+          };
+        });
       },
 
       setRawType: (rawType) => {
-        set((state) => ({
-          tabs: state.tabs.map((tab) => {
-            if (tab.id !== state.activeTabId) return tab;
-            return { ...tab, rawType, updatedAt: Date.now() };
-          }),
-        }));
+        set((state) => {
+          const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (currentTab && currentTab.rawType !== rawType) {
+            pushTabSnapshot(currentTab.id, currentTab, false);
+          }
+          return {
+            tabs: state.tabs.map((tab) => {
+              if (tab.id !== state.activeTabId) return tab;
+              return { ...tab, rawType, updatedAt: Date.now() };
+            }),
+            canUndoActiveRequest: (tabUndoHistory[state.activeTabId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[state.activeTabId]?.future?.length ?? 0) > 0,
+          };
+        });
       },
 
-      setBodyContent: (bodyContent) => {
-        set((state) => ({
-          tabs: state.tabs.map((tab) => {
-            if (tab.id !== state.activeTabId) return tab;
-            return { ...tab, bodyContent, updatedAt: Date.now() };
-          }),
-        }));
+      setBodyContent: (bodyContent, isDiscrete?: boolean) => {
+        set((state) => {
+          const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (currentTab && currentTab.bodyContent !== bodyContent) {
+            const isTyping = isDiscrete ? false : Math.abs(bodyContent.length - (currentTab.bodyContent || '').length) <= 1;
+            pushTabSnapshot(currentTab.id, currentTab, isTyping);
+          }
+          return {
+            tabs: state.tabs.map((tab) => {
+              if (tab.id !== state.activeTabId) return tab;
+              return { ...tab, bodyContent, updatedAt: Date.now() };
+            }),
+            canUndoActiveRequest: (tabUndoHistory[state.activeTabId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[state.activeTabId]?.future?.length ?? 0) > 0,
+          };
+        });
       },
 
-      setGraphqlQuery: (graphqlQuery) => {
-        set((state) => ({
-          tabs: state.tabs.map((tab) => {
-            if (tab.id !== state.activeTabId) return tab;
-            return { ...tab, graphqlQuery, updatedAt: Date.now() };
-          }),
-        }));
+      setGraphqlQuery: (graphqlQuery, isDiscrete?: boolean) => {
+        set((state) => {
+          const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (currentTab && currentTab.graphqlQuery !== graphqlQuery) {
+            const isTyping = isDiscrete ? false : Math.abs(graphqlQuery.length - (currentTab.graphqlQuery || '').length) <= 1;
+            pushTabSnapshot(currentTab.id, currentTab, isTyping);
+          }
+          return {
+            tabs: state.tabs.map((tab) => {
+              if (tab.id !== state.activeTabId) return tab;
+              return { ...tab, graphqlQuery, updatedAt: Date.now() };
+            }),
+            canUndoActiveRequest: (tabUndoHistory[state.activeTabId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[state.activeTabId]?.future?.length ?? 0) > 0,
+          };
+        });
       },
 
-      setGraphqlVariables: (graphqlVariables) => {
-        set((state) => ({
-          tabs: state.tabs.map((tab) => {
-            if (tab.id !== state.activeTabId) return tab;
-            return { ...tab, graphqlVariables, updatedAt: Date.now() };
-          }),
-        }));
+      setGraphqlVariables: (graphqlVariables, isDiscrete?: boolean) => {
+        set((state) => {
+          const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (currentTab && currentTab.graphqlVariables !== graphqlVariables) {
+            const isTyping = isDiscrete ? false : Math.abs(graphqlVariables.length - (currentTab.graphqlVariables || '').length) <= 1;
+            pushTabSnapshot(currentTab.id, currentTab, isTyping);
+          }
+          return {
+            tabs: state.tabs.map((tab) => {
+              if (tab.id !== state.activeTabId) return tab;
+              return { ...tab, graphqlVariables, updatedAt: Date.now() };
+            }),
+            canUndoActiveRequest: (tabUndoHistory[state.activeTabId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[state.activeTabId]?.future?.length ?? 0) > 0,
+          };
+        });
       },
 
-      setPreRequestScript: (preRequestScript) => {
-        set((state) => ({
-          tabs: state.tabs.map((tab) => {
-            if (tab.id !== state.activeTabId) return tab;
-            return { ...tab, preRequestScript, updatedAt: Date.now() };
-          }),
-        }));
+      setPreRequestScript: (preRequestScript, isDiscrete?: boolean) => {
+        set((state) => {
+          const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (currentTab && currentTab.preRequestScript !== preRequestScript) {
+            const isTyping = isDiscrete ? false : Math.abs(preRequestScript.length - (currentTab.preRequestScript || '').length) <= 1;
+            pushTabSnapshot(currentTab.id, currentTab, isTyping);
+          }
+          return {
+            tabs: state.tabs.map((tab) => {
+              if (tab.id !== state.activeTabId) return tab;
+              return { ...tab, preRequestScript, updatedAt: Date.now() };
+            }),
+            canUndoActiveRequest: (tabUndoHistory[state.activeTabId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[state.activeTabId]?.future?.length ?? 0) > 0,
+          };
+        });
       },
 
-      setPostResponseScript: (postResponseScript) => {
-        set((state) => ({
-          tabs: state.tabs.map((tab) => {
-            if (tab.id !== state.activeTabId) return tab;
-            return { ...tab, postResponseScript, updatedAt: Date.now() };
-          }),
-        }));
+      setPostResponseScript: (postResponseScript, isDiscrete?: boolean) => {
+        set((state) => {
+          const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (currentTab && currentTab.postResponseScript !== postResponseScript) {
+            const isTyping = isDiscrete ? false : Math.abs(postResponseScript.length - (currentTab.postResponseScript || '').length) <= 1;
+            pushTabSnapshot(currentTab.id, currentTab, isTyping);
+          }
+          return {
+            tabs: state.tabs.map((tab) => {
+              if (tab.id !== state.activeTabId) return tab;
+              return { ...tab, postResponseScript, updatedAt: Date.now() };
+            }),
+            canUndoActiveRequest: (tabUndoHistory[state.activeTabId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[state.activeTabId]?.future?.length ?? 0) > 0,
+          };
+        });
       },
 
       // Form Data actions
       updateFormDataItem: (id, updates) => {
-        set((state) => ({
-          tabs: state.tabs.map((tab) => {
-            if (tab.id !== state.activeTabId) return tab;
-            const currentList = tab.bodyFormData || [];
-            return {
-              ...tab,
-              bodyFormData: currentList.map((item) => (item.id === id ? { ...item, ...updates } : item)),
-              updatedAt: Date.now(),
-            };
-          }),
-        }));
+        set((state) => {
+          const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (currentTab) {
+            const isTyping = updates.type === undefined && updates.file === undefined;
+            pushTabSnapshot(currentTab.id, currentTab, isTyping);
+          }
+          const currentList = currentTab?.bodyFormData || [];
+          return {
+            tabs: state.tabs.map((tab) => {
+              if (tab.id !== state.activeTabId) return tab;
+              return {
+                ...tab,
+                bodyFormData: currentList.map((item) => (item.id === id ? { ...item, ...updates } : item)),
+                updatedAt: Date.now(),
+              };
+            }),
+            canUndoActiveRequest: (tabUndoHistory[state.activeTabId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[state.activeTabId]?.future?.length ?? 0) > 0,
+          };
+        });
       },
 
       addFormDataItem: () => {
-        set((state) => ({
-          tabs: state.tabs.map((tab) => {
-            if (tab.id !== state.activeTabId) return tab;
-            const currentList = tab.bodyFormData || [];
-            return {
-              ...tab,
-              bodyFormData: [
-                ...currentList,
-                { id: generateId(), key: '', type: 'text', value: '', enabled: true },
-              ],
-              updatedAt: Date.now(),
-            };
-          }),
-        }));
+        set((state) => {
+          const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (currentTab) {
+            pushTabSnapshot(currentTab.id, currentTab, false);
+          }
+          const currentList = currentTab?.bodyFormData || [];
+          return {
+            tabs: state.tabs.map((tab) => {
+              if (tab.id !== state.activeTabId) return tab;
+              return {
+                ...tab,
+                bodyFormData: [
+                  ...currentList,
+                  { id: generateId(), key: '', type: 'text', value: '', enabled: true },
+                ],
+                updatedAt: Date.now(),
+              };
+            }),
+            canUndoActiveRequest: (tabUndoHistory[state.activeTabId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[state.activeTabId]?.future?.length ?? 0) > 0,
+          };
+        });
       },
 
       removeFormDataItem: (id) => {
-        set((state) => ({
-          tabs: state.tabs.map((tab) => {
-            if (tab.id !== state.activeTabId) return tab;
-            const currentList = tab.bodyFormData || [];
-            return {
-              ...tab,
-              bodyFormData: currentList.filter((item) => item.id !== id),
-              updatedAt: Date.now(),
-            };
-          }),
-        }));
+        set((state) => {
+          const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (currentTab) {
+            pushTabSnapshot(currentTab.id, currentTab, false);
+          }
+          const currentList = currentTab?.bodyFormData || [];
+          return {
+            tabs: state.tabs.map((tab) => {
+              if (tab.id !== state.activeTabId) return tab;
+              return {
+                ...tab,
+                bodyFormData: currentList.filter((item) => item.id !== id),
+                updatedAt: Date.now(),
+              };
+            }),
+            canUndoActiveRequest: (tabUndoHistory[state.activeTabId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[state.activeTabId]?.future?.length ?? 0) > 0,
+          };
+        });
       },
 
       setBodyBinaryFile: (bodyBinaryFile) => {
-        set((state) => ({
-          tabs: state.tabs.map((tab) => {
-            if (tab.id !== state.activeTabId) return tab;
-            return { ...tab, bodyBinaryFile, updatedAt: Date.now() };
-          }),
-        }));
+        set((state) => {
+          const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (currentTab) {
+            pushTabSnapshot(currentTab.id, currentTab, false);
+          }
+          return {
+            tabs: state.tabs.map((tab) => {
+              if (tab.id !== state.activeTabId) return tab;
+              return { ...tab, bodyBinaryFile, updatedAt: Date.now() };
+            }),
+            canUndoActiveRequest: (tabUndoHistory[state.activeTabId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[state.activeTabId]?.future?.length ?? 0) > 0,
+          };
+        });
       },
 
       // URL-Encoded Form actions
       updateUrlEncodedItem: (id, updates) => {
-        set((state) => ({
-          tabs: state.tabs.map((tab) => {
-            if (tab.id !== state.activeTabId) return tab;
-            const currentList = tab.bodyUrlEncoded || [];
-            return {
-              ...tab,
-              bodyUrlEncoded: currentList.map((item) => (item.id === id ? { ...item, ...updates } : item)),
-              updatedAt: Date.now(),
-            };
-          }),
-        }));
+        set((state) => {
+          const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (currentTab) {
+            pushTabSnapshot(currentTab.id, currentTab, true);
+          }
+          const currentList = currentTab?.bodyUrlEncoded || [];
+          return {
+            tabs: state.tabs.map((tab) => {
+              if (tab.id !== state.activeTabId) return tab;
+              return {
+                ...tab,
+                bodyUrlEncoded: currentList.map((item) => (item.id === id ? { ...item, ...updates } : item)),
+                updatedAt: Date.now(),
+              };
+            }),
+            canUndoActiveRequest: (tabUndoHistory[state.activeTabId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[state.activeTabId]?.future?.length ?? 0) > 0,
+          };
+        });
       },
 
       addUrlEncodedItem: () => {
-        set((state) => ({
-          tabs: state.tabs.map((tab) => {
-            if (tab.id !== state.activeTabId) return tab;
-            const currentList = tab.bodyUrlEncoded || [];
-            return {
-              ...tab,
-              bodyUrlEncoded: [
-                ...currentList,
-                { id: generateId(), key: '', value: '', enabled: true },
-              ],
-              updatedAt: Date.now(),
-            };
-          }),
-        }));
+        set((state) => {
+          const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (currentTab) {
+            pushTabSnapshot(currentTab.id, currentTab, false);
+          }
+          const currentList = currentTab?.bodyUrlEncoded || [];
+          return {
+            tabs: state.tabs.map((tab) => {
+              if (tab.id !== state.activeTabId) return tab;
+              return {
+                ...tab,
+                bodyUrlEncoded: [
+                  ...currentList,
+                  { id: generateId(), key: '', value: '', enabled: true },
+                ],
+                updatedAt: Date.now(),
+              };
+            }),
+            canUndoActiveRequest: (tabUndoHistory[state.activeTabId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[state.activeTabId]?.future?.length ?? 0) > 0,
+          };
+        });
       },
 
       removeUrlEncodedItem: (id) => {
-        set((state) => ({
-          tabs: state.tabs.map((tab) => {
-            if (tab.id !== state.activeTabId) return tab;
-            const currentList = tab.bodyUrlEncoded || [];
-            return {
-              ...tab,
-              bodyUrlEncoded: currentList.filter((item) => item.id !== id),
-              updatedAt: Date.now(),
-            };
-          }),
-        }));
+        set((state) => {
+          const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (currentTab) {
+            pushTabSnapshot(currentTab.id, currentTab, false);
+          }
+          const currentList = currentTab?.bodyUrlEncoded || [];
+          return {
+            tabs: state.tabs.map((tab) => {
+              if (tab.id !== state.activeTabId) return tab;
+              return {
+                ...tab,
+                bodyUrlEncoded: currentList.filter((item) => item.id !== id),
+                updatedAt: Date.now(),
+              };
+            }),
+            canUndoActiveRequest: (tabUndoHistory[state.activeTabId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[state.activeTabId]?.future?.length ?? 0) > 0,
+          };
+        });
       },
 
       setUrlEncodedItems: (items) => {
-        set((state) => ({
-          tabs: state.tabs.map((tab) => {
-            if (tab.id !== state.activeTabId) return tab;
-            return {
-              ...tab,
-              bodyUrlEncoded: items,
-              updatedAt: Date.now(),
-            };
-          }),
-        }));
+        set((state) => {
+          const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (currentTab) {
+            pushTabSnapshot(currentTab.id, currentTab, false);
+          }
+          return {
+            tabs: state.tabs.map((tab) => {
+              if (tab.id !== state.activeTabId) return tab;
+              return {
+                ...tab,
+                bodyUrlEncoded: items,
+                updatedAt: Date.now(),
+              };
+            }),
+            canUndoActiveRequest: (tabUndoHistory[state.activeTabId]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[state.activeTabId]?.future?.length ?? 0) > 0,
+          };
+        });
+      },
+
+      undoActiveRequest: () => {
+        set((state) => {
+          const activeTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (!activeTab) return state;
+
+          const history = tabUndoHistory[activeTab.id];
+          if (!history || history.past.length === 0) return state;
+
+          if (undoTypingTimers[activeTab.id]) {
+            clearTimeout(undoTypingTimers[activeTab.id]);
+            delete undoTypingTimers[activeTab.id];
+          }
+
+          const previousState = history.past.pop()!;
+          history.future.push(cloneRequestPreservingAttachments(activeTab));
+          if (history.future.length > MAX_UNDO_HISTORY) {
+            history.future.shift();
+          }
+
+          const restoredTab: ApiRequest = {
+            ...cloneRequestPreservingAttachments(previousState),
+            id: activeTab.id,
+          };
+
+          return {
+            tabs: state.tabs.map((t) => (t.id === activeTab.id ? restoredTab : t)),
+            canUndoActiveRequest: history.past.length > 0,
+            canRedoActiveRequest: history.future.length > 0,
+          };
+        });
+      },
+
+      redoActiveRequest: () => {
+        set((state) => {
+          const activeTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (!activeTab) return state;
+
+          const history = tabUndoHistory[activeTab.id];
+          if (!history || history.future.length === 0) return state;
+
+          if (undoTypingTimers[activeTab.id]) {
+            clearTimeout(undoTypingTimers[activeTab.id]);
+            delete undoTypingTimers[activeTab.id];
+          }
+
+          const nextState = history.future.pop()!;
+          history.past.push(cloneRequestPreservingAttachments(activeTab));
+          if (history.past.length > MAX_UNDO_HISTORY) {
+            history.past.shift();
+          }
+
+          const restoredTab: ApiRequest = {
+            ...cloneRequestPreservingAttachments(nextState),
+            id: activeTab.id,
+          };
+
+          return {
+            tabs: state.tabs.map((t) => (t.id === activeTab.id ? restoredTab : t)),
+            canUndoActiveRequest: history.past.length > 0,
+            canRedoActiveRequest: history.future.length > 0,
+          };
+        });
       },
 
       sendRequest: async () => {
@@ -5001,6 +5418,8 @@ export function createApiStore(
               activeTabId: existingTab.id,
               activeResponse: restoredResponse,
               tabResponses: nextTabResponses,
+              canUndoActiveRequest: (tabUndoHistory[existingTab.id]?.past?.length ?? 0) > 0,
+              canRedoActiveRequest: (tabUndoHistory[existingTab.id]?.future?.length ?? 0) > 0,
             };
           }
 
@@ -5018,6 +5437,8 @@ export function createApiStore(
             activeTabId: newTab.id,
             activeResponse: initialResponse || null,
             tabResponses: nextTabResponses,
+            canUndoActiveRequest: false,
+            canRedoActiveRequest: false,
           };
         });
       },
@@ -5277,6 +5698,13 @@ export function createApiStore(
 
   (store as ApiStore).dispose = () => {
     isStoreDisposed = true;
+    for (const key of Object.keys(undoTypingTimers)) {
+      clearTimeout(undoTypingTimers[key]);
+      delete undoTypingTimers[key];
+    }
+    for (const key of Object.keys(tabUndoHistory)) {
+      delete tabUndoHistory[key];
+    }
     invalidateAsyncOperations({ session: true });
   };
 

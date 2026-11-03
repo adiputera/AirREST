@@ -31,6 +31,7 @@ import { requestHostPermission } from '../lib/hostPermissions';
 import { getDefaultPlatformAdapter } from '../lib/fetcher';
 import { getTrackedBlob } from '../lib/blobManager';
 import { useBackHandler } from '../lib/backNavigation';
+import { CodeEditor, CodeEditorHandle } from './editor/CodeEditor';
 
 function getExtensionFromMime(mime: string): string {
   const m = (mime || '').toLowerCase();
@@ -124,6 +125,8 @@ export const ResponseViewer: React.FC = () => {
   const isResizingResponseRef = React.useRef(false);
   const startResponseYRef = React.useRef(0);
   const startResponseHeightRef = React.useRef(400);
+  const responseEditorRef = React.useRef<CodeEditorHandle>(null);
+  const modalResponseEditorRef = React.useRef<CodeEditorHandle>(null);
 
   // Register back navigation handler for expanded response modal
   useBackHandler(isExpandedModalOpen, () => setIsExpandedModalOpen(false), 25);
@@ -369,6 +372,12 @@ export const ResponseViewer: React.FC = () => {
     }
   }
 
+  const isXml =
+    !isJson &&
+    typeof activeResponse?.data === 'string' &&
+    (activeResponse?.contentType?.includes('xml') || activeResponse.data.trim().startsWith('<'));
+  const responseLanguage: 'json' | 'xml' | 'text' = isJson ? 'json' : isXml ? 'xml' : 'text';
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden bg-app">
       {/* Response Header Bar */}
@@ -510,27 +519,55 @@ export const ResponseViewer: React.FC = () => {
             </button>
           </div>
 
-          {activeTab === 'body' && isJson && (
-            <div className="flex rounded-lg border border-line bg-element p-0.5 text-xs">
+          {activeTab === 'body' && (
+            <div className="flex items-center gap-1.5">
+              {isJson && (
+                <div className="flex rounded-lg border border-line bg-element p-0.5 text-xs">
+                  <button
+                    onClick={() => setViewMode('pretty')}
+                    className={`rounded px-2 py-0.5 transition ${
+                      viewMode === 'pretty'
+                        ? 'bg-card text-sky-600 dark:text-sky-400 font-semibold shadow-sm'
+                        : 'text-tx-muted hover:text-tx-primary'
+                    }`}
+                  >
+                    Pretty
+                  </button>
+                  <button
+                    onClick={() => setViewMode('raw')}
+                    className={`rounded px-2 py-0.5 transition ${
+                      viewMode === 'raw'
+                        ? 'bg-card text-sky-600 dark:text-sky-400 font-semibold shadow-sm'
+                        : 'text-tx-muted hover:text-tx-primary'
+                    }`}
+                  >
+                    Raw
+                  </button>
+                </div>
+              )}
               <button
-                onClick={() => setViewMode('pretty')}
-                className={`rounded px-2 py-0.5 transition ${
-                  viewMode === 'pretty'
-                    ? 'bg-card text-sky-600 dark:text-sky-400 font-semibold shadow-sm'
-                    : 'text-tx-muted hover:text-tx-primary'
-                }`}
+                type="button"
+                onClick={() => {
+                  responseEditorRef.current?.foldAll();
+                  modalResponseEditorRef.current?.foldAll();
+                }}
+                className="flex items-center gap-1 rounded-md border border-line bg-card px-2 py-0.5 text-xs text-tx-muted hover:text-tx-primary hover:bg-hover transition cursor-pointer"
+                title="Collapse all objects and lists"
               >
-                Pretty
+                <Minimize2 className="h-3 w-3" />
+                <span>Collapse All</span>
               </button>
               <button
-                onClick={() => setViewMode('raw')}
-                className={`rounded px-2 py-0.5 transition ${
-                  viewMode === 'raw'
-                    ? 'bg-card text-sky-600 dark:text-sky-400 font-semibold shadow-sm'
-                    : 'text-tx-muted hover:text-tx-primary'
-                }`}
+                type="button"
+                onClick={() => {
+                  responseEditorRef.current?.unfoldAll();
+                  modalResponseEditorRef.current?.unfoldAll();
+                }}
+                className="flex items-center gap-1 rounded-md border border-line bg-card px-2 py-0.5 text-xs text-tx-muted hover:text-tx-primary hover:bg-hover transition cursor-pointer"
+                title="Expand all objects and lists"
               >
-                Raw
+                <Maximize2 className="h-3 w-3" />
+                <span>Expand All</span>
               </button>
             </div>
           )}
@@ -991,12 +1028,14 @@ export const ResponseViewer: React.FC = () => {
               </div>
             ) : (
               <div className="space-y-1">
-                <pre
-                  style={{ maxHeight: `${responseHeight}px` }}
-                  className="rounded-xl border border-line bg-card p-4 font-mono text-xs text-tx-primary overflow-x-auto whitespace-pre-wrap leading-relaxed select-text overflow-y-auto"
-                >
-                  {viewMode === 'pretty' ? prettyJson : activeResponse.data}
-                </pre>
+                <CodeEditor
+                  ref={responseEditorRef}
+                  value={viewMode === 'pretty' ? prettyJson : activeResponse.data}
+                  readOnly={true}
+                  language={responseLanguage}
+                  height={responseHeight}
+                  className="w-full"
+                />
                 <div
                   onMouseDown={(e) => handleStartResponseResize(e.clientY)}
                   onTouchStart={handleTouchStartResponseResize}
@@ -1191,9 +1230,14 @@ export const ResponseViewer: React.FC = () => {
                     </button>
                   </div>
                 ) : (
-                  <pre className="h-full w-full rounded-xl border border-line bg-card p-4 font-mono text-xs md:text-sm text-tx-primary overflow-auto whitespace-pre-wrap leading-relaxed select-text">
-                    {viewMode === 'pretty' ? prettyJson : activeResponse.data}
-                  </pre>
+                  <CodeEditor
+                    ref={modalResponseEditorRef}
+                    value={viewMode === 'pretty' ? prettyJson : activeResponse.data}
+                    readOnly={true}
+                    language={responseLanguage}
+                    height="100%"
+                    className="h-full w-full"
+                  />
                 )
               ) : (
                 <div className="overflow-hidden rounded-xl border border-line bg-surface">

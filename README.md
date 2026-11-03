@@ -7,7 +7,7 @@
 > A fast, lightweight, and modern API testing studio packaged as a **Google Chrome Extension (Manifest V3)**, **Desktop Application (macOS, Windows, Linux)**, **Android App**, and standalone web client with optional cloud team synchronization. Built with **React 19**, **Vite**, **Tailwind CSS v4**, **Tauri v2**, **Zustand**, and a **Go + PostgreSQL** backend.
 
 [![GitHub Repository](https://img.shields.io/badge/GitHub-adiputera%2FAirREST-181717?logo=github)](https://github.com/adiputera/AirREST)
-[![Version](https://img.shields.io/badge/Version-1.3.2-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.3.3-blue.svg)](CHANGELOG.md)
 [![Manifest V3](https://img.shields.io/badge/Chrome%20Extension-Manifest%20V3-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)
 [![Tauri v2](https://img.shields.io/badge/Tauri-v2-24C8D8?logo=tauri&logoColor=white)](https://v2.tauri.app/)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
@@ -41,12 +41,21 @@ AirREST is a complete API testing studio that runs directly inside Google Chrome
 - **HTTP Methods**: Full support for `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, and `OPTIONS`.
 - **Bidirectional URL & Query Sync**: Editing query parameters in the URL input updates the key-value table automatically, and edits within the table update the URL query string in real time. Supports multi-value keys, templated variables (`{{var}}`), and parameter toggling.
 - **Unsaved Modifications Tracker & Safe Close**: Visual indicator dot (`●`) marks tabs with unsaved edits. Closing a dirty tab triggers an interactive confirmation dialog with options to **Save**, **Close Tab** (discard changes), or **Cancel** to prevent accidental data loss. Pressing <kbd>Ctrl + S</kbd> / <kbd>Cmd + S</kbd> saves updates directly into the source collection item.
+- **Per-Tab Undo & Redo History**: Revert accidental edits or mispasted request bodies at any time with <kbd>Ctrl + Z</kbd> / <kbd>Cmd + Z</kbd> (Undo) and <kbd>Ctrl + Y</kbd> / <kbd>Cmd + Shift + Z</kbd> (Redo), or via the compact mobile-friendly Undo button in the top-right action bar. In-memory per-tab history tracks up to 50 snapshots across body edits, parameters, headers, and configurations.
 - **Request Safety & Cancellation**: Inflight requests can be cancelled on demand via the **Cancel** button using native `AbortController`. Built-in 5-minute (300-second) execution deadlines and a 10 MiB streamed response body limit protect against memory overflow and hung connections.
-- **Keyboard Shortcuts**: Quick dispatch with <kbd>Ctrl + Enter</kbd> (Windows/Linux) or <kbd>Cmd + Enter</kbd> (macOS).
+- **Keyboard Shortcuts**: Quick dispatch with <kbd>Ctrl + Enter</kbd> / <kbd>Cmd + Enter</kbd>, quick save with <kbd>Ctrl + S</kbd> / <kbd>Cmd + S</kbd>, and instant undo/redo with <kbd>Ctrl + Z</kbd> / <kbd>Cmd + Z</kbd>.
+- **Studio Request vs Response Split-Pane Resizer & Persistence**:
+  - Horizontal drag-to-resize divider separating the entire Request panel (Params, Headers, Auth, Body, Scripts) from the Response panel on desktop screens.
+  - Independent scrolling: Request configuration scrolls inside the upper pane without pushing the Response header off the screen.
+  - Safe fluid clamping: Bounded safely between `150px` (minimum Request height) and leaving at least `140px` for the Response panel.
+  - Automatic persistence to `localStorage` under `airrest:request_pane_height`.
+  - Double-click reset to restore a balanced view, with full keyboard accessibility (<kbd>ArrowUp</kbd> / <kbd>ArrowDown</kbd> / <kbd>Home</kbd> / <kbd>Enter</kbd>).
+  - **Adaptive Section Collapse**: Collapsing the request configuration section immediately shrinks the top pane to `auto` and elevates the Response panel to fill all remaining viewport height with zero dead space. Expanding instantly restores the saved split-pane height.
 
 ### 2. 📝 Flexible Request Body Formats
 - **Visual Payload Builder (`JSON` & `XML`)**: Form-based tree builder with type safety (`string`, `number`, `boolean`, `date` with ISO-8601/Unix formats, `list`, `object`, `null`), flexible Root (`Object` vs `List`), recursive nested objects and lists, XML attribute toggling (`[Attr]`), auto-escape for XML entities, and a mobile-friendly 3-way segmented control (`[ 📝 Builder ]` <-> `[ 👁️ Result Preview ]` <-> `[ 💻 Raw ]`) with seamless two-way reverse parsing from raw payloads.
-- **JSON**: Code editor with 1-click **Beautify JSON** formatting, syntax validation, and **Tab / Shift+Tab keyboard indentation** support (2-space indents, multi-line block indent/outdent, and native Undo/Redo preservation).
+- **CodeMirror 6 Code Editor & Folding**: Mode Raw in Request Body and Response Viewer features **line numbers (1, 2, 3...)**, interactive **code folding (`(-)` / `(+)`)** for objects and arrays/lists, and 1-click **Collapse All** / **Expand All** actions without corrupting raw payload data.
+- **JSON**: Code editor with 1-click **Beautify JSON** formatting, relaxed syntax auto-recovery, debounced 500ms real-time validation, and **Tab / Shift+Tab keyboard indentation** support (2-space indents, multi-line block indent/outdent, and native Undo/Redo preservation).
 - **GraphQL (`bodyType = 'graphql'`)**: Split-pane interface for GraphQL Query/Mutation and JSON Variables, complete with **Prettify Query** and **Beautify Variables** actions, plus Tab indentation support. Sets `Content-Type: application/json` and `POST` method automatically.
 - **XML (`bodyType = 'xml'`)**: Dedicated editor with 1-click **Beautify XML** formatting and Tab indentation.
 - **Raw Payloads**: Text, JSON, XML, or HTML editing with automatic `Content-Type` header handling and Tab indentation.
@@ -93,6 +102,12 @@ AirREST is a complete API testing studio that runs directly inside Google Chrome
   - Double-click on any collection, folder, or request name directly in the sidebar tree to instantly initiate inline renaming.
   - Automatically synchronizes active open tabs when a request is renamed from the sidebar.
 - **Confirmation Modals**: Dialog prompts require explicit confirmation before deleting collections.
+- **Resizable Desktop Sidebar & LocalStorage Persistence**:
+  - Horizontal drag-to-resize separator handle on desktop screens with live px badge and hover/active sky-blue highlights.
+  - Fluid width boundaries clamped safely between `220px` (minimum) and up to `55%` of viewport width (max `800px`), preventing editor layout collapse.
+  - Automatic persistence to `localStorage` under `airrest:sidebar_width` across page reloads and desktop sessions.
+  - Quick double-click reset to restore the default width (`288px`).
+  - Full keyboard accessibility (<kbd>ArrowLeft</kbd> / <kbd>ArrowRight</kbd> to adjust, <kbd>Home</kbd> / <kbd>Enter</kbd> to reset) with ARIA separator role.
 
 ### 4. 🌍 Environment Variables & Dynamic Templating
 - **Environment Switcher**: Quick-switch between environments (e.g., Localhost, Development, Staging, Production) from the header dropdown.
