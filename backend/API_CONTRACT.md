@@ -337,7 +337,7 @@ In addition to enums, the Frontend relies on specific primitive types and relati
 - `DELETE /api/v1/collections/{id}` *(Auth)* — Soft delete collection (tombstone). Requires both existing RBAC/min-role checks and global `collection.delete`; a disabled feature returns `403 FEATURE_DISABLED`.
 - `POST /api/v1/collections/{id}/move` *(Auth)* — Move collection across scopes. Personal/offline sources may move into a project; a project collection cannot move into a personal workspace. Requires both existing RBAC/min-role checks and global `collection.move`; a disabled feature returns `403 FEATURE_DISABLED`.
   - Payload: `{ "target_workspace_id"?: UUID, "target_project_id"?: UUID }`
-- `PUT /api/v1/collections/{id}/reorder` *(Auth)* — Batch reorder items and folder parentage.
+- `PUT /api/v1/collections/{id}/reorder` *(Auth)* — Batch reorder items and folder parentage (also accessible via contract alias `PUT /api/v1/collections/{id}/items/reorder`).
   - Payload: `{ "items": [{ "id": UUID, "parent_id": UUID|null, "sort_order": int }] }`
 - `POST /api/v1/items` *(Auth)* — Create request or folder item.
   - Payload: `CollectionItem` schema.
@@ -380,15 +380,26 @@ In addition to enums, the Frontend relies on specific primitive types and relati
 
 ### Request limits and availability
 
-All routes enforce a 4 MiB (4,194,304-byte) request body limit, including chunked bodies and bodies without `Content-Length`. `POST /api/v1/sync/push` and `POST /api/v1/sync/import-batch` additionally accept one gzip member: maximum 3,000,000 encoded bytes and 16 MiB decoded JSON. Oversize bodies return `413 PAYLOAD_TOO_LARGE`. At most 16 handlers run concurrently per instance; excess requests receive `503 SERVER_BUSY` and `Retry-After: 1`. A 30-second request deadline propagates to database work and returns `503 REQUEST_TIMEOUT`. These errors use the standard flat error envelope. Hosting/proxy limits can be smaller.
+All routes enforce a 4 MiB (4,194,304-byte) request body limit, including chunked bodies and bodies without `Content-Length`. `POST /api/v1/sync/push` and `POST /api/v1/sync/import-batch` additionally accept one gzip member: maximum 3,000,000 encoded bytes and 16 MiB decoded JSON. Oversize bodies return `413 PAYLOAD_TOO_LARGE`. At most 16 handlers run concurrently per instance; excess requests receive `503 SERVER_BUSY` and `Retry-After: 1`. A 300-second (5-minute) request deadline propagates to database work and returns `503 REQUEST_TIMEOUT`. These errors use the standard flat error envelope. Hosting/proxy limits can be smaller.
 
 Sync failures do not return successful partial deltas. Role lookup and row iteration errors are propagated; result sets close before another connection is needed. Invalid scope returns 400; authorization returns 403; concurrent import collision returns 409; batch limits return 413; other sync/database failures return 500.
 
-Serverless initialization permits one attempt at a time, with a 20-second deadline. Failed attempts retry after 1, 2, 4, 8, 16, then 30 seconds; successful initialization is reused. Requests during initialization/backoff receive `503` and `Retry-After: 1`. The existing startup error envelope is preserved as the exception to flat errors:
+Serverless initialization permits one attempt at a time per instance, with a 20-second deadline when `SKIP_MIGRATIONS=true` and a 120-second deadline when boot migrations may run. Failed attempts retry after 1, 2, 4, 8, 16, then 30 seconds; successful initialization is reused. Requests during initialization/backoff receive `503` and `Retry-After: 1`. The nested startup error envelope is preserved as the exception to flat errors. `code` is always `SERVICE_UNAVAILABLE`; the additive `reason` field identifies the failing stage (during backoff it reports the last failure). Raw errors are written to server logs only (`failed to initialize backend`).
 
 ```json
-{"success":false,"error":{"code":"SERVICE_UNAVAILABLE","message":"Failed to initialize database connection"}}
+{"success":false,"error":{"code":"SERVICE_UNAVAILABLE","reason":"DATABASE_UNAVAILABLE","message":"Failed to initialize database connection"}}
 ```
+
+| `reason` | `message` | Typical cause |
+|---|---|---|
+| `INITIALIZING` | `Service is initializing, retry shortly` | Another request on the same instance is initializing |
+| `CONFIG_INVALID` | `Server configuration is invalid` | Missing/weak `JWT_SECRET` |
+| `DATABASE_UNAVAILABLE` | `Failed to initialize database connection` | Invalid `DATABASE_URL`, unreachable host, auth/SSL failure |
+| `MIGRATION_FAILED` | `Database migration failed` | SQL error, `lock_timeout` (5 s) or `statement_timeout` (60 s) exceeded |
+| `BOOTSTRAP_FAILED` | `Initial administrator bootstrap failed` | No superadmin exists and `SUPERADMIN_EMAIL`/`SUPERADMIN_PASSWORD` are invalid |
+| `INITIALIZATION_FAILED` | `Service initialization failed` | Unclassified failure |
+
+Boot migrations are tracked in `schema_migrations`. Each version is applied inside its own transaction that first takes a transaction-scoped advisory lock (`pg_advisory_xact_lock`, safe behind transaction poolers) and re-checks `schema_migrations`, so concurrent cold starts apply each version exactly once. Concurrent superadmin bootstrap is likewise idempotent.
 
 ### 10. Admin Management (Superadmin Only)
 - `GET /api/v1/admin/users` *(Auth, Superadmin)* — List all registered users.

@@ -133,12 +133,12 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
       }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in duration-150"
     >
-      <div className="relative w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl shadow-black/90">
+      <div className="relative w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl border border-line-strong bg-card p-6 shadow-2xl shadow-black/90">
         {/* Close Button */}
         <button
           onClick={onClose}
           disabled={isLoading}
-          className="absolute right-4 top-4 rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white transition disabled:opacity-50"
+          className="absolute right-4 top-4 rounded-lg p-1.5 text-tx-muted hover:bg-hover hover:text-tx-primary transition disabled:opacity-50"
           title="Close"
         >
           <X className="h-4 w-4" />
@@ -150,8 +150,8 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
             <KeyRound className="h-5 w-5" />
           </div>
           <div>
-            <h3 className="text-base font-semibold text-zinc-100">Change Password</h3>
-            <p className="text-xs text-zinc-400">Changing your password signs out other devices.</p>
+            <h3 className="text-base font-semibold text-tx-primary">Change Password</h3>
+            <p className="text-xs text-tx-muted">Changing your password signs out other devices.</p>
           </div>
         </div>
 
@@ -167,11 +167,11 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Current Password */}
           <div>
-            <label className="block text-xs font-medium text-zinc-300 mb-1.5">
+            <label className="block text-xs font-medium text-tx-secondary mb-1.5">
               Current Password
             </label>
             <div className="relative">
-              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-zinc-500">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-tx-muted">
                 <Lock className="h-4 w-4" />
               </div>
               <input
@@ -180,13 +180,13 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
                 onChange={(e) => setCurrentPassword(e.target.value)}
                 placeholder="Enter current password"
                 disabled={isLoading}
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 pl-9 pr-10 py-2.5 text-xs text-zinc-100 placeholder-zinc-500 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition disabled:opacity-50"
+                className="w-full rounded-xl border border-line bg-element pl-9 pr-10 py-2.5 text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition disabled:opacity-50"
                 required
               />
               <button
                 type="button"
                 onClick={() => setShowCurrent(!showCurrent)}
-                className="absolute inset-y-0 right-0 pr-3 flex items-center text-zinc-500 hover:text-zinc-300"
+                className="absolute inset-y-0 right-0 pr-3 flex items-center text-tx-muted hover:text-tx-primary"
                 tabIndex={-1}
               >
                 {showCurrent ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
@@ -196,11 +196,11 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
 
           {/* New Password */}
           <div>
-            <label className="block text-xs font-medium text-zinc-300 mb-1.5">
+            <label className="block text-xs font-medium text-tx-secondary mb-1.5">
               New Password
             </label>
             <div className="relative">
-              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-zinc-500">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-tx-muted">
                 <KeyRound className="h-4 w-4" />
               </div>
               <input
@@ -210,28 +210,28 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
                 placeholder="Minimum 8 characters"
                 minLength={8}
                 disabled={isLoading}
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 pl-9 pr-10 py-2.5 text-xs text-zinc-100 placeholder-zinc-500 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition disabled:opacity-50"
+                className="w-full rounded-xl border border-line bg-element pl-9 pr-10 py-2.5 text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition disabled:opacity-50"
                 required
               />
               <button
                 type="button"
                 onClick={() => setShowNew(!showNew)}
-                className="absolute inset-y-0 right-0 pr-3 flex items-center text-zinc-500 hover:text-zinc-300"
+                className="absolute inset-y-0 right-0 pr-3 flex items-center text-tx-muted hover:text-tx-primary"
                 tabIndex={-1}
               >
                 {showNew ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
               </button>
             </div>
-            <p className="mt-1 text-[11px] text-zinc-500">Must be at least 8 characters long</p>
+            <p className="mt-1 text-[11px] text-tx-faint">Must be at least 8 characters long</p>
           </div>
 
           {/* Confirm New Password */}
           <div>
-            <label className="block text-xs font-medium text-zinc-300 mb-1.5">
+            <label className="block text-xs font-medium text-tx-secondary mb-1.5">
               Confirm New Password
             </label>
             <div className="relative">
-              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-zinc-500">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-tx-muted">
                 <KeyRound className="h-4 w-4" />
               </div>
               <input
@@ -241,13 +241,13 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
                 placeholder="Re-enter new password"
                 minLength={8}
                 disabled={isLoading}
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 pl-9 pr-10 py-2.5 text-xs text-zinc-100 placeholder-zinc-500 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition disabled:opacity-50"
+                className="w-full rounded-xl border border-line bg-element pl-9 pr-10 py-2.5 text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition disabled:opacity-50"
                 required
               />
               <button
                 type="button"
                 onClick={() => setShowConfirm(!showConfirm)}
-                className="absolute inset-y-0 right-0 pr-3 flex items-center text-zinc-500 hover:text-zinc-300"
+                className="absolute inset-y-0 right-0 pr-3 flex items-center text-tx-muted hover:text-tx-primary"
                 tabIndex={-1}
               >
                 {showConfirm ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
@@ -259,12 +259,12 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
           </div>
 
           {/* Actions */}
-          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-zinc-800">
+          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-line">
             <button
               type="button"
               onClick={onClose}
               disabled={isLoading}
-              className="rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2 text-xs font-medium text-zinc-300 hover:bg-zinc-800 hover:text-white transition disabled:opacity-50"
+              className="rounded-xl border border-line bg-card px-3.5 py-2 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition disabled:opacity-50"
             >
               Cancel
             </button>

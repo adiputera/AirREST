@@ -16,6 +16,7 @@ import {
   writeFile as tauriWriteFile,
   writeTextFile as tauriWriteTextFile,
   readTextFile as tauriReadTextFile,
+  stat as tauriStat,
 } from '@tauri-apps/plugin-fs';
 import type {
   ScriptWorkerRequest,
@@ -23,6 +24,8 @@ import type {
 } from '@airrest/common/protocol';
 import { SCRIPT_LIMITS, validateScriptInput } from '@airrest/common/protocol';
 import { runQuickJsGuest } from '../scripts/quickjsRunner';
+
+export const MAX_IMPORT_FILE_BYTES = 16 * 1024 * 1024; // 16 MiB
 
 export function extractFilename(filePath: string): string {
   if (filePath.startsWith('content:')) {
@@ -121,16 +124,37 @@ export const tauriTestTransport: TestTransport = {
   },
 };
 
+function combineSignals(signal?: AbortSignal | null, timeoutMs = 300000): AbortSignal | undefined {
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    if (!signal) return timeoutSignal;
+    if ('any' in AbortSignal && typeof (AbortSignal as any).any === 'function') {
+      return (AbortSignal as any).any([signal, timeoutSignal]);
+    }
+  }
+  if (signal) return signal;
+  if (typeof AbortController !== 'undefined') {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error('Request timed out')), timeoutMs);
+    controller.signal.addEventListener('abort', () => clearTimeout(timer), { once: true });
+    return controller.signal;
+  }
+  return undefined;
+}
+
 export const tauriCloudTransport: CloudTransport = {
   fetch: async (url: string, init: TransportInit) => {
     // Cloud sync strictly enforces standard TLS with zero bypasses.
     // maxRedirections: 0 prevents reqwest / Tauri HTTP from automatically following redirects,
     // avoiding credential leaks or unintended host transitions.
+    // connectTimeout: 15000 guards against hanging TCP handshakes.
+    const signal = combineSignals(init.signal as AbortSignal, 300000);
     return tauriFetch(url, {
       method: init.method,
       headers: init.headers,
       body: init.body,
-      signal: init.signal,
+      signal,
+      connectTimeout: 15000,
       maxRedirections: 0,
     });
   },
@@ -143,15 +167,21 @@ interface ActiveWorkerRecord {
 
 const activeWorkerRecords = new Set<ActiveWorkerRecord>();
 
-function dialogFilters(options?: FileOptions): FileOptions['filters'] {
+export function dialogFilters(options?: FileOptions & { mimeType?: string }): FileOptions['filters'] {
   if (!__AIRREST_ANDROID__) return options?.filters;
   // Android's document picker filters by MIME type rather than extension.
-  return options?.filters?.map((filter) => ({
-    ...filter,
-    extensions: filter.extensions.map((extension) =>
-      extension.toLowerCase() === 'json' ? 'application/json' : extension,
-    ),
-  }));
+  if (options?.filters && options.filters.length > 0) {
+    return options.filters.map((filter) => ({
+      ...filter,
+      extensions: filter.extensions.map((extension) =>
+        extension.toLowerCase() === 'json' ? 'application/json' : extension,
+      ),
+    }));
+  }
+  if (options?.mimeType) {
+    return [{ name: 'File', extensions: [options.mimeType] }];
+  }
+  return options?.filters;
 }
 
 export const tauriScriptExecutor: ScriptExecutor = {
@@ -344,7 +374,7 @@ export const tauriScriptExecutor: ScriptExecutor = {
 };
 
 export const tauriAdapter: PlatformAdapter = {
-  platformId: 'desktop',
+  platformId: typeof __AIRREST_ANDROID__ !== 'undefined' && __AIRREST_ANDROID__ ? 'android' : 'desktop',
   capabilities: {
     supportsCustomForbiddenHeaders: true,
     supportsIgnoreSslErrors: true,
@@ -383,7 +413,14 @@ export const tauriAdapter: PlatformAdapter = {
 
     try {
       const filePath = Array.isArray(selected) ? selected[0] : selected;
+      const fileInfo = typeof tauriStat === 'function' ? await tauriStat(filePath).catch(() => null) : null;
+      if (fileInfo && typeof fileInfo.size === 'number' && fileInfo.size > MAX_IMPORT_FILE_BYTES) {
+        throw new Error('Selected file exceeds maximum allowed limit of 16 MB.');
+      }
       const content = await tauriReadTextFile(filePath);
+      if (content.length > MAX_IMPORT_FILE_BYTES) {
+        throw new Error('Selected file exceeds maximum allowed limit of 16 MB.');
+      }
       const filename = extractFilename(filePath);
       return { filename, content };
     } catch (err) {

@@ -1,15 +1,21 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { createAirrestRuntime, AirrestProvider, App, dispatchBack } from '@airrest/common';
+import { createAirrestRuntime, AirrestProvider, App, dispatchBack, initEarlyTheme } from '@airrest/common';
 import { exit, onBackButtonPress } from '@tauri-apps/api/app';
 import { tauriAdapter } from './adapters/tauriAdapter';
 import { DesktopUpdateBanner } from './components/DesktopUpdateBanner';
 import { AndroidUpdateBanner } from './components/AndroidUpdateBanner';
 import './index.css';
 
+initEarlyTheme();
+
 const runtime = createAirrestRuntime({
   adapter: __AIRREST_ANDROID__ ? { ...tauriAdapter, platformId: 'android' } : tauriAdapter,
   edition: 'full',
+});
+
+window.addEventListener('beforeunload', () => {
+  runtime.dispose();
 });
 
 if (__AIRREST_ANDROID__) {

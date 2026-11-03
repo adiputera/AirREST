@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -80,7 +81,7 @@ func Load() (*Config, error) {
 	if minConns > maxConns {
 		minConns = maxConns
 	}
-	skipMigrations := os.Getenv("SKIP_MIGRATIONS") == "true" || os.Getenv("SKIP_MIGRATIONS") == "1"
+	skipMigrations := skipMigrationsFromEnv()
 
 	return &Config{
 		Port:                     port,
@@ -97,6 +98,29 @@ func Load() (*Config, error) {
 		AllowedOrigins:           []string{"http://localhost:*", "http://127.0.0.1:*", "https://*"},
 		IsServerless:             isServerless,
 	}, nil
+}
+
+const (
+	// StartupTimeout bounds application initialization when boot migrations are skipped.
+	StartupTimeout = 20 * time.Second
+	// StartupTimeoutWithMigrations bounds initialization when boot migrations may run.
+	StartupTimeoutWithMigrations = 120 * time.Second
+)
+
+// skipMigrationsFromEnv reports whether SKIP_MIGRATIONS disables boot migrations.
+func skipMigrationsFromEnv() bool {
+	v := os.Getenv("SKIP_MIGRATIONS")
+	return v == "true" || v == "1"
+}
+
+// InitTimeout returns the initialization deadline for the current environment.
+// Migrations can hold DDL locks and run long, so they receive a wider deadline.
+func InitTimeout() time.Duration {
+	_ = godotenv.Load() // Ignore error if .env doesn't exist
+	if skipMigrationsFromEnv() {
+		return StartupTimeout
+	}
+	return StartupTimeoutWithMigrations
 }
 
 func getEnv(key, defaultVal string) string {

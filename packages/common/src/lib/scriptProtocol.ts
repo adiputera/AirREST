@@ -5,6 +5,7 @@ export const SCRIPT_LIMITS = {
   MAX_SCRIPT_BYTES: 256 * 1024, // 256 KiB
   MAX_SERIALIZED_ENV_BYTES: 1024 * 1024, // 1 MiB
   MAX_SERIALIZED_VARS_BYTES: 1024 * 1024, // 1 MiB
+  MAX_RESPONSE_BYTES: 2 * 1024 * 1024, // 2 MiB
   MAX_HEAP_BYTES: 64 * 1024 * 1024, // 64 MiB
   MAX_STACK_BYTES: 512 * 1024, // 512 KiB
   DEFAULT_TIMEOUT_MS: 2000,
@@ -124,6 +125,12 @@ export function validateScriptInput(input: ScriptInput): { valid: boolean; error
       valid: false,
       error: `Serialized variables size exceeded the 1 MiB limit.`,
     };
+  }
+
+  if (input.response?.data && typeof input.response.data === 'string') {
+    if (getUtf8ByteLength(input.response.data) > SCRIPT_LIMITS.MAX_RESPONSE_BYTES) {
+      input.response.data = truncateUtf8Bytes(input.response.data, SCRIPT_LIMITS.MAX_RESPONSE_BYTES);
+    }
   }
 
   return { valid: true };

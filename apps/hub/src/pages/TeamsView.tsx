@@ -201,12 +201,12 @@ export const TeamsView: React.FC = () => {
   const searchSeqRef = useRef(0);
   const handleUserSearch = async (query: string) => {
     setUserQuery(query);
+    const seq = ++searchSeqRef.current;
     if (!token || query.trim().length < 2) {
       setSearchResults([]);
       setIsSearchingUsers(false);
       return;
     }
-    const seq = ++searchSeqRef.current;
     setIsSearchingUsers(true);
     try {
       const results = await apiSearchUsers(apiUrl, token, query.trim(), refreshToken || undefined);
@@ -399,9 +399,13 @@ export const TeamsView: React.FC = () => {
       const updatedMembers = await apiListTeamMembers(apiUrl, token, selectedTeamId, refreshToken || undefined);
       if (useHubStore.getState().selectedTeamId !== selectedTeamId) return;
       setMembers(updatedMembers);
+      if (editingMember.user_id === user?.id) {
+        const updatedTeams = await apiListTeams(apiUrl, token, refreshToken || undefined);
+        setTeams(updatedTeams);
+      }
       handleCloseEditMember();
     } catch (err: any) {
-      alert(err.message || 'Failed to update member role');
+      setErrorMsg(err.message || 'Failed to update member role');
     } finally {
       setIsUpdatingRole(false);
     }
@@ -515,6 +519,16 @@ export const TeamsView: React.FC = () => {
                 <span>Back to Teams</span>
               </button>
             </div>
+
+            {errorMsg && (
+              <div className="flex items-center gap-2 rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-400">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span className="flex-1">{errorMsg}</span>
+                <button type="button" onClick={() => setErrorMsg(null)} className="text-red-400 hover:text-red-300">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
 
             {/* Team Banner */}
             <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4 sm:p-6 flex flex-col xl:flex-row xl:items-center justify-between gap-4 sm:gap-6">

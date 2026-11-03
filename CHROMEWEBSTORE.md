@@ -1,6 +1,6 @@
 # Chrome Web Store Listings — AirREST
 
-> Last Updated: 2026-11-01
+> Last Updated: 2026-11-03
 
 > Chrome Web Store release notes describe browser-extension changes only. Do not include backend, Hub, or desktop release notes here.
 
@@ -35,7 +35,11 @@ KEY FEATURES
 • Supports all standard HTTP methods: GET, POST, PUT, PATCH, DELETE, HEAD, and OPTIONS
 • Native import and export compatibility with Postman Collection v2.1.0 and Environment files
 • Multi-tab workspace with in-memory response persistence, zero-tabs empty studio state, unsaved change indicators, tab duplication, and keyboard shortcuts
-• Comprehensive request body support: JSON (with beautifier & syntax check), GraphQL (query & variables), XML, URL-encoded, Form-Data (file uploads), and raw binary
+• Tab close safeguards: Interactive confirmation dialog on closing tabs with unsaved changes (Save, Close Tab, Cancel)
+• Environment value safeguards: Explicit Save (✓) and Cancel (✕) controls for environment variable names and cloud-synced initial values with interactive unsaved changes confirmation dialog (Save Changes, Discard, Cancel)
+• Theme customization: High-contrast Dark, Light, and System modes with automatic OS color-scheme synchronization
+• Comprehensive request body support: Visual Payload Builder (JSON & XML form tree), raw JSON (with beautifier & syntax check), GraphQL (query & variables), XML, URL-encoded, Form-Data (file uploads), and raw binary
+• Full-screen modal expansion and draggable viewport height resizing for request payload and response viewers
 • Parameter and header editors with dynamic variable interpolation ({{$guid}}, {{$timestamp}}, custom variables)
 • Sandboxed scripting engine supporting pre-request scripts and post-response test assertions
 • Response viewer with syntax highlighting, header inspection, timing metrics, and image/binary previews
@@ -63,6 +67,9 @@ SUPPORT
 For questions, bug reports, or feature suggestions, visit the project repository on GitHub:
 https://github.com/adiputera/AirREST
 
+Version 1.3.2 — Hardened sandbox origin validation in packaged production extension builds, restricting localhost postMessage access to local development modes; declared typed Vite environment configuration; and synchronized Postman environment export metadata.
+Version 1.3.1 — Added explicit Save (✓) and Discard (✕) action controls on environment variable rows with inline dirty state boundary indicators and interactive confirmation dialogs safeguarding unsaved variable changes on modal dismiss or environment switching; extended cloud synchronization and request timeouts to 5 minutes (300s); fixed collection import error propagation so the import pop-up remains open with error details if cloud batch import times out; added pending sync status tracking and automated retry upload for unsynced collections in Scope Switcher before delta pulls, preventing data loss on sync retry; and added visual pending sync indicators in the sidebar.
+Version 1.3.0 — Added System, Dark, and Light theme modes with automatic OS color-scheme sync; interactive Visual Payload Builder for JSON & XML with 3-way mode switching (Raw, Builder, Preview); 4-arrow full-screen modal expansion and draggable viewport height resizing for payload editor and response viewer; unsaved changes confirmation dialog on tab close (Save, Close Tab, Cancel); automatic startup cloud delta synchronization; extended cloud and test request timeouts to 2 minutes; accessible popover dropdowns for mobile environments and HTTP methods; hardened sandbox CSP isolation and prototype protection; enriched Chromium network error diagnostic classification; and deduplicated extension architecture.
 Version 1.2.0 — Added in-app collection permission management via the sidebar 3-dots menu for project scopes, interactive environment permission dialogs with rich role descriptions, account profile display name editing with email protection in User Menu, responsive layout with an auto-collapsible drawer sidebar for screens under 768px and Chrome Side Panel mode (chrome.sidePanel), and improved responsive editor navigation on compact widths.
 Version 1.1.9 — Added dynamic URL path variables (:param and {param}) with automatic URL parsing, parameter editing, and live dispatch substitution; collapsible request editor sections; improved sidebar dropdown positioning; and Cloud Auth modal lifecycle resets for password and visibility state.
 Version 1.1.8 — Added Hub-managed controls for moving, deleting, and exporting cloud collections. The extension refreshes these controls when changing cloud scope or using Sync Online, and prevents moving project collections into personal workspaces.
@@ -129,7 +136,11 @@ KEY FEATURES
 • Supports all standard HTTP methods: GET, POST, PUT, PATCH, DELETE, HEAD, and OPTIONS
 • Native import and export compatibility with Postman Collection v2.1.0 and Environment files
 • Multi-tab workspace with in-memory response persistence, zero-tabs empty studio state, unsaved change tracking and keyboard shortcuts
-• Comprehensive request body support: JSON (with beautifier & syntax check), GraphQL, XML, URL-encoded, Form-Data (file uploads), and raw binary
+• Tab close safeguards: Interactive confirmation dialog on closing tabs with unsaved changes (Save, Close Tab, Cancel)
+• Environment value safeguards: Explicit Save (✓) and Cancel (✕) controls for environment variable names and cloud-synced initial values with interactive unsaved changes confirmation dialog (Save Changes, Discard, Cancel)
+• Theme customization: High-contrast Dark, Light, and System modes with automatic OS color-scheme synchronization
+• Comprehensive request body support: Visual Payload Builder (JSON & XML form tree), raw JSON (with beautifier & syntax check), GraphQL, XML, URL-encoded, Form-Data (file uploads), and raw binary
+• Full-screen modal expansion and draggable viewport height resizing for request payload and response viewers
 • Parameter and header editors with dynamic variable interpolation ({{$guid}}, {{$timestamp}}, custom variables)
 • Sandboxed scripting engine supporting pre-request scripts and post-response test assertions
 • Response viewer with syntax highlighting, header inspection, timing metrics, and image/binary previews
@@ -153,6 +164,9 @@ SUPPORT
 For questions, bug reports, or feature suggestions, visit the project repository on GitHub:
 https://github.com/adiputera/AirREST
 
+Version 1.3.2 — Hardened sandbox origin validation in packaged production extension builds, restricting localhost postMessage access to local development modes; declared typed Vite environment configuration; and synchronized Postman environment export metadata.
+Version 1.3.1 — Added explicit Save (✓) and Discard (✕) controls for environment initial values with inline action buttons and unsaved changes confirmation dialog on modal exit; hardened cloud synchronization concurrency and debounce in environment store preventing false OCC conflict popups; prevented premature closing of ImportModal on network timeouts with automatic sync retry in ScopeSwitcher and Sidebar indicators; protected un-synced pending collections from cloud overwrites.
+Version 1.3.0 — Added System, Dark, and Light theme modes with automatic OS color-scheme sync; interactive Visual Payload Builder for JSON & XML with 3-way mode switching (Raw, Builder, Preview); 4-arrow full-screen modal expansion and draggable viewport height resizing for payload editor and response viewer; unsaved changes confirmation dialog on tab close (Save, Close Tab, Cancel); extended test request execution timeout to 2 minutes; accessible popover dropdowns for mobile environments and HTTP methods; hardened sandbox CSP isolation and prototype protection; enriched Chromium network error diagnostic classification; and deduplicated extension architecture.
 Version 1.2.0 — Added responsive layout with an auto-collapsible drawer sidebar for screens under 768px and Chrome Side Panel mode (chrome.sidePanel), interactive environment access dialogs with role descriptions, and improved responsive editor navigation on compact widths.
 Version 1.1.9 — Added dynamic URL path variables (:param and {param}) with automatic URL parsing, parameter editing, and live dispatch substitution; collapsible request editor sections; and improved sidebar dropdown positioning.
 Version 1.1.8 — Updated release metadata. Offline mode remains local-only and does not connect to Hub feature controls.

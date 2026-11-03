@@ -12,7 +12,10 @@ let quickJsModulePromise: Promise<QuickJSWASMModule> | null = null;
 
 export function getCachedQuickJS(): Promise<QuickJSWASMModule> {
   if (!quickJsModulePromise) {
-    quickJsModulePromise = getQuickJS();
+    quickJsModulePromise = getQuickJS().catch((err) => {
+      quickJsModulePromise = null;
+      throw err;
+    });
   }
   return quickJsModulePromise;
 }
@@ -481,13 +484,17 @@ export async function runQuickJsGuest(
       response: input.response,
     });
 
-    const runnerCode = `globalThis.__runAirrestScript(${JSON.stringify(payloadString)})`;
+    const payloadHandle = context.newString(payloadString);
+    context.setProp(context.global, '__airrestPayload', payloadHandle);
+    payloadHandle.dispose();
+
     deadline = Date.now() + timeoutMs;
     timedOut = false;
     if (options?.onEvalStart) {
       options.onEvalStart();
     }
-    const evalHandle = context.evalCode(runnerCode);
+    const evalHandle = context.evalCode('globalThis.__runAirrestScript(globalThis.__airrestPayload)');
+    context.setProp(context.global, '__airrestPayload', context.undefined);
 
     if (evalHandle.error) {
       if (options?.signal?.aborted || abortedBySignal) {

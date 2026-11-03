@@ -81,16 +81,18 @@ jobs:
       - name: Install workspace dependencies
         run: npm ci
 
-      - name: Resolve Release Tag Name
+      - name: Resolve Release Metadata
         id: release_meta
         shell: bash
         run: |
+          VERSION=$(node -p "require('./apps/native/package.json').version")
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag_name }}" ]; then
             echo "tag_name=${{ inputs.tag_name }}" >> "$GITHUB_OUTPUT"
           elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
             echo "tag_name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           else
-            echo "tag_name=desktop-v__VERSION__" >> "$GITHUB_OUTPUT"
+            echo "tag_name=v${VERSION}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Extract Release Notes from CHANGELOG.md
@@ -100,20 +102,23 @@ jobs:
           node scripts/extract-release-notes.mjs "${{ steps.release_meta.outputs.tag_name }}"
 
       - name: Configure Updater Signing in tauri.conf.json
-        if: env.TAURI_UPDATER_PUBLIC_KEY != '' && env.TAURI_SIGNING_PRIVATE_KEY != ''
         env:
           TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         shell: bash
         run: |
-          node -e '
-            const fs = require("fs");
-            const p = "apps/native/src-tauri/tauri.conf.json";
-            const conf = JSON.parse(fs.readFileSync(p, "utf8"));
-            conf.bundle.createUpdaterArtifacts = true;
-            conf.plugins.updater.pubkey = process.env.TAURI_UPDATER_PUBLIC_KEY.trim();
-            fs.writeFileSync(p, JSON.stringify(conf, null, 2) + "\n");
-          '
+          if [ -n "$TAURI_UPDATER_PUBLIC_KEY" ] && [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            node -e '
+              const fs = require("fs");
+              const p = "apps/native/src-tauri/tauri.conf.json";
+              const conf = JSON.parse(fs.readFileSync(p, "utf8"));
+              conf.bundle.createUpdaterArtifacts = true;
+              conf.plugins.updater.pubkey = process.env.TAURI_UPDATER_PUBLIC_KEY.trim();
+              fs.writeFileSync(p, JSON.stringify(conf, null, 2) + "\n");
+            '
+          else
+            echo "Updater signing secrets not configured; skipping updater artifacts configuration."
+          fi
 
       - name: Build and Release Tauri Desktop App
         uses: tauri-apps/tauri-action@v0
@@ -126,7 +131,7 @@ jobs:
         with:
           projectPath: apps/native
           tagName: ${{ steps.release_meta.outputs.tag_name }}
-          releaseName: 'AirREST v__VERSION__'
+          releaseName: 'AirREST v${{ steps.release_meta.outputs.version }}'
           releaseBody: ${{ steps.changelog.outputs.release_notes }}
           releaseDraft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || false }}
           prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
@@ -190,23 +195,34 @@ jobs:
           fi
 
       - name: Configure Android Signing Keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.AIRREST_ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.AIRREST_ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.AIRREST_ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.AIRREST_ANDROID_KEY_PASSWORD }}
+          IS_TAG_RELEASE: ${{ startsWith(github.ref, 'refs/tags/') || github.ref_type == 'tag' }}
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/keystore"
-          if [ -n "${{ secrets.AIRREST_ANDROID_KEYSTORE_BASE64 }}" ]; then
+          KEYSTORE_FILE="$RUNNER_TEMP/keystore/airrest-release.keystore"
+
+          if [ -n "$KEYSTORE_BASE64" ]; then
             echo "Using configured repository secrets for Android signing..."
-            echo "${{ secrets.AIRREST_ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > "$RUNNER_TEMP/keystore/airrest-release.keystore"
-            echo "AIRREST_ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/keystore/airrest-release.keystore" >> "$GITHUB_ENV"
-            echo "AIRREST_ANDROID_KEYSTORE_PASSWORD=${{ secrets.AIRREST_ANDROID_KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
-            echo "AIRREST_ANDROID_KEY_ALIAS=${{ secrets.AIRREST_ANDROID_KEY_ALIAS }}" >> "$GITHUB_ENV"
-            echo "AIRREST_ANDROID_KEY_PASSWORD=${{ secrets.AIRREST_ANDROID_KEY_PASSWORD }}" >> "$GITHUB_ENV"
+            echo "$KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_FILE"
+            echo "AIRREST_ANDROID_KEYSTORE_PATH=$KEYSTORE_FILE" >> "$GITHUB_ENV"
+            echo "AIRREST_ANDROID_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "AIRREST_ANDROID_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "AIRREST_ANDROID_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+          elif [ "$IS_TAG_RELEASE" = "true" ]; then
+            echo "::error::Production release tag detected, but AIRREST_ANDROID_KEYSTORE_BASE64 is not configured. Aborting build to prevent signing with untracked keystore."
+            exit 1
           else
             echo "::warning::AIRREST_ANDROID_KEYSTORE_BASE64 secret not found; generating temporary CI fallback keystore so APK is installable."
-            keytool -genkeypair -v -keystore "$RUNNER_TEMP/keystore/airrest-release.keystore" \
+            keytool -genkeypair -v -keystore "$KEYSTORE_FILE" \
               -alias "airrest-ci" -keyalg RSA -keysize 2048 -validity 10000 \
               -storepass "airrestpass123" -keypass "airrestpass123" \
               -dname "CN=AirREST CI, O=AirREST, C=ID"
-            echo "AIRREST_ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/keystore/airrest-release.keystore" >> "$GITHUB_ENV"
+            echo "AIRREST_ANDROID_KEYSTORE_PATH=$KEYSTORE_FILE" >> "$GITHUB_ENV"
             echo "AIRREST_ANDROID_KEYSTORE_PASSWORD=airrestpass123" >> "$GITHUB_ENV"
             echo "AIRREST_ANDROID_KEY_ALIAS=airrest-ci" >> "$GITHUB_ENV"
             echo "AIRREST_ANDROID_KEY_PASSWORD=airrestpass123" >> "$GITHUB_ENV"

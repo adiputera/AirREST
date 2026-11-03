@@ -3,11 +3,13 @@ import {
   TestTransport,
   CloudTransport,
   ScriptExecutor,
+  ApiResponse,
   runScriptInSandbox,
   resetSandboxIframe,
   hasHostPermission,
   requestHostPermission,
   categorizeNetworkError,
+  getChromiumNetworkError,
 } from '@airrest/common';
 
 export const chromeTransport: TestTransport = {
@@ -18,10 +20,16 @@ export const chromeTransport: TestTransport = {
       cache: 'no-store',
     });
   },
-  classifyError: async (error) => {
+  classifyError: async (error, url) => {
     const errorMsg = error instanceof Error ? error.message : String(error);
+    let netErrorCode: string | null = null;
+    if (url) {
+      netErrorCode = await getChromiumNetworkError(url);
+    }
+    const category = categorizeNetworkError(netErrorCode || errorMsg);
     return {
-      category: categorizeNetworkError(errorMsg),
+      category,
+      code: netErrorCode || undefined,
       detail: errorMsg,
     };
   },
@@ -38,12 +46,13 @@ export const chromeCloudTransport: CloudTransport = {
 };
 
 export const chromeScriptExecutor: ScriptExecutor = {
-  execute: async (input) => {
+  execute: async (input, options) => {
     return runScriptInSandbox(
       input.script,
-      input.response as any,
+      input.response as ApiResponse | undefined,
       input.environment,
-      input.variables
+      input.variables,
+      options
     );
   },
   dispose: () => {
@@ -64,14 +73,14 @@ export const chromeAdapter: PlatformAdapter = {
   scriptExecutor: chromeScriptExecutor,
   saveFile: async (filename, content, options) => {
     const blob = content instanceof Uint8Array
-      ? new Blob([content as any], { type: options?.mimeType || 'application/octet-stream' })
+      ? new Blob([content as unknown as BlobPart], { type: options?.mimeType || 'application/octet-stream' })
       : new Blob([content], { type: options?.mimeType || 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = filename;
     a.click();
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
     return true;
   },
   openFile: async (options) => {

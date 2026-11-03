@@ -9,7 +9,7 @@ const require = createRequire(import.meta.url);
 
 function loadStore({ executeApiRequest = async () => ({ status: 200, statusText: 'OK', data: '{"ok":true}', timeMs: 50, sizeBytes: 10, headers: {} }) } = {}) {
   const source = fs
-    .readFileSync(new URL('../apps/extension/src/store/useApiStore.ts', import.meta.url), 'utf8')
+    .readFileSync(new URL('../packages/common/src/store/useApiStore.ts', import.meta.url), 'utf8')
     .replaceAll('import.meta.env', '({})');
   const compiled = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -22,16 +22,16 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
   };
   const noop = () => {};
   const modules = {
-    '@/lib/storage': { appStorage },
-    '@/lib/blobManager': { revokeBlobUrl: noop, revokeBlobUrls: noop },
-    '@/lib/fetcher': { executeApiRequest },
-    '@/lib/scriptRunner': {
+    'storage': { appStorage },
+    'blobManager': { revokeBlobUrl: noop, revokeBlobUrls: noop },
+    'fetcher': { executeApiRequest },
+    'scriptRunner': {
       executePreRequestScript: async () => ({ success: true, environment: {}, variables: {} }),
       executePostResponseScript: async () => ({ success: true, environment: {}, variables: {} }),
     },
-    '@/lib/postman': { importPostmanCollection: noop, importPostmanEnvironment: noop, detectPostmanJsonType: noop },
-    '@/lib/urlParams': { parseQueryParamsFromUrl: () => [], parsePathVariablesFromUrl: () => [], buildUrlWithParams: (u) => u },
-    '@/lib/cloudApi': {
+    'postman': { importPostmanCollection: noop, importPostmanEnvironment: noop, detectPostmanJsonType: noop },
+    'urlParams': { parseQueryParamsFromUrl: () => [], parsePathVariablesFromUrl: () => [], buildUrlWithParams: (u) => u },
+    'cloudApi': {
       batchImportToScope: noop,
       registerTokenRefreshCallback: noop,
       registerAuthEvictedCallback: noop,
@@ -49,8 +49,8 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
       fetchCollectionById: noop,
       fetchScopeEnvironments: noop,
     },
-    '@/lib/treeHelper': { reorderItemInTree: noop },
-    '@/lib/cloudSyncTransformer': {
+    'treeHelper': { reorderItemInTree: noop },
+    'cloudSyncTransformer': {
       buildCollectionFromDetails: (collection) => ({ ...collection, items: collection.items ?? [] }),
       buildEnvironmentsFromDelta: (environments) => (environments ?? []).map((environment) => ({
         ...environment,
@@ -59,20 +59,31 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
         updatedAt: environment.updatedAt ?? Date.now(),
       })),
     },
-    '@/lib/edition': { isOfflineOnly: true },
-    '@/lib/requestDiff': {
+    'edition': { isOfflineOnly: true },
+    'requestDiff': {
       findSavedRequestInCollections: noop,
       alignCollectionItemIds: noop,
       flattenCollectionRequests: noop,
       alignEnvironmentVariableIds: noop,
     },
-    '@/lib/jwt': { canModifyCollection: () => true, hasScopePermission: () => true },
+    'jwt': { canModifyCollection: () => true, hasScopePermission: () => true },
+    'theme': { applyTheme: noop },
+    'storeContext': { StoreContext: {} },
+  };
+
+  const resolveModule = (id) => {
+    for (const [key, mod] of Object.entries(modules)) {
+      if (id === key || id.endsWith(`/${key}`) || id.endsWith(`@/lib/${key}`)) {
+        return mod;
+      }
+    }
+    return require(id);
   };
 
   let uuidCounter = 0;
   vm.runInNewContext(compiled, {
     exports,
-    require: (id) => modules[id] ?? require(id),
+    require: resolveModule,
     console,
     crypto: { randomUUID: () => `uuid-${++uuidCounter}` },
     Date,
@@ -86,7 +97,7 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
     URLSearchParams,
     TextEncoder,
     TextDecoder,
-  }, { filename: 'apps/extension/src/store/useApiStore.ts' });
+  }, { filename: 'packages/common/src/store/useApiStore.ts' });
 
   return exports.useApiStore;
 }
@@ -318,5 +329,51 @@ test('T-SEMI-PERSIST-8: createTab from 0 tabs successfully opens a single active
   assert.equal(store.getState().activeTabId, store.getState().tabs[0].id);
   assert.equal(store.getState().activeResponse, null);
 });
+
+test('T-EXT-TAB: switching tabs while sendRequest is in-flight does not overwrite activeResponse on new tab, and deleteOfflineWorkspace does not leak into offlineScopeCache', async () => {
+  let resolveReq;
+  const reqPromise = new Promise((r) => { resolveReq = r; });
+  const store = loadStore({
+    executeApiRequest: () => reqPromise,
+  });
+
+  const tab1Id = store.getState().activeTabId;
+  store.getState().updateActiveRequest({ url: 'https://api.example.com/slow' });
+
+  // Start request on Tab 1
+  const pendingSend = store.getState().sendRequest();
+
+  // Switch to Tab 2 before Tab 1 finishes
+  store.getState().createTab({ name: 'Tab 2', url: 'https://api.example.com/fast' });
+  const tab2Id = store.getState().activeTabId;
+  assert.notEqual(tab1Id, tab2Id);
+
+  // Resolve Tab 1 request
+  resolveReq({
+    status: 200,
+    statusText: 'OK',
+    data: '{"tab1":true}',
+    timeMs: 50,
+    sizeBytes: 13,
+    headers: {},
+    timestamp: Date.now(),
+  });
+  await pendingSend;
+
+  // Tab 2 is still active, so activeResponse must remain null while Tab 1 response is cached in tabResponses[tab1Id]
+  assert.equal(store.getState().activeTabId, tab2Id);
+  assert.equal(store.getState().activeResponse, null, 'activeResponse on Tab 2 must not be overwritten by Tab 1 completion');
+  assert.equal(store.getState().tabResponses?.[tab1Id]?.data, '{"tab1":true}', 'Tab 1 response must be cached in tabResponses');
+
+  // Verify deleteOfflineWorkspace does not re-snapshot deleted workspace into offlineScopeCache
+  const wsId = store.getState().createOfflineWorkspace('Temp Offline Workspace');
+  store.getState().switchOfflineWorkspace(wsId);
+  assert.equal(store.getState().activeOfflineWorkspaceId, wsId);
+
+  store.getState().deleteOfflineWorkspace(wsId);
+  assert.notEqual(store.getState().activeOfflineWorkspaceId, wsId);
+  assert.equal(store.getState().offlineScopeCache?.[wsId], undefined, 'Deleted offline workspace must not remain in offlineScopeCache');
+});
+
 
 

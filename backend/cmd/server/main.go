@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/adiputera/airrest-backend/config"
 	"github.com/adiputera/airrest-backend/core/app"
 )
 
@@ -22,7 +23,7 @@ func main() {
 	slog.Info("starting AirREST backend service...")
 
 	// 2. Initialize application stack
-	initCtx, initCancel := context.WithTimeout(context.Background(), 25*time.Second)
+	initCtx, initCancel := context.WithTimeout(context.Background(), config.InitTimeout())
 	application, err := app.New(initCtx)
 	initCancel()
 	if err != nil {

@@ -126,11 +126,11 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "const res = pm.response.json();",
-                  "if (res.data && res.data.token) {",
-                  "    pm.environment.set('userToken', res.data.token);",
-                  "    pm.environment.set('userId', res.data.user.id);",
-                  "}"
+                  "pm.test(\"Registration is disabled (403)\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "    const res = pm.response.json();",
+                  "    pm.expect(res.code).to.eql(\"REGISTRATION_DISABLED\");",
+                  "});"
                 ]
               }
             }
@@ -409,6 +409,86 @@
               ]
             }
           }
+        },
+        {
+          "name": "Get Workspace",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/workspaces/{{workspaceId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "workspaces",
+                "{{workspaceId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Workspace",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Updated Workspace\",\n  \"description\": \"Updated Description\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/workspaces/{{workspaceId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "workspaces",
+                "{{workspaceId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Workspace",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/workspaces/{{workspaceId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "workspaces",
+                "{{workspaceId}}"
+              ]
+            }
+          }
         }
       ]
     },
@@ -465,6 +545,170 @@
                 "api",
                 "v1",
                 "teams"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Team",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/teams/{{teamId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "teams",
+                "{{teamId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Team",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Updated Team Name\",\n  \"description\": \"Updated Description\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/teams/{{teamId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "teams",
+                "{{teamId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Team",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/teams/{{teamId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "teams",
+                "{{teamId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Team Members",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/teams/{{teamId}}/members",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "teams",
+                "{{teamId}}",
+                "members"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Add Team Member",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"{{memberUserId}}\",\n  \"role\": \"member\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/teams/{{teamId}}/members",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "teams",
+                "{{teamId}}",
+                "members"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Remove Team Member",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/teams/{{teamId}}/members/{{memberUserId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "teams",
+                "{{teamId}}",
+                "members",
+                "{{memberUserId}}"
               ]
             }
           }
@@ -531,6 +775,170 @@
               ]
             }
           }
+        },
+        {
+          "name": "Get Project",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/projects/{{projectId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "projects",
+                "{{projectId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Project",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Updated Project Name\",\n  \"description\": \"Updated Description\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/projects/{{projectId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "projects",
+                "{{projectId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Project",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/projects/{{projectId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "projects",
+                "{{projectId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Project Members",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/projects/{{projectId}}/members",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "projects",
+                "{{projectId}}",
+                "members"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Add Project Member",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"{{memberUserId}}\",\n  \"role\": \"contributor\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/projects/{{projectId}}/members",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "projects",
+                "{{projectId}}",
+                "members"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Remove Project Member",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/projects/{{projectId}}/members/{{memberUserId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "projects",
+                "{{projectId}}",
+                "members",
+                "{{memberUserId}}"
+              ]
+            }
+          }
         }
       ]
     },
@@ -562,6 +970,37 @@
                   "key": "workspace_id",
                   "value": "{{workspaceId}}"
                 }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Collection",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"workspace_id\": \"{{workspaceId}}\",\n  \"name\": \"New Collection\",\n  \"description\": \"API testing suite\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/collections",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "collections"
               ]
             }
           }
@@ -650,6 +1089,30 @@
                 "api",
                 "v1",
                 "items"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Collection Item",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/items/{{itemId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "items",
+                "{{itemId}}"
               ]
             }
           }
@@ -762,6 +1225,219 @@
                 "v1",
                 "collections",
                 "{{collectionId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Move Collection",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"target_workspace_id\": \"{{workspaceId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/collections/{{collectionId}}/move",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "collections",
+                "{{collectionId}}",
+                "move"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Environments",
+      "item": [
+        {
+          "name": "List Environments",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/environments?workspace_id={{workspaceId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "environments"
+              ],
+              "query": [
+                {
+                  "key": "workspace_id",
+                  "value": "{{workspaceId}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Environment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"workspace_id\": \"{{workspaceId}}\",\n  \"name\": \"Staging\",\n  \"variables\": [\n    {\n      \"key\": \"API_URL\",\n      \"value\": \"https://httpbin.org\",\n      \"enabled\": true\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/environments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "environments"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Environment",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/environments/{{environmentId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "environments",
+                "{{environmentId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Environment (OCC)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Staging Updated\",\n  \"base_version\": 1,\n  \"variables\": [\n    {\n      \"key\": \"API_URL\",\n      \"value\": \"https://httpbin.org/get\",\n      \"enabled\": true\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/environments/{{environmentId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "environments",
+                "{{environmentId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Environment",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/environments/{{environmentId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "environments",
+                "{{environmentId}}"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "User Directory",
+      "item": [
+        {
+          "name": "Search Users",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/search?q=test",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "search"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "test"
+                }
               ]
             }
           }
@@ -1077,7 +1753,13 @@
                 "api",
                 "v1",
                 "sync",
-                "pull?workspace_id={{workspaceId}}"
+                "pull"
+              ],
+              "query": [
+                {
+                  "key": "workspace_id",
+                  "value": "{{workspaceId}}"
+                }
               ]
             },
             "description": "Exactly one scope. Restricted resources are excluded; failed queries never return a successful partial delta."
@@ -1285,6 +1967,22 @@
     },
     {
       "key": "revokedRefreshToken",
+      "value": ""
+    },
+    {
+      "key": "environmentId",
+      "value": ""
+    },
+    {
+      "key": "projectId",
+      "value": ""
+    },
+    {
+      "key": "itemId",
+      "value": ""
+    },
+    {
+      "key": "memberUserId",
       "value": ""
     }
   ]
