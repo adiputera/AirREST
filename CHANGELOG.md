@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.2] - 2026-11-03
+
+### Fixed
+- **Repository Audit Remediations & Security Hardening**:
+  - **Backend OCC Concurrency Enforcement**: Hardened `UpdateEnvironment` in `backend/core/service/environment_service.go` to reject update requests without or with invalid `base_version` (`baseVersion <= 0`) with `409 Conflict`, aligning with `backend/API_CONTRACT.md`; updated `backend/openapi.yaml` and `backend/openapi.json`.
+  - **PostgreSQL Error Sanitization**: Sanitized raw PostgreSQL driver errors in `backend/core/middleware/auth.go` and `backend/core/handler/admin_handler.go` to avoid exposing database internals in HTTP 500 error responses.
+  - **Versioned Migration Tracking**: Added `schema_migrations` tracking table to `backend/core/repository/postgres/db.go` so executed SQL migrations run once per version rather than re-executing across application pool initializations.
+  - **Postman API Test Collection Parity & Fixes**: Fixed path array parameter corruption in `backend/airrest_api_collection.json` sync pull item; updated disabled registration assertion to expect 403 `REGISTRATION_DISABLED`; expanded collection to cover all backend routes including Environments, Workspaces, Teams, Projects, and Collection operations.
+  - **Extension Sandbox Origin Hardening**: Restricted localhost origin acceptance in `apps/extension/public/sandbox.html` to development/HTTP environments so packaged production builds accept messages exclusively from extension origins.
+  - **Tooling, Types & Linter Alignment**: Expanded `eslint.config.mjs` to lint `apps/extension/public/service-worker.js`; added missing `VITE_AIRREST_EDITION` to `apps/extension/src/vite-env.d.ts`; updated version bump script `scripts/bump-desktop-version.mjs` to maintain `apps/hub/package.json`, `README.md` version badge, and Postman export version metadata in sync.
+  - **Handler Unit Testing**: Implemented table-driven handler unit test suites across `auth_handler_test.go`, `environment_handler_test.go`, `workspace_handler_test.go`, `sync_handler_test.go`, `user_handler_test.go`, `team_handler_test.go`, and `project_handler_test.go`.
+
 ## [1.3.1] - 2026-11-02
 
 ### Added

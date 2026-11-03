@@ -170,7 +170,7 @@ func (h *AdminHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusNotFound, "user not found", "NOT_FOUND")
 			return
 		}
-		response.Error(w, http.StatusInternalServerError, "failed to delete user: "+err.Error(), "SERVER_ERROR")
+		response.Error(w, http.StatusInternalServerError, "failed to delete user", "SERVER_ERROR")
 		return
 	}
 

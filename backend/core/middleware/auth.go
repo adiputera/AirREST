@@ -52,7 +52,7 @@ func Authenticate(tm *token.TokenManager, authService *service.AuthService) func
 					response.Error(w, http.StatusUnauthorized, "user account not found or deactivated", "UNAUTHORIZED")
 					return
 				}
-				response.Error(w, http.StatusInternalServerError, "database error during authentication: "+err.Error(), "DATABASE_ERROR")
+				response.Error(w, http.StatusInternalServerError, "internal database error during authentication", "DATABASE_ERROR")
 				return
 			}
 

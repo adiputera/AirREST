@@ -10,7 +10,10 @@
       function isValidOrigin(origin) {
         if (!origin || typeof origin !== 'string' || origin === 'null') return false;
         if (origin.startsWith('chrome-extension://')) return true;
-        if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
+        // Allow localhost only during development / test runners
+        if (location.protocol === 'http:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+          if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
+        }
         return false;
       }
 

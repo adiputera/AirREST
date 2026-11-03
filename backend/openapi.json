@@ -5349,6 +5349,9 @@
       },
       "UpdateEnvironmentRequest": {
         "type": "object",
+        "required": [
+          "base_version"
+        ],
         "properties": {
           "name": {
             "type": "string",
