@@ -62,4 +62,4 @@ AirREST Hub deploys seamlessly to Vercel as a single-page application:
  
 ## 📄 License
  
-Licensed under the [MIT License](../LICENSE).
+Licensed under the [MIT License](../../LICENSE).

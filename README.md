@@ -4,11 +4,12 @@
 
 # AirREST
 
-> A fast, lightweight, and modern browser-based REST API testing studio packaged as a **Google Chrome Extension (Manifest V3)** and standalone web client with optional cloud team synchronization. Built with **React 19**, **Vite**, **Tailwind CSS v4**, **Zustand**, and a **Go + PostgreSQL** backend.
+> A fast, lightweight, and modern API testing studio packaged as a **Google Chrome Extension (Manifest V3)**, **Desktop Application (macOS, Windows, Linux)**, **Android App**, and standalone web client with optional cloud team synchronization. Built with **React 19**, **Vite**, **Tailwind CSS v4**, **Tauri v2**, **Zustand**, and a **Go + PostgreSQL** backend.
 
 [![GitHub Repository](https://img.shields.io/badge/GitHub-adiputera%2FAirREST-181717?logo=github)](https://github.com/adiputera/AirREST)
 [![Version](https://img.shields.io/badge/Version-1.3.2-blue.svg)](CHANGELOG.md)
 [![Manifest V3](https://img.shields.io/badge/Chrome%20Extension-Manifest%20V3-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)
+[![Tauri v2](https://img.shields.io/badge/Tauri-v2-24C8D8?logo=tauri&logoColor=white)](https://v2.tauri.app/)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=white)](https://vitejs.dev/)
 [![Tailwind CSS v4](https://img.shields.io/badge/Tailwind_CSS-v4-38B2AC?logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
@@ -19,10 +20,11 @@
 
 ## 🌟 Overview
 
-AirREST is an API testing client that runs directly inside Google Chrome as a Manifest V3 extension, with an optional team management portal (AirREST Hub) and Go synchronization backend. It allows dispatching direct HTTP and HTTPS requests from the browser, managing nested collections, sharing environments, and collaborating across teams with role-based access control.
+AirREST is a complete API testing studio that runs directly inside Google Chrome as a Manifest V3 extension, as cross-platform native applications on Desktop (macOS, Windows, Linux) and Android via Tauri v2, accompanied by a dedicated team portal (AirREST Hub) and Go synchronization backend. It allows dispatching direct HTTP and HTTPS requests from the browser without CORS restrictions, managing nested collections, sharing environments, and collaborating across teams with role-based access control.
 
 ### Core Highlights
 - ⚡ **Direct In-Browser Dispatching**: Chrome host permissions enable unrestricted HTTP and HTTPS requests directly from the client without CORS or mixed-content limitations.
+- 📱 **Cross-Platform Native Studio**: Native client apps for macOS, Windows, Linux, and Android with local storage, isolated QuickJS runtime, and in-app desktop auto-updater.
 - 💾 **Dual Storage Modes**: Works in 100% Offline Mode with local storage, or connects to Cloud Sync Mode for multi-device backup and team collaboration.
 - 🗂️ **Multi Workspaces & Cloud Scopes**: Create, rename, clone, and switch between multiple isolated Offline Workspaces as well as multiple Online Personal Workspaces and Team Projects with per-scope tab/history isolation.
 - 📁 **Postman v2.1 Native Compatibility**: Full import and export support for Postman Collections and Environments with duplicate resolution and diff inspector.
@@ -39,7 +41,7 @@ AirREST is an API testing client that runs directly inside Google Chrome as a Ma
 - **HTTP Methods**: Full support for `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, and `OPTIONS`.
 - **Bidirectional URL & Query Sync**: Editing query parameters in the URL input updates the key-value table automatically, and edits within the table update the URL query string in real time. Supports multi-value keys, templated variables (`{{var}}`), and parameter toggling.
 - **Unsaved Modifications Tracker & Safe Close**: Visual indicator dot (`●`) marks tabs with unsaved edits. Closing a dirty tab triggers an interactive confirmation dialog with options to **Save**, **Close Tab** (discard changes), or **Cancel** to prevent accidental data loss. Pressing <kbd>Ctrl + S</kbd> / <kbd>Cmd + S</kbd> saves updates directly into the source collection item.
-- **Request Safety & Cancellation**: Inflight requests can be cancelled on demand via the **Cancel** button using native `AbortController`. Built-in 2-minute (120-second) execution deadlines and a 10 MiB streamed response body limit protect against memory overflow and hung connections.
+- **Request Safety & Cancellation**: Inflight requests can be cancelled on demand via the **Cancel** button using native `AbortController`. Built-in 5-minute (300-second) execution deadlines and a 10 MiB streamed response body limit protect against memory overflow and hung connections.
 - **Keyboard Shortcuts**: Quick dispatch with <kbd>Ctrl + Enter</kbd> (Windows/Linux) or <kbd>Cmd + Enter</kbd> (macOS).
 
 ### 2. 📝 Flexible Request Body Formats
@@ -77,7 +79,7 @@ AirREST is an API testing client that runs directly inside Google Chrome as a Ma
   - **Cross-Collection Safety Guard**: Hovering over a different collection displays a `not-allowed` pointer and disables dropping to prevent unintended cross-collection movements (use Move Request modal instead).
   - **Circular Dependency Guard**: Dropping a folder into itself or any of its nested children is strictly blocked with a `not-allowed` pointer.
   - Automatic synchronization: Updates positions in local storage and dispatches batch reordering (`PUT /api/v1/collections/{id}/reorder`) in Cloud mode.
-- **Auto-Sync on Import**: Importing collections in Cloud mode automatically syncs all endpoints and folders directly to the backend.
+- **Auto-Sync on Import & Proactive Retry**: Importing collections in Cloud mode automatically syncs all endpoints and folders directly to the backend. Import modals stay open on timeout/network failures to preserve draft data, while un-synced collections display a pending badge (`_syncStatus: 'pending'`) in the sidebar with a 1-click retry trigger.
 - **Unified Collection & Request Search**: Real-time multi-token search across collections, folders, request names, HTTP methods (e.g. GET, POST), and URL endpoints with quick-clear button and automatic tree expansion.
 - **Hierarchical Tree Navigation**:
   - **1-Level Default Expansion**: Expanding any collection or folder defaults to 1 level only—child subfolders remain collapsed until explicitly opened, preventing tree clutter.
@@ -104,6 +106,7 @@ AirREST is an API testing client that runs directly inside Google Chrome as a Ma
   - `{{$isoTimestamp}}` — Current ISO 8601 UTC date-time string.
   - `{{$randomInt}}` — Random integer between 1 and 1000.
 - **Role-Based Environment Access**: Configure environment visibility in team projects using minimum-role settings (`All Members`, `Contributor+`, `Maintainer+`, or `Admin Only`).
+- **Draft Buffering & Row-Level Save/Discard Controls**: Buffers environment variable name and initial value edits locally before dispatching cloud pushes, complete with amber dirty indicators, row-level Save ($\checkmark$ / <kbd>Enter</kbd>) and Discard ($\times$ / <kbd>Esc</kbd>) actions, and an interactive confirmation dialog on close or environment switch to prevent accidental data loss.
 - **Visual OCC Conflict Resolution**: Dedicated interactive modal for HTTP 409 conflicts displaying server truth versus local draft side-by-side, enabling selective pull or draft resubmission with updated base version.
 
 ### 5. 🔐 Authorization Suite
@@ -271,14 +274,14 @@ pm.environment.set("lastRequestTimestamp", now);
   - Each workspace maintains its own isolated tabs, collections, environments, and history.
 - **Scope Switcher**: Seamlessly switch between Offline Workspaces and Cloud Workspaces (Personal & Team Projects) with RBAC role badges (`Admin`, `Maintainer`, `Contributor`, `Reader`).
 - **Scoped Data Isolation**: Separate tabs, history, and active environments per workspace scope.
-- **Smart Client Caching**: 12-hour cache enables instant project switching without redundant network fetches.
+- **Smart Client Caching & Auto-Sync**: 12-hour cache enables instant project switching without redundant network fetches. Automatic background delta synchronization (`pullCloudDelta`) runs on app launch and rehydration so team collections stay up to date seamlessly.
 - **Manual Sync**: Dedicated sync button to trigger immediate synchronization with the cloud backend.
 - **Rolling Refresh Tokens**: 30-day JWT renewal with background refresh keeps active sessions connected. Password changes revoke existing sessions and return replacement tokens to the device making the change; administrator resets revoke all target-user sessions. Refresh tokens are not single-use.
 - **Optimistic Concurrency Control (OCC)**: Version-checked updates handle concurrent modifications cleanly.
 - **User Menu & Account Controls**: An interactive user menu is displayed on the right of the top navigation bar. When unauthenticated, it serves as a direct **Sign In** action to connect your cloud account; when logged in, it displays user details, role badge, an in-app **Change Password** modal (`PUT /api/v1/auth/password`), and a secure **Sign Out** option that clears cloud session tokens and cached workspaces.
 
 ### 11. 🏢 AirREST Hub Management Portal
-- **Dedicated Dashboard**: Independent web application (`hub/`) for team and project management.
+- **Dedicated Dashboard**: Independent web application (`apps/hub/`) for team and project management.
 - **Team Management**: Create and configure teams, invite members simultaneously with multi-select search checkboxes, and assign roles.
 - **Project Administration**: Manage projects and assign members in batch with granular RBAC permissions (`Admin`, `Maintainer`, `Contributor`, `Reader`).
 - **Resource Permissions**: Configure minimum role requirements per collection and environment.
@@ -302,83 +305,74 @@ pm.environment.set("lastRequestTimestamp", now);
 
 ## 🚀 Getting Started
 
-### 1. Build and Install the Chrome Extension
+## 🚀 Getting Started
 
-AirREST supports two build targets:
+> [!TIP]
+> For complete build configurations, multi-platform releases, Android SDK/NDK setup, code signing, deployment guides, and test matrices, see the dedicated [BUILD.md](BUILD.md).
 
-| Edition | Build Command | Output Directory | Description |
-|---|---|---|---|
-| **Offline Only** | `npm run build:offline` | `extension/dist-offline/` | 100% offline mode with minimal permissions. |
-| **Full (Cloud + Offline)** | `npm run build` | `extension/dist/` | Dual-mode edition with local storage and cloud sync. |
-| **Both Editions** | `npm run build:all-extensions` | `extension/dist/` & `extension/dist-offline/` | Builds both packages simultaneously. |
+### 1. Chrome Extension (Manifest V3)
 
 ```bash
-# Clone the repository
-git clone git@github.com:adiputera/AirREST.git
-# Or via HTTPS:
-# git clone https://github.com/adiputera/AirREST.git
-
+# Clone repository & install dependencies
+git clone https://github.com/adiputera/AirREST.git
 cd AirREST
-
-# Install dependencies
 npm install
 
-# Build the extension
+# Build Full Edition (Cloud + Offline)
 npm run build
+# Output: apps/extension/dist/
+
+# Or build 100% Offline Edition
+npm run build:offline
+# Output: apps/extension/dist-offline/
 ```
 
-**Load the extension into Google Chrome:**
-1. Open `chrome://extensions/` in Chrome.
-2. Enable **Developer mode** (top-right toggle).
-3. Click **Load unpacked** and select `extension/dist/` (or `extension/dist-offline/`).
+**Load into Google Chrome:**
+1. Navigate to `chrome://extensions/` and enable **Developer mode**.
+2. Click **Load unpacked** and select `apps/extension/dist/` (or `apps/extension/dist-offline/`).
 
-### 2. Build and Run the Desktop Application (Tauri v2)
+### 2. Desktop & Android Native Studio (Tauri v2)
 
 ```bash
-# Run the desktop app in development mode
+# Run Desktop studio in development mode
 npm run dev:desktop
 
-# Build native installers for your current OS
+# Build native desktop installers (.dmg, .deb, .rpm, .AppImage, .msi, .exe)
 npm run build:desktop
+
+# Run Android app on connected device or emulator
+npm run dev:android
+
+# Build ARM64 Android release APK
+npm run build:android
 ```
 
-#### Automated Multi-OS Releases & In-App Auto-Updater (GitHub Actions)
-The repository includes a cross-platform release workflow ([`.github/workflows/desktop-release.yml`](.github/workflows/desktop-release.yml)) powered by `tauri-apps/tauri-action` that builds native installers for **macOS** (`.dmg` / `.app` for Apple Silicon & Intel), **Linux** (`.deb`, `.rpm`, `.AppImage`), and **Windows** (`.msi`, `.exe` NSIS) and publishes them directly to **GitHub Releases**:
-- **Bumping Desktop Version**: Run `npm run version:desktop -- <version>` (e.g., `npm run version:desktop -- 0.1.4`) to synchronize version strings across `package.json`, `tauri.conf.json`, and `Cargo.toml`.
-- **Tag Trigger**: Push a version tag matching `desktop-v*` or `v*` (e.g., `git tag desktop-v0.1.4 && git push origin main --tags`).
-- **Manual Trigger**: Run the **Release AirREST Desktop** workflow from the GitHub Actions tab (`workflow_dispatch`).
-- **In-App Auto-Updater**: Applications automatically check and download releases in the background via `@tauri-apps/plugin-updater`. On macOS, updates stage seamlessly on disk; on Windows and Linux, updates apply when the user restarts or closes the window (`onCloseRequested`). Releases are cryptographically signed and verified using the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_UPDATER_PUBLIC_KEY`.
-
-### 3. Run the AirREST Hub Portal (Optional)
+### 3. AirREST Hub Web Portal (Optional)
 
 ```bash
-# Start Hub locally
+# Start Hub management portal locally (http://localhost:5173)
 npm run dev:hub
 
-# Or build for production
+# Build production bundle (apps/hub/dist/)
 npm run build:hub
 ```
 
-Deploying to Vercel:
-1. Import the repository in the Vercel Dashboard.
-2. Set **Root Directory** to `hub`.
-3. Set Framework Preset to **Vite** and click **Deploy**.
+Deploying to Vercel: Import repository into Vercel, set **Root Directory** to `apps/hub`, Framework Preset to **Vite**, and click **Deploy**.
 
-### 4. Run the Cloud Synchronization Backend (Optional)
+### 4. Cloud Synchronization Backend (Go + PostgreSQL)
 
 ```bash
 cd backend
-
-# Copy sample configuration
 cp .env.example .env
 
-# Start PostgreSQL database with Docker
+# Start local PostgreSQL database
 docker compose up -d postgres
 
-# Start the Go server
+# Start Go server (http://localhost:8080)
 go run cmd/server/main.go
 ```
-The server listens at `http://localhost:8080`, automatically applies database migrations, and provisions the initial Superadmin account (`admin@example.com`).
+
+The backend automatically applies database migrations and provisions the bootstrap Superadmin account.
 
 #### 📜 Re-implementing the Backend in Other Languages
 AirREST is completely backend-agnostic! If you prefer implementing the backend in Python, Node.js/TypeScript, Java, C#, or Rust, refer to the formal API contract:
@@ -388,55 +382,50 @@ AirREST is completely backend-agnostic! If you prefer implementing the backend i
 
 ---
 
-## ⚙️ Configuration
+## ⚙️ Configuration Overview
 
-### Backend Environment Variables (`backend/.env`)
-
+### Backend (`backend/.env`)
 | Variable | Required | Default / Example | Description |
 |---|---|---|---|
-| `PORT` | Optional | `8080` | Port for the HTTP server to listen on. |
-| `DATABASE_URL` | **Yes** | `postgres://airrest:airrest_secret_password@localhost:5432/airrest_db?sslmode=disable` | PostgreSQL connection string. |
-| `JWT_SECRET` | **Yes** | No default; generate with `openssl rand -hex 32` | HS256 JWT signing secret (minimum 32 characters). |
-| `JWT_EXPIRATION_HOURS` | Optional | `72` | Access token lifespan in hours. |
-| `JWT_REFRESH_EXPIRATION_DAYS` | Optional | `30` | Rolling refresh token lifespan in days. |
-| `SUPERADMIN_EMAIL` | First startup | User-supplied email | Email for the initial Superadmin account. |
-| `SUPERADMIN_PASSWORD` | First startup | User-supplied unique password (12–72 bytes) | Password for the initial Superadmin account. |
-| `SUPERADMIN_NAME` | Optional | `Super Administrator` | Display name for the Superadmin account. |
-| `DB_MAX_CONNS` | Optional | `25` (Docker) / `4` (Vercel) | Maximum concurrent connections in `pgxpool`. |
-| `DB_MIN_CONNS` | Optional | `2` (Docker) / `1` (Vercel) | Minimum idle connections in `pgxpool`. |
-| `SKIP_MIGRATIONS` | Optional | `false` | Skips database migrations on startup when set to `true`. |
+| `PORT` | Optional | `8080` | Port for HTTP server to listen on. |
+| `DATABASE_URL` | **Yes** | `postgres://airrest:secret@localhost:5432/airrest_db?sslmode=disable` | PostgreSQL connection string. |
+| `JWT_SECRET` | **Yes** | Generated 32+ character hex string | HS256 JWT signing key. |
+| `SUPERADMIN_EMAIL` | First startup | User-supplied email | Bootstrap Superadmin email. |
+| `SUPERADMIN_PASSWORD` | First startup | User-supplied password (12–72 bytes) | Bootstrap Superadmin password. |
+| `SKIP_MIGRATIONS` | Optional | `false` | Skips boot schema migrations when set to `true`. |
 
-### Hub Environment Variables (`hub/.env`)
-
+### Hub Portal (`apps/hub/.env`)
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `VITE_API_URL` | Optional | `http://localhost:8080` | Default backend API URL for the Hub web client. |
+| `VITE_API_URL` | Optional | `http://localhost:8080` | Backend API URL for the Hub web client. |
+
+*See [BUILD.md](BUILD.md#6-environment-variables-reference) for the complete configuration reference.*
 
 ---
 
-## 🛠 Development Scripts
+## 🛠 Essential Scripts
 
-### Workspace Root (Node.js)
-
-| Command | Description |
+| Command | Target / Description |
 |---|---|
-| `npm run dev` | Runs the Vite dev server for the Chrome Extension |
-| `npm run dev:offline` | Runs the Vite dev server in offline-only mode |
-| `npm run build` | Builds the full Chrome Extension (`extension/dist/`) |
-| `npm run build:offline` | Builds the offline-only Chrome Extension (`extension/dist-offline/`) |
-| `npm run build:all-extensions` | Compiles both Chrome Extension editions |
-| `npm run dev:hub` | Runs the Vite dev server for AirREST Hub |
-| `npm run build:hub` | Builds the production bundle for AirREST Hub |
-| `npm run dev:desktop` | Runs the Tauri v2 Desktop client in development mode |
-| `npm run build:desktop` | Builds the Tauri v2 Desktop client binary |
-| `npm run build:all` | Compiles all targets (Extension and Hub) |
-| `npm run preview` | Previews the production extension build locally |
-| `npm run typecheck` | Validates TypeScript types across extension and hub |
-| `npm run test:security-clients` | Runs security client regression tests for extension & hub |
-| `npm run test:desktop-sandbox` | Runs Gate P0.3 QuickJS WebAssembly guest sandbox verification |
-| `npm run test:desktop-transport` | Runs Gate P0.1/P0.2 native transport, header echo, & stream limit tests |
-| `npm run test:hub` | Runs frontend Hub regression test suite |
+| `npm run dev` | Runs Vite dev server for Chrome Extension |
+| `npm run build` | Builds Full Chrome Extension (`apps/extension/dist/`) |
+| `npm run build:offline` | Builds Offline Chrome Extension (`apps/extension/dist-offline/`) |
+| `npm run build:all-extensions` | Builds both Chrome Extension editions |
+| `npm run dev:desktop` | Runs Tauri v2 Desktop client in development mode |
+| `npm run build:desktop` | Compiles native desktop binary/installer |
+| `npm run dev:android` | Runs Android app in dev mode on device/emulator |
+| `npm run build:android` | Builds ARM64 release APK for Android |
+| `npm run dev:hub` | Runs Vite dev server for AirREST Hub |
+| `npm run build:hub` | Builds production bundle for AirREST Hub (`apps/hub/dist/`) |
+| `npm run build:all` | Compiles Extension, Offline Extension, and Hub |
+| `npm run typecheck` | Validates TypeScript types across common, extension, hub, and native |
 | `npm run lint` | Runs ESLint validation across the repository |
+| `npm run test:all` | **Runs the entire automated regression test suite** (19 test suites) |
+| `npm run test:desktop` | Runs native desktop & Android test suites |
+| `npm run test:hub` | Runs frontend Hub regression test suite |
+| `npm run test:security-clients` | Runs security client regression tests for extension & hub |
+
+*For backend tests and individual test suites, see [BUILD.md](BUILD.md#7-complete-scripts--testing-reference).*
 
 ### Backend (Go & Docker)
 
@@ -456,19 +445,24 @@ AirREST is completely backend-agnostic! If you prefer implementing the backend i
 │   └── workflows/
 │       └── desktop-release.yml   # Multi-OS Tauri v2 build & GitHub Release workflow
 ├── .gitignore                    # Ignore rules (.env, build outputs, dependencies)
+├── BUILD.md                      # Comprehensive multi-target build, release & testing guide
+├── CHANGELOG.md                  # Release notes & version history
+├── LICENSE                       # MIT License
 ├── package.json                  # Root npm workspace configuration (workspaces: ["packages/*", "apps/*"])
 ├── package-lock.json
 ├── eslint.config.mjs             # Monorepo ESLint configuration
 ├── tsconfig.json                 # Workspace root TypeScript configuration
 ├── packages/
-│   └── common/                   # Shared Core Library (@airrest/common)
+│   └── common/                   # Shared Universal Core Engine (@airrest/common)
 │       ├── src/
-│       │   ├── components/       # Universal UI components (Header, RequestEditor, ResponseViewer, Modals)
-│       │   ├── lib/              # Shared business logic (cURL, fetcher, postman, scriptRunner, cloudApi)
+│       │   ├── components/       # UI components (Header, RequestEditor, ResponseViewer, Modals)
+│       │   ├── lib/              # Business logic (cURL, fetcher, postman, scriptRunner, cloudApi)
 │       │   ├── store/            # Zustand persistent store with multi-workspace support
 │       │   ├── types/            # Domain interfaces and PlatformAdapter contracts
 │       │   ├── runtime.ts        # Runtime factory (createAirrestRuntime)
 │       │   ├── context.tsx       # AirrestProvider & useAirrestRuntime
+│       │   ├── index.ts          # Package public exports
+│       │   ├── styles.css        # Semantic CSS variable tokens
 │       │   └── App.tsx           # Shared application studio UI
 │       └── package.json          # Shared package configuration
 │
@@ -482,14 +476,12 @@ AirREST is completely backend-agnostic! If you prefer implementing the backend i
 │   │   ├── dist/                 # Compiled full edition
 │   │   ├── dist-offline/         # Compiled offline-only edition
 │   │   ├── public/               # Static extension assets (manifest.json, sandbox.html, service-worker.js, icons)
-│   │   ├── src/                  # Extension source code
-│   │   │   ├── components/       # UI components (Header, RequestEditor, ResponseViewer, Modals)
-│   │   │   ├── lib/              # Core utilities (cURL, fetcher, postman, scriptRunner, cloudApi)
-│   │   │   ├── store/            # Zustand persistent application store
-│   │   │   ├── types/            # TypeScript interfaces and models
-│   │   │   ├── App.tsx           # Main application shell
-│   │   │   ├── index.css         # Tailwind CSS v4 stylesheets
-│   │   │   └── main.tsx          # React DOM entrypoint
+│   │   ├── src/                  # Thin platform adapter entrypoint
+│   │   │   ├── adapters/         # Chrome host & sandbox bridge (chromeAdapter.ts)
+│   │   │   ├── App.tsx           # Extension root wrapper
+│   │   │   ├── index.css         # Tailwind CSS v4 theme stylesheets
+│   │   │   ├── main.tsx          # React DOM entrypoint
+│   │   │   └── vite-env.d.ts     # Extension environment types
 │   │   ├── index.html            # Extension window HTML
 │   │   ├── package.json          # Extension dependencies & scripts
 │   │   ├── tsconfig.json         # Extension TypeScript configuration
