@@ -15,7 +15,7 @@ import (
 )
 
 func TestWorkspaceHandler_Validation(t *testing.T) {
-	wsService := service.NewWorkspaceService(nil, nil)
+	wsService := service.NewWorkspaceService(nil)
 	wsHandler := NewWorkspaceHandler(wsService)
 
 	user := &domain.User{

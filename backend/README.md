@@ -65,7 +65,7 @@ Set `JWT_SECRET` to the generated value and supply your own bootstrap email/pass
 | `SUPERADMIN_NAME` | Optional | `Super Administrator` | Display name for bootstrap Superadmin account. |
 | `DB_MAX_CONNS` | Optional | `25` (Docker) / `4` (Vercel) | Maximum connections in `pgxpool`. |
 | `DB_MIN_CONNS` | Optional | `2` (Docker) / `1` (Vercel) | Minimum idle connections in `pgxpool`. |
-| `SKIP_MIGRATIONS` | Optional | `false` | Skip automatic boot schema migrations (useful if migrations are managed by external CI/CD). |
+| `SKIP_MIGRATIONS` | Optional | `false` | Skip automatic boot schema migrations. Recommended `true` for Vercel **Production** (see [Migration Strategy on Vercel](#4-migration-strategy-on-vercel)). Also selects the initialization deadline: 20 s when skipped, 120 s when migrations may run. |
 
 
 ---
@@ -107,13 +107,34 @@ The AirREST backend natively supports Vercel Serverless Functions via the `@verc
 - **Entrypoint**: `api/index.go` exports `func Handler(w http.ResponseWriter, r *http.Request)`.
 - **Routing**: `vercel.json` rewrites all incoming traffic `/(.*)` to `/api/index.go`.
 - **Serverless-Tuned Pooling**: When running on Vercel (`VERCEL=1`), `pgxpool` automatically switches to serverless-optimized bounds (`MaxConns: 4`, `MinConns: 1`) to maintain efficient PostgreSQL connection usage.
-- **Cold-Start Lazy Init**: Database connections and router setup initialize on demand. Successful initialization is reused. Failed attempts retry after exponential backoff (1, 2, 4, 8, 16, then 30 seconds); requests during initialization/backoff receive `503` and `Retry-After: 1`. Attempts have a 20-second deadline.
+- **Cold-Start Lazy Init**: Database connections and router setup initialize on demand. Successful initialization is reused. Failed attempts retry after exponential backoff (1, 2, 4, 8, 16, then 30 seconds); requests during initialization/backoff receive `503` and `Retry-After: 1` with a `reason` field (`CONFIG_INVALID`, `DATABASE_UNAVAILABLE`, `MIGRATION_FAILED`, `BOOTSTRAP_FAILED`, ...). Attempts have a 20-second deadline, or 120 seconds when boot migrations are enabled. The raw cause is logged as `failed to initialize backend`.
+- **Migrations Run Lazily**: Boot migrations execute on the first request that cold-starts an instance, not during build or deploy.
 
 ### 3. Recommended Cloud PostgreSQL
 Because serverless functions scale dynamically, use a serverless-friendly PostgreSQL provider with transaction connection pooling:
 - **Neon Serverless Postgres** (Native pooling, fast cold starts)
 - **Supabase** (Use the Transaction Pooler connection string on port `6543`)
 - **AWS Aurora Serverless / RDS with RDS Proxy**
+
+### 4. Migration Strategy on Vercel
+Boot migrations are concurrency-safe: each version runs in its own transaction guarded by a transaction-scoped advisory lock (`pg_advisory_xact_lock`, compatible with transaction poolers) and is re-checked in `schema_migrations` before it runs, so simultaneous cold starts apply each version exactly once. DDL uses `lock_timeout = 5s` and `statement_timeout = 60s`, so a migration blocked by live traffic fails fast and is retried instead of stalling production queries.
+
+Recommended setup when Preview and Production share one database:
+
+| Environment variable | Production | Preview |
+|---|---|---|
+| `SKIP_MIGRATIONS` | `true` | unset |
+| `DATABASE_URL` | Pooled connection (e.g. port `6543`) | Direct connection (port `5432`), scoped to the release branch only |
+
+Scope the Preview `DATABASE_URL` to the release branch (Vercel → Settings → Environment Variables → Preview → specific branch) so experimental branches cannot migrate the shared database.
+
+Release flow:
+1. Push or merge to the release branch; Vercel builds a Preview deployment.
+2. Trigger a cold start: `curl https://<preview-deployment-url>/api/v1/health`.
+3. Check the logs for `all database migrations up to date` (or a `MIGRATION_FAILED` reason in the 503 body).
+4. Promote the deployment to Production.
+
+> **Write backward-compatible migrations.** The schema changes before Production code is promoted, so the currently running release must keep working: add tables or nullable/defaulted columns freely; postpone renames and drops to a later release.
 
 ---
 
@@ -123,6 +144,8 @@ Because serverless functions scale dynamically, use a serverless-friendly Postgr
 cd backend
 go test -v ./...
 ```
+
+Database integration suites (security, concurrent migrations, concurrent superadmin bootstrap) run when `AIRREST_TEST_DATABASE_URL` points to a disposable localhost database ending in `_test`; see [Disposable PostgreSQL regression suite](#disposable-postgresql-regression-suite).
 
 ---
 

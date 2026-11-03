@@ -384,11 +384,22 @@ All routes enforce a 4 MiB (4,194,304-byte) request body limit, including chunke
 
 Sync failures do not return successful partial deltas. Role lookup and row iteration errors are propagated; result sets close before another connection is needed. Invalid scope returns 400; authorization returns 403; concurrent import collision returns 409; batch limits return 413; other sync/database failures return 500.
 
-Serverless initialization permits one attempt at a time, with a 20-second deadline. Failed attempts retry after 1, 2, 4, 8, 16, then 30 seconds; successful initialization is reused. Requests during initialization/backoff receive `503` and `Retry-After: 1`. The existing startup error envelope is preserved as the exception to flat errors:
+Serverless initialization permits one attempt at a time per instance, with a 20-second deadline when `SKIP_MIGRATIONS=true` and a 120-second deadline when boot migrations may run. Failed attempts retry after 1, 2, 4, 8, 16, then 30 seconds; successful initialization is reused. Requests during initialization/backoff receive `503` and `Retry-After: 1`. The nested startup error envelope is preserved as the exception to flat errors. `code` is always `SERVICE_UNAVAILABLE`; the additive `reason` field identifies the failing stage (during backoff it reports the last failure). Raw errors are written to server logs only (`failed to initialize backend`).
 
 ```json
-{"success":false,"error":{"code":"SERVICE_UNAVAILABLE","message":"Failed to initialize database connection"}}
+{"success":false,"error":{"code":"SERVICE_UNAVAILABLE","reason":"DATABASE_UNAVAILABLE","message":"Failed to initialize database connection"}}
 ```
+
+| `reason` | `message` | Typical cause |
+|---|---|---|
+| `INITIALIZING` | `Service is initializing, retry shortly` | Another request on the same instance is initializing |
+| `CONFIG_INVALID` | `Server configuration is invalid` | Missing/weak `JWT_SECRET` |
+| `DATABASE_UNAVAILABLE` | `Failed to initialize database connection` | Invalid `DATABASE_URL`, unreachable host, auth/SSL failure |
+| `MIGRATION_FAILED` | `Database migration failed` | SQL error, `lock_timeout` (5 s) or `statement_timeout` (60 s) exceeded |
+| `BOOTSTRAP_FAILED` | `Initial administrator bootstrap failed` | No superadmin exists and `SUPERADMIN_EMAIL`/`SUPERADMIN_PASSWORD` are invalid |
+| `INITIALIZATION_FAILED` | `Service initialization failed` | Unclassified failure |
+
+Boot migrations are tracked in `schema_migrations`. Each version is applied inside its own transaction that first takes a transaction-scoped advisory lock (`pg_advisory_xact_lock`, safe behind transaction poolers) and re-checks `schema_migrations`, so concurrent cold starts apply each version exactly once. Concurrent superadmin bootstrap is likewise idempotent.
 
 ### 10. Admin Management (Superadmin Only)
 - `GET /api/v1/admin/users` *(Auth, Superadmin)* — List all registered users.
