@@ -325,7 +325,7 @@ test('should not retry an environment write after an OCC conflict', async () => 
   });
 
   store.getState().updateEnvironment('environment-1', { name: 'Changed name' });
-  await new Promise((resolve) => setTimeout(resolve, 350));
+  await new Promise((resolve) => setTimeout(resolve, 1300));
 
   assert.equal(updateCalls, 1);
   assert.equal(store.getState().syncStatus, 'error');

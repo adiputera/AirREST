@@ -1,6 +1,6 @@
 {
   "name": "airrest",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -50,6 +50,8 @@
     "test:desktop": "npm run test:native",
     "test:sidebar-search": "node --test scripts/sidebar-search.test.mjs",
     "test:sidebar-dropdown-placement": "node --test scripts/sidebar-dropdown-placement.test.mjs",
+    "test:sidebar-resizable": "node --test scripts/sidebar-resizable.test.mjs",
+    "test:studio-split-resizer": "node --test scripts/studio-split-resizer.test.mjs",
     "test:scope-switcher-placement": "node --test scripts/scope-switcher-placement.test.mjs",
     "test:tab-response-cache": "node --test scripts/tab-response-cache.test.mjs",
     "test:path-variables": "node --test scripts/path-variables.test.mjs",
@@ -59,7 +61,7 @@
     "test:payload-builder": "node --test scripts/payload-builder.test.mjs",
     "test:collection-sync-retry": "node --test scripts/collection-sync-retry.test.mjs",
     "test:environment-draft-sync": "node --test scripts/environment-draft-sync.test.mjs",
-    "test:all": "npm run test:security-clients && npm run test:extension-lifecycle && npm run test:extension-storage && npm run test:extension-fetcher && npm run test:cloud-compression && npm run test:feature-policy && npm run test:hub && npm run test:desktop && npm run test:sidebar-search && npm run test:sidebar-dropdown-placement && npm run test:scope-switcher-placement && npm run test:tab-response-cache && npm run test:path-variables && npm run test:request-collapse && npm run test:collection-permission && npm run test:theme && npm run test:payload-builder && npm run test:collection-sync-retry && npm run test:environment-draft-sync"
+    "test:all": "npm run test:security-clients && npm run test:extension-lifecycle && npm run test:extension-storage && npm run test:extension-fetcher && npm run test:cloud-compression && npm run test:feature-policy && npm run test:hub && npm run test:desktop && npm run test:sidebar-search && npm run test:sidebar-dropdown-placement && npm run test:sidebar-resizable && npm run test:studio-split-resizer && npm run test:scope-switcher-placement && npm run test:tab-response-cache && npm run test:path-variables && npm run test:request-collapse && npm run test:collection-permission && npm run test:theme && npm run test:payload-builder && npm run test:collection-sync-retry && npm run test:environment-draft-sync"
   },
   "devDependencies": {
     "eslint": "^9",

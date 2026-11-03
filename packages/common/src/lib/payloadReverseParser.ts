@@ -1,5 +1,6 @@
 import { PayloadNode, PayloadBuilderConfig, DateConfig } from '../types/payloadBuilder';
 import { generateNodeId, createInitialPayloadConfig } from './payloadCompiler';
+import { sanitizeRelaxedJson } from './formatters';
 
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$/i;
 const DATE_ONLY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
@@ -136,13 +137,7 @@ export function inferJsonValueNode(key: string, val: unknown): PayloadNode {
 }
 
 function trySanitizeJson(raw: string): unknown {
-  // 1. Remove single-line comments // and multi-line comments /* */
-  let clean = raw.replace(/\/\*[\s\S]*?\*\/|([^\\:]|^)\/\/.*$/gm, '$1');
-  // 2. Wrap unquoted template variables in objects and lists
-  clean = clean.replace(/:\s*(\{\{[^{}]+\}\})/g, ': "__AIRREST_TMPL_$1__"');
-  clean = clean.replace(/([[,]\s*)(\{\{[^{}]+\}\})/g, '$1"__AIRREST_TMPL_$2__"');
-  // 3. Remove trailing commas
-  clean = clean.replace(/,\s*([}\]])/g, '$1');
+  const clean = sanitizeRelaxedJson(raw);
   return JSON.parse(clean);
 }
 

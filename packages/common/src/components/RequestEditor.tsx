@@ -25,6 +25,8 @@ import {
   ChevronUp,
   ChevronLeft,
   ChevronRight,
+  Undo2,
+  Redo2,
 } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
 import { HttpMethod, BodyType, RawType, KeyValuePair } from '../types/api';
@@ -53,7 +55,11 @@ function formatFileSize(bytes: number): string {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
 }
 
-export const RequestEditor: React.FC = () => {
+export interface RequestEditorProps {
+  onCollapseChange?: (collapsed: boolean) => void;
+}
+
+export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }) => {
   const tabs = useApiStore((state) => state.tabs);
   const activeTabId = useApiStore((state) => state.activeTabId);
   const updateActiveRequest = useApiStore((state) => state.updateActiveRequest);
@@ -87,6 +93,10 @@ export const RequestEditor: React.FC = () => {
   const activeEnvironmentId = useApiStore((state) => state.activeEnvironmentId);
   const collections = useApiStore((state) => state.collections);
   const saveActiveRequest = useApiStore((state) => state.saveActiveRequest);
+  const undoActiveRequest = useApiStore((state) => state.undoActiveRequest);
+  const redoActiveRequest = useApiStore((state) => state.redoActiveRequest);
+  const canUndoActiveRequest = useApiStore((state) => state.canUndoActiveRequest);
+  const canRedoActiveRequest = useApiStore((state) => state.canRedoActiveRequest);
 
   const [activeTab, setActiveTab] = useState<'params' | 'headers' | 'auth' | 'body' | 'prerequest' | 'tests'>('params');
   const [isConfigCollapsed, setIsConfigCollapsed] = useState(() => {
@@ -96,6 +106,10 @@ export const RequestEditor: React.FC = () => {
       return false;
     }
   });
+
+  useEffect(() => {
+    onCollapseChange?.(isConfigCollapsed);
+  }, [isConfigCollapsed, onCollapseChange]);
 
   const toggleCollapse = useCallback(() => {
     setIsConfigCollapsed((prev) => {
@@ -209,6 +223,43 @@ export const RequestEditor: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleSave]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+      const modifier = isMac ? e.metaKey : e.ctrlKey;
+      if (!modifier) return;
+
+      const key = e.key.toLowerCase();
+      const isUndo = key === 'z' && !e.shiftKey;
+      const isRedo = (key === 'z' && e.shiftKey) || (key === 'y' && !e.shiftKey);
+
+      if (!isUndo && !isRedo) return;
+
+      // Do not intercept if user is typing in another modal (e.g. Save, Environment, Import) or sidebar
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        const modal = target.closest('[role="dialog"], [data-modal="true"]');
+        if (modal && !modal.closest('[data-payload-modal="true"]')) {
+          return;
+        }
+        if (target.closest('[data-sidebar="true"]')) {
+          return;
+        }
+      }
+
+      if (isUndo) {
+        e.preventDefault();
+        undoActiveRequest();
+      } else if (isRedo) {
+        e.preventDefault();
+        redoActiveRequest();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [undoActiveRequest, redoActiveRequest]);
 
   useEffect(() => {
     setIsUrlEncodedBulkEdit(false);
@@ -358,13 +409,13 @@ export const RequestEditor: React.FC = () => {
   };
 
   const handleBeautifyJson = () => {
-    try {
-      if (!currentTab?.bodyContent?.trim()) return;
-      const parsed = JSON.parse(currentTab.bodyContent);
-      setBodyContent(JSON.stringify(parsed, null, 2));
+    if (!currentTab?.bodyContent?.trim()) return;
+    const res = beautifyJson(currentTab.bodyContent);
+    if (res.error) {
+      setJsonFormatError(res.error);
+    } else {
+      setBodyContent(res.formatted, true);
       setJsonFormatError(null);
-    } catch (err: unknown) {
-      setJsonFormatError(err instanceof Error ? err.message : 'Invalid JSON format');
     }
   };
 
@@ -374,7 +425,7 @@ export const RequestEditor: React.FC = () => {
     if (res.error) {
       setXmlFormatError(res.error);
     } else {
-      setBodyContent(res.formatted);
+      setBodyContent(res.formatted, true);
       setXmlFormatError(null);
     }
   };
@@ -386,8 +437,8 @@ export const RequestEditor: React.FC = () => {
     if (res.error) {
       setGraphqlQueryError(res.error);
     } else {
-      setGraphqlQuery(res.formatted);
-      setBodyContent(res.formatted);
+      setGraphqlQuery(res.formatted, true);
+      setBodyContent(res.formatted, true);
       setGraphqlQueryError(null);
     }
   };
@@ -399,7 +450,7 @@ export const RequestEditor: React.FC = () => {
     if (res.error) {
       setGraphqlVariablesError(res.error);
     } else {
-      setGraphqlVariables(res.formatted);
+      setGraphqlVariables(res.formatted, true);
       setGraphqlVariablesError(null);
     }
   };
@@ -425,7 +476,7 @@ export const RequestEditor: React.FC = () => {
 
   return (
     <>
-      <div className="flex flex-col border-b border-line bg-surface px-3.5 pt-2 pb-1.5">
+      <div className={`flex flex-col border-b border-line bg-surface px-3.5 pt-2 ${isConfigCollapsed ? 'pb-0' : 'pb-1.5'}`}>
         {/* Request Name and Actions Bar */}
         <div className="mb-1.5 flex items-center justify-between gap-2 min-h-[28px]">
           {isNarrowScreen && isEditingNameOnMobile ? (
@@ -600,8 +651,32 @@ export const RequestEditor: React.FC = () => {
                 </div>
               </div>
 
-              {/* cURL and Keyboard Shortcut */}
-              <div className="flex items-center gap-2 shrink-0">
+              {/* Undo / Redo, cURL and Keyboard Shortcut */}
+              <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                {/* Compact Undo Button */}
+                <button
+                  type="button"
+                  onClick={undoActiveRequest}
+                  disabled={!canUndoActiveRequest}
+                  className="flex items-center gap-1 rounded-md border border-line bg-card px-1.5 sm:px-2 py-0.5 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary disabled:opacity-30 disabled:cursor-not-allowed transition"
+                  title="Undo request changes (Ctrl+Z / ⌘+Z)"
+                >
+                  <Undo2 className="h-3 w-3 text-tx-muted" />
+                  <span className="hidden sm:inline">Undo</span>
+                </button>
+
+                {canRedoActiveRequest && (
+                  <button
+                    type="button"
+                    onClick={redoActiveRequest}
+                    className="flex items-center gap-1 rounded-md border border-line bg-card px-1.5 sm:px-2 py-0.5 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition animate-in fade-in duration-100"
+                    title="Redo request changes (Ctrl+Y / ⌘+Shift+Z)"
+                  >
+                    <Redo2 className="h-3 w-3 text-tx-muted" />
+                    <span className="hidden sm:inline">Redo</span>
+                  </button>
+                )}
+
                 <button
                   type="button"
                   onClick={handleCopyCurl}
@@ -728,7 +803,7 @@ export const RequestEditor: React.FC = () => {
         )}
 
         {/* Configuration Subtabs */}
-        <div className="mt-1.5 flex items-center justify-between border-b border-line gap-2 text-xs font-medium text-tx-muted">
+        <div className={`mt-1.5 flex items-center justify-between ${isConfigCollapsed ? '' : 'border-b'} border-line gap-2 text-xs font-medium text-tx-muted`}>
           <div className="flex items-center gap-4 overflow-x-auto min-w-0">
             <button
               type="button"

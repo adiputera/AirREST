@@ -1350,8 +1350,8 @@ test('R2 (P2): debounced environment cloud sync pending in transport is aborted 
   // Rename environment triggering debounce
   runtime.store.getState().updateEnvironment('env1', { name: 'env-renamed' });
 
-  // Wait for 300ms debounce to fire and enter transport
-  await new Promise((r) => setTimeout(r, 350));
+  // Wait for 1200ms debounce to fire and enter transport
+  await new Promise((r) => setTimeout(r, 1300));
   assert.equal(typeof deferredResolve, 'function', 'Request must have reached cloud transport');
   assert.equal(capturedSignal?.aborted, false, 'Signal must be active while pending');
 
