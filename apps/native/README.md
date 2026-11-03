@@ -4,6 +4,20 @@ The desktop and Android targets share the React application and services in
 `packages/common`. Platform-specific HTTP, file dialogs, and script execution are
 provided by the Tauri adapter. The desktop updater is enabled only on desktop.
 
+## Desktop development & auto-updater
+
+Platform-specific HTTP, file dialogs, and QuickJS script execution are enabled across macOS, Linux, and Windows desktop targets.
+
+### Desktop auto-updater configuration
+The desktop updater plugin is conditionally initialized when a public signature key is provided at compile time.
+To build desktop releases with auto-update capabilities enabled, specify `TAURI_UPDATER_PUBLIC_KEY`:
+
+```sh
+TAURI_UPDATER_PUBLIC_KEY="<your-public-key-here>" npm run build:native
+```
+
+If omitted, updater checks will log an informational warning and remain inactive without crashing the application.
+
 ## Android development
 
 Install a supported Node.js version, Rust, a JDK, Android SDK, platform tools,

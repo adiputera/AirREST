@@ -75,7 +75,32 @@ func ConnectWithPoolConfig(ctx context.Context, databaseURL string, maxConns, mi
 	return pool, nil
 }
 
+const createSchemaMigrationsTable = `
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version VARCHAR(255) PRIMARY KEY,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);`
+
 func runMigrations(ctx context.Context, pool *pgxpool.Pool) error {
+	if _, err := pool.Exec(ctx, createSchemaMigrationsTable); err != nil {
+		return fmt.Errorf("failed to ensure schema_migrations table: %w", err)
+	}
+
+	rows, err := pool.Query(ctx, "SELECT version FROM schema_migrations")
+	if err != nil {
+		return fmt.Errorf("failed to query schema_migrations: %w", err)
+	}
+	defer rows.Close()
+
+	applied := make(map[string]bool)
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return err
+		}
+		applied[v] = true
+	}
+
 	entries, err := fs.ReadDir(migrations.MigrationFS, ".")
 	if err != nil {
 		return fmt.Errorf("failed to read migration files: %w", err)
@@ -86,20 +111,35 @@ func runMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	})
 
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() || applied[entry.Name()] {
 			continue
 		}
-		slog.Info("executing migration", "file", entry.Name())
+		slog.Info("applying database migration", "file", entry.Name())
 		content, err := fs.ReadFile(migrations.MigrationFS, entry.Name())
 		if err != nil {
 			return fmt.Errorf("failed to read migration %s: %w", entry.Name(), err)
 		}
 
-		if _, err := pool.Exec(ctx, string(content)); err != nil {
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to begin migration transaction: %w", err)
+		}
+
+		if _, err := tx.Exec(ctx, string(content)); err != nil {
+			_ = tx.Rollback(ctx)
 			return fmt.Errorf("failed to execute migration %s: %w", entry.Name(), err)
+		}
+
+		if _, err := tx.Exec(ctx, "INSERT INTO schema_migrations (version) VALUES ($1)", entry.Name()); err != nil {
+			_ = tx.Rollback(ctx)
+			return fmt.Errorf("failed to record migration %s: %w", entry.Name(), err)
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("failed to commit migration %s: %w", entry.Name(), err)
 		}
 	}
 
-	slog.Info("all database migrations applied successfully")
+	slog.Info("all database migrations up to date")
 	return nil
 }
