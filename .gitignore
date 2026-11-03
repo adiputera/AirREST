@@ -96,6 +96,9 @@ apps/native/src-tauri/gen/android/tauri.settings.gradle
 *.swp
 *.swo
 
+# Agent Workspaces & Coordination
+.agents/
+
 # Temporary & backup files
 *.tmp
 *.bak
