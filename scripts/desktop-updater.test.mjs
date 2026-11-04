@@ -261,3 +261,25 @@ test('T-UPDATER-6: Tauri config, capabilities, and GitHub workflow contracts are
   assert.ok(workflow.includes('TAURI_UPDATER_PUBLIC_KEY'));
   assert.ok(workflow.includes('includeUpdaterJson: true'));
 });
+
+test('T-UPDATER-7: Desktop update banner preserves compact floating toast layout without viewport height stretch', () => {
+  const rootDir = path.resolve(new URL('..', import.meta.url).pathname);
+  const bannerSrc = fs.readFileSync(
+    path.join(rootDir, 'apps/native/src/components/DesktopUpdateBanner.tsx'),
+    'utf8',
+  );
+  const indexCss = fs.readFileSync(
+    path.join(rootDir, 'apps/native/src/index.css'),
+    'utf8',
+  );
+
+  // Must use <aside role="status" aria-live="polite"> and prevent height expansion
+  assert.ok(bannerSrc.includes('<aside'));
+  assert.ok(bannerSrc.includes('role="status"'));
+  assert.ok(bannerSrc.includes('!h-auto'));
+  assert.ok(bannerSrc.includes('!flex-none'));
+
+  // Root CSS selector must never stretch fixed overlays or toasts
+  assert.ok(indexCss.includes('#root > div:not(.fixed)'));
+  assert.ok(!indexCss.includes('#root > div {'));
+});

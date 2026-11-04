@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.4] - 2026-11-04
+
+### Fixed
+- **Sandbox Reserved-Parameter Diagnostics**: Post-response scripts that redeclare injected sandbox parameters, such as `response`, now explain the collision and suggest a safe local name (`responseJson`) in both extension and desktop execution engines.
+- **Desktop Auto-Updater Floating Toast Layout**:
+  - Scoped the root child container flex styling in `apps/native/src/index.css` to `#root > div:not(.fixed)`, preventing fixed-position overlays, modals, and toasts from being forced into `height: 100%` and `flex: 1 1 0%`.
+  - Migrated `DesktopUpdateBanner` root element from `div` to semantic `<aside role="status" aria-live="polite">` with explicit `!h-auto !flex-none` constraints, ensuring the banner maintains its compact toast dimensions in the bottom-right corner during background downloads and install prompts without stretching across the viewport.
+  - Added regression test `T-UPDATER-7` in `scripts/desktop-updater.test.mjs` validating banner semantic structure, dimension boundary constraints, and CSS rule isolation.
+
 ## [1.3.3] - 2026-11-03
 
 ### Added

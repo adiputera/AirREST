@@ -17,6 +17,32 @@
         return false;
       }
 
+      const internalSandboxParameters = [
+        'pm',
+        'postman',
+        'response',
+        'responseBody',
+        'responseCode',
+        'responseTime',
+        'responseHeaders',
+        'tests'
+      ];
+
+      function describeInternalParameterRedefinition(errorMessage, script) {
+        if (!/(?:invalid redefinition of parameter name|(?:identifier|parameter).*?(?:already been declared|redeclared)|redeclaration)/i.test(errorMessage)) {
+          return errorMessage;
+        }
+
+        for (const parameter of internalSandboxParameters) {
+          const declarationPattern = new RegExp('\\b(?:const|let|class|function)\\s+' + parameter + '\\b');
+          if (declarationPattern.test(script)) {
+            return errorMessage + "\n\nParameter '" + parameter + "' is already used by the internal sandbox. Rename your local variable; for example, use 'responseJson' instead of 'response'.";
+          }
+        }
+
+        return errorMessage;
+      }
+
       window.addEventListener('message', function (event) {
         if (!event.source || event.source !== window.parent) return;
         if (!isValidOrigin(event.origin)) return;
@@ -180,6 +206,7 @@
           } catch {
             errorMessage = 'Script execution failed.';
           }
+          errorMessage = describeInternalParameterRedefinition(errorMessage, script);
           if (event.source && typeof event.source.postMessage === 'function') {
             event.source.postMessage({
               id: id,

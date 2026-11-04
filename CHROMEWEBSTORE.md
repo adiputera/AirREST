@@ -1,6 +1,6 @@
 # Chrome Web Store Listings — AirREST
 
-> Last Updated: 2026-11-03
+> Last Updated: 2026-11-04
 
 > Chrome Web Store release notes describe browser-extension changes only. Do not include backend, Hub, or desktop release notes here.
 
@@ -67,6 +67,7 @@ SUPPORT
 For questions, bug reports, or feature suggestions, visit the project repository on GitHub:
 https://github.com/adiputera/AirREST
 
+Version 1.3.4 — Improved sandbox script diagnostics: if a post-response script redeclares an injected parameter such as `response`, AirREST now explains the name collision and suggests using a safe local name such as `responseJson`.
 Version 1.3.3 — Added per-tab in-memory undo (Ctrl+Z / Cmd+Z) and redo (Ctrl+Y / Ctrl+Shift+Z) history tracking up to 50 snapshots across body edits, parameters, headers, and configurations; discrete snapshot capture for bulk paste and Beautify actions; two-way controlled editor synchronization; compact mobile-friendly header action buttons in the request editor; resilient JSON formatting with automatic recovery from relaxed syntax; debounced real-time syntax validation; CodeMirror 6 line numbers and code folding (collapse/expand objects and lists) across Request Body and Response Viewer; interactive desktop sidebar drag-to-resize with persistent custom width (220px to 800px); global studio request vs response split-pane resizer with persistent height and independent dual-pane scrolling across all request subtabs; and seamless request section collapse with automatic height shrinking and response viewer elevation.
 Version 1.3.2 — Hardened sandbox origin validation in packaged production extension builds, restricting localhost postMessage access to local development modes; declared typed Vite environment configuration; and synchronized Postman environment export metadata.
 Version 1.3.1 — Added explicit Save (✓) and Discard (✕) action controls on environment variable rows with inline dirty state boundary indicators and interactive confirmation dialogs safeguarding unsaved variable changes on modal dismiss or environment switching; extended cloud synchronization and request timeouts to 5 minutes (300s); fixed collection import error propagation so the import pop-up remains open with error details if cloud batch import times out; added pending sync status tracking and automated retry upload for unsynced collections in Scope Switcher before delta pulls, preventing data loss on sync retry; and added visual pending sync indicators in the sidebar.
