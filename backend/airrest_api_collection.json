@@ -10,6 +10,38 @@
       "name": "0. Health",
       "item": [
         {
+          "name": "Root Service Ping",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": []
+            },
+            "description": "Returns the service metadata exposed at the root route."
+          }
+        },
+        {
+          "name": "System Healthcheck",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Returns the unprefixed health endpoint for infrastructure monitoring."
+          }
+        },
+        {
           "name": "Service Healthcheck",
           "request": {
             "method": "GET",
@@ -129,7 +161,9 @@
                   "pm.test(\"Registration is disabled (403)\", function () {",
                   "    pm.response.to.have.status(403);",
                   "    const res = pm.response.json();",
+                  "    pm.expect(res.success).to.eql(false);",
                   "    pm.expect(res.code).to.eql(\"REGISTRATION_DISABLED\");",
+                  "    pm.expect(res.error).to.be.a(\"string\");",
                   "});"
                 ]
               }
@@ -1060,6 +1094,41 @@
                 "reorder"
               ]
             }
+          }
+        },
+        {
+          "name": "Reorder Items in Collection (Contract Alias)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"id\": \"{{itemId1}}\",\n      \"parent_id\": null,\n      \"sort_order\": 0\n    },\n    {\n      \"id\": \"{{itemId2}}\",\n      \"parent_id\": null,\n      \"sort_order\": 1\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/collections/{{collectionId}}/items/reorder",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "collections",
+                "{{collectionId}}",
+                "items",
+                "reorder"
+              ]
+            },
+            "description": "Contract alias for batch collection-item reordering."
           }
         },
         {
