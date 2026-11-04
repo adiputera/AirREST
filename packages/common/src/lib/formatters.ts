@@ -155,17 +155,17 @@ export function sanitizeRelaxedJson(raw?: string | null): string {
   clean = clean.replace(/:\s*'([^'\\]*(?:\\.[^'\\]*)*)'/g, (_m, inner) => {
     return `: "${inner.replace(/(?<!\\)"/g, '\\"')}"`;
   });
-  clean = clean.replace(/([\[,]\s*)'([^'\\]*(?:\\.[^'\\]*)*)'(?=\s*[,\]])/g, (_m, prefix, inner) => {
+  clean = clean.replace(/((?:\[|,)\s*)'([^'\\]*(?:\\.[^'\\]*)*)'(?=\s*(?:,|\]))/g, (_m, prefix, inner) => {
     return `${prefix}"${inner.replace(/(?<!\\)"/g, '\\"')}"`;
   });
 
   // 4. Python booleans and None (in key-values and arrays)
   clean = clean.replace(/:\s*True\b/g, ': true').replace(/:\s*False\b/g, ': false').replace(/:\s*None\b/g, ': null');
-  clean = clean.replace(/([\[,]\s*)True\b/g, '$1true').replace(/([\[,]\s*)False\b/g, '$1false').replace(/([\[,]\s*)None\b/g, '$1null');
+  clean = clean.replace(/((?:\[|,)\s*)True\b/g, '$1true').replace(/((?:\[|,)\s*)False\b/g, '$1false').replace(/((?:\[|,)\s*)None\b/g, '$1null');
 
   // 5. Wrap unquoted AirREST template variables {{var}}
   clean = clean.replace(/:\s*(\{\{[^{}]+\}\})/g, ': "__AIRREST_TMPL_$1__"');
-  clean = clean.replace(/([[,]\s*)(\{\{[^{}]+\}\})/g, '$1"__AIRREST_TMPL_$2__"');
+  clean = clean.replace(/((?:\[|,)\s*)(\{\{[^{}]+\}\})/g, '$1"__AIRREST_TMPL_$2__"');
 
   // 6. Remove trailing commas before } or ]
   while (/,(\s*[}\]])/.test(clean)) {

@@ -302,7 +302,6 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
         view.destroy();
         viewRef.current = null;
       };
-      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [showLineNumbers, showFoldGutter, readOnly]);
 
     // Synchronize external value changes (e.g. from Undo / Redo or tab switch)

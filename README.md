@@ -435,7 +435,7 @@ AirREST is completely backend-agnostic! If you prefer implementing the backend i
 | `npm run build:all` | Compiles Extension, Offline Extension, and Hub |
 | `npm run typecheck` | Validates TypeScript types across common, extension, hub, and native |
 | `npm run lint` | Runs ESLint validation across the repository |
-| `npm run test:all` | **Runs the entire automated regression test suite** (19 test suites) |
+| `npm run test:all` | **Runs the entire automated regression test suite** (33 test suites) |
 | `npm run test:desktop` | Runs native desktop & Android test suites |
 | `npm run test:hub` | Runs frontend Hub regression test suite |
 | `npm run test:security-clients` | Runs security client regression tests for extension & hub |

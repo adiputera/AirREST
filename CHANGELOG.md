@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Sandbox Reserved-Parameter Diagnostics**: Post-response scripts that redeclare injected sandbox parameters, such as `response`, now explain the collision and suggest a safe local name (`responseJson`) in both extension and desktop execution engines.
+- **Audit Contract and Quality Gates**:
+  - Synchronized the required environment-update `base_version` contract across the API guide, OpenAPI YAML/JSON, and Postman collection; added root and health checks plus the collection-reorder alias to the collection.
+  - Added API/Postman parity, extension-sandbox, and version-bumper regression tests, and included every shipped test file in `test:all`.
+  - Restored the lint gate to zero errors, made the release version bumper handle prerelease badges, synchronized the lockfile with workspace version 1.3.4, and added push/PR CI checks for TypeScript, lint, Node tests, and Go tests.
 - **Desktop Auto-Updater Floating Toast Layout**:
   - Scoped the root child container flex styling in `apps/native/src/index.css` to `#root > div:not(.fixed)`, preventing fixed-position overlays, modals, and toasts from being forced into `height: 100%` and `flex: 1 1 0%`.
   - Migrated `DesktopUpdateBanner` root element from `div` to semantic `<aside role="status" aria-live="polite">` with explicit `!h-auto !flex-none` constraints, ensuring the banner maintains its compact toast dimensions in the bottom-right corner during background downloads and install prompts without stretching across the viewport.

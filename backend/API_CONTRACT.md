@@ -57,16 +57,18 @@ Every response from the backend (both success and error) MUST follow the Envelop
 
 ---
 
-### 2. Mandatory CORS Configuration
-The Chrome Extension runs within browser sandboxes (with origins like `chrome-extension://<extension-id>` or `null`), while AirREST Hub runs as a Web SPA.
+### 2. CORS Configuration
+Cloud requests from the packaged Chrome Extension are issued by an extension page with declared host permissions; the script sandbox only executes local scripts and does not call this API. AirREST Hub remains a Web SPA and is subject to browser CORS.
 
-Your server **must** implement CORS with the following settings:
-- **Allowed Origins**: `*` or dynamically reflect the request `Origin` header.
+The bundled backend config accepts the following web origins:
+- **Allowed Origins**: `http://localhost:*`, `http://127.0.0.1:*`, and `https://*`.
 - **Allowed Methods**: `GET, POST, PUT, PATCH, DELETE, OPTIONS`
 - **Allowed Headers**: `Accept, Authorization, Content-Type, Content-Encoding, X-CSRF-Token`
 - **Exposed Headers**: `Link`
 - **Allow Credentials**: `true`
 - **Preflight Max Age**: `300` seconds (5 minutes)
+
+Deployments that expose the API to other web origins must configure and test those origins deliberately. Do not add the sandbox's opaque `null` origin: it is not a cloud transport context.
 
 ---
 
@@ -352,7 +354,7 @@ In addition to enums, the Frontend relies on specific primitive types and relati
   - Payload: `{ "workspace_id"?: UUID, "project_id"?: UUID, "name": string, "variables": EnvironmentVariable[], "min_role"?: ProjectRole }`
 - `GET /api/v1/environments/{id}` *(Auth)* — Get environment details.
 - `PUT /api/v1/environments/{id}` *(Auth)* — Update environment (enforces `base_version` OCC).
-  - Payload: `{ "name"?: string, "variables"?: EnvironmentVariable[], "min_role"?: ProjectRole, "base_version"?: int64 }`
+  - Payload: `{ "name"?: string, "variables"?: EnvironmentVariable[], "min_role"?: ProjectRole, "base_version": int64 }` (`base_version` must be at least `1`).
 - `DELETE /api/v1/environments/{id}` *(Auth)* — Soft delete environment (tombstone).
 - **Initial Value vs. Current Value Protocol**:
   - The `variables` stored in backend environments represent the shared **Initial Value** (`value` / `initial_value`).
