@@ -1,9 +1,16 @@
+import {
+  createProductPolicy,
+  parseProductEdition,
+  type ProductEdition,
+  type ProductPolicy,
+} from '../productPolicy';
+
 /**
- * Distribution edition helper for AirREST.
- *
- * Supports multi-target builds from a single codebase:
- * - 'offline': 100% offline-only build for Chrome Web Store public release.
- * - 'full': Default edition with offline capabilities + cloud workspace sync.
+ * Build-time compatibility helper. New runtime code should receive a ProductPolicy
+ * from the application composition root instead of importing this module directly.
  */
-export const APP_EDITION = (import.meta.env.VITE_APP_EDITION as string) || 'full';
-export const isOfflineOnly = APP_EDITION === 'offline';
+export const APP_EDITION: ProductEdition = parseProductEdition(import.meta.env.VITE_APP_EDITION || 'full');
+export const defaultProductPolicy: ProductPolicy = createProductPolicy(APP_EDITION);
+
+/** @deprecated Inject ProductPolicy through createAirrestRuntime instead. */
+export const isOfflineOnly = !defaultProductPolicy.workspace.cloud;

@@ -31,6 +31,179 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
     },
     'postman': { importPostmanCollection: noop, importPostmanEnvironment: noop, detectPostmanJsonType: noop },
     'urlParams': { parseQueryParamsFromUrl: () => [], parsePathVariablesFromUrl: () => [], buildUrlWithParams: (u) => u },
+    'asyncOperationCoordinator': {
+      createAsyncOperationCoordinator: ({ isDisposed }) => {
+        let sessionGeneration = 0;
+        let scopeGeneration = 0;
+        const controllers = new Set();
+        return {
+          begin: () => {
+            const controller = new AbortController();
+            if (isDisposed()) controller.abort();
+            controllers.add(controller);
+            return { controller, sessionGeneration, scopeGeneration };
+          },
+          complete: (operation) => controllers.delete(operation.controller),
+          isCurrent: (operation) => !isDisposed() && !operation.controller.signal.aborted && operation.sessionGeneration === sessionGeneration && operation.scopeGeneration === scopeGeneration,
+          invalidate: ({ session = false } = {}) => {
+            if (session) sessionGeneration++;
+            scopeGeneration++;
+            for (const controller of controllers) controller.abort();
+            controllers.clear();
+          },
+        };
+      },
+    },
+    'scopeCache': {
+      getScopeCacheKey: (scope) => scope?.id ? `${scope.type}:${scope.id}` : 'default',
+      resolveCachedScopeTabs: (entry, createInitialTab) => {
+        const tabs = entry?.tabs?.length ? entry.tabs : [createInitialTab()];
+        return {
+          tabs,
+          activeTabId: entry?.activeTabId && tabs.some((tab) => tab.id === entry.activeTabId)
+            ? entry.activeTabId
+            : tabs[0].id,
+        };
+      },
+      isScopeCacheFresh: (entry, ttlMs, now = Date.now()) => Boolean(entry?.lastSyncedAt && now - entry.lastSyncedAt < ttlMs),
+    },
+    'scopeSnapshot': {
+      snapshotWorkspaceResources: (resources, lastSyncedAt) => ({ ...resources, ...(lastSyncedAt !== undefined ? { lastSyncedAt } : {}) }),
+      createEmptyWorkspaceSnapshot: (createInitialTab) => {
+        const initialTab = createInitialTab();
+        return { collections: [], environments: [], activeEnvironmentId: null, tabs: [initialTab], activeTabId: initialTab.id, history: [] };
+      },
+      restoreWorkspaceResources: (snapshot, createInitialTab) => {
+        const source = snapshot || (() => {
+          const tab = createInitialTab();
+          return { collections: [], environments: [], activeEnvironmentId: null, tabs: [tab], activeTabId: tab.id, history: [] };
+        })();
+        const tabs = source.tabs?.length ? source.tabs : [createInitialTab()];
+        return {
+          collections: source.collections || [], environments: source.environments || [], activeEnvironmentId: source.activeEnvironmentId || null,
+          tabs, activeTabId: source.activeTabId && tabs.some((tab) => tab.id === source.activeTabId) ? source.activeTabId : tabs[0].id,
+          history: source.history || [],
+        };
+      },
+    },
+    'cloudSession': {
+      prepareCloudSessionUpdate: (current, requested, normalizeApiUrl) => {
+        const updates = { ...requested };
+        if (updates.apiUrl !== undefined) updates.apiUrl = normalizeApiUrl(updates.apiUrl);
+        return {
+          updates,
+          startsNewSession: (updates.apiUrl !== undefined && updates.apiUrl !== current.apiUrl) ||
+            (updates.user?.id !== undefined && updates.user.id !== current.user?.id) ||
+            (updates.token !== undefined && !current.token),
+        };
+      },
+    },
+    'cloudScopeTransition': {
+      isActiveCloudScope: (workspaceMode, activeCloudScope, targetScope) => workspaceMode === 'cloud' && activeCloudScope?.type === targetScope.type && activeCloudScope?.id === targetScope.id,
+      prepareCloudScopeTransition: ({ workspaceMode, activeCloudScope, targetScope, activeOfflineWorkspaceId, offlineScopeCache, scopeCache, resources, lastSyncedAt, forceSync, cacheTtlMs, createInitialTab }) => {
+        const offline = { ...offlineScopeCache };
+        const cloud = { ...scopeCache };
+        if (workspaceMode === 'offline') offline[activeOfflineWorkspaceId] = { ...resources };
+        else if (activeCloudScope) cloud[`${activeCloudScope.type}:${activeCloudScope.id}`] = { ...cloud[`${activeCloudScope.type}:${activeCloudScope.id}`], ...resources, lastSyncedAt };
+        const target = cloud[`${targetScope.type}:${targetScope.id}`];
+        const tabs = target?.tabs?.length ? target.tabs : [createInitialTab()];
+        return {
+          isSameScope: workspaceMode === 'cloud' && activeCloudScope?.type === targetScope.type && activeCloudScope?.id === targetScope.id,
+          offlineScopeCache: offline, scopeCache: cloud, targetCache: target,
+          targetResources: { collections: target?.collections || [], environments: target?.environments || [], activeEnvironmentId: target?.activeEnvironmentId || null, tabs, activeTabId: target?.activeTabId && tabs.some((tab) => tab.id === target.activeTabId) ? target.activeTabId : tabs[0].id, history: target?.history || [] },
+          isFresh: !forceSync && Boolean(target?.lastSyncedAt && Date.now() - target.lastSyncedAt < cacheTtlMs),
+        };
+      },
+    },
+    'workspaceModeTransition': {
+      prepareWorkspaceModeTransition: ({ currentWorkspaceMode, nextWorkspaceMode, activeCloudScope, activeOfflineWorkspaceId, fallbackOfflineWorkspaceId, offlineScopeCache, scopeCache, resources, lastSyncedAt, cacheTtlMs, createInitialTab }) => {
+        const offline = { ...offlineScopeCache };
+        const cloud = { ...scopeCache };
+        if (nextWorkspaceMode === 'offline') {
+          if (activeCloudScope) cloud[`${activeCloudScope.type}:${activeCloudScope.id}`] = { ...cloud[`${activeCloudScope.type}:${activeCloudScope.id}`], ...resources, lastSyncedAt };
+          const targetCache = offline[activeOfflineWorkspaceId || fallbackOfflineWorkspaceId] || (() => { const tab = createInitialTab(); return { collections: [], environments: [], activeEnvironmentId: null, tabs: [tab], activeTabId: tab.id, history: [] }; })();
+          const tabs = targetCache.tabs?.length ? targetCache.tabs : [createInitialTab()];
+          return { offlineScopeCache: offline, scopeCache: cloud, targetCache, targetResources: { collections: targetCache.collections || [], environments: targetCache.environments || [], activeEnvironmentId: targetCache.activeEnvironmentId || null, tabs, activeTabId: targetCache.activeTabId && tabs.some((tab) => tab.id === targetCache.activeTabId) ? targetCache.activeTabId : tabs[0].id, history: targetCache.history || [] }, isCloudCacheFresh: false };
+        }
+        if (currentWorkspaceMode === 'offline' && activeOfflineWorkspaceId) offline[activeOfflineWorkspaceId] = { ...resources };
+        const targetCache = activeCloudScope ? cloud[`${activeCloudScope.type}:${activeCloudScope.id}`] : undefined;
+        const tabs = targetCache?.tabs?.length ? targetCache.tabs : [createInitialTab()];
+        return { offlineScopeCache: offline, scopeCache: cloud, targetCache, targetResources: { collections: targetCache?.collections || [], environments: targetCache?.environments || [], activeEnvironmentId: targetCache?.activeEnvironmentId || null, tabs, activeTabId: targetCache?.activeTabId && tabs.some((tab) => tab.id === targetCache.activeTabId) ? targetCache.activeTabId : tabs[0].id, history: targetCache?.history || [] }, isCloudCacheFresh: Boolean(targetCache?.lastSyncedAt && Date.now() - targetCache.lastSyncedAt < cacheTtlMs) };
+      },
+    },
+    'cloudDeltaState': {
+      prepareCloudDeltaState: ({ scope, scopeCache, collections, pulledEnvironments, currentEnvironments, activeEnvironmentId, tabs, activeTabId, history, partialCollectionCount, syncedAt }) => {
+        const environments = pulledEnvironments.map((environment) => {
+          const current = currentEnvironments.find((candidate) => candidate.id === environment.id);
+          return current ? { ...environment, variables: environment.variables.map((variable) => {
+            const local = current.variables.find((candidate) => candidate.id === variable.id || candidate.key === variable.key);
+            return { ...variable, currentValue: local?.currentValue !== undefined ? local.currentValue : variable.initialValue };
+          }) } : environment;
+        });
+        const nextActiveEnvironmentId = environments.some((environment) => environment.id === activeEnvironmentId) ? activeEnvironmentId : (environments[0]?.id || null);
+        const key = `${scope.type}:${scope.id}`;
+        const hasPartial = partialCollectionCount > 0;
+        return { collections, environments, activeEnvironmentId: nextActiveEnvironmentId, scopeCache: { ...scopeCache, [key]: { ...scopeCache[key], collections, environments, activeEnvironmentId: nextActiveEnvironmentId, tabs, activeTabId, history, lastSyncedAt: syncedAt } }, syncStatus: hasPartial ? 'error' : 'synced', syncError: hasPartial ? `${partialCollectionCount} collection detail${partialCollectionCount === 1 ? '' : 's'} could not be loaded. Click sync to retry.` : null, lastSyncedAt: syncedAt };
+      },
+    },
+    'persistence': {
+      preparePersistedWorkspaceCaches: ({ workspaceMode, activeOfflineWorkspaceId, activeCloudScope, lastSyncedAt, resources, offlineScopeCache, scopeCache, serializeRequest, serializeCollection, serializeHistory }) => {
+        const serializeCache = (cache) => Object.fromEntries(Object.entries(cache).map(([key, entry]) => [key, { ...entry, tabs: (entry.tabs || []).map(serializeRequest), collections: (entry.collections || []).map(serializeCollection), history: serializeHistory(entry.history || []) }]));
+        const offline = serializeCache(offlineScopeCache);
+        const cloud = serializeCache(scopeCache);
+        if (workspaceMode === 'offline' && activeOfflineWorkspaceId) offline[activeOfflineWorkspaceId] = { ...offline[activeOfflineWorkspaceId], collections: resources.collections.map(serializeCollection), environments: resources.environments, activeEnvironmentId: resources.activeEnvironmentId, tabs: resources.tabs.map(serializeRequest), activeTabId: resources.activeTabId, history: serializeHistory(resources.history) };
+        if (workspaceMode === 'cloud' && activeCloudScope) { const key = `${activeCloudScope.type}:${activeCloudScope.id}`; cloud[key] = { ...cloud[key], collections: resources.collections.map(serializeCollection), environments: resources.environments, activeEnvironmentId: resources.activeEnvironmentId, tabs: resources.tabs.map(serializeRequest), activeTabId: resources.activeTabId, history: serializeHistory(resources.history), lastSyncedAt }; }
+        return { offlineScopeCache: offline, scopeCache: cloud };
+      },
+      normalizePersistedWorkspaceScopeCache: (cache, normalizers) => Object.fromEntries(Object.entries(cache || {}).map(([key, entry]) => [key, { ...entry, tabs: (entry.tabs || []).map(normalizers.normalizeRequest), collections: normalizers.normalizeCollections(entry.collections || []), history: normalizers.normalizeHistory(entry.history || []) }])),
+    },
+    'cloudSyncCollections': {
+      isPendingCloudCollection: (collection) => collection._syncStatus === 'pending' || (collection._origin === 'cloud' && typeof collection.version !== 'number'),
+      reuseUnchangedCloudCollection: (existing, metadata) => {
+        if (!existing || existing.isPartial) return null;
+        const updatedAt = new Date(metadata.updated_at || 0).getTime();
+        const unchanged = (typeof metadata.version === 'number' && existing.version === metadata.version) || (updatedAt > 0 && existing.updatedAt === updatedAt);
+        return unchanged ? { ...existing, name: metadata.name, description: metadata.description || '', minRole: metadata.min_role || existing.minRole, version: metadata.version ?? existing.version, updatedAt: updatedAt || existing.updatedAt, _syncStatus: 'synced' } : null;
+      },
+      createPartialCloudCollection: (metadata, existing, now = Date.now()) => ({ id: metadata.id, name: metadata.name, description: metadata.description || '', items: existing?.items || [], minRole: metadata.min_role || existing?.minRole || 'reader', version: existing?.version, createdAt: new Date(metadata.created_at || now).getTime(), updatedAt: existing?.updatedAt || 0, _origin: 'cloud', isPartial: true, _syncStatus: 'synced' }),
+      retainPendingCloudCollections: (collections, serverIds) => { const ids = new Set(serverIds); return collections.filter((collection) => !ids.has(collection.id) && (collection._syncStatus === 'pending' || typeof collection.version !== 'number')); },
+    },
+    'cloudCollectionSync': {
+      pushPendingCloudCollections: async ({ collections, upload, isCurrent, isAborted, onUploaded }) => {
+        for (const collection of collections.filter((candidate) => candidate._syncStatus === 'pending' || (candidate._origin === 'cloud' && typeof candidate.version !== 'number'))) {
+          if (!isCurrent()) return { status: 'cancelled' };
+          try { await upload(collection); } catch (error) { return isAborted() || !isCurrent() ? { status: 'cancelled' } : { status: 'failed', collection, error }; }
+          if (!isCurrent()) return { status: 'cancelled' };
+          onUploaded(collection);
+        }
+        return { status: 'completed' };
+      },
+      pullCloudCollections: async ({ currentCollections, fetchMetadata, fetchDetail, buildCollection, isCurrent, onDetailFetchError }) => {
+        const metadata = await fetchMetadata();
+        if (!isCurrent()) return { status: 'cancelled' };
+        const currentById = new Map(currentCollections.map((collection) => [collection.id, collection]));
+        const collections = [];
+        let partialCollectionCount = 0;
+        for (const item of metadata) {
+          if (item.deleted_at) continue;
+          const existing = currentById.get(item.id);
+          const updatedAt = new Date(item.updated_at || 0).getTime();
+          const unchanged = existing && !existing.isPartial && ((typeof item.version === 'number' && existing.version === item.version) || (updatedAt > 0 && existing.updatedAt === updatedAt));
+          if (unchanged) { collections.push({ ...existing, name: item.name, description: item.description || '', minRole: item.min_role || existing.minRole, version: item.version ?? existing.version, updatedAt: updatedAt || existing.updatedAt, _syncStatus: 'synced' }); continue; }
+          try {
+            const detail = await fetchDetail(item.id);
+            if (!isCurrent()) return { status: 'cancelled' };
+            if (detail && !detail.deleted_at) collections.push({ ...buildCollection(detail), _syncStatus: 'synced' });
+          } catch (error) {
+            if (!isCurrent()) return { status: 'cancelled' };
+            onDetailFetchError?.(item, error); partialCollectionCount++;
+            collections.push({ id: item.id, name: item.name, description: item.description || '', items: existing?.items || [], minRole: item.min_role || existing?.minRole || 'reader', version: existing?.version, createdAt: new Date(item.created_at || Date.now()).getTime(), updatedAt: existing?.updatedAt || 0, _origin: 'cloud', isPartial: true, _syncStatus: 'synced' });
+          }
+        }
+        const ids = new Set(metadata.map((item) => item.id));
+        return { status: 'completed', collections: [...collections, ...currentCollections.filter((collection) => !ids.has(collection.id) && (collection._syncStatus === 'pending' || typeof collection.version !== 'number'))], partialCollectionCount };
+      },
+    },
     'cloudApi': {
       batchImportToScope: noop,
       registerTokenRefreshCallback: noop,
@@ -59,7 +232,7 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
         updatedAt: environment.updatedAt ?? Date.now(),
       })),
     },
-    'edition': { isOfflineOnly: true },
+    'edition': { defaultProductPolicy: { workspace: { cloud: false } } },
     'requestDiff': {
       findSavedRequestInCollections: noop,
       alignCollectionItemIds: noop,
@@ -374,6 +547,3 @@ test('T-EXT-TAB: switching tabs while sendRequest is in-flight does not overwrit
   assert.notEqual(store.getState().activeOfflineWorkspaceId, wsId);
   assert.equal(store.getState().offlineScopeCache?.[wsId], undefined, 'Deleted offline workspace must not remain in offlineScopeCache');
 });
-
-
-

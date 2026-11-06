@@ -11,12 +11,13 @@ import { CloudAuthModal } from './CloudAuthModal';
 import { ScopeSwitcher } from './ScopeSwitcher';
 import { UserMenu } from './UserMenu';
 import { DesktopThemeToggle } from './ThemeToggle';
-import { isOfflineOnly } from '../lib/edition';
 import { hasScopePermission } from '../lib/jwt';
-import { useAirrestRuntime } from '../context';
+import { useAirrestRuntime, useProductPolicy } from '../context';
 import { useBackHandler } from '../lib/backNavigation';
 
 export const Header: React.FC<{ onOpenSidebar?: () => void }> = ({ onOpenSidebar }) => {
+  const productPolicy = useProductPolicy();
+  const isOfflineOnly = !productPolicy.workspace.cloud;
   let isDesktop = false;
   let isAndroid = false;
   try {

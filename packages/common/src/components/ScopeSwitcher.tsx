@@ -25,7 +25,7 @@ import {
 import { useApiStore } from '../store/useApiStore';
 import { ActiveScope, OfflineWorkspace, CloudWorkspace, CloudProject } from '../types/api';
 import { getRoleFromJwt } from '../lib/jwt';
-import { isOfflineOnly } from '../lib/edition';
+import { useProductPolicy } from '../context';
 import { ConfirmModal } from './ConfirmModal';
 
 function formatTimeAgo(timestamp: number): string {
@@ -48,6 +48,8 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
   onOpenModeSelector,
   onOpenCloudAuth,
 }) => {
+  const productPolicy = useProductPolicy();
+  const isOfflineOnly = !productPolicy.workspace.cloud;
   const [isOpen, setIsOpen] = useState(false);
   useBackHandler(isOpen, () => setIsOpen(false), 15);
   const [search, setSearch] = useState('');

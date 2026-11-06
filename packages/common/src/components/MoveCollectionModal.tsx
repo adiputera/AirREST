@@ -21,7 +21,7 @@ import {
   fetchTeamProjects,
 } from '../lib/cloudApi';
 import { getRoleFromJwt, canModifyCollection, hasScopePermission } from '../lib/jwt';
-import { isOfflineOnly } from '../lib/edition';
+import { useProductPolicy } from '../context';
 import { useBackHandler } from '../lib/backNavigation';
 
 interface MoveCollectionModalProps {
@@ -42,6 +42,8 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
   onClose,
   collection,
 }) => {
+  const productPolicy = useProductPolicy();
+  const isOfflineOnly = !productPolicy.workspace.cloud;
   const workspaceMode = useApiStore((state) => state.workspaceMode);
   const cloudConfig = useApiStore((state) => state.cloudConfig);
   const moveCollection = useApiStore((state) => state.moveCollection);

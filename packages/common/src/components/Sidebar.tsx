@@ -46,7 +46,7 @@ import { UserMenu } from './UserMenu';
 import { MobileThemeSegmentedControl } from './ThemeToggle';
 import { ModeSelectorModal } from './ModeSelectorModal';
 import { CloudAuthModal } from './CloudAuthModal';
-import { isOfflineOnly } from '../lib/edition';
+import { useProductPolicy } from '../context';
 
 function filterCollectionItems(items: CollectionItem[], query: string): CollectionItem[] {
   const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -892,6 +892,8 @@ export interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
+  const productPolicy = useProductPolicy();
+  const isOfflineOnly = !productPolicy.workspace.cloud;
   const sidebarTab = useApiStore((state) => state.sidebarTab);
   const setSidebarTab = useApiStore((state) => state.setSidebarTab);
   const collections = useApiStore((state) => state.collections);

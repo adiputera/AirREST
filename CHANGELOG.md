@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.7] - 2026-11-06
+
+### Fixed
+- **Complete Desktop Update Manifest**: Desktop builds remain parallel, while one final job generates and publishes `latest.json` from signed release assets for both macOS architectures, Linux, and Windows. Missing assets or signatures stop publication; overlapping release runs are serialized to prevent manifest replacement races.
+
+### Changed
+- **Product Policy Foundation**: Centralized edition capabilities in an immutable policy injected into each application runtime and store. Shared UI now consumes that runtime policy instead of build-global edition checks, preserving existing Full and Offline behavior while preparing an online-only product edition for future authentication and workspace work.
+- **Authentication Provider Foundation**: Added an injectable authentication provider contract with the existing password login as its default implementation. Login and account controls now follow provider capabilities, allowing a future identity provider to replace the sign-in flow without altering shared Studio workflows.
+- **Cloud Client Foundation**: Added an isolated cloud transport and refresh lifecycle factory. Runtime-owned store reads and mutations now use that client, while legacy named exports remain as a compatibility bridge for existing consumers.
+- **Store Lifecycle Foundation**: Moved per-store async cancellation and stale-result guards into a dedicated coordinator, preserving existing session and scope invalidation behavior while reducing coupling in the store facade.
+- **Workspace Cache Foundation**: Extracted shared scope-cache keys, tab restoration, and freshness evaluation from the store while retaining the existing persisted workspace cache format.
+- **Workspace Lifecycle Foundation**: Extracted resource snapshot and restoration helpers used by scope switching and logout, preserving collection, environment, tab, history, and sync-cache behavior.
+- **Cloud Session Foundation**: Extracted cloud session-boundary decisions for normalized server URLs, identities, and initial credentials so future authentication providers can reuse the same reset semantics.
+- **Cloud Scope Transition Foundation**: Moved cloud scope-switch planning into a pure workspace module that snapshots the source cache, restores the target resources, and evaluates cache freshness before the store performs UI updates or synchronization.
+- **Workspace Mode Transition Foundation**: Moved offline/cloud mode-switch cache planning and resource restoration into a pure workspace module, preserving the existing identified-workspace and default-workspace behavior.
+- **Cloud Delta State Foundation**: Moved cloud-sync result planning into a pure workspace module that preserves local environment current values, selects the active environment, and writes the per-scope cache snapshot after data has been fetched.
+- **Workspace Persistence Foundation**: Moved workspace cache serialization and rehydration normalization into a pure module while preserving attachment-safe storage and the existing persisted format.
+- **Cloud Sync Collection Foundation**: Moved unchanged-cache reuse, partial collection fallback, and retention of pending local collections into a pure workspace helper while preserving existing cloud-sync behavior.
+- **Cloud Collection Sync Foundation**: Moved pending-upload and metadata/detail reconciliation orchestration behind injected workspace callbacks, leaving the store responsible for UI state, cancellation, and error presentation.
+
 ## [1.3.6] - 2026-11-06
 
 ### Changed
