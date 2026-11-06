@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.6] - 2026-11-06
+
+### Changed
+- **Android Update Checks**: Reduced the persisted release-check cooldown from six hours to four hours; reopening the app within that window continues to use the cached release.
+
+### Fixed
+- **Request Editor Responsive Resizing**:
+  - Resolved an issue where dragging the studio horizontal request/response split resizer downwards left unused dead space below request editors.
+  - Configured `RequestEditor` root and subtab panels with `flex-1 min-h-0 flex flex-col`.
+  - Updated `PayloadBuilder` embedded raw CodeMirror editor (`height="100%"` with `className="flex-1 min-h-0"`), preview view, and tree list container to expand flexibly within available vertical height.
+  - Updated Pre-request Script, Tests / Post-response Script, GraphQL Query, and Raw body textareas to use `flex-1 min-h-[140px]` so they expand smoothly with the panel resizer.
+  - Added regression test suite in `scripts/studio-split-resizer.test.mjs` verifying flex layout and height expansion across all request subtab editors.
+
 ## [1.3.5] - 2026-11-06
 
 ### Fixed

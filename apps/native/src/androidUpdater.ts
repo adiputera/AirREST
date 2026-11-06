@@ -21,7 +21,7 @@ export interface AndroidUpdateStatus {
 export const IDLE_UPDATE: AndroidUpdateStatus = {
   state: 'idle', version: null, progress: null, message: null, canInstall: false,
 };
-export const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+export const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 export const RELEASE_CACHE_KEY = 'airrest_android_release_cache';
 export const DISMISSED_VERSION_KEY = 'airrest_android_dismissed_version';
 

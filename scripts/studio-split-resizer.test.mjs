@@ -66,3 +66,33 @@ test('App has global studio split-pane resizer across Request and Response panel
   assert.match(appContent, /isDesktop && !isRequestCollapsed/);
 });
 
+test('RequestEditor and PayloadBuilder expand vertically to eliminate dead space during pane resize', () => {
+  const requestEditorContent = fs.readFileSync(
+    new URL('../packages/common/src/components/RequestEditor.tsx', import.meta.url),
+    'utf8'
+  );
+  const payloadBuilderContent = fs.readFileSync(
+    new URL('../packages/common/src/components/payload/PayloadBuilder.tsx', import.meta.url),
+    'utf8'
+  );
+
+  // RequestEditor root and subtabs expand to fill parent requestPaneHeight
+  assert.match(requestEditorContent, /flex-1 min-h-full border-b border-line bg-surface/);
+  assert.match(requestEditorContent, /Subtab Panels[\s\S]*?flex-1 min-h-0 flex flex-col/);
+
+  // Pre-request script textarea expands with flex-1
+  assert.match(requestEditorContent, /activeTab === 'prerequest'[\s\S]*?className="w-full flex-1 min-h-\[140px\]/);
+
+  // Post-response / tests script textarea expands with flex-1
+  assert.match(requestEditorContent, /activeTab === 'tests'[\s\S]*?className="w-full flex-1 min-h-\[140px\]/);
+
+  // Raw body and GraphQL editors expand with flex-1
+  assert.match(requestEditorContent, /currentTab\.bodyType !== 'none'[\s\S]*?className="w-full flex-1 min-h-\[140px\]/);
+  assert.match(requestEditorContent, /GraphQL Query & Variables Dual Editor[\s\S]*?flex-1 min-h-0 flex flex-col/);
+
+  // PayloadBuilder raw CodeEditor fills 100% height without dead space
+  assert.match(payloadBuilderContent, /flex-1 min-h-0 flex flex-col space-y-3/);
+  assert.match(payloadBuilderContent, /<CodeEditor[\s\S]*?height="100%"[\s\S]*?minHeight=\{140\}[\s\S]*?className="flex-1 min-h-0"/);
+});
+
+
