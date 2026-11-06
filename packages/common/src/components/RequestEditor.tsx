@@ -476,9 +476,9 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
 
   return (
     <>
-      <div className={`flex flex-col border-b border-line bg-surface px-3.5 pt-2 ${isConfigCollapsed ? 'pb-0' : 'pb-1.5'}`}>
+      <div className={`flex flex-col flex-1 min-h-full border-b border-line bg-surface px-3.5 pt-2 ${isConfigCollapsed ? 'pb-0' : 'pb-1.5'}`}>
         {/* Request Name and Actions Bar */}
-        <div className="mb-1.5 flex items-center justify-between gap-2 min-h-[28px]">
+        <div className="mb-1.5 flex items-center justify-between gap-2 min-h-[28px] shrink-0">
           {isNarrowScreen && isEditingNameOnMobile ? (
             /* Mobile Full-Width Request Name Edit Mode */
             <div className="flex items-center gap-1.5 flex-1 w-full animate-in fade-in duration-100">
@@ -704,7 +704,7 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
           )}
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           {/* Method Selector */}
           <div className="relative shrink-0" ref={methodMenuRef}>
             <button
@@ -793,7 +793,7 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
 
         {/* Resolved URL Preview Banner */}
         {currentTab.url.includes('{{') && (
-          <div className="mt-1 flex items-center gap-1.5 rounded-md bg-card/60 border border-line px-2 py-0.5 text-[10.5px] font-mono text-tx-muted leading-tight">
+          <div className="mt-1 flex items-center gap-1.5 rounded-md bg-card/60 border border-line px-2 py-0.5 text-[10.5px] font-mono text-tx-muted leading-tight shrink-0">
             <span className="text-tx-faint font-semibold shrink-0 text-[9px] uppercase tracking-wider">Resolved</span>
             <span className="text-tx-muted shrink-0 text-[10px]">→</span>
             <span className="text-amber-700 dark:text-amber-400 font-medium truncate select-all">
@@ -803,7 +803,7 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
         )}
 
         {/* Configuration Subtabs */}
-        <div className={`mt-1.5 flex items-center justify-between ${isConfigCollapsed ? '' : 'border-b'} border-line gap-2 text-xs font-medium text-tx-muted`}>
+        <div className={`mt-1.5 flex items-center justify-between ${isConfigCollapsed ? '' : 'border-b'} border-line gap-2 text-xs font-medium text-tx-muted shrink-0`}>
           <div className="flex items-center gap-4 overflow-x-auto min-w-0">
             <button
               type="button"
@@ -928,7 +928,7 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
 
         {/* Subtab Panels */}
         {!isConfigCollapsed && (
-          <div className="mt-2.5">
+          <div className="mt-2.5 flex-1 min-h-0 flex flex-col">
             {activeTab === 'params' && (
               <div className="space-y-6">
                 <div className="space-y-2">
@@ -1139,8 +1139,8 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
             )}
 
             {activeTab === 'body' && (
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex-1 min-h-0 flex flex-col space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 shrink-0">
                   {/* Body Type Selectors & Raw Type Subselector */}
                   <div className="flex flex-wrap items-center gap-2">
                     <div className="flex flex-wrap gap-1.5">
@@ -1339,10 +1339,10 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
                   </div>
                 ) : currentTab.bodyType === 'x-www-form-urlencoded' ? (
                   /* URL-Encoded Key-Value Form Table */
-                  <div className="space-y-2">
+                  <div className={isUrlEncodedBulkEdit ? "flex-1 min-h-0 flex flex-col space-y-2" : "space-y-2"}>
                     {isUrlEncodedBulkEdit ? (
-                      <div className="space-y-1.5">
-                        <div className="flex items-center justify-between text-[11px] text-tx-muted">
+                      <div className="flex-1 min-h-0 flex flex-col space-y-1.5">
+                        <div className="flex items-center justify-between text-[11px] text-tx-muted shrink-0">
                           <span>Enter fields as <code className="text-sky-600 dark:text-sky-300">key: value</code> or <code className="text-sky-600 dark:text-sky-300">key=value</code> (one per line):</span>
                         </div>
                         <textarea
@@ -1355,7 +1355,7 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
                           }
                           placeholder="username: user123&#10;password: secret&#10;grant_type: password"
                           rows={6}
-                          className="w-full rounded-xl border border-line bg-card p-3 font-mono text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition resize-y"
+                          className="w-full flex-1 min-h-[140px] rounded-xl border border-line bg-card p-3 font-mono text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition resize-y"
                         />
                       </div>
                     ) : (
@@ -1498,10 +1498,10 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
                   </div>
                 ) : currentTab.bodyType === 'graphql' ? (
                   /* GraphQL Query & Variables Dual Editor */
-                  <div className="space-y-4">
+                  <div className="flex-1 min-h-0 flex flex-col space-y-4">
                     {/* Query Editor */}
-                    <div className="space-y-1.5">
-                      <div className="flex items-center justify-between">
+                    <div className="flex-1 min-h-0 flex flex-col space-y-1.5">
+                      <div className="flex items-center justify-between shrink-0">
                         <div className="flex items-center gap-1.5 text-xs font-semibold text-tx-secondary">
                           <Code2 className="h-3.5 w-3.5 text-pink-500 dark:text-pink-400" />
                           <span>Query / Mutation</span>
@@ -1509,7 +1509,7 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
                         <button
                           type="button"
                           onClick={handleBeautifyGraphQLQuery}
-                          className="flex items-center gap-1.5 rounded-lg border border-line bg-card px-2.5 py-1 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition"
+                          className="flex items-center gap-1.5 rounded-lg border border-line bg-card px-2.5 py-1 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition shrink-0"
                           title="Prettify GraphQL Query"
                         >
                           <Sparkles className="h-3.5 w-3.5 text-pink-500 dark:text-pink-400" />
@@ -1534,16 +1534,16 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
                         }
                         placeholder={`query GetUsers($limit: Int) {\n  users(limit: $limit) {\n    id\n    name\n    email\n  }\n}`}
                         rows={8}
-                        className="w-full rounded-xl border border-line bg-card p-3 font-mono text-xs text-tx-primary placeholder-tx-faint focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500 transition resize-y"
+                        className="w-full flex-1 min-h-[100px] rounded-xl border border-line bg-card p-3 font-mono text-xs text-tx-primary placeholder-tx-faint focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500 transition resize-y"
                       />
                       {graphqlQueryError && (
-                        <p className="text-[11px] text-rose-500 dark:text-rose-400 font-mono">{graphqlQueryError}</p>
+                        <p className="text-[11px] text-rose-500 dark:text-rose-400 font-mono shrink-0">{graphqlQueryError}</p>
                       )}
                     </div>
 
                     {/* Variables Editor */}
-                    <div className="space-y-1.5">
-                      <div className="flex items-center justify-between">
+                    <div className="h-32 shrink-0 flex flex-col space-y-1.5">
+                      <div className="flex items-center justify-between shrink-0">
                         <div className="flex items-center gap-1.5 text-xs font-semibold text-tx-secondary">
                           <Sliders className="h-3.5 w-3.5 text-sky-500 dark:text-sky-400" />
                           <span>GraphQL Variables (JSON)</span>
@@ -1551,7 +1551,7 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
                         <button
                           type="button"
                           onClick={handleBeautifyGraphQLVariables}
-                          className="flex items-center gap-1.5 rounded-lg border border-line bg-card px-2.5 py-1 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition"
+                          className="flex items-center gap-1.5 rounded-lg border border-line bg-card px-2.5 py-1 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition shrink-0"
                           title="Beautify Variables JSON"
                         >
                           <Sparkles className="h-3.5 w-3.5 text-sky-500 dark:text-sky-400" />
@@ -1574,10 +1574,10 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
                         }
                         placeholder={`{\n  "limit": 10\n}`}
                         rows={4}
-                        className="w-full rounded-xl border border-line bg-card p-3 font-mono text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition resize-y"
+                        className="w-full flex-1 min-h-[60px] rounded-xl border border-line bg-card p-3 font-mono text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition resize-y"
                       />
                       {graphqlVariablesError && (
-                        <p className="text-[11px] text-rose-500 dark:text-rose-400 font-mono">{graphqlVariablesError}</p>
+                        <p className="text-[11px] text-rose-500 dark:text-rose-400 font-mono shrink-0">{graphqlVariablesError}</p>
                       )}
                     </div>
                   </div>
@@ -1596,7 +1596,7 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
                     onBodyContentChange={setBodyContent}
                   />
                 ) : currentTab.bodyType !== 'none' ? (
-                  <div className="space-y-1">
+                  <div className="flex-1 min-h-0 flex flex-col space-y-1">
                     <textarea
                       value={currentTab.bodyContent}
                       onChange={(e) => {
@@ -1619,13 +1619,13 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
                           : 'Raw body payload with {{variable}}...'
                       }
                       rows={6}
-                      className="w-full rounded-xl border border-line bg-card p-3 font-mono text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition resize-y"
+                      className="w-full flex-1 min-h-[140px] rounded-xl border border-line bg-card p-3 font-mono text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition resize-y"
                     />
                     {jsonFormatError && (
-                      <p className="text-[11px] text-rose-500 dark:text-rose-400 font-mono">{jsonFormatError}</p>
+                      <p className="text-[11px] text-rose-500 dark:text-rose-400 font-mono shrink-0">{jsonFormatError}</p>
                     )}
                     {xmlFormatError && (
-                      <p className="text-[11px] text-rose-500 dark:text-rose-400 font-mono">{xmlFormatError}</p>
+                      <p className="text-[11px] text-rose-500 dark:text-rose-400 font-mono shrink-0">{xmlFormatError}</p>
                     )}
                   </div>
                 ) : (
@@ -1638,8 +1638,8 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
 
             {activeTab === 'prerequest' && (
               /* Pre-request Script Tab */
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
+              <div className="flex-1 min-h-0 flex flex-col space-y-3">
+                <div className="flex items-center justify-between shrink-0">
                   <span className="text-xs font-semibold text-tx-secondary">
                     Pre-request Script (Runs before request is sent)
                   </span>
@@ -1686,10 +1686,10 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
                   }
                   placeholder="// JavaScript code executed before sending request:\n// pm.environment.set('token', 'sample_bearer_token');\n// pm.variables.set('reqId', 'req_' + Date.now());"
                   rows={8}
-                  className="w-full rounded-xl border border-line bg-card p-3 font-mono text-xs text-tx-primary placeholder-tx-faint focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 transition resize-y"
+                  className="w-full flex-1 min-h-[140px] rounded-xl border border-line bg-card p-3 font-mono text-xs text-tx-primary placeholder-tx-faint focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 transition resize-y"
                 />
 
-                <p className="text-[11px] text-tx-muted leading-relaxed">
+                <p className="text-[11px] text-tx-muted leading-relaxed shrink-0">
                   Use <code className="text-violet-500 dark:text-violet-400">pm.environment.set(key, value)</code> to dynamically update variables before sending. Code runs in an isolated sandbox.
                 </p>
               </div>
@@ -1697,8 +1697,8 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
 
             {activeTab === 'tests' && (
               /* Tests / Post-response Script Tab */
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
+              <div className="flex-1 min-h-0 flex flex-col space-y-3">
+                <div className="flex items-center justify-between shrink-0">
                   <span className="text-xs font-semibold text-tx-secondary">
                     Tests & Post-response Script (Runs after response is received)
                   </span>
@@ -1751,10 +1751,10 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
                   }
                   placeholder="// JavaScript executed after response is received:\n// const data = pm.response.json();\n// pm.environment.set('token', data.token);\n// if (pm.response.code !== 200) throw new Error('Status failed');"
                   rows={8}
-                  className="w-full rounded-xl border border-line bg-card p-3 font-mono text-xs text-tx-primary placeholder-tx-faint focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 transition resize-y"
+                  className="w-full flex-1 min-h-[140px] rounded-xl border border-line bg-card p-3 font-mono text-xs text-tx-primary placeholder-tx-faint focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 transition resize-y"
                 />
 
-                <p className="text-[11px] text-tx-muted leading-relaxed">
+                <p className="text-[11px] text-tx-muted leading-relaxed shrink-0">
                   Use <code className="text-emerald-500 dark:text-emerald-400">pm.response.json()</code> to inspect payload and <code className="text-emerald-500 dark:text-emerald-400">pm.environment.set(&apos;token&apos;, token)</code> to automatically persist tokens or IDs. Subsequent requests will immediately use <code className="text-sky-500 dark:text-sky-400">&#123;&#123;token&#125;&#125;</code> in Headers or Auth!
                 </p>
               </div>

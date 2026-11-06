@@ -321,7 +321,7 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
 
   // Shared Sub-Views
   const renderBuilderView = (isModal: boolean) => (
-    <div className={`space-y-3 ${isModal ? 'flex-1 min-h-0 flex flex-col' : ''}`}>
+    <div className="flex-1 min-h-0 flex flex-col space-y-3">
       {/* Builder Sub-Header: Root Type Switcher & XML Tags */}
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-element/50 p-2 text-xs shrink-0">
         {/* Root Type Buttons */}
@@ -432,10 +432,7 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
 
       {/* Tree Node List Container */}
       <div
-        style={!isModal ? { maxHeight: '360px' } : undefined}
-        className={`rounded-xl border border-line bg-surface p-2 space-y-1 overflow-y-auto ${
-          isModal ? 'flex-1 min-h-0' : ''
-        }`}
+        className="flex-1 min-h-[140px] rounded-xl border border-line bg-surface p-2 space-y-1 overflow-y-auto"
       >
         {builderConfig.nodes.map((node, idx) => (
           <PayloadNodeRow
@@ -472,7 +469,7 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
   );
 
   const renderPreviewView = (isModal: boolean) => (
-    <div className={`space-y-2 ${isModal ? 'flex-1 min-h-0 flex flex-col' : ''}`}>
+    <div className="flex-1 min-h-0 flex flex-col space-y-2">
       <div className="flex items-center justify-between text-[11px] text-tx-muted shrink-0">
         <span>
           Real-time compiled {format.toUpperCase()} output (read-only):
@@ -480,10 +477,7 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
       </div>
 
       <pre
-        style={!isModal ? { minHeight: '180px', maxHeight: '400px' } : undefined}
-        className={`w-full overflow-auto rounded-xl border border-line bg-element p-3.5 font-mono text-xs text-tx-primary select-text leading-relaxed ${
-          isModal ? 'flex-1 min-h-0' : ''
-        }`}
+        className="w-full flex-1 min-h-[140px] overflow-auto rounded-xl border border-line bg-element p-3.5 font-mono text-xs text-tx-primary select-text leading-relaxed"
       >
         <code>{compiledText || (format === 'json' ? '{}' : '<request />')}</code>
       </pre>
@@ -491,7 +485,7 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
   );
 
   const renderRawView = (isModal: boolean) => (
-    <div className={`space-y-2 ${isModal ? 'flex-1 min-h-0 flex flex-col' : ''}`}>
+    <div className="flex-1 min-h-0 flex flex-col space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-tx-muted shrink-0">
         <span>Edit raw {format.toUpperCase()} payload with line numbers & code folding:</span>
         <div className="flex items-center gap-1.5">
@@ -534,22 +528,22 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
           triggerValidation(val, 500);
         }}
         language={format}
-        height={!isModal ? 240 : '100%'}
-        minHeight={!isModal ? 140 : undefined}
+        height="100%"
+        minHeight={140}
         placeholder={
           format === 'json'
             ? '{\n  "title": "foo",\n  "count": 1\n}'
             : '<request>\n  <title>foo</title>\n</request>'
         }
-        className={isModal ? 'flex-1 min-h-0' : ''}
+        className="flex-1 min-h-0"
       />
     </div>
   );
 
   return (
-    <div className="space-y-3">
+    <div className="flex-1 min-h-0 flex flex-col space-y-3">
       {/* Top Segmented Navigation & Actions */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line pb-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line pb-2.5 shrink-0">
         {/* Segmented Mode Control */}
         <div className="flex items-center rounded-xl border border-line bg-element p-0.5">
           <button
@@ -632,7 +626,7 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
 
       {/* Parse Error Alert Banner (if any) */}
       {parseError && (
-        <div className="flex items-center gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 p-2.5 text-xs text-rose-600 dark:text-rose-400">
+        <div className="flex items-center gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 p-2.5 text-xs text-rose-600 dark:text-rose-400 shrink-0">
           <AlertCircle className="h-4 w-4 shrink-0" />
           <span className="flex-1 font-mono text-[11px]">{parseError}</span>
           <button
