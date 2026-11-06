@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.5] - 2026-11-06
+
+### Fixed
+- **Native HTTP Origin**: Desktop and Android API requests and cloud requests now suppress the Tauri HTTP plugin's automatic WebView `Origin` header, preventing server-side CORS rejection of native requests. Explicitly configured `Origin` headers remain supported, with existing TLS and redirect policies preserved.
+- Added native transport regression coverage through the installed HTTP plugin's JavaScript serialization and IPC boundary.
+
+### Documentation
+- Added official Chrome Web Store install links and badge to `README.md` and build guides.
+
 ## [1.3.4] - 2026-11-04
 
 ### Fixed
