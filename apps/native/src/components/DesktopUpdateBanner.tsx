@@ -240,7 +240,11 @@ export const DesktopUpdateBanner: React.FC = () => {
   }
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 max-w-sm rounded-xl border border-sky-500/30 bg-slate-900/95 p-4 text-slate-100 shadow-2xl backdrop-blur-md transition-all animate-in fade-in slide-in-from-bottom-3 duration-300">
+    <aside
+      role="status"
+      aria-live="polite"
+      className="fixed bottom-4 right-4 z-50 !h-auto !flex-none max-w-sm rounded-xl border border-sky-500/30 bg-slate-900/95 p-4 text-slate-100 shadow-2xl backdrop-blur-md transition-all animate-in fade-in slide-in-from-bottom-3 duration-300"
+    >
       <div className="flex items-start gap-3">
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-sky-500/10 text-sky-400">
           <svg className="h-4 w-4 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -303,7 +307,7 @@ export const DesktopUpdateBanner: React.FC = () => {
           )}
         </div>
       </div>
-    </div>
+    </aside>
   );
 };
 export default DesktopUpdateBanner;

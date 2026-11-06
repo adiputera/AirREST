@@ -24,6 +24,7 @@ export default tseslint.config(
         chrome: 'readonly',
         self: 'readonly',
         window: 'readonly',
+        console: 'readonly',
         Date: 'readonly',
         Map: 'readonly',
         Boolean: 'readonly',

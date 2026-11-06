@@ -36,6 +36,9 @@ jobs:
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
         run: npm run build:android:emulator -- --ci
+      - name: Test Android update policy
+        # The build above generates the Tauri Gradle module wiring used by these JVM tests.
+        run: cd apps/native/src-tauri/gen/android && ./gradlew :app:testUniversalDebugUnitTest
       - name: Check 16 KiB native and APK alignment
         run: >-
           python3 scripts/check-android-page-size.py

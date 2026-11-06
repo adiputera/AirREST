@@ -1350,8 +1350,8 @@ test('R2 (P2): debounced environment cloud sync pending in transport is aborted 
   // Rename environment triggering debounce
   runtime.store.getState().updateEnvironment('env1', { name: 'env-renamed' });
 
-  // Wait for 300ms debounce to fire and enter transport
-  await new Promise((r) => setTimeout(r, 350));
+  // Wait for 1200ms debounce to fire and enter transport
+  await new Promise((r) => setTimeout(r, 1300));
   assert.equal(typeof deferredResolve, 'function', 'Request must have reached cloud transport');
   assert.equal(capturedSignal?.aborted, false, 'Signal must be active while pending');
 
@@ -2472,6 +2472,7 @@ test('T-NAT-CLOUD: 401 retry cancels initial response body and tauriCloudTranspo
     },
     __AIRREST_ANDROID__: false,
     console,
+    Headers,
     AbortSignal,
     AbortController,
     setTimeout,
@@ -2481,6 +2482,95 @@ test('T-NAT-CLOUD: 401 retry cancels initial response body and tauriCloudTranspo
   await exports.tauriCloudTransport.fetch('https://api.example.com/sync', { method: 'GET' });
   assert.equal(tauriFetchOpts?.connectTimeout, 15000, 'tauriCloudTransport must specify connectTimeout: 15000');
   assert.ok(tauriFetchOpts?.signal, 'tauriCloudTransport must provide timeout signal');
+});
+
+function loadNativeHttpTransports() {
+  // Exercise the installed plugin's Request/Headers serialization, mocking only IPC.
+  const compile = (source) => ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, allowJs: true },
+  }).outputText;
+  const calls = [];
+  const pluginExports = {};
+  const globals = { Headers, Request, Response, ReadableStream, AbortSignal, AbortController, setTimeout, clearTimeout };
+  vm.runInNewContext(compile(fs.readFileSync(
+    new URL('../node_modules/@tauri-apps/plugin-http/dist-js/index.js', import.meta.url), 'utf8',
+  )), {
+    ...globals,
+    exports: pluginExports,
+    require: () => ({ invoke: async (command, args) => {
+      calls.push({ command, args });
+      if (command === 'plugin:http|fetch') return 1;
+      if (command === 'plugin:http|fetch_send') {
+        return { status: 204, statusText: 'No Content', url: 'https://example.com/api', headers: [], rid: 2 };
+      }
+      throw new Error(`Unexpected IPC command: ${command}`);
+    } }),
+  });
+  const exports = {};
+  vm.runInNewContext(compile(fs.readFileSync(
+    new URL('../apps/native/src/adapters/tauriAdapter.ts', import.meta.url), 'utf8',
+  ).replaceAll('import.meta.url', '"file:///adapter.ts"')), {
+    ...globals,
+    exports,
+    __AIRREST_ANDROID__: false,
+    require: (name) => name === '@tauri-apps/plugin-http' ? pluginExports : {},
+  });
+  return { ...exports, calls };
+}
+
+test('native HTTP suppresses implicit Origin at the plugin IPC boundary for Send and cloud requests', async () => {
+  const { tauriTestTransport, tauriCloudTransport, calls } = loadNativeHttpTransports();
+  const cargo = fs.readFileSync(new URL('../apps/native/src-tauri/Cargo.toml', import.meta.url), 'utf8');
+  assert.match(cargo, /tauri-plugin-http\s*=\s*\{[^\n]*"unsafe-headers"/,
+    'The Rust plugin needs unsafe-headers to remove the empty Origin before network I/O');
+
+  for (const transport of [tauriTestTransport, tauriCloudTransport]) {
+    for (const headers of [undefined, { Authorization: 'Bearer test-token' }, [['X-Test', 'value']], new Headers({ 'X-Test': 'value' })]) {
+      const before = headers === undefined ? undefined : JSON.stringify([...new Headers(headers)]);
+      const response = await transport.fetch('https://example.com/api', {
+        method: 'POST', headers, body: 'payload', signal: new AbortController().signal,
+      });
+      assert.equal(response.status, 204);
+      const config = calls.filter((call) => call.command === 'plugin:http|fetch').at(-1).args.clientConfig;
+      const serialized = new Headers(config.headers);
+      assert.equal(serialized.get('origin'), '', 'Empty sentinel prevents the Rust plugin from injecting the WebView Origin');
+      assert.equal(serialized.get('authorization'), new Headers(headers).get('authorization'));
+      assert.equal(serialized.get('x-test'), new Headers(headers).get('x-test'));
+      assert.equal(new TextDecoder().decode(Uint8Array.from(config.data)), 'payload');
+      assert.equal(config.danger, undefined, 'Default TLS verification remains enabled');
+      assert.equal(headers === undefined ? undefined : JSON.stringify([...new Headers(headers)]), before);
+      if (transport === tauriCloudTransport) {
+        assert.equal(config.maxRedirections, 0);
+        assert.equal(config.connectTimeout, 15000);
+      }
+    }
+  }
+});
+
+test('native HTTP preserves explicit Origin including mixed-case names and an empty value', async () => {
+  const { tauriTestTransport, tauriCloudTransport, calls } = loadNativeHttpTransports();
+  for (const transport of [tauriTestTransport, tauriCloudTransport]) {
+    for (const headers of [{ Origin: 'https://example.com' }, { oRiGiN: 'null' }, [['origin', 'https://example.com']], new Headers({ Origin: '' })]) {
+      await transport.fetch('https://example.com/api', { method: 'GET', headers, signal: new AbortController().signal });
+      const config = calls.filter((call) => call.command === 'plugin:http|fetch').at(-1).args.clientConfig;
+      const origins = config.headers.filter(([name]) => name.toLowerCase() === 'origin');
+      assert.equal(origins.length, 1);
+      assert.equal(origins[0][1], new Headers(headers).get('origin'));
+    }
+  }
+});
+
+test('native HTTP propagates cancellation and invalid-header errors before IPC', async () => {
+  const { tauriTestTransport, tauriCloudTransport, calls } = loadNativeHttpTransports();
+  for (const transport of [tauriTestTransport, tauriCloudTransport]) {
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(transport.fetch('https://example.com/api', { method: 'GET', signal: controller.signal }), /Request cancelled/);
+    await assert.rejects(transport.fetch('https://example.com/api', {
+      method: 'GET', headers: { 'X-Test': 'invalid\r\nvalue' }, signal: new AbortController().signal,
+    }), /invalid/i);
+  }
+  assert.equal(calls.length, 0);
 });
 
 test('T-NAT-LIFECYCLE: tauriAdapter.dispose aborts active workers, dialogFilters converts MIME, and outbound body limits enforced', async () => {
@@ -2616,8 +2706,5 @@ test('T-EXT-SCOPE: fetchScopes preserves workspaceMode, activeScope, and scopesC
 
   runtime.dispose();
 });
-
-
-
 
 

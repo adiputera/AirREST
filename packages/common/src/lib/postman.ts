@@ -1209,7 +1209,7 @@ export function exportPostmanEnvironment(env: Environment): string {
       })),
     _postman_variable_scope: 'environment',
     _postman_exported_at: new Date().toISOString(),
-    _postman_exported_using: 'AirREST/1.3.2',
+    _postman_exported_using: 'AirREST/1.3.6',
   };
 
   return JSON.stringify(postmanFormat, null, 2);

@@ -23,6 +23,9 @@ function loadModule(relativePath, mockModules = {}, extraGlobals = {}) {
         if (id === './payloadCompiler' || id === '@/lib/payloadCompiler') {
           return loadModule('../packages/common/src/lib/payloadCompiler.ts', mockModules, extraGlobals);
         }
+        if (id === './formatters' || id === '@/lib/formatters') {
+          return loadModule('../packages/common/src/lib/formatters.ts', mockModules, extraGlobals);
+        }
         if (id.startsWith('@/lib/') || id.startsWith('./') || id.startsWith('../')) {
           return mockModules[id] || {};
         }

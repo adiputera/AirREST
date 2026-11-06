@@ -18,6 +18,32 @@ TAURI_UPDATER_PUBLIC_KEY="<your-public-key-here>" npm run build:native
 
 If omitted, updater checks will log an informational warning and remain inactive without crashing the application.
 
+## Android APK updates
+
+The Android update banner downloads the matching ARM64 or x86-64 APK directly from
+the official GitHub release using Android DownloadManager. Transfers continue in
+the background, and reopening AirREST restores the download status. A failed
+download can be retried; active downloads can be cancelled.
+
+After Android reports a completed download, AirREST stages the APK in private
+storage and verifies its size, SHA-256 digest when supplied by the release,
+package/version, and signing key. The banner then offers **Install APK**. If
+Android requires installation permission, allow AirREST in the settings screen,
+return to AirREST, and tap **Install APK** again. Installation always requires
+confirmation in Android's installer. A cancelled installation can be retried
+without downloading the APK again. **Manual download** opens the release page.
+
+Updates must use the same signing key as the installed app, so a debug build
+cannot install a production APK through this updater. Version codes use
+`major * 1000000 + minor * 1000 + patch`. This path is for directly distributed
+APKs; store-managed distributions should use their store's update mechanism.
+
+Run `npm run test:android-update` for frontend lifecycle tests. After a Tauri
+Android build has generated the Gradle wiring, run
+`./gradlew :app:testUniversalDebugUnitTest` from `src-tauri/gen/android` for the
+native release/transfer policy tests. Verify the complete download and upgrade
+flow on an Android device with two APKs signed by the same key.
+
 ## Android development
 
 Install a supported Node.js version, Rust, a JDK, Android SDK, platform tools,
