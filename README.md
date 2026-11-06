@@ -7,6 +7,7 @@
 > A fast, lightweight, and modern API testing studio packaged as a **Google Chrome Extension (Manifest V3)**, **Desktop Application (macOS, Windows, Linux)**, **Android App**, and standalone web client with optional cloud team synchronization. Built with **React 19**, **Vite**, **Tailwind CSS v4**, **Tauri v2**, **Zustand**, and a **Go + PostgreSQL** backend.
 
 [![GitHub Repository](https://img.shields.io/badge/GitHub-adiputera%2FAirREST-181717?logo=github)](https://github.com/adiputera/AirREST)
+[![Chrome Web Store](https://img.shields.io/badge/Chrome%20Web%20Store-Install-4285F4?logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/airrest-rest-client/kpajbolnoepgalhoinilfdfpcmgbdlld)
 [![Version](https://img.shields.io/badge/Version-1.3.4-blue.svg)](CHANGELOG.md)
 [![Manifest V3](https://img.shields.io/badge/Chrome%20Extension-Manifest%20V3-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)
 [![Tauri v2](https://img.shields.io/badge/Tauri-v2-24C8D8?logo=tauri&logoColor=white)](https://v2.tauri.app/)
@@ -320,12 +321,20 @@ pm.environment.set("lastRequestTimestamp", now);
 
 ## 🚀 Getting Started
 
-## 🚀 Getting Started
-
 > [!TIP]
 > For complete build configurations, multi-platform releases, Android SDK/NDK setup, code signing, deployment guides, and test matrices, see the dedicated [BUILD.md](BUILD.md).
 
 ### 1. Chrome Extension (Manifest V3)
+
+#### Install via Chrome Web Store (Recommended)
+
+Get AirREST directly from the official Chrome Web Store:
+
+[![Available in the Chrome Web Store](https://img.shields.io/badge/Chrome_Web_Store-Install_AirREST-4285F4?logo=googlechrome&logoColor=white&style=for-the-badge)](https://chromewebstore.google.com/detail/airrest-rest-client/kpajbolnoepgalhoinilfdfpcmgbdlld)
+
+👉 **[Install AirREST from Chrome Web Store](https://chromewebstore.google.com/detail/airrest-rest-client/kpajbolnoepgalhoinilfdfpcmgbdlld)**
+
+#### Build & Install from Source (Developer Mode)
 
 ```bash
 # Clone repository & install dependencies

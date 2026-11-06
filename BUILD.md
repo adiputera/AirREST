@@ -59,6 +59,9 @@ Before building AirREST, ensure your system has the following tools installed:
 
 The browser extension runs directly inside Chromium-based browsers (Google Chrome, Microsoft Edge, Brave, Arc, Opera) using Manifest V3 host permissions.
 
+> [!TIP]
+> If you prefer installing without building from source, install AirREST directly from the official [Chrome Web Store](https://chromewebstore.google.com/detail/airrest-rest-client/kpajbolnoepgalhoinilfdfpcmgbdlld).
+
 ### Build Targets
 
 AirREST supports two distinct extension editions:

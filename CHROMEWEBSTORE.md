@@ -1,6 +1,7 @@
 # Chrome Web Store Listings — AirREST
 
-> Last Updated: 2026-11-04
+> Last Updated: 2026-11-04  
+> Store URL: https://chromewebstore.google.com/detail/airrest-rest-client/kpajbolnoepgalhoinilfdfpcmgbdlld
 
 > Chrome Web Store release notes describe browser-extension changes only. Do not include backend, Hub, or desktop release notes here.
 
