@@ -26,8 +26,17 @@ on:
 permissions:
   contents: write
 
+# Serialize repeated releases while keeping each run's platform builds parallel.
+concurrency:
+  group: airrest-release
+  cancel-in-progress: false
+
 jobs:
   publish-tauri:
+    outputs:
+      tag_name: ${{ steps.release_meta.outputs.tag_name }}
+      version: ${{ steps.release_meta.outputs.version }}
+      updater_enabled: ${{ steps.updater_signing.outputs.enabled }}
     strategy:
       fail-fast: false
       matrix:
@@ -102,12 +111,14 @@ jobs:
           node scripts/extract-release-notes.mjs "${{ steps.release_meta.outputs.tag_name }}"
 
       - name: Configure Updater Signing in tauri.conf.json
+        id: updater_signing
         env:
           TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         shell: bash
         run: |
           if [ -n "$TAURI_UPDATER_PUBLIC_KEY" ] && [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo 'enabled=true' >> "$GITHUB_OUTPUT"
             node -e '
               const fs = require("fs");
               const p = "apps/native/src-tauri/tauri.conf.json";
@@ -117,6 +128,7 @@ jobs:
               fs.writeFileSync(p, JSON.stringify(conf, null, 2) + "\n");
             '
           else
+            echo 'enabled=false' >> "$GITHUB_OUTPUT"
             echo "Updater signing secrets not configured; skipping updater artifacts configuration."
           fi
 
@@ -135,8 +147,32 @@ jobs:
           releaseBody: ${{ steps.changelog.outputs.release_notes }}
           releaseDraft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || false }}
           prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
-          includeUpdaterJson: true
+          includeUpdaterJson: false
           args: ${{ matrix.args }}
+
+  publish-updater:
+    needs: publish-tauri
+    if: needs.publish-tauri.outputs.updater_enabled == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Generate complete desktop updater manifest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.publish-tauri.outputs.tag_name }}
+          RELEASE_VERSION: ${{ needs.publish-tauri.outputs.version }}
+        run: >-
+          node scripts/generate-updater-manifest.mjs
+          --repo "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG"
+          --version "$RELEASE_VERSION" --output latest.json
+      - name: Publish desktop updater manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.publish-tauri.outputs.tag_name }}
+        run: gh release upload "$RELEASE_TAG" latest.json --clobber --repo "$GITHUB_REPOSITORY"
 
   build-android:
     runs-on: ubuntu-latest
