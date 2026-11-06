@@ -138,10 +138,10 @@ jobs:
           includeUpdaterJson: true
           args: ${{ matrix.args }}
 
-  publish-android:
-    needs: publish-tauri
-    if: always() && (needs.publish-tauri.result == 'success' || needs.publish-tauri.result == 'failure')
+  build-android:
     runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.release_meta.outputs.tag_name }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -268,19 +268,45 @@ jobs:
           path: apps/native/src-tauri/target/release-assets/*
           if-no-files-found: error
 
+  publish-android:
+    # Build in parallel; attach Android assets after desktop release writers finish.
+    needs: [build-android, publish-tauri]
+    if: >-
+      ${{ !cancelled() && needs.build-android.result == 'success' &&
+      (needs.publish-tauri.result == 'success' || needs.publish-tauri.result == 'failure') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Download Android Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: airrest-android-release
+          path: apps/native/src-tauri/target/release-assets
+
       - name: Extract Release Notes from CHANGELOG.md
         id: changelog
         shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.build-android.outputs.tag_name }}
         run: |
-          node scripts/extract-release-notes.mjs "${{ steps.release_meta.outputs.tag_name }}"
+          node scripts/extract-release-notes.mjs "$RELEASE_TAG"
 
       - name: Attach Android APKs to GitHub Release
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && steps.release_meta.outputs.tag_name != '')
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && needs.build-android.outputs.tag_name != '')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ steps.release_meta.outputs.tag_name }}
+          tag_name: ${{ needs.build-android.outputs.tag_name }}
           body: ${{ steps.changelog.outputs.release_notes }}
+          draft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || false }}
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
           generate_release_notes: true
           files: apps/native/src-tauri/target/release-assets/*
