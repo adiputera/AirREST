@@ -106,11 +106,19 @@ export function classifyTauriNetworkError(error: unknown): {
   return { category, detail };
 }
 
+function nativeRequestHeaders(input: TransportInit['headers']): Headers {
+  const headers = new Headers(input);
+  // With unsafe-headers enabled, Tauri removes an empty Origin before sending.
+  // Otherwise it injects the WebView origin, which can trigger server CORS checks.
+  if (!headers.has('Origin')) headers.set('Origin', '');
+  return headers;
+}
+
 export const tauriTestTransport: TestTransport = {
   fetch: async (url: string, init: TransportInit, options?: TestRequestOptions) => {
     return tauriFetch(url, {
       method: init.method,
-      headers: init.headers,
+      headers: nativeRequestHeaders(init.headers),
       body: init.body,
       signal: init.signal,
       maxRedirections: options?.followRedirects === false ? 0 : undefined,
@@ -151,7 +159,7 @@ export const tauriCloudTransport: CloudTransport = {
     const signal = combineSignals(init.signal as AbortSignal, 300000);
     return tauriFetch(url, {
       method: init.method,
-      headers: init.headers,
+      headers: nativeRequestHeaders(init.headers),
       body: init.body,
       signal,
       connectTimeout: 15000,
@@ -434,4 +442,3 @@ export const tauriAdapter: PlatformAdapter = {
     tauriScriptExecutor.dispose();
   },
 };
-

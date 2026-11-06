@@ -325,7 +325,7 @@ test('should not retry an environment write after an OCC conflict', async () => 
   });
 
   store.getState().updateEnvironment('environment-1', { name: 'Changed name' });
-  await new Promise((resolve) => setTimeout(resolve, 350));
+  await new Promise((resolve) => setTimeout(resolve, 1300));
 
   assert.equal(updateCalls, 1);
   assert.equal(store.getState().syncStatus, 'error');
@@ -940,4 +940,51 @@ test('T-EXT-CSP: manifest.json and sandbox.html CSP hardening & prototype isolat
   assert.equal(mockParent.lastData.id, testId);
   assert.equal(mockParent.lastData.success, true, `Script should pass without prototype pollution: ${mockParent.lastData.error}`);
   assert.equal(mockParent.lastData.environment.custom, 'ok');
+});
+
+test('T-EXT-SANDBOX: reserved sandbox parameter redeclaration explains how to fix it', () => {
+  const sandboxHtml = fs.readFileSync(new URL('../apps/extension/public/sandbox.html', import.meta.url), 'utf8');
+  const scriptMatch = sandboxHtml.match(/<script>([\s\S]*?)<\/script>/);
+  assert.ok(scriptMatch, 'sandbox.html must contain script tag');
+
+  let messageHandler = null;
+  const mockSandboxWindow = {
+    addEventListener: (type, fn) => {
+      if (type === 'message') messageHandler = fn;
+    },
+  };
+  const mockParent = {
+    postMessage: (data) => {
+      mockParent.lastData = data;
+    },
+    lastData: null,
+  };
+  mockSandboxWindow.parent = mockParent;
+
+  const sandboxContext = vm.createContext({
+    window: mockSandboxWindow,
+    location: { protocol: 'chrome-extension:', hostname: '' },
+    JSON,
+    Object,
+    String,
+    Function,
+    Error,
+    RegExp,
+  });
+  vm.runInContext(scriptMatch[1], sandboxContext);
+
+  assert.equal(typeof messageHandler, 'function');
+  messageHandler({
+    source: mockParent,
+    origin: 'chrome-extension://test-extension-id',
+    data: {
+      id: 'reserved-parameter-error',
+      script: 'const response = pm.response.json();',
+      response: { status: 200, statusText: 'OK', headers: {}, data: '{}' },
+    },
+  });
+
+  assert.equal(mockParent.lastData.success, false);
+  assert.match(mockParent.lastData.error, /Parameter 'response' is already used by the internal sandbox/);
+  assert.match(mockParent.lastData.error, /responseJson/);
 });

@@ -6,6 +6,16 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init());
 
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(
+        tauri::plugin::Builder::<tauri::Wry>::new("android-update")
+            .setup(|_app, api| {
+                api.register_android_plugin("id.adiputera.airrest", "AndroidUpdatePlugin")?;
+                Ok(())
+            })
+            .build(),
+    );
+
     #[cfg(desktop)]
     let builder = {
         let mut updater_builder = tauri_plugin_updater::Builder::new();

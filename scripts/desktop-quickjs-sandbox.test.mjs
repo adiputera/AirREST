@@ -154,6 +154,28 @@ test('Gate P0.3: pm.response failed assertion reports test failure', async () =>
   assert.match(result.error, /Expected status code 200 but got 404/);
 });
 
+test('Gate P0.3: reserved sandbox parameter redeclaration explains how to fix it', async () => {
+  const result = await runScriptInQuickJS({
+    script: `
+      const response = pm.response.json();
+      pm.environment.set('clientToken', response.access_token);
+    `,
+    environment: {},
+    variables: {},
+    response: {
+      status: 200,
+      statusText: 'OK',
+      headers: { 'content-type': 'application/json' },
+      data: '{"access_token":"token-value"}',
+      timeMs: 10,
+    },
+  });
+
+  assert.equal(result.success, false);
+  assert.match(result.error, /Parameter 'response' is already used by the internal sandbox/);
+  assert.match(result.error, /responseJson/);
+});
+
 test('Gate P0.3: Legacy postman API compatibility', async () => {
   const result = await runScriptInQuickJS({
     script: `

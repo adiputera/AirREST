@@ -1,8 +1,14 @@
 {
   "$schema": "../gen/schemas/android-schema.json",
   "identifier": "android-back",
-  "description": "Allow Android Back to close the activity when no overlay is open",
+  "description": "Android navigation and native APK updates from the main window",
   "platforms": ["android"],
   "windows": ["main"],
-  "permissions": ["core:app:allow-exit"]
+  "permissions": [
+    "core:app:allow-exit",
+    "android-update:allow-status",
+    "android-update:allow-start",
+    "android-update:allow-cancel",
+    "android-update:allow-install"
+  ]
 }

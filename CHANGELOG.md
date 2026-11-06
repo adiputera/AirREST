@@ -7,6 +7,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.6] - 2026-11-06
+
+### Changed
+- **Android Update Checks**: Reduced the persisted release-check cooldown from six hours to four hours; reopening the app within that window continues to use the cached release.
+
+### Fixed
+- **Request Editor Responsive Resizing**:
+  - Resolved an issue where dragging the studio horizontal request/response split resizer downwards left unused dead space below request editors.
+  - Configured `RequestEditor` root and subtab panels with `flex-1 min-h-0 flex flex-col`.
+  - Updated `PayloadBuilder` embedded raw CodeMirror editor (`height="100%"` with `className="flex-1 min-h-0"`), preview view, and tree list container to expand flexibly within available vertical height.
+  - Updated Pre-request Script, Tests / Post-response Script, GraphQL Query, and Raw body textareas to use `flex-1 min-h-[140px]` so they expand smoothly with the panel resizer.
+  - Added regression test suite in `scripts/studio-split-resizer.test.mjs` verifying flex layout and height expansion across all request subtab editors.
+
+## [1.3.5] - 2026-11-06
+
+### Fixed
+- **Native HTTP Origin**: Desktop and Android API requests and cloud requests now suppress the Tauri HTTP plugin's automatic WebView `Origin` header, preventing server-side CORS rejection of native requests. Explicitly configured `Origin` headers remain supported, with existing TLS and redirect policies preserved.
+- Added native transport regression coverage through the installed HTTP plugin's JavaScript serialization and IPC boundary.
+
+### Documentation
+- Added official Chrome Web Store install links and badge to `README.md` and build guides.
+
+## [1.3.4] - 2026-11-04
+
+### Fixed
+- **Sandbox Reserved-Parameter Diagnostics**: Post-response scripts that redeclare injected sandbox parameters, such as `response`, now explain the collision and suggest a safe local name (`responseJson`) in both extension and desktop execution engines.
+- **Audit Contract and Quality Gates**:
+  - Synchronized the required environment-update `base_version` contract across the API guide, OpenAPI YAML/JSON, and Postman collection; added root and health checks plus the collection-reorder alias to the collection.
+  - Added API/Postman parity, extension-sandbox, and version-bumper regression tests, and included every shipped test file in `test:all`.
+  - Restored the lint gate to zero errors, made the release version bumper handle prerelease badges, synchronized the lockfile with workspace version 1.3.4, and added push/PR CI checks for TypeScript, lint, Node tests, and Go tests.
+- **Desktop Auto-Updater Floating Toast Layout**:
+  - Scoped the root child container flex styling in `apps/native/src/index.css` to `#root > div:not(.fixed)`, preventing fixed-position overlays, modals, and toasts from being forced into `height: 100%` and `flex: 1 1 0%`.
+  - Migrated `DesktopUpdateBanner` root element from `div` to semantic `<aside role="status" aria-live="polite">` with explicit `!h-auto !flex-none` constraints, ensuring the banner maintains its compact toast dimensions in the bottom-right corner during background downloads and install prompts without stretching across the viewport.
+  - Added regression test `T-UPDATER-7` in `scripts/desktop-updater.test.mjs` validating banner semantic structure, dimension boundary constraints, and CSS rule isolation.
+
+## [1.3.3] - 2026-11-03
+
+### Added
+- **Native Android APK Updates**:
+  - Download APKs directly from the update banner through Android DownloadManager, with native ABI selection, background downloads, persisted status, cancellation, and retry.
+  - Separate download completion from APK verification; check release size/checksum when supplied, package/version, and signing key before enabling **Install APK**.
+  - Open Android installation settings when permission is needed, then let the user launch the installer; retain the release page as a manual fallback.
+  - Restore cached release notifications during the six-hour check cooldown and recover pending downloads after restarting AirREST.
+  - Add updater lifecycle regression tests and JVM tests for Android release selection and completion policy.
+- **Per-Tab Request Undo (`Ctrl+Z` / `Cmd+Z`) and Redo (`Ctrl+Y` / `Ctrl+Shift+Z`) with Mobile Action Button**:
+  - **In-Memory Per-Tab History Stack**: Implemented bounded 50-snapshot in-memory undo/redo stacks in `packages/common/src/store/useApiStore.ts` tracking active request modifications across request body, headers, parameters, authentication, and configurations without localStorage bloat.
+  - **Discrete & Coalesced Change Tracking**: Accidental bulk changes (such as pasting wrong payloads into the request body or Beautify formatting) capture immediate discrete snapshots so a single Undo reverts the entire paste; continuous character typing is coalesced with a 500ms debounce window.
+  - **Global Keyboard Shortcuts & Modal Isolation**: Registered `Ctrl+Z` / `Cmd+Z` (Undo) and `Ctrl+Y` / `Ctrl+Shift+Z` / `Cmd+Shift+Z` (Redo) in `RequestEditor`, isolated from external dialogs while supporting editing inside the Expanded Payload Editor modal (`data-payload-modal="true"`).
+  - **Mobile-Friendly Header Action Buttons**: Added a compact Undo button (`Undo2`) in the top-right header action bar (beside cURL) with reactive disable states, and an auto-surfacing Redo button (`Redo2`) when forward history is available for mobile and narrow-screen devices.
+  - **Two-Way Controlled Editor Synchronization**: Synchronized `PayloadBuilder` raw textarea and tree builder state on undo/redo dispatch with internal update flags preventing redundant parsing or lost cursor states.
+  - **Resilient JSON Formatting & Relaxed Syntax Recovery**: Enhanced `beautifyJson` and `sanitizeRelaxedJson` in `packages/common/src/lib/formatters.ts` and `payloadReverseParser.ts` to automatically repair common relaxed syntax issues (single-quoted keys, unquoted keys, trailing commas, Python booleans/None, missing inter-line commas) while safely preserving string literals, URLs, and comments via a dedicated character scanner.
+  - **Debounced Real-Time Syntax Validation**: Integrated a lightweight 500ms debounced syntax validator in `PayloadBuilder` that validates syntax directly without heavy AST regeneration or input lag, automatically hides the error banner as soon as syntax is fixed, and eliminates state disparities on undo/redo.
+  - **Line Numbers & Code Folding (`(-)` / `(+)`) on Request Body and Response Viewer via CodeMirror 6**:
+    - **Modular CodeEditor Component**: Built a reusable, lightweight CodeMirror 6 editor (`packages/common/src/components/editor/CodeEditor.tsx`) with line numbers gutter, code folding gutter (`foldGutter`) with clear minus `(−)` and plus `(+)` markers, tab indentation (2 spaces), syntax highlighting, and history integration.
+    - **Request Body Code Folding**: Integrated `CodeEditor` into `PayloadBuilder` Raw mode with real-time 500ms debounced validation, undo/redo synchronization, and **Collapse All** / **Expand All** toolbar controls for collapsible JSON objects and arrays.
+    - **Response Viewer Code Folding**: Upgraded `ResponseViewer` body inspector to `CodeEditor` (read-only mode), enabling developers to fold/unfold large nested JSON objects/arrays with dedicated **Collapse All** and **Expand All** action buttons in the response header.
+    - **Data Integrity Preservation**: Code folding is purely visual; payloads sent over HTTP or copied/downloaded remain 100% complete without corruption.
+  - **Automated Verification**: Added dedicated test suite in `scripts/request-undo.test.mjs` and `scripts/code-editor-folding.test.mjs` verifying static contract integrity, in-memory stack state transitions, JSON format recovery, line numbers, and fold gutter operations.
+- **Seamless Request Section Collapse with Full Response Elevation**:
+  - Automatically shrinks the top Request pane height to `auto` when the configuration section (Params, Headers, Auth, Body, Scripts) is collapsed via the **Collapse** button or subtab toggle.
+  - Elevates the Response Viewer upward to immediately fill the vacated viewport space without leaving dead blank areas.
+  - Dynamically hides the split-pane resizer when collapsed and cleanly restores the previous user-defined `requestPaneHeight` when expanding.
+  - Cleaned up subtab divider borders to eliminate duplicate lines when collapsed.
+- **Desktop Sidebar Drag-to-Resize with LocalStorage Persistence**:
+  - **Horizontal Drag-to-Resize Handle**: Added an accessible vertical separator handle (`role="separator"`) along the right border of the collection sidebar on desktop screens with a hover/active visual indicator (`sky-500`) and live width tooltip badge (`px`).
+  - **Fluid Dynamic Boundaries & Window Clamping**: Bounded sidebar width safely between `220px` (minimum) and up to `55%` of viewport width (max `800px`), preventing layout collapse while preserving editor space. Added automatic window resize clamping.
+  - **State Persistence & Double-Click Reset**: Stored width preference in `localStorage` under `airrest:sidebar_width` across app reloads and browser sessions; double-clicking the resizer handle instantly resets width to default (`288px`).
+  - **Keyboard & Touch Accessibility**: Supported keyboard adjustment (`ArrowLeft`, `ArrowRight`, `Home`, `Enter`, `Space`) and touch events for full accessibility compliance.
+  - **Layout Anti-Crush**: Added `md:shrink-0` to the sidebar workspace container to prevent flex crushing on narrow desktop viewports.
+  - **Automated Regression Suite**: Added `scripts/sidebar-resizable.test.mjs` asserting width clamping bounds, storage key contracts, ARIA semantics, and layout preservation rules.
+- **Studio Request vs Response Split-Pane Resizer & Persistence**:
+  - **Global Workspace Split-Pane Divider**: Replaced the sequential single-scroll column with an interactive horizontal split-pane dividing the entire Request panel (Params, Headers, Auth, Body, Scripts) from the Response panel.
+  - **Universal Subtab Coverage**: Resizer is universally present across all active request subtabs, allowing developers to resize the request area freely whether editing query parameters, headers, authentication, raw/builder body, or test scripts.
+  - **Independent Dual-Pane Scrolling**: Request parameters and bodies scroll cleanly within the upper pane without pushing the Response status bar off the screen; Response headers and body inspector scroll independently in the lower pane.
+  - **Safe Clamping Boundaries**: Request pane height is safely clamped between `150px` (ensuring URL bar and subtabs remain visible) and `containerHeight - 140px` (preserving adequate response inspection room).
+  - **State Persistence & Double-Click Reset**: Stored height preference in `localStorage` under `airrest:request_pane_height`; double-clicking the divider restores a balanced default view. Full keyboard navigation via <kbd>ArrowUp</kbd> / <kbd>ArrowDown</kbd> / <kbd>Home</kbd> / <kbd>Enter</kbd>.
+  - **Automated Verification**: Added dedicated test suite `scripts/studio-split-resizer.test.mjs`.
+
 ## [1.3.2] - 2026-11-03
 
 ### Fixed

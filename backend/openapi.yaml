@@ -65,13 +65,15 @@ info:
     - **Granular Permissions**: Collections and Environments support `min_role` (`admin`, `maintainer`, `contributor`, `reader`).
       Users with a project role below `min_role` are prohibited from reading or writing that resource.
 
-    ### 6. CORS Requirements
-    The backend MUST support CORS with:
-    - Allowed Origins: `*` or user-configured hosts, including `chrome-extension://*`
+    ### 6. CORS Configuration
+    Cloud requests from the packaged Chrome Extension are issued by an extension page with declared host permissions; the script sandbox only executes local scripts and does not call this API. AirREST Hub remains a Web SPA and is subject to browser CORS.
+    The bundled backend config accepts the following web origins:
+    - Allowed Origins: `http://localhost:*`, `http://127.0.0.1:*`, and `https://*`
     - Allowed Methods: `GET, POST, PUT, PATCH, DELETE, OPTIONS`
     - Allowed Headers: `Accept, Authorization, Content-Type, Content-Encoding, X-CSRF-Token`
     - Exposed Headers: `Link`
     - Allow Credentials: `true`
+    Deployments that expose the API to other web origins must configure and test those origins deliberately. Do not add the sandbox's opaque `null` origin: it is not a cloud transport context.
 
     ### Session revocation and resource limits
      Both access and refresh JWTs carry a nonnegative integer token_version matching users.token_version. Missing or stale versions are rejected with 401. Password changes and administrator resets atomically increment the version and revoke existing sessions. A self-service password change returns a replacement token pair for the current device; administrator resets revoke every target-device session. Profile changes do not revoke sessions. Refresh tokens can be reused until expiry or account-wide revocation; they are not single-use. Clients clear tokens and sign in again after a rejected refresh.

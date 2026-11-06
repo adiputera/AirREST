@@ -1,205 +1,132 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { openUrl } from '@tauri-apps/plugin-opener';
-
-export interface GitHubAsset {
-  name: string;
-  browser_download_url: string;
-}
-
-export interface GitHubRelease {
-  tag_name: string;
-  name?: string;
-  html_url: string;
-  body?: string;
-  assets?: GitHubAsset[];
-}
-
-export function isNewerVersion(remote: string, current: string): boolean {
-  const clean = (v: string) => v.replace(/^(desktop-|android-)?v?/, '').split('-')[0];
-  const rParts = clean(remote).split('.').map((n) => parseInt(n, 10) || 0);
-  const cParts = clean(current).split('.').map((n) => parseInt(n, 10) || 0);
-
-  for (let i = 0; i < 3; i++) {
-    const r = rParts[i] ?? 0;
-    const c = cParts[i] ?? 0;
-    if (r > c) return true;
-    if (r < c) return false;
-  }
-  return false;
-}
-
-export function pickAndroidApkUrl(
-  assets: GitHubAsset[] = [],
-  fallbackHtmlUrl: string,
-  userAgent?: string,
-): string {
-  const ua = typeof userAgent === 'string'
-    ? userAgent
-    : typeof navigator !== 'undefined'
-      ? navigator.userAgent || ''
-      : '';
-  const isX86 = /x86_64|x86/i.test(ua);
-
-  if (isX86) {
-    const x86 = assets.find(
-      (a) => a.name.endsWith('.apk') && (a.name.includes('x86_64') || a.name.includes('x86')),
-    );
-    if (x86) return x86.browser_download_url;
-  }
-
-  // Prefer ARM64 APK (phones/tablets), then universal APK, then any APK
-  const arm64 = assets.find(
-    (a) => a.name.endsWith('.apk') && (a.name.includes('arm64') || a.name.includes('aarch64')),
-  );
-  if (arm64) return arm64.browser_download_url;
-
-  const universal = assets.find((a) => a.name.endsWith('.apk') && a.name.includes('universal'));
-  if (universal) return universal.browser_download_url;
-
-  const anyApk = assets.find((a) => a.name.endsWith('.apk'));
-  if (anyApk) return anyApk.browser_download_url;
-
-  return fallbackHtmlUrl;
-}
-
-export const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
-export const LAST_CHECK_KEY = 'airrest_android_last_update_check';
-export const DISMISSED_VERSION_KEY = 'airrest_android_dismissed_version';
+import {
+  CHECK_INTERVAL_MS, DISMISSED_VERSION_KEY, IDLE_UPDATE, RELEASE_CACHE_KEY,
+  createAndroidUpdateController, isNewerVersion, nativeAndroidUpdater, parseRelease,
+  readCachedRelease, updateError,
+  type AndroidUpdateStatus, type GitHubRelease,
+} from '../androidUpdater';
 
 export function AndroidUpdateBanner({
   repo = 'adiputera/AirREST',
   currentVersion = typeof __AIRREST_VERSION__ !== 'undefined' ? __AIRREST_VERSION__ : '0.0.0',
-}: {
-  repo?: string;
-  currentVersion?: string;
-}) {
-  const [updateAvailable, setUpdateAvailable] = useState<GitHubRelease | null>(null);
+}: { repo?: string; currentVersion?: string }) {
+  const [release, setRelease] = useState<GitHubRelease | null>(null);
+  const [status, setStatus] = useState<AndroidUpdateStatus>(IDLE_UPDATE);
   const [dismissed, setDismissed] = useState(false);
-  const [downloading, setDownloading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const updater = useRef<ReturnType<typeof createAndroidUpdateController> | null>(null);
 
   useEffect(() => {
-    let isMounted = true;
-    const controller = new AbortController();
+    const controller = createAndroidUpdateController(nativeAndroidUpdater, setStatus, setMessage, setBusy);
+    updater.current = controller;
+    const refresh = () => { if (!document.hidden) void controller.refresh(); };
+    refresh();
+    const timer = setInterval(refresh, 2000);
+    document.addEventListener('visibilitychange', refresh);
+    window.addEventListener('focus', refresh);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', refresh);
+      window.removeEventListener('focus', refresh);
+      controller.dispose();
+      updater.current = null;
+    };
+  }, []);
 
-    async function checkForUpdates() {
+  useEffect(() => {
+    let mounted = true;
+    const abort = new AbortController();
+    const timeout = setTimeout(() => abort.abort(), 6000);
+    const showRelease = (candidate: GitHubRelease) => {
+      if (!mounted) return;
+      setRelease(isNewerVersion(candidate.tag_name, currentVersion) ? candidate : null);
+      setDismissed(localStorage.getItem(DISMISSED_VERSION_KEY) === candidate.tag_name);
+    };
+    async function check() {
       try {
-        const lastCheck = localStorage.getItem(LAST_CHECK_KEY);
-        const dismissedVer = localStorage.getItem(DISMISSED_VERSION_KEY);
-        const now = Date.now();
-
-        // Avoid repeated checks within the cooldown window
-        if (lastCheck && now - parseInt(lastCheck, 10) < CHECK_INTERVAL_MS) {
-          return;
+        const cached = readCachedRelease(localStorage.getItem(RELEASE_CACHE_KEY), repo);
+        if (cached) {
+          showRelease(cached.release);
+          const age = Date.now() - cached.checkedAt;
+          if (age >= 0 && age < CHECK_INTERVAL_MS) return;
         }
-
-        const timeoutId = setTimeout(() => controller.abort(), 6000);
-
         const response = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
-          signal: controller.signal,
-          headers: {
-            Accept: 'application/vnd.github.v3+json',
-          },
+          signal: abort.signal, headers: { Accept: 'application/vnd.github+json' },
         });
-        clearTimeout(timeoutId);
-
-        if (!response.ok) return;
-
-        const release = (await response.json()) as GitHubRelease;
-
-        if (!isMounted) return;
-
-        const hasApk = Boolean(
-          release.assets?.some((a) => a.name.endsWith('.apk') && a.browser_download_url?.startsWith('https://')),
-        );
-        if (hasApk) {
-          localStorage.setItem(LAST_CHECK_KEY, String(now));
-          if (release.tag_name && isNewerVersion(release.tag_name, currentVersion)) {
-            if (dismissedVer !== release.tag_name) {
-              setUpdateAvailable(release);
-            }
-          }
+        if (!response.ok) return; // Offline/rate-limited checks leave the cached update available.
+        const candidate = parseRelease(await response.json());
+        if (!mounted || !candidate) return;
+        showRelease(candidate);
+        localStorage.setItem(RELEASE_CACHE_KEY, JSON.stringify({ repo, checkedAt: Date.now(), release: candidate }));
+      } catch (error) {
+        if (mounted && !abort.signal.aborted) {
+          // Keep the cached release visible; a failed background check must not disrupt the app.
+          setMessage(`Could not check for a newer release. ${updateError(error)}`);
         }
-      } catch {
-        // Silently ignore network failures or offline mode
+      } finally {
+        clearTimeout(timeout);
       }
     }
-
-    void checkForUpdates();
-
-    return () => {
-      isMounted = false;
-      controller.abort();
-    };
+    void check();
+    return () => { mounted = false; abort.abort(); clearTimeout(timeout); };
   }, [repo, currentVersion]);
 
-  if (!updateAvailable || dismissed) return null;
+  // An in-progress or downloaded APK survives dismissal, offline startup, and app restart.
+  const hasDownload = status.state !== 'idle';
+  if (!hasDownload && (!release || dismissed)) return null;
+  const transferring = ['pending', 'downloading', 'paused', 'verifying'].includes(status.state);
+  const ready = status.state === 'ready';
+  const version = hasDownload ? status.version : release?.tag_name;
+  const description = status.state === 'pending' ? 'Waiting for download…'
+    : status.state === 'downloading' ? `Downloading APK${status.progress == null ? '…' : ` (${status.progress}%)`}`
+    : status.state === 'verifying' ? 'Checking APK…'
+    : ready ? 'APK verified and ready to install'
+    : status.state === 'failed' ? 'Update needs attention'
+    : status.state === 'paused' ? 'Download paused'
+    : 'Update available';
 
-  const hasApk = Boolean(updateAvailable.assets?.some((a) => a.name.endsWith('.apk')));
-  if (!hasApk) return null;
+  async function manualDownload() {
+    if (!release) return;
+    try { await openUrl(release.html_url); }
+    catch (error) { setMessage(`Could not open the release page. ${updateError(error)}`); }
+  }
 
-  const newVer = updateAvailable.tag_name;
-  const rawDownloadUrl = pickAndroidApkUrl(updateAvailable.assets, updateAvailable.html_url);
-  const downloadUrl = rawDownloadUrl.startsWith('https://') ? rawDownloadUrl : '';
-  const releasePageUrl = updateAvailable.html_url?.startsWith('https://')
-    ? updateAvailable.html_url
-    : downloadUrl;
-  if (!releasePageUrl && !downloadUrl) return null;
-
-  const handleDownload = async () => {
-    // Redirect to GitHub release page in browser to avoid in-app webview / Custom Tab download stall (stuck at 100%)
-    const targetUrl = releasePageUrl || downloadUrl;
-    if (!targetUrl || !targetUrl.startsWith('https://')) return;
-    setDownloading(true);
-    try {
-      await openUrl(targetUrl);
-    } catch {
-      window.open(targetUrl, '_blank', 'noopener,noreferrer');
-    } finally {
-      setDownloading(false);
-    }
-  };
-
-  const handleDismiss = () => {
+  function dismiss() {
+    if (release) localStorage.setItem(DISMISSED_VERSION_KEY, release.tag_name);
     setDismissed(true);
-    if (newVer) {
-      localStorage.setItem(DISMISSED_VERSION_KEY, newVer);
-    }
-  };
+  }
 
+  const buttonClass = 'rounded bg-cyan-600 px-2.5 py-1 font-medium text-white hover:bg-cyan-500 disabled:opacity-50';
   return (
-    <aside
-      role="status"
-      aria-live="polite"
-      className="sticky top-0 z-50 flex items-center justify-between gap-3 bg-gradient-to-r from-cyan-950 via-slate-900 to-indigo-950 px-3 py-2 text-xs text-slate-100 shadow-md border-b border-cyan-800/40"
-    >
-      <div className="flex items-center gap-2 overflow-hidden truncate">
-        <span className="flex h-2 w-2 rounded-full bg-cyan-400 animate-pulse shrink-0" />
-        <span className="font-semibold text-cyan-300">AirREST {newVer}</span>
-        <span className="truncate text-slate-300">is available</span>
+    <aside role="status" aria-live="polite"
+      className="sticky top-0 z-50 border-b border-cyan-800/40 bg-gradient-to-r from-cyan-950 via-slate-900 to-indigo-950 px-3 py-2 text-xs text-slate-100 shadow-md">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
+          <span className="font-semibold text-cyan-300">AirREST {version}</span>
+          <span className="ml-2">{description}</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {ready ? (
+            <button type="button" className={buttonClass} disabled={busy} onClick={() => void updater.current?.install()}>
+              {busy ? 'Opening…' : 'Install APK'}
+            </button>
+          ) : !transferring && release ? (
+            <button type="button" className={buttonClass} disabled={busy} onClick={() => void updater.current?.start(release)}>
+              {busy ? 'Starting…' : status.state === 'failed' ? 'Retry download' : 'Download APK'}
+            </button>
+          ) : null}
+          {hasDownload && (
+            <button type="button" disabled={busy} onClick={() => void updater.current?.cancel()} className="px-2 py-1 disabled:opacity-50">
+              {ready ? 'Discard APK' : 'Cancel'}
+            </button>
+          )}
+          {release && !transferring && <button type="button" disabled={busy} onClick={() => void manualDownload()} className="px-2 py-1 underline">Manual download</button>}
+          {!hasDownload && <button type="button" disabled={busy} onClick={dismiss} aria-label="Close update notification" className="px-2 py-1">✕</button>}
+        </div>
       </div>
-
-      <div className="flex items-center gap-2 shrink-0">
-        <button
-          type="button"
-          onClick={handleDownload}
-          disabled={downloading}
-          className="rounded bg-cyan-600 hover:bg-cyan-500 active:bg-cyan-700 px-2.5 py-1 text-xs font-medium text-white shadow-sm transition-colors focus:outline-none focus:ring-1 focus:ring-cyan-400 cursor-pointer"
-        >
-          {downloading ? 'Opening...' : 'Download APK'}
-        </button>
-        <button
-          type="button"
-          onClick={handleDismiss}
-          aria-label="Close update notification"
-          className="p-1 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
-        >
-          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <line x1="18" y1="6" x2="6" y2="18" />
-            <line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
-        </button>
-      </div>
+      {(status.message || message) && <p className="mt-1 break-words text-amber-200">{message || status.message}</p>}
     </aside>
   );
 }
-

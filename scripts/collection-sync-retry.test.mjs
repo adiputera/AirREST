@@ -61,7 +61,7 @@ test('Collection Sync & Retry: Sidebar displays pending sync indicator for un-sy
   const content = fs.readFileSync(new URL('../packages/common/src/components/Sidebar.tsx', import.meta.url), 'utf8');
 
   assert.match(content, /col\._syncStatus\s*===\s*'pending'/);
-  assert.match(content, /Upload pending: not yet synced to cloud/);
+  assert.match(content, /not yet (?:uploaded to the|synced to) cloud/);
 });
 
 test('Collection Sync & Retry: Version consistency across workspace packages', () => {
@@ -74,11 +74,10 @@ test('Collection Sync & Retry: Version consistency across workspace packages', (
   const nativePkg = readJson('apps/native/package.json');
   const tauriConf = readJson('apps/native/src-tauri/tauri.conf.json');
 
-  assert.equal(rootPkg.version, '1.3.1');
-  assert.equal(extPkg.version, '1.3.1');
-  assert.equal(extManifest.version, '1.3.1');
-  assert.equal(commonPkg.version, '1.3.1');
-  assert.equal(nativePkg.version, '1.3.1');
-  assert.equal(tauriConf.version, '1.3.1');
+  assert.equal(extPkg.version, rootPkg.version);
+  assert.equal(extManifest.version, rootPkg.version);
+  assert.equal(commonPkg.version, rootPkg.version);
+  assert.equal(nativePkg.version, rootPkg.version);
+  assert.equal(tauriConf.version, rootPkg.version);
 });
 

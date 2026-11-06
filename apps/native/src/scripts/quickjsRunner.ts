@@ -10,6 +10,32 @@ import {
 
 let quickJsModulePromise: Promise<QuickJSWASMModule> | null = null;
 
+const INTERNAL_SANDBOX_PARAMETERS = [
+  'pm',
+  'postman',
+  'response',
+  'responseBody',
+  'responseCode',
+  'responseTime',
+  'responseHeaders',
+  'tests',
+] as const;
+
+function describeInternalParameterRedefinition(errorMessage: string, script: string): string {
+  if (!/(?:invalid redefinition of parameter name|(?:identifier|parameter).*?(?:already been declared|redeclared)|redeclaration)/i.test(errorMessage)) {
+    return errorMessage;
+  }
+
+  for (const parameter of INTERNAL_SANDBOX_PARAMETERS) {
+    const declarationPattern = new RegExp(`\\b(?:const|let|class|function)\\s+${parameter}\\b`);
+    if (declarationPattern.test(script)) {
+      return `${errorMessage}\n\nParameter '${parameter}' is already used by the internal sandbox. Rename your local variable; for example, use 'responseJson' instead of 'response'.`;
+    }
+  }
+
+  return errorMessage;
+}
+
 export function getCachedQuickJS(): Promise<QuickJSWASMModule> {
   if (!quickJsModulePromise) {
     quickJsModulePromise = getQuickJS().catch((err) => {
@@ -588,7 +614,9 @@ export async function runQuickJsGuest(
       }
 
       const isTimeout = message.includes('interrupted') || message === 'Script execution timed out.' || Date.now() > deadline;
-      const finalError = isTimeout ? 'Script execution timed out.' : message;
+      const finalError = isTimeout
+        ? 'Script execution timed out.'
+        : describeInternalParameterRedefinition(message, input.script);
 
       return validateScriptOutput({
         success: false,
