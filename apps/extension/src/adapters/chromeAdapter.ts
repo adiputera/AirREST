@@ -10,7 +10,7 @@ import {
   requestHostPermission,
   categorizeNetworkError,
   getChromiumNetworkError,
-} from '@airrest/common';
+} from '@airrest/common/platform';
 
 export const chromeTransport: TestTransport = {
   fetch: async (url, init, options) => {

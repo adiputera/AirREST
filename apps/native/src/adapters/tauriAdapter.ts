@@ -9,7 +9,7 @@ import {
   TestRequestOptions,
   TransportInit,
   FileOptions,
-} from '@airrest/common';
+} from '@airrest/common/platform';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { save as tauriSave, open as tauriOpen } from '@tauri-apps/plugin-dialog';
 import {

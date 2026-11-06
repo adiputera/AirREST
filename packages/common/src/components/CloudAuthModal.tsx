@@ -6,7 +6,6 @@ import { Lock, Mail, Server, AlertCircle, Loader2, CheckCircle2, X, Eye, EyeOff 
 import { useApiStore } from '../store/useApiStore';
 import { useStoreContext } from '../store/storeContext';
 import {
-  loginUser,
   fetchUserWorkspaces,
   fetchUserTeams,
   fetchTeamProjects,
@@ -14,6 +13,7 @@ import {
 } from '../lib/cloudApi';
 import { ActiveScope, CloudUser } from '../types/api';
 import { getRoleFromJwt } from '../lib/jwt';
+import { useAuthProvider } from '../context';
 
 interface CloudAuthModalProps {
   isOpen: boolean;
@@ -21,6 +21,8 @@ interface CloudAuthModalProps {
 }
 
 export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose }) => {
+  const authProvider = useAuthProvider();
+  const requiresPasswordCredentials = authProvider.capabilities.passwordCredentials;
   const contextStore = useStoreContext();
   const activeStore = contextStore || useApiStore;
 
@@ -79,8 +81,12 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
 
     try {
       const cleanUrl = normalizeCloudApiUrl(apiUrl);
-      const authResult = await loginUser(cleanUrl, email, password);
-      const { user, token, refresh_token, expires_at } = authResult;
+      const authResult = await authProvider.signIn({
+        apiUrl: cleanUrl,
+        email: requiresPasswordCredentials ? email : undefined,
+        password: requiresPasswordCredentials ? password : undefined,
+      });
+      const { user, accessToken: token, refreshToken: refresh_token, expiresAt: expires_at } = authResult;
 
       // 1. Fetch workspaces and teams to establish initial active scope
       let initialScope: ActiveScope = {
@@ -249,45 +255,49 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
             )}
 
             <form onSubmit={handleSubmit} className="space-y-3">
-              <div>
-                <label className="block text-[11px] font-semibold text-tx-secondary mb-1">Email Address</label>
-                <div className="relative">
-                  <Mail className="absolute left-3 top-2.5 h-4 w-4 text-tx-muted" />
-                  <input
-                    type="email"
-                    required
-                    placeholder="user@example.com"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="w-full rounded-lg border border-line bg-element pl-9 pr-3 py-2 text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none"
-                  />
-                </div>
-              </div>
+              {requiresPasswordCredentials && (
+                <>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-tx-secondary mb-1">Email Address</label>
+                    <div className="relative">
+                      <Mail className="absolute left-3 top-2.5 h-4 w-4 text-tx-muted" />
+                      <input
+                        type="email"
+                        required
+                        placeholder="user@example.com"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        className="w-full rounded-lg border border-line bg-element pl-9 pr-3 py-2 text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
 
-              <div>
-                <label className="block text-[11px] font-semibold text-tx-secondary mb-1">Password</label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-2.5 h-4 w-4 text-tx-muted" />
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    required
-                    minLength={8}
-                    placeholder="Minimum 8 characters"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="w-full rounded-lg border border-line bg-element pl-9 pr-10 py-2 text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-2.5 top-2.5 text-tx-muted hover:text-tx-primary transition"
-                    title={showPassword ? 'Hide password' : 'Show password'}
-                    aria-label={showPassword ? 'Hide password' : 'Show password'}
-                  >
-                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
-                </div>
-              </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-tx-secondary mb-1">Password</label>
+                    <div className="relative">
+                      <Lock className="absolute left-3 top-2.5 h-4 w-4 text-tx-muted" />
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        required
+                        minLength={8}
+                        placeholder="Minimum 8 characters"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        className="w-full rounded-lg border border-line bg-element pl-9 pr-10 py-2 text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-2.5 top-2.5 text-tx-muted hover:text-tx-primary transition"
+                        title={showPassword ? 'Hide password' : 'Show password'}
+                        aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      >
+                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
 
               {/* Server URL Accordion */}
               <div className="pt-1">
@@ -324,7 +334,7 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
                 disabled={isLoading}
                 className="w-full flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-sky-600 to-indigo-600 py-2.5 text-xs font-semibold text-white shadow-md shadow-sky-500/20 hover:from-sky-500 hover:to-indigo-500 transition disabled:opacity-50 mt-4"
               >
-                {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Sign In & Synchronize'}
+                {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : requiresPasswordCredentials ? 'Sign In & Synchronize' : 'Continue'}
               </button>
 
               <p className="mt-4 text-center text-[11px] text-tx-faint">

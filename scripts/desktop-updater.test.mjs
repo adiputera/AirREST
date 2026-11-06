@@ -259,7 +259,9 @@ test('T-UPDATER-6: Tauri config, capabilities, and GitHub workflow contracts are
 
   assert.ok(workflow.includes('TAURI_SIGNING_PRIVATE_KEY'));
   assert.ok(workflow.includes('TAURI_UPDATER_PUBLIC_KEY'));
-  assert.ok(workflow.includes('includeUpdaterJson: true'));
+  assert.ok(workflow.includes('includeUpdaterJson: false'));
+  assert.ok(!workflow.includes('includeUpdaterJson: true'));
+  assert.ok(workflow.includes('node scripts/generate-updater-manifest.mjs'));
 });
 
 test('T-UPDATER-7: Desktop update banner preserves compact floating toast layout without viewport height stretch', () => {

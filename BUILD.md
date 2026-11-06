@@ -155,7 +155,18 @@ The repository includes a cross-platform release workflow (`.github/workflows/de
    git tag desktop-v1.3.2
    git push origin desktop-v1.3.2
    ```
-3. **Manual Trigger**: Run the **Release AirREST Desktop** workflow from the GitHub Actions tab (`workflow_dispatch`).
+3. **Manual Trigger**: Run the **Release AirREST (Desktop & Android)** workflow from the GitHub Actions tab (`workflow_dispatch`).
+4. **Parallel Builds and Updater Publication**: Android and all four desktop targets build in parallel. Desktop jobs upload signed installers without writing `latest.json`. Once every desktop job succeeds, `publish-updater` generates one complete manifest from the release assets and their `.sig` files. Missing targets or invalid signatures fail the job before upload. Releases without updater signing configured skip this job. Workflow runs are serialized to prevent simultaneous releases from replacing the same manifest.
+
+To repair an existing release without rebuilding installers (Node.js 22+):
+
+```bash
+node scripts/generate-updater-manifest.mjs --repo OWNER/REPO --tag v1.3.6 --output /tmp/latest.json
+# After reviewing the manifest, upload with an authenticated GitHub CLI:
+gh release upload v1.3.6 /tmp/latest.json --clobber --repo OWNER/REPO
+```
+
+The generator reads public releases without authentication. For a private or draft release, provide `GITHUB_TOKEN` or `GH_TOKEN` with repository contents read access. Upload requires contents write access. All four desktop targets and their original signatures must be present; Android assets are handled by the Android updater separately.
 
 ---
 

@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { createAirrestRuntime, AirrestProvider, App, dispatchBack, initEarlyTheme } from '@airrest/common';
+import { createAirrestRuntime, AirrestProvider } from '@airrest/common/runtime';
+import { App, dispatchBack, initEarlyTheme } from '@airrest/common/ui';
 import { exit, onBackButtonPress } from '@tauri-apps/api/app';
 import { tauriAdapter } from './adapters/tauriAdapter';
 import { DesktopUpdateBanner } from './components/DesktopUpdateBanner';

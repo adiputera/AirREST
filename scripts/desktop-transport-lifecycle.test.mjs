@@ -105,6 +105,13 @@ function loadProductionRuntime() {
       return {
         setCloudTransport: (t) => { currentCloudTransport = t; },
         getCloudTransport: () => currentCloudTransport,
+        createCloudClient: ({ transport } = {}) => ({
+          getTransport: () => transport ?? null,
+          setTransport: () => {},
+          registerTokenRefreshCallback: () => () => {},
+          registerAuthEvictedCallback: () => () => {},
+          dispose: () => {},
+        }),
         registerTokenRefreshCallback: () => () => {},
         registerAuthEvictedCallback: () => () => {},
       };
@@ -120,6 +127,12 @@ function loadProductionRuntime() {
         setDefaultPlatformAdapter: (a) => { currentPlatformAdapter = a; },
         getDefaultPlatformAdapter: () => currentPlatformAdapter,
       };
+    }
+    if (id.includes('productPolicy')) {
+      return { createProductPolicy: (edition) => ({ edition, workspace: { cloud: edition !== 'offline' } }) };
+    }
+    if (id.includes('passwordAuthProvider')) {
+      return { passwordAuthProvider: { id: 'password', capabilities: {}, signIn: async () => { throw new Error('not configured'); } } };
     }
     return {};
   };
@@ -455,12 +468,33 @@ test('Gate P0.1/F8: Runtime creation wires adapter, executor, and cloud transpor
   assert.equal(getCurrentCloudTransport(), mockAdapter.cloudTransport);
   assert.equal(getCurrentScriptExecutor(), mockAdapter.scriptExecutor);
   assert.ok(runtime.store);
+  assert.equal(runtime.authProvider.id, 'password');
 
   runtime.dispose();
   assert.equal(adapterDisposed, true);
   assert.equal(getCurrentPlatformAdapter(), null);
   assert.equal(getCurrentCloudTransport(), null);
   assert.equal(getCurrentScriptExecutor(), null);
+});
+
+test('Gate P0.1/F8: Runtime retains an injected authentication provider', () => {
+  const authProvider = {
+    id: 'test-auth',
+    capabilities: { passwordCredentials: false, editableProfile: false, passwordChange: false },
+    signIn: async () => ({ user: {}, accessToken: 'test-token' }),
+  };
+  const mockAdapter = {
+    cloudTransport: { fetch: async () => new Response() },
+    scriptExecutor: { execute: async () => ({ success: true, environment: {}, variables: {} }) },
+    saveFile: async () => false,
+    openFile: async () => null,
+    dispose: () => {},
+  };
+
+  const runtime = createAirrestRuntime({ adapter: mockAdapter, authProvider });
+
+  assert.equal(runtime.authProvider, authProvider);
+  runtime.dispose();
 });
 
 test('Gate P0.1/F8: Offline runtime does NOT wire cloud transport', () => {
@@ -750,6 +784,20 @@ test('D3 (P2): Multi-runtime isolation with production runtime and store instanc
       if (id === 'zustand/middleware') return zustandMiddleware;
       if (id === 'react') return React;
       if (id.includes('storeContext')) return runModule('../packages/common/src/store/storeContext.ts', sandbox);
+      if (id.includes('asyncOperationCoordinator')) return runModule('../packages/common/src/store/asyncOperationCoordinator.ts', sandbox);
+      if (id.includes('scopeCache')) return runModule('../packages/common/src/workspace/scopeCache.ts', sandbox);
+      if (id.includes('scopeSnapshot')) return runModule('../packages/common/src/workspace/scopeSnapshot.ts', sandbox);
+      if (id.includes('cloudSession')) return runModule('../packages/common/src/workspace/cloudSession.ts', sandbox);
+      if (id.includes('cloudScopeTransition')) return runModule('../packages/common/src/workspace/cloudScopeTransition.ts', sandbox);
+      if (id.includes('workspaceModeTransition')) return runModule('../packages/common/src/workspace/workspaceModeTransition.ts', sandbox);
+      if (id.includes('cloudDeltaState')) return runModule('../packages/common/src/workspace/cloudDeltaState.ts', sandbox);
+      if (id.includes('persistence')) return runModule('../packages/common/src/workspace/persistence.ts', sandbox);
+      if (id.includes('cloudSyncCollections')) return runModule('../packages/common/src/workspace/cloudSyncCollections.ts', sandbox);
+      if (id.includes('cloudCollectionSync')) return runModule('../packages/common/src/workspace/cloudCollectionSync.ts', sandbox);
+      if (id.includes('edition')) return { defaultProductPolicy: { workspace: { cloud: true } } };
+      if (id.includes('productPolicy')) {
+        return { createProductPolicy: (edition) => ({ edition, workspace: { cloud: edition !== 'offline' } }) };
+      }
       if (id.includes('storage')) return { appStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} }, onStorageCommit: () => () => {} };
       if (id.includes('fetcher')) return runModule('../packages/common/src/lib/fetcher.ts', sandbox);
       if (id.includes('blobManager')) return runModule('../packages/common/src/lib/blobManager.ts', sandbox);
@@ -798,6 +846,24 @@ test('D3 (P2): Multi-runtime isolation with production runtime and store instanc
 
   const adapterA = {
     id: 'adapter-A',
+    cloudTransport: {
+      fetch: async (url) => {
+        adapterACalls++;
+        if (new URL(url).pathname === '/api/v1/feature-policy') {
+          return new Response(JSON.stringify({
+            data: {
+              revision: 1,
+              flags: {
+                'collection.move': true,
+                'collection.delete': true,
+                'collection.export': true,
+              },
+            },
+          }), { status: 200 });
+        }
+        return new Response('{"data": []}', { status: 200 });
+      },
+    },
     hasHostPermission: async () => { adapterACalls++; return true; },
     requestHostPermission: async () => true,
     dispose: () => {},
@@ -805,6 +871,24 @@ test('D3 (P2): Multi-runtime isolation with production runtime and store instanc
 
   const adapterB = {
     id: 'adapter-B',
+    cloudTransport: {
+      fetch: async (url) => {
+        adapterBCalls++;
+        if (new URL(url).pathname === '/api/v1/feature-policy') {
+          return new Response(JSON.stringify({
+            data: {
+              revision: 1,
+              flags: {
+                'collection.move': true,
+                'collection.delete': true,
+                'collection.export': true,
+              },
+            },
+          }), { status: 200 });
+        }
+        return new Response('{"data": []}', { status: 200 });
+      },
+    },
     hasHostPermission: async () => { adapterBCalls++; return true; },
     requestHostPermission: async () => true,
     dispose: () => {},
@@ -812,6 +896,11 @@ test('D3 (P2): Multi-runtime isolation with production runtime and store instanc
 
   const runtimeA = runtimeModule.createAirrestRuntime({ adapter: adapterA });
   const runtimeB = runtimeModule.createAirrestRuntime({ adapter: adapterB });
+
+  await runtimeA.cloudClient.fetchUserWorkspaces('https://runtime-a.example', 'token-A');
+  await runtimeB.cloudClient.fetchUserWorkspaces('https://runtime-b.example', 'token-B');
+  assert.equal(adapterACalls, 1, 'Runtime A cloud client must use adapter A transport');
+  assert.equal(adapterBCalls, 1, 'Runtime B cloud client must use adapter B transport');
 
   // Probe 1: sendRequest from A uses adapter A, not adapter B
   runtimeA.store.setState({
@@ -833,8 +922,8 @@ test('D3 (P2): Multi-runtime isolation with production runtime and store instanc
   runtimeB.store.getState().logoutCloud();
   await pA;
 
-  assert.equal(adapterACalls, 1, 'Runtime A must use adapter A');
-  assert.equal(adapterBCalls, 0, 'Runtime A must NOT use adapter B');
+  assert.equal(adapterACalls, 2, 'Runtime A must use adapter A');
+  assert.equal(adapterBCalls, 1, 'Runtime A must NOT use adapter B');
   assert.equal(requestAAborted, false, 'Logout in runtime B must NOT abort request in runtime A');
 
   // Probe 3: Auth eviction with failedToken B does NOT evict runtime A
@@ -899,6 +988,16 @@ test('V1 (P1): Cross-origin refresh isolation - separate origins do not join or 
         if (id === 'zustand/middleware') return zustandMiddleware;
         if (id === 'react') return React;
         if (id.includes('storeContext')) return runModule('../packages/common/src/store/storeContext.ts');
+        if (id.includes('asyncOperationCoordinator')) return runModule('../packages/common/src/store/asyncOperationCoordinator.ts');
+        if (id.includes('scopeCache')) return runModule('../packages/common/src/workspace/scopeCache.ts');
+        if (id.includes('scopeSnapshot')) return runModule('../packages/common/src/workspace/scopeSnapshot.ts');
+        if (id.includes('cloudSession')) return runModule('../packages/common/src/workspace/cloudSession.ts');
+        if (id.includes('cloudScopeTransition')) return runModule('../packages/common/src/workspace/cloudScopeTransition.ts');
+        if (id.includes('workspaceModeTransition')) return runModule('../packages/common/src/workspace/workspaceModeTransition.ts');
+        if (id.includes('cloudDeltaState')) return runModule('../packages/common/src/workspace/cloudDeltaState.ts');
+        if (id.includes('persistence')) return runModule('../packages/common/src/workspace/persistence.ts');
+        if (id.includes('cloudSyncCollections')) return runModule('../packages/common/src/workspace/cloudSyncCollections.ts');
+        if (id.includes('cloudCollectionSync')) return runModule('../packages/common/src/workspace/cloudCollectionSync.ts');
         if (id.includes('storage')) return { appStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} }, onStorageCommit: () => () => {} };
         if (id.includes('fetcher')) return runModule('../packages/common/src/lib/fetcher.ts');
         if (id.includes('blobManager')) return runModule('../packages/common/src/lib/blobManager.ts');
@@ -1015,6 +1114,16 @@ test('V2 (P2): Retried 401 after silent token rotation evicts the rotated token 
       if (id === 'zustand/middleware') return zustandMiddleware;
       if (id === 'react') return React;
       if (id.includes('storeContext')) return runModule('../packages/common/src/store/storeContext.ts');
+      if (id.includes('asyncOperationCoordinator')) return runModule('../packages/common/src/store/asyncOperationCoordinator.ts');
+      if (id.includes('scopeCache')) return runModule('../packages/common/src/workspace/scopeCache.ts');
+      if (id.includes('scopeSnapshot')) return runModule('../packages/common/src/workspace/scopeSnapshot.ts');
+      if (id.includes('cloudSession')) return runModule('../packages/common/src/workspace/cloudSession.ts');
+      if (id.includes('cloudScopeTransition')) return runModule('../packages/common/src/workspace/cloudScopeTransition.ts');
+      if (id.includes('workspaceModeTransition')) return runModule('../packages/common/src/workspace/workspaceModeTransition.ts');
+      if (id.includes('cloudDeltaState')) return runModule('../packages/common/src/workspace/cloudDeltaState.ts');
+      if (id.includes('persistence')) return runModule('../packages/common/src/workspace/persistence.ts');
+      if (id.includes('cloudSyncCollections')) return runModule('../packages/common/src/workspace/cloudSyncCollections.ts');
+      if (id.includes('cloudCollectionSync')) return runModule('../packages/common/src/workspace/cloudCollectionSync.ts');
       if (id.includes('storage')) return { appStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} }, onStorageCommit: () => () => {} };
       if (id.includes('fetcher')) return runModule('../packages/common/src/lib/fetcher.ts');
       if (id.includes('blobManager')) return runModule('../packages/common/src/lib/blobManager.ts');
@@ -1026,7 +1135,8 @@ test('V2 (P2): Retried 401 after silent token rotation evicts the rotated token 
       if (id.includes('jwt')) return runModule('../packages/common/src/lib/jwt.ts');
       if (id.includes('requestDiff')) return runModule('../packages/common/src/lib/requestDiff.ts');
       if (id.includes('cloudSyncTransformer')) return runModule('../packages/common/src/lib/cloudSyncTransformer.ts');
-      if (id.includes('edition')) return { isOfflineOnly: false };
+      if (id.includes('edition')) return { defaultProductPolicy: { workspace: { cloud: true } } };
+      if (id.includes('productPolicy')) return { createProductPolicy: (edition) => ({ edition, workspace: { cloud: edition !== 'offline' } }) };
       if (id.includes('useApiStore')) return runModule('../packages/common/src/store/useApiStore.ts');
       if (id.includes('runtime')) return runModule('../packages/common/src/runtime.ts');
       return {};
@@ -1180,6 +1290,16 @@ test('V5 (P2): runtime.dispose() aborts in-flight request signals and prevents l
       if (id === 'zustand/middleware') return zustandMiddleware;
       if (id === 'react') return React;
       if (id.includes('storeContext')) return runModule('../packages/common/src/store/storeContext.ts');
+      if (id.includes('asyncOperationCoordinator')) return runModule('../packages/common/src/store/asyncOperationCoordinator.ts');
+      if (id.includes('scopeCache')) return runModule('../packages/common/src/workspace/scopeCache.ts');
+      if (id.includes('scopeSnapshot')) return runModule('../packages/common/src/workspace/scopeSnapshot.ts');
+      if (id.includes('cloudSession')) return runModule('../packages/common/src/workspace/cloudSession.ts');
+      if (id.includes('cloudScopeTransition')) return runModule('../packages/common/src/workspace/cloudScopeTransition.ts');
+      if (id.includes('workspaceModeTransition')) return runModule('../packages/common/src/workspace/workspaceModeTransition.ts');
+      if (id.includes('cloudDeltaState')) return runModule('../packages/common/src/workspace/cloudDeltaState.ts');
+      if (id.includes('persistence')) return runModule('../packages/common/src/workspace/persistence.ts');
+      if (id.includes('cloudSyncCollections')) return runModule('../packages/common/src/workspace/cloudSyncCollections.ts');
+      if (id.includes('cloudCollectionSync')) return runModule('../packages/common/src/workspace/cloudCollectionSync.ts');
       if (id.includes('storage')) return { appStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} }, onStorageCommit: () => () => {} };
       if (id.includes('fetcher')) return runModule('../packages/common/src/lib/fetcher.ts');
       if (id.includes('blobManager')) return runModule('../packages/common/src/lib/blobManager.ts');
@@ -1191,7 +1311,8 @@ test('V5 (P2): runtime.dispose() aborts in-flight request signals and prevents l
       if (id.includes('jwt')) return runModule('../packages/common/src/lib/jwt.ts');
       if (id.includes('requestDiff')) return runModule('../packages/common/src/lib/requestDiff.ts');
       if (id.includes('cloudSyncTransformer')) return runModule('../packages/common/src/lib/cloudSyncTransformer.ts');
-      if (id.includes('edition')) return { isOfflineOnly: false };
+      if (id.includes('edition')) return { defaultProductPolicy: { workspace: { cloud: true } } };
+      if (id.includes('productPolicy')) return { createProductPolicy: (edition) => ({ edition, workspace: { cloud: edition !== 'offline' } }) };
       if (id.includes('useApiStore')) return runModule('../packages/common/src/store/useApiStore.ts');
       if (id.includes('runtime')) return runModule('../packages/common/src/runtime.ts');
       return {};
@@ -1296,6 +1417,16 @@ test('R2 (P2): debounced environment cloud sync pending in transport is aborted 
       if (id === 'zustand/middleware') return zustandMiddleware;
       if (id === 'react') return React;
       if (id.includes('storeContext')) return runModule('../packages/common/src/store/storeContext.ts');
+      if (id.includes('asyncOperationCoordinator')) return runModule('../packages/common/src/store/asyncOperationCoordinator.ts');
+      if (id.includes('scopeCache')) return runModule('../packages/common/src/workspace/scopeCache.ts');
+      if (id.includes('scopeSnapshot')) return runModule('../packages/common/src/workspace/scopeSnapshot.ts');
+      if (id.includes('cloudSession')) return runModule('../packages/common/src/workspace/cloudSession.ts');
+      if (id.includes('cloudScopeTransition')) return runModule('../packages/common/src/workspace/cloudScopeTransition.ts');
+      if (id.includes('workspaceModeTransition')) return runModule('../packages/common/src/workspace/workspaceModeTransition.ts');
+      if (id.includes('cloudDeltaState')) return runModule('../packages/common/src/workspace/cloudDeltaState.ts');
+      if (id.includes('persistence')) return runModule('../packages/common/src/workspace/persistence.ts');
+      if (id.includes('cloudSyncCollections')) return runModule('../packages/common/src/workspace/cloudSyncCollections.ts');
+      if (id.includes('cloudCollectionSync')) return runModule('../packages/common/src/workspace/cloudCollectionSync.ts');
       if (id.includes('storage')) return { appStorage: memoryStorage, onStorageCommit: () => () => {} };
       if (id.includes('fetcher')) return runModule('../packages/common/src/lib/fetcher.ts');
       if (id.includes('blobManager')) return runModule('../packages/common/src/lib/blobManager.ts');
@@ -1307,7 +1438,8 @@ test('R2 (P2): debounced environment cloud sync pending in transport is aborted 
       if (id.includes('jwt')) return runModule('../packages/common/src/lib/jwt.ts');
       if (id.includes('requestDiff')) return runModule('../packages/common/src/lib/requestDiff.ts');
       if (id.includes('cloudSyncTransformer')) return runModule('../packages/common/src/lib/cloudSyncTransformer.ts');
-      if (id.includes('edition')) return { isOfflineOnly: false };
+      if (id.includes('edition')) return { defaultProductPolicy: { workspace: { cloud: true } } };
+      if (id.includes('productPolicy')) return { createProductPolicy: (edition) => ({ edition, workspace: { cloud: edition !== 'offline' } }) };
       if (id.includes('useApiStore')) return runModule('../packages/common/src/store/useApiStore.ts');
       if (id.includes('runtime')) return runModule('../packages/common/src/runtime.ts');
       return {};
@@ -1420,6 +1552,16 @@ export async function setupRuntimeModules(customStorage = null) {
       if (id === 'zustand/middleware') return zustandMiddleware;
       if (id === 'react') return React;
       if (id.includes('storeContext')) return runModule('../packages/common/src/store/storeContext.ts');
+      if (id.includes('asyncOperationCoordinator')) return runModule('../packages/common/src/store/asyncOperationCoordinator.ts');
+      if (id.includes('scopeCache')) return runModule('../packages/common/src/workspace/scopeCache.ts');
+      if (id.includes('scopeSnapshot')) return runModule('../packages/common/src/workspace/scopeSnapshot.ts');
+      if (id.includes('cloudSession')) return runModule('../packages/common/src/workspace/cloudSession.ts');
+      if (id.includes('cloudScopeTransition')) return runModule('../packages/common/src/workspace/cloudScopeTransition.ts');
+      if (id.includes('workspaceModeTransition')) return runModule('../packages/common/src/workspace/workspaceModeTransition.ts');
+      if (id.includes('cloudDeltaState')) return runModule('../packages/common/src/workspace/cloudDeltaState.ts');
+      if (id.includes('persistence')) return runModule('../packages/common/src/workspace/persistence.ts');
+      if (id.includes('cloudSyncCollections')) return runModule('../packages/common/src/workspace/cloudSyncCollections.ts');
+      if (id.includes('cloudCollectionSync')) return runModule('../packages/common/src/workspace/cloudCollectionSync.ts');
       if (id.includes('storage')) return { appStorage: memoryStorage, onStorageCommit: () => () => {} };
       if (id.includes('fetcher')) return runModule('../packages/common/src/lib/fetcher.ts');
       if (id.includes('blobManager')) return runModule('../packages/common/src/lib/blobManager.ts');
@@ -1431,7 +1573,8 @@ export async function setupRuntimeModules(customStorage = null) {
       if (id.includes('jwt')) return runModule('../packages/common/src/lib/jwt.ts');
       if (id.includes('requestDiff')) return runModule('../packages/common/src/lib/requestDiff.ts');
       if (id.includes('cloudSyncTransformer')) return runModule('../packages/common/src/lib/cloudSyncTransformer.ts');
-      if (id.includes('edition')) return { isOfflineOnly: false };
+      if (id.includes('edition')) return { defaultProductPolicy: { workspace: { cloud: true } } };
+      if (id.includes('productPolicy')) return { createProductPolicy: (edition) => ({ edition, workspace: { cloud: edition !== 'offline' } }) };
       if (id.includes('useApiStore')) return runModule('../packages/common/src/store/useApiStore.ts');
       if (id.includes('runtime')) return runModule('../packages/common/src/runtime.ts');
       return {};
@@ -1965,10 +2108,10 @@ test('T-IMPORT-3: chromeAdapter.openFile in DOM environment creates file input a
 });
 
 test('T-TEAM-EXPAND-1: fetchScopes does not pollute teamProjects with empty arrays, and fetchProjectsForTeam accurately fetches and caches projects', async () => {
-  const { runtimeModule, cloudApiModule } = await setupRuntimeModules();
+  const { runtimeModule } = await setupRuntimeModules();
   const fetchedEndpoints = [];
 
-  cloudApiModule.setCloudTransport({
+  const cloudTransport = {
     fetch: async (url, init) => {
       const urlObj = new URL(url);
       fetchedEndpoints.push(urlObj.pathname);
@@ -1987,10 +2130,11 @@ test('T-TEAM-EXPAND-1: fetchScopes does not pollute teamProjects with empty arra
       }
       return new Response(JSON.stringify({ data: {} }), { status: 200 });
     }
-  });
+  };
 
   const adapter = {
     id: 'test-adapter',
+    cloudTransport,
     hasHostPermission: async () => true,
     requestHostPermission: async () => true,
     dispose: () => {},
@@ -2706,5 +2850,3 @@ test('T-EXT-SCOPE: fetchScopes preserves workspaceMode, activeScope, and scopesC
 
   runtime.dispose();
 });
-
-

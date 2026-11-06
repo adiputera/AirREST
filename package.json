@@ -1,6 +1,6 @@
 {
   "name": "airrest",
-  "version": "1.3.6",
+  "version": "1.3.7",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -33,6 +33,19 @@
     "typecheck": "npm run --prefix packages/common typecheck && npm run --prefix apps/extension typecheck && npm run --prefix apps/hub typecheck && npm run --prefix apps/native typecheck",
     "lint": "eslint",
     "test:security-clients": "node --test scripts/security-client.test.mjs",
+    "test:product-policy": "node --test scripts/product-policy.test.mjs",
+    "test:auth-provider": "node --test scripts/auth-provider.test.mjs",
+    "test:cloud-client": "node --test scripts/cloud-client.test.mjs",
+    "test:async-operation-coordinator": "node --test scripts/async-operation-coordinator.test.mjs",
+    "test:workspace-scope-cache": "node --test scripts/workspace-scope-cache.test.mjs",
+    "test:workspace-scope-snapshot": "node --test scripts/workspace-scope-snapshot.test.mjs",
+    "test:workspace-cloud-session": "node --test scripts/workspace-cloud-session.test.mjs",
+    "test:workspace-cloud-scope-transition": "node --test scripts/workspace-cloud-scope-transition.test.mjs",
+    "test:workspace-mode-transition": "node --test scripts/workspace-mode-transition.test.mjs",
+    "test:workspace-cloud-delta-state": "node --test scripts/workspace-cloud-delta-state.test.mjs",
+    "test:workspace-persistence": "node --test scripts/workspace-persistence.test.mjs",
+    "test:workspace-cloud-sync-collections": "node --test scripts/workspace-cloud-sync-collections.test.mjs",
+    "test:workspace-cloud-collection-sync": "node --test scripts/workspace-cloud-collection-sync.test.mjs",
     "test:api-contract-parity": "node --test scripts/api-contract-parity.test.mjs",
     "test:extension-lifecycle": "node --test scripts/extension-request-lifecycle.test.mjs",
     "test:extension-sandbox": "node --test scripts/extension-sandbox.test.mjs",
@@ -61,13 +74,13 @@
     "test:collection-permission": "node --test scripts/collection-permission.test.mjs",
     "test:code-editor-folding": "node --test scripts/code-editor-folding.test.mjs",
     "test:request-undo": "node --test scripts/request-undo.test.mjs",
-    "test:release-notes": "node --test scripts/extract-release-notes.test.mjs",
+    "test:release-notes": "node --test scripts/extract-release-notes.test.mjs scripts/generate-updater-manifest.test.mjs",
     "test:version-bumper": "node --test scripts/version-bumper.test.mjs",
     "test:theme": "node --test scripts/theme-resolution.test.mjs",
     "test:payload-builder": "node --test scripts/payload-builder.test.mjs",
     "test:collection-sync-retry": "node --test scripts/collection-sync-retry.test.mjs",
     "test:environment-draft-sync": "node --test scripts/environment-draft-sync.test.mjs",
-    "test:all": "npm run test:security-clients && npm run test:api-contract-parity && npm run test:extension-lifecycle && npm run test:extension-sandbox && npm run test:extension-storage && npm run test:extension-fetcher && npm run test:cloud-compression && npm run test:feature-policy && npm run test:hub && npm run test:desktop && npm run test:sidebar-search && npm run test:sidebar-dropdown-placement && npm run test:sidebar-resizable && npm run test:studio-split-resizer && npm run test:scope-switcher-placement && npm run test:tab-response-cache && npm run test:path-variables && npm run test:request-collapse && npm run test:collection-permission && npm run test:code-editor-folding && npm run test:request-undo && npm run test:release-notes && npm run test:version-bumper && npm run test:theme && npm run test:payload-builder && npm run test:collection-sync-retry && npm run test:environment-draft-sync"
+    "test:all": "npm run test:security-clients && npm run test:product-policy && npm run test:auth-provider && npm run test:cloud-client && npm run test:async-operation-coordinator && npm run test:workspace-scope-cache && npm run test:workspace-scope-snapshot && npm run test:workspace-cloud-session && npm run test:workspace-cloud-scope-transition && npm run test:workspace-mode-transition && npm run test:workspace-cloud-delta-state && npm run test:workspace-persistence && npm run test:workspace-cloud-sync-collections && npm run test:workspace-cloud-collection-sync && npm run test:api-contract-parity && npm run test:extension-lifecycle && npm run test:extension-sandbox && npm run test:extension-storage && npm run test:extension-fetcher && npm run test:cloud-compression && npm run test:feature-policy && npm run test:hub && npm run test:desktop && npm run test:sidebar-search && npm run test:sidebar-dropdown-placement && npm run test:sidebar-resizable && npm run test:studio-split-resizer && npm run test:scope-switcher-placement && npm run test:tab-response-cache && npm run test:path-variables && npm run test:request-collapse && npm run test:collection-permission && npm run test:code-editor-folding && npm run test:request-undo && npm run test:release-notes && npm run test:version-bumper && npm run test:theme && npm run test:payload-builder && npm run test:collection-sync-retry && npm run test:environment-draft-sync"
   },
   "devDependencies": {
     "eslint": "^9",

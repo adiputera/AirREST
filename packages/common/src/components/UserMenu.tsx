@@ -4,7 +4,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useBackHandler } from '../lib/backNavigation';
 import { User, LogIn, KeyRound, LogOut, ChevronDown, Pencil } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
-import { isOfflineOnly } from '../lib/edition';
+import { useAuthProvider, useProductPolicy } from '../context';
 import { EditProfileModal } from './EditProfileModal';
 import { ChangePasswordModal } from './ChangePasswordModal';
 import { ConfirmModal } from './ConfirmModal';
@@ -15,6 +15,9 @@ interface UserMenuProps {
 }
 
 export const UserMenu: React.FC<UserMenuProps> = ({ onOpenLogin }) => {
+  const productPolicy = useProductPolicy();
+  const authProvider = useAuthProvider();
+  const isOfflineOnly = !productPolicy.workspace.cloud;
   const [isOpen, setIsOpen] = useState(false);
   useBackHandler(isOpen, () => setIsOpen(false), 15);
   const [isInternalLoginOpen, setIsInternalLoginOpen] = useState(false);
@@ -212,43 +215,45 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onOpenLogin }) => {
 
             {/* Menu Items */}
             <div className="space-y-0.5">
-              {/* Edit Profile */}
-              <button
-                onClick={() => {
-                  setIsOpen(false);
-                  setIsEditProfileOpen(true);
-                }}
-                className="w-full flex items-center gap-2.5 rounded-xl px-3 py-2 text-xs text-tx-secondary hover:bg-hover hover:text-tx-primary transition group text-left"
-              >
-                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-sky-500/20 bg-sky-500/10 text-sky-500 dark:text-sky-400 group-hover:bg-sky-500/20 transition">
-                  <Pencil className="h-3.5 w-3.5" />
-                </div>
-                <div className="flex-1">
-                  <div className="font-medium text-tx-primary">
-                    Edit Profile
+              {authProvider.capabilities.editableProfile && (
+                <button
+                  onClick={() => {
+                    setIsOpen(false);
+                    setIsEditProfileOpen(true);
+                  }}
+                  className="w-full flex items-center gap-2.5 rounded-xl px-3 py-2 text-xs text-tx-secondary hover:bg-hover hover:text-tx-primary transition group text-left"
+                >
+                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-sky-500/20 bg-sky-500/10 text-sky-500 dark:text-sky-400 group-hover:bg-sky-500/20 transition">
+                    <Pencil className="h-3.5 w-3.5" />
                   </div>
-                  <div className="text-[10px] text-tx-muted">Update display name</div>
-                </div>
-              </button>
+                  <div className="flex-1">
+                    <div className="font-medium text-tx-primary">
+                      Edit Profile
+                    </div>
+                    <div className="text-[10px] text-tx-muted">Update display name</div>
+                  </div>
+                </button>
+              )}
 
-              {/* Change Password */}
-              <button
-                onClick={() => {
-                  setIsOpen(false);
-                  setIsChangePasswordOpen(true);
-                }}
-                className="w-full flex items-center gap-2.5 rounded-xl px-3 py-2 text-xs text-tx-secondary hover:bg-hover hover:text-tx-primary transition group text-left"
-              >
-                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-sky-500/20 bg-sky-500/10 text-sky-500 dark:text-sky-400 group-hover:bg-sky-500/20 transition">
-                  <KeyRound className="h-3.5 w-3.5" />
-                </div>
-                <div className="flex-1">
-                  <div className="font-medium text-tx-primary">
-                    Change Password
+              {authProvider.capabilities.passwordChange && (
+                <button
+                  onClick={() => {
+                    setIsOpen(false);
+                    setIsChangePasswordOpen(true);
+                  }}
+                  className="w-full flex items-center gap-2.5 rounded-xl px-3 py-2 text-xs text-tx-secondary hover:bg-hover hover:text-tx-primary transition group text-left"
+                >
+                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-sky-500/20 bg-sky-500/10 text-sky-500 dark:text-sky-400 group-hover:bg-sky-500/20 transition">
+                    <KeyRound className="h-3.5 w-3.5" />
                   </div>
-                  <div className="text-[10px] text-tx-muted">Update account credentials</div>
-                </div>
-              </button>
+                  <div className="flex-1">
+                    <div className="font-medium text-tx-primary">
+                      Change Password
+                    </div>
+                    <div className="text-[10px] text-tx-muted">Update account credentials</div>
+                  </div>
+                </button>
+              )}
 
               {/* Sign Out (Clear All Data) */}
               <button
@@ -274,16 +279,20 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onOpenLogin }) => {
       </div>
 
       {/* Edit Profile Modal */}
-      <EditProfileModal
-        isOpen={isEditProfileOpen}
-        onClose={() => setIsEditProfileOpen(false)}
-      />
+      {authProvider.capabilities.editableProfile && (
+        <EditProfileModal
+          isOpen={isEditProfileOpen}
+          onClose={() => setIsEditProfileOpen(false)}
+        />
+      )}
 
       {/* Change Password Modal */}
-      <ChangePasswordModal
-        isOpen={isChangePasswordOpen}
-        onClose={() => setIsChangePasswordOpen(false)}
-      />
+      {authProvider.capabilities.passwordChange && (
+        <ChangePasswordModal
+          isOpen={isChangePasswordOpen}
+          onClose={() => setIsChangePasswordOpen(false)}
+        />
+      )}
 
       {/* Sign Out Confirmation Modal */}
       <ConfirmModal
