@@ -10,7 +10,11 @@ function loadClient(file, fetch) {
   const source = fs.readFileSync(new URL(`../${file}`, import.meta.url), 'utf8').replaceAll('import.meta.env', '({})');
   const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const exports = {};
-  vm.runInNewContext(compiled, { exports, fetch, Headers, Response, TextEncoder, console }, { filename: file });
+  const require = (id) => {
+    if (id === '@airrest/common/cloud') return loadClient('packages/common/src/lib/cloudApi.ts', fetch);
+    throw new Error(`Unexpected import: ${id}`);
+  };
+  vm.runInNewContext(compiled, { exports, require, fetch, Headers, Response, TextEncoder, console }, { filename: file });
   return exports;
 }
 
@@ -50,6 +54,44 @@ for (const file of ['packages/common/src/lib/cloudApi.ts', 'apps/hub/src/lib/api
     await assert.rejects(api.fetchWithAuth('/api/v1/sync/import-batch', { apiUrl: 'https://example.com', body: 'x'.repeat(4 * 1024 * 1024 + 1) }), /(?:4 MiB|too large)/);
   });
 }
+
+test('Hub and Studio refresh independently even with the same server and refresh token', async () => {
+  const fetches = [];
+  let resolveHub;
+  let resolveStudio;
+  const createFetch = (owner) => async (url, init) => {
+    fetches.push({ owner, url, authorization: new Headers(init.headers).get('Authorization') });
+    if (url.endsWith('/api/v1/auth/refresh')) {
+      return new Promise((resolve) => {
+        const complete = () => resolve(new Response(JSON.stringify({ data: {
+          token: `${owner}-new`, refresh_token: `${owner}-refresh`, expires_at: '2030-01-01T00:00:00Z',
+        } })));
+        if (owner === 'hub') resolveHub = complete;
+        else resolveStudio = complete;
+      });
+    }
+    return new Response('{}', { status: fetches.filter((entry) => entry.owner === owner && !entry.url.endsWith('/refresh')).length === 1 ? 401 : 200 });
+  };
+  const hub = loadClient('apps/hub/src/lib/api.ts', createFetch('hub'));
+  const studio = loadClient('packages/common/src/lib/cloudApi.ts', createFetch('studio'));
+  const refreshes = [];
+  hub.registerHubTokenRefresh((tokens) => refreshes.push(['hub', tokens.token]));
+  studio.registerTokenRefreshCallback((tokens) => refreshes.push(['studio', tokens.token]));
+  const request = { apiUrl: 'https://example.com', token: 'old', refreshToken: 'same-refresh' };
+  const hubRequest = hub.fetchWithAuth('/api/v1/workspaces', request);
+  const studioRequest = studio.fetchWithAuth('/api/v1/workspaces', request);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(typeof resolveHub, 'function');
+  assert.equal(typeof resolveStudio, 'function');
+  resolveStudio();
+  resolveHub();
+  assert.equal((await hubRequest).status, 200);
+  assert.equal((await studioRequest).status, 200);
+  assert.deepEqual(refreshes.sort(), [['hub', 'hub-new'], ['studio', 'studio-new']]);
+  assert.equal(fetches.filter((entry) => entry.url.endsWith('/api/v1/auth/refresh')).length, 2);
+  assert.equal(fetches.find((entry) => entry.authorization === 'Bearer hub-new').owner, 'hub');
+  assert.equal(fetches.find((entry) => entry.authorization === 'Bearer studio-new').owner, 'studio');
+});
 
 test('password change returns a replacement token pair without evicting the current session', async () => {
   let evictions = 0;

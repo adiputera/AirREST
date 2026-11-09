@@ -28,7 +28,7 @@ import {
 } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
 import { requestHostPermission } from '../lib/hostPermissions';
-import { getDefaultPlatformAdapter } from '../lib/fetcher';
+import { usePlatformAdapter } from '../context';
 import { getTrackedBlob } from '../lib/blobManager';
 import { useBackHandler } from '../lib/backNavigation';
 import { CodeEditor, CodeEditorHandle } from './editor/CodeEditor';
@@ -87,6 +87,7 @@ function parseUrlDetails(urlStr: string): { host: string; port: string; protocol
 }
 
 export const ResponseViewer: React.FC = () => {
+  const runtimeAdapter = usePlatformAdapter();
   const activeResponse = useApiStore((state) => state.activeResponse);
   const isLoading = useApiStore((state) => state.isLoading);
   const updateActiveRequest = useApiStore((state) => state.updateActiveRequest);
@@ -236,7 +237,7 @@ export const ResponseViewer: React.FC = () => {
       return;
     }
 
-    const adapter = getDefaultPlatformAdapter();
+    const adapter = runtimeAdapter;
 
     try {
       const ext = getExtensionFromMime(activeResponse.contentType || '');
@@ -289,7 +290,7 @@ export const ResponseViewer: React.FC = () => {
   };
 
   const handleRequestHostPermission = async () => {
-    const granted = await requestHostPermission(targetUrl);
+    const granted = await (runtimeAdapter?.requestHostPermission(targetUrl) ?? requestHostPermission(targetUrl));
     if (granted) {
       setPermissionMessage(null);
       sendRequest();

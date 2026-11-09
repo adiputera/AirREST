@@ -8,6 +8,7 @@ import { ResponseViewer } from './components/ResponseViewer';
 import { EmptyStudioView } from './components/EmptyStudioView';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { useApiStore } from './store/useApiStore';
+import { isCloudSessionActive } from './workspace/cloudSession';
 import { useStoreContext } from './store/storeContext';
 import { onStorageCommit } from './lib/storage';
 import { useBackHandler } from './lib/backNavigation';
@@ -38,6 +39,7 @@ export const App: React.FC = () => {
   const createTab = activeStore((state) => state.createTab);
   const workspaceMode = activeStore((state) => state.workspaceMode);
   const cloudToken = activeStore((state) => state.cloudConfig.token);
+  const cloudSessionActive = activeStore((state) => isCloudSessionActive(state.cloudConfig));
   const activeScope = activeStore((state) => state.cloudConfig.activeScope);
   const pullCloudDelta = activeStore((state) => state.pullCloudDelta);
   const refreshFeaturePolicy = activeStore((state) => state.refreshFeaturePolicy);
@@ -221,11 +223,11 @@ export const App: React.FC = () => {
 
   // Initial background delta sync on app startup when opened with an active cloud session
   useEffect(() => {
-    if (!hasHydrated || workspaceMode !== 'cloud' || !cloudToken || !activeScope) return;
+    if (!hasHydrated || workspaceMode !== 'cloud' || !cloudSessionActive || !activeScope) return;
     if (hasInitialPulledRef.current) return;
     hasInitialPulledRef.current = true;
     void pullCloudDelta();
-  }, [hasHydrated, workspaceMode, cloudToken, activeScope, pullCloudDelta]);
+  }, [hasHydrated, workspaceMode, cloudToken, cloudSessionActive, activeScope, pullCloudDelta]);
 
   useEffect(() => {
     applyTheme(theme);
@@ -263,7 +265,7 @@ export const App: React.FC = () => {
   }), []);
 
   useEffect(() => {
-    if (workspaceMode !== 'cloud' || !cloudToken) return;
+    if (workspaceMode !== 'cloud' || !cloudSessionActive) return;
 
     let disposed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -286,7 +288,7 @@ export const App: React.FC = () => {
       if (timer) clearTimeout(timer);
       window.removeEventListener('focus', refreshIfNeeded);
     };
-  }, [workspaceMode, cloudToken, refreshFeaturePolicy]);
+  }, [workspaceMode, cloudToken, cloudSessionActive, refreshFeaturePolicy]);
 
   if (!hasHydrated) {
     return (

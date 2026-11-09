@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useBackHandler } from '../lib/backNavigation';
 import { Lock, Mail, Server, AlertCircle, Loader2, CheckCircle2, X, Eye, EyeOff } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
@@ -13,7 +13,8 @@ import {
 } from '../lib/cloudApi';
 import { ActiveScope, CloudUser } from '../types/api';
 import { getRoleFromJwt } from '../lib/jwt';
-import { useAuthProvider } from '../context';
+import { useAuthProvider, useCloudClient, usePlatformAdapter, useProductPolicy } from '../context';
+import { isCloudSessionActive } from '../workspace/cloudSession';
 
 interface CloudAuthModalProps {
   isOpen: boolean;
@@ -22,6 +23,11 @@ interface CloudAuthModalProps {
 
 export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose }) => {
   const authProvider = useAuthProvider();
+  const productPolicy = useProductPolicy();
+  const platformAdapter = usePlatformAdapter();
+  const cloudClient = useCloudClient();
+  const loginOperation = useRef<AbortController | null>(null);
+  const loginSession = useRef<{ generation: number; userId: string; apiUrl: string } | null>(null);
   const requiresPasswordCredentials = authProvider.capabilities.passwordCredentials;
   const contextStore = useStoreContext();
   const activeStore = contextStore || useApiStore;
@@ -36,6 +42,8 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
   const [importPrompt, setImportPrompt] = useState(false);
 
   const cloudConfig = activeStore((state) => state.cloudConfig);
+  const recoverableCount = activeStore((state) => (state.cloudCacheArchives?.unclaimed?.length || 0) +
+    (state.cloudCacheArchives?.unsupportedVersions?.length || 0));
   const setCloudConfig = activeStore((state) => state.setCloudConfig);
   const setWorkspaceMode = activeStore((state) => state.setWorkspaceMode);
   const setActiveScope = activeStore((state) => state.setActiveScope);
@@ -46,18 +54,56 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
   const activeOfflineWorkspaceId = activeStore((state) => state.activeOfflineWorkspaceId);
 
   const localCols = offlineScopeCache?.[activeOfflineWorkspaceId || 'local-default']?.collections || collections;
-  const localCount = localCols.length;
+  const localCount = productPolicy.workspace.offline === false ? 0 : localCols.length;
 
   const [apiUrl, setApiUrl] = useState(normalizeCloudApiUrl(cloudConfig.apiUrl) || 'http://localhost:8080');
 
   const handleClose = () => {
+    if (productPolicy.workspace.offline === false && !isCloudSessionActive(activeStore.getState().cloudConfig)) return;
+    loginOperation.current?.abort();
+    loginOperation.current = null;
+    loginSession.current = null;
+    setIsLoading(false);
     setPassword('');
     setShowPassword(false);
     setErrorMsg(null);
     setImportPrompt(false);
     onClose();
   };
+  const downloadPreservedData = async () => {
+    try {
+      const content = activeStore.getState().getCloudCacheRecoveryBackup();
+      if (platformAdapter?.saveFile) {
+        await platformAdapter.saveFile('airrest-cloud-cache-recovery.json', content, {
+          filters: [{ name: 'JSON', extensions: ['json'] }], mimeType: 'application/json',
+        });
+      } else {
+        const url = URL.createObjectURL(new Blob([content], { type: 'application/json' }));
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'airrest-cloud-cache-recovery.json';
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+    } catch {
+      setErrorMsg('Could not save the recovery file. Please try again.');
+    }
+  };
   useBackHandler(isOpen, () => { if (!isLoading) handleClose(); }, 20);
+
+  useEffect(() => {
+    if (!isOpen) {
+      loginOperation.current?.abort();
+      loginOperation.current = null;
+      loginSession.current = null;
+      setIsLoading(false);
+    }
+    return () => {
+      loginOperation.current?.abort();
+      loginOperation.current = null;
+      loginSession.current = null;
+    };
+  }, [isOpen]);
 
   useEffect(() => {
     if (isOpen) {
@@ -76,6 +122,19 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (loginOperation.current) return;
+    const operation = new AbortController();
+    loginOperation.current = operation;
+    loginSession.current = null;
+    const startingConfig = activeStore.getState().cloudConfig;
+    const isCurrent = () => {
+      if (loginOperation.current !== operation || operation.signal.aborted) return false;
+      const session = loginSession.current;
+      if (!session) return true;
+      const state = activeStore.getState();
+      return state.getCloudSessionGeneration() === session.generation &&
+        state.cloudConfig.user?.id === session.userId && state.cloudConfig.apiUrl === session.apiUrl;
+    };
     setIsLoading(true);
     setErrorMsg(null);
 
@@ -85,8 +144,30 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
         apiUrl: cleanUrl,
         email: requiresPasswordCredentials ? email : undefined,
         password: requiresPasswordCredentials ? password : undefined,
+        signal: operation.signal,
       });
+      if (!isCurrent()) return;
       const { user, accessToken: token, refreshToken: refresh_token, expiresAt: expires_at } = authResult;
+      if (typeof user?.id !== 'string' || !user.id.trim() ||
+        (token !== undefined && (typeof token !== 'string' || !token.trim()))) {
+        throw new Error('The authentication provider returned an unsupported or invalid session.');
+      }
+      const providerSession = !token;
+      if (providerSession && (!authProvider.authorizeRequest || !cloudClient)) {
+        throw new Error('This authentication provider cannot authorize a tokenless session.');
+      }
+      let verifiedUser = user;
+      const verifyProviderIdentity = async () => {
+        if (!providerSession || !cloudClient) return;
+        const verified = await cloudClient.getCurrentUser(cleanUrl, undefined, undefined, operation.signal);
+        if (!isCurrent()) return;
+        if (!verified || verified.id !== user.id) {
+          throw new Error('The provider session identity could not be verified.');
+        }
+        verifiedUser = verified;
+      };
+      await verifyProviderIdentity();
+      if (!isCurrent()) return;
 
       // 1. Fetch workspaces and teams to establish initial active scope
       let initialScope: ActiveScope = {
@@ -97,7 +178,8 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
       };
 
       try {
-        const workspaces = await fetchUserWorkspaces(cleanUrl, token, refresh_token);
+        const workspaces = await (cloudClient?.fetchUserWorkspaces ?? fetchUserWorkspaces)(cleanUrl, token, refresh_token, operation.signal);
+        if (!isCurrent()) return;
         if (Array.isArray(workspaces) && workspaces.length > 0) {
           const defaultWs = workspaces.find((w) => w.is_default) || workspaces[0];
           initialScope = {
@@ -108,9 +190,11 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
           };
         } else {
           // Check teams
-          const teams = await fetchUserTeams(cleanUrl, token, refresh_token);
+          const teams = await (cloudClient?.fetchUserTeams ?? fetchUserTeams)(cleanUrl, token, refresh_token, operation.signal);
+          if (!isCurrent()) return;
           if (Array.isArray(teams) && teams.length > 0) {
-            const projects = await fetchTeamProjects(cleanUrl, teams[0].id, token, refresh_token);
+            const projects = await (cloudClient?.fetchTeamProjects ?? fetchTeamProjects)(cleanUrl, teams[0].id, token, refresh_token, operation.signal);
+            if (!isCurrent()) return;
             if (Array.isArray(projects) && projects.length > 0) {
               initialScope = {
                 type: 'project',
@@ -118,37 +202,53 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
                 name: projects[0].name,
                 teamId: teams[0].id,
                 teamName: teams[0].name,
-                role: projects[0].user_role || (user.role === 'superadmin' ? 'admin' : 'contributor'),
+                role: projects[0].user_role || (verifiedUser.role === 'superadmin' ? 'admin' : 'contributor'),
                 permissions: projects[0].permissions,
               };
             }
           }
         }
       } catch (wsErr) {
+        if (!isCurrent()) return;
         console.warn('Could not auto-fetch scopes upon login:', wsErr);
       }
 
+      // Cookies can change while scope discovery is in flight. Confirm the
+      // identity again before restoring an owner-specific cache.
+      await verifyProviderIdentity();
+      if (!isCurrent()) return;
+
       const currentStore = activeStore.getState();
+      if (!isCurrent() || currentStore.cloudConfig !== startingConfig) return;
       const activeWsId = currentStore.activeOfflineWorkspaceId || 'local-default';
       const localEntry = currentStore.offlineScopeCache?.[activeWsId];
       const localCols = localEntry?.collections || (currentStore.workspaceMode === 'offline' ? currentStore.collections : []);
-      const localCount = localCols.length;
+      const localCount = productPolicy.workspace.offline === false ? 0 : localCols.length;
 
       // 2. Commit auth to store prioritizing verified server user role before jwt fallback
       const jwtRole = getRoleFromJwt(token);
       const effectiveUser: CloudUser = {
-        ...user,
-        role: user.role || jwtRole || 'reader',
+        ...verifiedUser,
+        role: verifiedUser.role || jwtRole || 'reader',
       };
 
       setCloudConfig({
         apiUrl: cleanUrl,
+        sessionKind: providerSession ? 'provider' : undefined,
         token,
         refreshToken: refresh_token,
         tokenExpiresAt: expires_at,
         user: effectiveUser,
         activeScope: initialScope,
       });
+
+      const generation = activeStore.getState().getCloudSessionGeneration();
+      loginSession.current = { generation, userId: effectiveUser.id, apiUrl: cleanUrl };
+      const isCurrentSession = () => {
+        const state = activeStore.getState();
+        return isCurrent() && state.getCloudSessionGeneration() === generation &&
+          state.cloudConfig.user?.id === effectiveUser.id && state.cloudConfig.apiUrl === cleanUrl;
+      };
 
       setWorkspaceMode('cloud');
 
@@ -158,6 +258,7 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
       } else {
         await pullCloudDelta();
       }
+      if (!isCurrentSession()) return;
 
       // 4. Check if local collections exist to prompt for one-click migration
       setPassword('');
@@ -168,17 +269,30 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
         handleClose();
       }
     } catch (err: any) {
-      setErrorMsg(err.message || 'Authentication failed. Please verify credentials.');
+      if (isCurrent()) setErrorMsg(err.message || 'Authentication failed. Please verify credentials.');
     } finally {
-      setIsLoading(false);
+      if (loginOperation.current === operation) {
+        loginOperation.current = null;
+        setIsLoading(false);
+      }
     }
   };
 
   const handleImportDecision = async (shouldImport: boolean) => {
+    const session = loginSession.current;
+    const state = activeStore.getState();
+    if (!session || state.getCloudSessionGeneration() !== session.generation ||
+      state.cloudConfig.user?.id !== session.userId || state.cloudConfig.apiUrl !== session.apiUrl) {
+      handleClose();
+      return;
+    }
     if (shouldImport) {
       setIsLoading(true);
       await importLocalToCloud();
       setIsLoading(false);
+      const current = activeStore.getState();
+      if (loginSession.current !== session || current.getCloudSessionGeneration() !== session.generation ||
+        current.cloudConfig.user?.id !== session.userId || current.cloudConfig.apiUrl !== session.apiUrl) return;
     }
     handleClose();
   };
@@ -194,13 +308,21 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
     >
       <div className="relative max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-2xl border border-line-strong bg-card p-4 shadow-2xl shadow-black/90 md:p-6">
         {/* Close Button */}
-        <button
+        {(productPolicy.workspace.offline !== false || isCloudSessionActive(cloudConfig)) && <button
           onClick={handleClose}
           className="absolute right-4 top-4 rounded-lg p-1.5 text-tx-muted hover:bg-hover hover:text-tx-primary transition"
           title="Close"
         >
           <X className="h-4 w-4" />
-        </button>
+        </button>}
+
+        {productPolicy.workspace.offline === false && !isCloudSessionActive(cloudConfig) && recoverableCount > 0 && (
+          <button type="button" onClick={() => void downloadPreservedData()}
+            className="mb-3 rounded-lg border border-amber-500/40 px-2 py-1 text-xs text-amber-600 dark:text-amber-300"
+            title="Download preserved data, which may include sensitive values and unsupported archives">
+            Download preserved data
+          </button>
+        )}
 
         {importPrompt ? (
           /* Post-Login Import Prompt */

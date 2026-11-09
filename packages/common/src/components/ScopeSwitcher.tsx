@@ -23,6 +23,7 @@ import {
   X,
 } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
+import { isCloudSessionActive } from '../workspace/cloudSession';
 import { ActiveScope, OfflineWorkspace, CloudWorkspace, CloudProject } from '../types/api';
 import { getRoleFromJwt } from '../lib/jwt';
 import { useProductPolicy } from '../context';
@@ -145,7 +146,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
 
   // Load accessible workspaces and teams (uses 12-hour cache unless forced)
   const loadScopes = async (force = false) => {
-    if (isOfflineOnly || !cloudConfig.token) return;
+    if (isOfflineOnly || !isCloudSessionActive(cloudConfig)) return;
     setIsLoadingScopes(true);
     try {
       await fetchScopes(force);
@@ -155,10 +156,10 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
   };
 
   useEffect(() => {
-    if (!isOfflineOnly && cloudConfig.token) {
+    if (!isOfflineOnly && isCloudSessionActive(cloudConfig)) {
       loadScopes(false);
     }
-  }, [cloudConfig.token]);
+  }, [cloudConfig.token, cloudConfig.sessionKind, cloudConfig.user?.id]);
 
   // Auto-expand the currently active team project accordion and ensure projects are loaded
   useEffect(() => {
@@ -177,7 +178,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
             (scopesCache.teamProjects[activeTeamId]?.length ?? 0) > 0
         );
 
-      if (!isLoaded && !isOfflineOnly && cloudConfig.token) {
+      if (!isLoaded && !isOfflineOnly && isCloudSessionActive(cloudConfig)) {
         setLoadingTeams((prev) => ({ ...prev, [activeTeamId]: true }));
         fetchProjectsForTeam(activeTeamId, true)
           .then(() => {
@@ -377,7 +378,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
             onClick={() => {
               const next = !isOpen;
               setIsOpen(next);
-              if (next && !isOfflineOnly && cloudConfig.token) loadScopes(false);
+              if (next && !isOfflineOnly && isCloudSessionActive(cloudConfig)) loadScopes(false);
             }}
             className="group flex flex-1 min-w-0 items-center justify-between gap-1.5 rounded-lg border border-line bg-card/90 px-2.5 py-1.5 text-xs text-tx-secondary hover:border-line-strong hover:bg-hover hover:text-tx-primary transition shadow-sm"
             title="Switch Workspace"
@@ -484,6 +485,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
 
             <div className="max-h-[calc(100dvh-7rem)] md:max-h-80 overflow-y-auto space-y-3 pr-1">
               {/* Section 1: Offline Workspaces */}
+              {productPolicy.workspace.offline !== false && (
               <div>
                 <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400 flex items-center justify-between">
                   <div className="flex items-center gap-1.5">
@@ -661,13 +663,14 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                   )}
                 </div>
               </div>
+              )}
 
               {/* Section 2: Online Workspaces (Cloud Sync) - Omitted in offline-only edition */}
               {!isOfflineOnly && (
                 <div>
                   <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-sky-700 dark:text-sky-400 flex items-center justify-between border-t border-line pt-2">
                     <span>Online Workspaces</span>
-                    {cloudConfig.token && (
+                    {isCloudSessionActive(cloudConfig) && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -683,7 +686,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
                     )}
                   </div>
 
-                  {cloudConfig.token ? (
+                  {isCloudSessionActive(cloudConfig) ? (
                     isLoadingScopes ? (
                       <div className="flex items-center justify-center py-6 text-xs text-tx-muted gap-2">
                         <Loader2 className="h-4 w-4 animate-spin text-sky-600 dark:text-sky-400" />
@@ -1070,7 +1073,7 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
             </div>
 
             {/* Footer Controls */}
-            {!isOfflineOnly && cloudConfig.token && (
+            {!isOfflineOnly && isCloudSessionActive(cloudConfig) && (
               <div className="mt-2 border-t border-line pt-1.5">
                 <button
                   onClick={() => {

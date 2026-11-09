@@ -26,7 +26,9 @@ function load(file, overrides = {}, globals = {}) {
   const exports = {};
   vm.runInNewContext(compiled, {
     exports, console, Headers, Response, TextEncoder, Error, VITE_ENV: {},
-    require: (id) => id in overrides ? overrides[id] : require(id),
+    require: (id) => id in overrides ? overrides[id]
+      : id === '@airrest/common/cloud' ? load('packages/common/src/lib/cloudApi.ts', {}, globals)
+        : require(id),
     ...globals,
   }, { filename: file });
   return exports;

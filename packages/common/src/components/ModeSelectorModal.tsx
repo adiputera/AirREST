@@ -3,6 +3,7 @@
 import React from 'react';
 import { Database, Cloud, Shield, Zap, Users, Check, ArrowRight, X } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
+import { useProductPolicy } from '../context';
 import { useBackHandler } from '../lib/backNavigation';
 
 interface ModeSelectorModalProps {
@@ -16,6 +17,7 @@ export const ModeSelectorModal: React.FC<ModeSelectorModalProps> = ({
   onClose,
   onSelectCloud,
 }) => {
+  const productPolicy = useProductPolicy();
   const setWorkspaceMode = useApiStore((state) => state.setWorkspaceMode);
   const workspaceMode = useApiStore((state) => state.workspaceMode);
   useBackHandler(isOpen, onClose, 20);
@@ -53,13 +55,16 @@ export const ModeSelectorModal: React.FC<ModeSelectorModalProps> = ({
             How would you like to use AirREST?
           </h2>
           <p className="text-xs text-tx-muted mt-1 max-w-md mx-auto">
-            Choose your storage mode. You can switch between offline and self-hosted sync at any time from the top header.
+            {productPolicy.workspace.offline && productPolicy.workspace.cloud
+              ? 'Choose your storage mode. You can switch between offline and self-hosted sync at any time from the top header.'
+              : 'Choose an available workspace mode.'}
           </p>
         </div>
 
         {/* Options Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Card 1: Offline Mode */}
+          {productPolicy.workspace.offline !== false && (
           <div
             onClick={handleSelectOffline}
             className={`group relative flex flex-col justify-between rounded-xl border p-5 cursor-pointer transition-all duration-200 ${
@@ -113,8 +118,10 @@ export const ModeSelectorModal: React.FC<ModeSelectorModalProps> = ({
               <ArrowRight className="h-3.5 w-3.5" />
             </button>
           </div>
+          )}
 
           {/* Card 2: Cloud Sync Mode */}
+          {productPolicy.workspace.cloud && (
           <div
             onClick={handleSelectCloud}
             className={`group relative flex flex-col justify-between rounded-xl border p-5 cursor-pointer transition-all duration-200 ${
@@ -168,6 +175,7 @@ export const ModeSelectorModal: React.FC<ModeSelectorModalProps> = ({
               <ArrowRight className="h-3.5 w-3.5" />
             </button>
           </div>
+          )}
         </div>
 
         {/* Footer Note */}

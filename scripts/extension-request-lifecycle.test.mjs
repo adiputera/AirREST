@@ -62,7 +62,8 @@ function loadStore({ executePreRequestScript, executeApiRequest, cloudApi = {}, 
             : tabs[0].id,
         };
       },
-      isScopeCacheFresh: (entry, ttlMs, now = Date.now()) => Boolean(entry?.lastSyncedAt && now - entry.lastSyncedAt < ttlMs),
+      isScopeCacheFresh: (entry, ttlMs, now = Date.now()) => Boolean(entry?.lastSyncedAt && now - entry.lastSyncedAt < ttlMs &&
+        !entry.collections?.some((item) => item._syncStatus === 'pending' || (item._origin === 'cloud' && typeof item.version !== 'number'))),
     },
     'scopeSnapshot': {
       snapshotWorkspaceResources: (resources, lastSyncedAt) => ({
@@ -88,9 +89,20 @@ function loadStore({ executePreRequestScript, executeApiRequest, cloudApi = {}, 
       },
     },
     'cloudSession': {
+      isCloudSessionActive: (config) => Boolean(config.token || (config.sessionKind === 'provider' && config.user?.id)),
       prepareCloudSessionUpdate: (current, requested, normalizeApiUrl) => {
         const updates = { ...requested };
         if (updates.apiUrl !== undefined) updates.apiUrl = normalizeApiUrl(updates.apiUrl);
+        if (updates.apiUrl !== undefined && updates.apiUrl !== current.apiUrl) {
+          for (const key of ['user', 'token', 'refreshToken', 'tokenExpiresAt', 'sessionKind', 'activeScope']) {
+            if (!Object.prototype.hasOwnProperty.call(updates, key)) updates[key] = undefined;
+          }
+        }
+        if (Object.prototype.hasOwnProperty.call(updates, 'user') && updates.user?.id !== current.user?.id) {
+          for (const key of ['token', 'refreshToken', 'tokenExpiresAt', 'sessionKind', 'activeScope']) {
+            if (!Object.prototype.hasOwnProperty.call(updates, key)) updates[key] = undefined;
+          }
+        }
         return {
           updates,
           startsNewSession: (updates.apiUrl !== undefined && updates.apiUrl !== current.apiUrl) ||
@@ -247,6 +259,24 @@ function loadStore({ executePreRequestScript, executeApiRequest, cloudApi = {}, 
     'theme': { applyTheme: noop },
     'storeContext': { StoreContext: {} },
   };
+
+  const loadWorkspaceModule = (name) => {
+    const source = fs.readFileSync(new URL(`../packages/common/src/workspace/${name}.ts`, import.meta.url), 'utf8');
+    const output = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+    const exports = {};
+    vm.runInNewContext(output, { exports, require: (id) => modules[id.split('/').at(-1)] || {}, Object, JSON, URL });
+    return exports;
+  };
+  const policyExports = {};
+  vm.runInNewContext(ts.transpileModule(fs.readFileSync(new URL('../packages/common/src/productPolicy.ts', import.meta.url), 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText, { exports: policyExports });
+  modules.productPolicy = policyExports;
+  modules.scopeSnapshot.snapshotWorkspaceResources = loadWorkspaceModule('scopeSnapshot').snapshotWorkspaceResources;
+  modules.cloudCacheArchive = loadWorkspaceModule('cloudCacheArchive');
+  const cachePersistence = loadWorkspaceModule('persistence');
+  modules.persistence.serializeCloudCacheArchives = cachePersistence.serializeCloudCacheArchives;
+  modules.persistence.normalizeCloudCacheArchives = cachePersistence.normalizeCloudCacheArchives;
 
   const resolveModule = (id) => {
     for (const [key, mod] of Object.entries(modules)) {
@@ -451,6 +481,8 @@ test('should retry incomplete collection details when metadata is unchanged', as
     },
     isOfflineOnly: false,
   });
+  store.getState();
+  await new Promise((resolve) => setImmediate(resolve));
   store.setState({
     workspaceMode: 'cloud',
     cloudConfig: {
@@ -489,6 +521,8 @@ test('should not retry an environment write after an OCC conflict', async () => 
     },
     isOfflineOnly: false,
   });
+  store.getState();
+  await new Promise((resolve) => setImmediate(resolve));
   store.setState({
     workspaceMode: 'cloud',
     cloudConfig: { apiUrl: 'https://example.com', token: 'access-token' },
@@ -568,6 +602,8 @@ test('requires an explicit OCC choice before resubmitting an environment draft',
       },
     },
   });
+  store.getState();
+  await new Promise((resolve) => setImmediate(resolve));
   store.setState({
     workspaceMode: 'cloud',
     cloudConfig: { apiUrl: 'https://example.com', token: 'access-token', activeScope: { type: 'workspace', id: 'workspace-1', name: 'Workspace' } },
@@ -887,7 +923,7 @@ function loadExtensionRuntime(domEnv = {}) {
     ts.transpileModule(adapterSrc, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText,
     {
       exports: adapterExports,
-      require: (id) => (id === '@airrest/common' ? commonMock : require(id)),
+      require: (id) => (id === '@airrest/common' || id === '@airrest/common/platform' ? commonMock : require(id)),
       fetch: () => {},
       Blob: class {},
       URL: { createObjectURL: () => '', revokeObjectURL: () => {} },
@@ -916,6 +952,7 @@ function loadExtensionRuntime(domEnv = {}) {
             setCloudTransport: () => {},
             getCloudTransport: () => null,
             createCloudClient: () => ({
+              loginUser: async () => { throw new Error('not configured'); },
               getTransport: () => null,
               setTransport: () => {},
               registerTokenRefreshCallback: () => () => {},
@@ -927,12 +964,13 @@ function loadExtensionRuntime(domEnv = {}) {
           };
         }
         if (id.includes('scriptRunner')) return runnerExports;
+        if (id.includes('cloudSession')) return { isCloudSessionActive: (config) => Boolean(config.token || (config.sessionKind === 'provider' && config.user?.id)) };
         if (id.includes('fetcher')) return { setDefaultPlatformAdapter: () => {}, getDefaultPlatformAdapter: () => null };
         if (id.includes('productPolicy')) {
           return { createProductPolicy: (edition) => ({ edition, workspace: { cloud: edition !== 'offline' } }) };
         }
         if (id.includes('passwordAuthProvider')) {
-          return { passwordAuthProvider: { id: 'password', capabilities: {}, signIn: async () => { throw new Error('not configured'); } } };
+          return { createPasswordAuthProvider: () => ({ id: 'password', capabilities: {}, signIn: async () => { throw new Error('not configured'); } }) };
         }
         return require(id);
       },

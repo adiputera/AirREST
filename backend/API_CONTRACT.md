@@ -74,6 +74,10 @@ Deployments that expose the API to other web origins must configure and test tho
 
 ### 3. Authentication & Silent Rolling Refresh
 
+The default backend and this contract use bearer JWTs. A custom Studio auth provider may instead authenticate through a separately configured cookie-backed proxy or replacement authenticator. That deployment must provide its own cookie, CSRF, and session lifecycle; the default backend and this collection do not implement cookie authentication. For a tokenless provider, Studio verifies the returned identity through `/api/v1/auth/me` before opening its owner-specific cache.
+
+Backend hosts can select a request authenticator with `app.NewWithOptions` and `AuthenticatorFactory`; `app.New` retains the default password/JWT implementation. Replacement authenticators return a local application user, and the existing resource authorization rules remain in force.
+
 1. **Bearer JWT Token**:
    - Headers: `Authorization: Bearer <access_token>`
    - Algorithm: `HS256`

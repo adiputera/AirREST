@@ -62,3 +62,40 @@ test('persistence snapshots the active cloud scope and normalizes saved scope ca
   assert.equal(snapshot.collections[0].normalized, true);
   assert.equal(snapshot.history[0].normalized, true);
 });
+
+test('archived and unclaimed caches survive serialization and hydration without file handles', () => {
+  const { serializeCloudCacheArchives, normalizeCloudCacheArchives } = loadWorkspacePersistence();
+  const snapshot = { ...resources, lastSyncedAt: 123 };
+  const source = { version: 1, owners: { owner: { scopeCache: { 'workspace:one': snapshot }, unscoped: [snapshot] } }, unclaimed: [{ scopeCache: { 'workspace:unknown': snapshot }, unscoped: [snapshot] }] };
+  const serialized = serializeCloudCacheArchives(source, serializers);
+  assert.equal(serialized.owners.owner.scopeCache['workspace:one'].tabs[0].attachment, undefined);
+  assert.equal(serialized.unclaimed[0].scopeCache['workspace:unknown'].collections[0].persisted, true);
+  assert.equal(serialized.owners.owner.unscoped[0].tabs[0].attachment, undefined);
+  const normalized = normalizeCloudCacheArchives(JSON.parse(JSON.stringify(serialized)), {
+    normalizeRequest: (value) => value,
+    normalizeCollections: (values) => values,
+    normalizeHistory: (values) => values,
+  });
+  assert.equal(normalized.owners.owner.scopeCache['workspace:one'].lastSyncedAt, 123);
+  assert.equal(normalized.unclaimed[0].scopeCache['workspace:unknown'].collections[0].id, 'collection-1');
+  assert.equal(normalized.unclaimed[0].unscoped[0].collections[0].id, 'collection-1');
+  const again = normalizeCloudCacheArchives(JSON.parse(JSON.stringify(normalized)), {
+    normalizeRequest: (value) => value,
+    normalizeCollections: (values) => values,
+    normalizeHistory: (values) => values,
+  });
+  assert.equal(JSON.stringify(again), JSON.stringify(normalized));
+});
+
+test('unknown archive versions survive repeated normalization and serialization as opaque data', () => {
+  const { serializeCloudCacheArchives, normalizeCloudCacheArchives } = loadWorkspacePersistence();
+  const future = { version: 2, owners: { someone: { pending: [{ id: 'draft', value: 'unchanged' }] } }, futureField: [1, 2] };
+  const normalizers = { normalizeRequest: (value) => value, normalizeCollections: (value) => value, normalizeHistory: (value) => value };
+  const first = normalizeCloudCacheArchives(future, normalizers);
+  assert.equal(Object.keys(first.owners).length, 0);
+  assert.deepEqual(JSON.parse(JSON.stringify(first.unsupportedVersions)), [future]);
+  const serialized = serializeCloudCacheArchives(first, serializers);
+  const second = normalizeCloudCacheArchives(JSON.parse(JSON.stringify(serialized)), normalizers);
+  assert.deepEqual(JSON.parse(JSON.stringify(second.unsupportedVersions)), [future]);
+  assert.equal(second.unclaimed.length, 0);
+});

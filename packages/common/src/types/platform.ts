@@ -20,8 +20,10 @@ export interface TestTransport {
 }
 
 export interface CloudTransport {
+  /** Explicit opt-in: the adapter forwards Fetch credentials to its own cookie jar. */
+  readonly supportsCredentials?: boolean;
   // Construct approved transport options explicitly; no test-request options.
-  fetch(url: string, init: TransportInit): Promise<Response>;
+  fetch(url: string, init: TransportInit & Pick<RequestInit, 'credentials'>): Promise<Response>;
 }
 
 export interface PlatformCapabilities {

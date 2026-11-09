@@ -35,7 +35,7 @@ import { Collection, Environment, HttpMethod } from '../types/api';
 import { MethodBadge } from './MethodBadge';
 import { handleCodeEditorKeyDown } from '../lib/editorHelper';
 import { canModifyCollection, canModifyEnvironment, hasScopePermission } from '../lib/jwt';
-import { getDefaultPlatformAdapter } from '../lib/fetcher';
+import { usePlatformAdapter } from '../context';
 import { useBackHandler } from '../lib/backNavigation';
 
 interface ImportModalProps {
@@ -44,6 +44,7 @@ interface ImportModalProps {
 }
 
 export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => {
+  const runtimeAdapter = usePlatformAdapter();
   const [activeImportTab, setActiveImportTab] = useState<'postman' | 'curl'>('postman');
   const [jsonText, setJsonText] = useState('');
   const [curlText, setCurlText] = useState('');
@@ -128,7 +129,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
       e.preventDefault();
       e.stopPropagation();
     }
-    const adapter = getDefaultPlatformAdapter();
+    const adapter = runtimeAdapter;
     if (adapter?.capabilities?.supportsNativeFileSystem && adapter?.openFile) {
       try {
         setErrorMsg(null);

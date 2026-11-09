@@ -5,6 +5,9 @@ import { defaultProductPolicy } from './lib/edition';
 import type { ProductPolicy } from './productPolicy';
 import { passwordAuthProvider } from './auth/passwordAuthProvider';
 import type { AuthProvider } from './auth/types';
+import type { CloudClient } from './lib/cloudApi';
+import { getDefaultPlatformAdapter } from './lib/fetcher';
+import type { PlatformAdapter } from './types/platform';
 
 const AirrestContext = createContext<AirrestRuntime | null>(null);
 
@@ -37,4 +40,14 @@ export function useProductPolicy(): ProductPolicy {
 
 export function useAuthProvider(): AuthProvider {
   return useContext(AirrestContext)?.authProvider ?? passwordAuthProvider;
+}
+
+/** Returns null for legacy consumers that do not use a runtime provider. */
+export function useCloudClient(): CloudClient | null {
+  return useContext(AirrestContext)?.cloudClient ?? null;
+}
+
+/** Resolve the platform belonging to this tree, retaining the legacy fallback. */
+export function usePlatformAdapter(): PlatformAdapter | null {
+  return useContext(AirrestContext)?.adapter ?? getDefaultPlatformAdapter();
 }

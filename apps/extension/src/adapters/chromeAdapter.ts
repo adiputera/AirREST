@@ -36,6 +36,7 @@ export const chromeTransport: TestTransport = {
 };
 
 export const chromeCloudTransport: CloudTransport = {
+  supportsCredentials: true,
   fetch: async (url, init) => {
     return fetch(url, {
       ...init,

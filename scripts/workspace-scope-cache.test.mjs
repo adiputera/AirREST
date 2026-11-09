@@ -36,4 +36,7 @@ test('scope cache helpers keep keys, tab selection, and TTL behavior stable', ()
   assert.equal(repairedTabs.activeTabId, 'tab-1');
   assert.equal(isScopeCacheFresh(cached, 200, 1_000), true);
   assert.equal(isScopeCacheFresh(cached, 50, 1_000), false);
+  assert.equal(isScopeCacheFresh({ ...cached, collections: [{ _syncStatus: 'pending' }] }, 200, 1_000), false);
+  assert.equal(isScopeCacheFresh({ ...cached, collections: [{ _origin: 'cloud' }] }, 200, 1_000), false);
+  assert.equal(isScopeCacheFresh({ ...cached, collections: [{ _origin: 'cloud', version: 1 }] }, 200, 1_000), true);
 });

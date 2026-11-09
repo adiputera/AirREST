@@ -1,4 +1,5 @@
 import { User, Team, TeamMember, Project, ProjectMember, Collection, Environment, ProjectRole, FeaturePolicy, FeatureFlags } from '../types';
+import { requestPasswordRefresh } from '@airrest/common/cloud';
 
 export interface TokenRefreshCallback {
   (tokens: { token: string; refreshToken: string; expiresAt: string; previousRefreshToken: string }): void;
@@ -129,34 +130,21 @@ async function handleSilentRefresh(apiUrl: string, refreshTokenStr: string): Pro
 
   const refreshPromise = (async (): Promise<SilentRefreshResult> => {
     try {
-      const res = await fetch(`${apiUrl}/api/v1/auth/refresh`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: refreshTokenStr }),
-      });
-
-      if (res.status === 401 || res.status === 403) {
-        return { token: null, refreshToken: null, evicted: true };
-      }
-
-      if (!res.ok) {
-        return { token: null, refreshToken: null, evicted: false };
-      }
-
-      const json = await res.json().catch(() => ({}));
-      const data = unwrapData<any>(json);
-      if (data && data.token && data.refresh_token) {
+      const result = await requestPasswordRefresh(
+        apiUrl, refreshTokenStr, (url, init) => fetch(url, init), (response) => response.json().catch(() => ({})),
+      );
+      if (result.token && result.refreshToken) {
         if (onTokenRefreshed && generation === sessionGeneration) {
           onTokenRefreshed({
-            token: data.token,
-            refreshToken: data.refresh_token,
-            expiresAt: data.expires_at,
+            token: result.token,
+            refreshToken: result.refreshToken,
+            expiresAt: result.expiresAt as string,
             previousRefreshToken: refreshTokenStr,
           });
         }
-        return { token: data.token as string, refreshToken: data.refresh_token as string, evicted: false };
+        return { token: result.token, refreshToken: result.refreshToken, evicted: false };
       }
-      return { token: null, refreshToken: null, evicted: false };
+      return { token: null, refreshToken: null, evicted: result.evicted };
     } catch {
       return { token: null, refreshToken: null, evicted: false };
     } finally {

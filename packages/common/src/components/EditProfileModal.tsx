@@ -4,8 +4,11 @@ import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { User, Mail, Lock, AlertCircle, Loader2, X } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
+import { isCloudSessionActive } from '../workspace/cloudSession';
 import { updateUserProfile } from '../lib/cloudApi';
 import { useBackHandler } from '../lib/backNavigation';
+import { useCloudClient } from '../context';
+import { useStoreContext } from '../store/storeContext';
 
 interface EditProfileModalProps {
   isOpen: boolean;
@@ -13,6 +16,8 @@ interface EditProfileModalProps {
 }
 
 export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onClose }) => {
+  const cloudClient = useCloudClient();
+  const store = useStoreContext() || useApiStore;
   const cloudConfig = useApiStore((state) => state.cloudConfig);
   const setCloudConfig = useApiStore((state) => state.setCloudConfig);
   const user = cloudConfig.user;
@@ -58,21 +63,23 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
       return;
     }
 
-    if (!cloudConfig.token) {
-      setErrorMsg('Authentication token missing. Please sign in again.');
+    if (!isCloudSessionActive(cloudConfig)) {
+      setErrorMsg('Not authenticated. Please sign in again.');
       return;
     }
 
     setIsLoading(true);
+    const sessionGeneration = store.getState().getCloudSessionGeneration();
 
     try {
-      const updatedUser = await updateUserProfile(
+      const updatedUser = await (cloudClient?.updateUserProfile ?? updateUserProfile)(
         cloudConfig.apiUrl || 'http://localhost:8080',
         trimmedName,
         cloudConfig.token,
         cloudConfig.refreshToken
       );
 
+      if (store.getState().getCloudSessionGeneration() !== sessionGeneration) return;
       setCloudConfig({
         user: updatedUser,
       });

@@ -1,2 +1,2 @@
 export * from './types';
-export { passwordAuthProvider } from './passwordAuthProvider';
+export { createPasswordAuthProvider, passwordAuthProvider } from './passwordAuthProvider';

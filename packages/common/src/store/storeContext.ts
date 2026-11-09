@@ -2,8 +2,11 @@ import { createContext, useContext } from 'react';
 import type { UseBoundStore, StoreApi } from 'zustand';
 import type { PersistOptions } from 'zustand/middleware';
 import type { ApiStoreState } from './useApiStore';
+import type { ProductPolicy } from '../productPolicy';
 
 export type ApiStore = UseBoundStore<StoreApi<ApiStoreState>> & {
+  /** Present on stores created by createApiStore; legacy injected stores may omit it. */
+  readonly productPolicy?: ProductPolicy;
   persist: {
     setOptions: (options: Partial<PersistOptions<ApiStoreState, unknown>>) => void;
     clearStorage: () => void;

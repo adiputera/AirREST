@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/adiputera/airrest-backend/core/domain"
+	"github.com/adiputera/airrest-backend/core/middleware"
 	"github.com/adiputera/airrest-backend/core/repository/postgres"
 	"github.com/adiputera/airrest-backend/core/service"
 	"github.com/adiputera/airrest-backend/pkg/token"
@@ -103,6 +104,18 @@ func TestSecurityIntegration(t *testing.T) {
 	admin, err := users.GetByEmail(ctx, "admin@example.com")
 	if err != nil {
 		t.Fatal(err)
+	}
+	customApp, err := NewWithOptions(ctx, Options{AuthenticatorFactory: func(middleware.TokenVerifier, middleware.UserResolver) middleware.Authenticator {
+		return &testAuthenticator{user: admin}
+	}})
+	if err != nil {
+		t.Fatalf("assemble app with custom authenticator: %v", err)
+	}
+	defer customApp.Close()
+	customResponse := httptest.NewRecorder()
+	customApp.Router.ServeHTTP(customResponse, httptest.NewRequest("GET", "/api/v1/auth/me", nil))
+	if customResponse.Code != 200 || !strings.Contains(customResponse.Body.String(), admin.ID.String()) {
+		t.Fatalf("custom authenticator did not reach protected route: status=%d body=%s", customResponse.Code, customResponse.Body.String())
 	}
 	newUser := func(name string) (*domain.User, *service.TokenPair) {
 		t.Helper()

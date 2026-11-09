@@ -4,8 +4,11 @@ import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { KeyRound, Lock, Eye, EyeOff, AlertCircle, Loader2, X } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
+import { isCloudSessionActive } from '../workspace/cloudSession';
 import { changeUserPassword } from '../lib/cloudApi';
 import { useBackHandler } from '../lib/backNavigation';
+import { useCloudClient } from '../context';
+import { useStoreContext } from '../store/storeContext';
 
 interface ChangePasswordModalProps {
   isOpen: boolean;
@@ -13,6 +16,8 @@ interface ChangePasswordModalProps {
 }
 
 export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen, onClose }) => {
+  const cloudClient = useCloudClient();
+  const store = useStoreContext() || useApiStore;
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -83,15 +88,16 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
       return;
     }
 
-    if (!cloudConfig.token) {
-      setErrorMsg('Authentication token missing. Please sign in again.');
+    if (!isCloudSessionActive(cloudConfig)) {
+      setErrorMsg('Not authenticated. Please sign in again.');
       return;
     }
 
     setIsLoading(true);
+    const sessionGeneration = store.getState().getCloudSessionGeneration();
 
     try {
-      const session = await changeUserPassword(
+      const session = await (cloudClient?.changeUserPassword ?? changeUserPassword)(
         cloudConfig.apiUrl || 'http://localhost:8080',
         currentPassword,
         newPassword,
@@ -99,6 +105,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
         cloudConfig.refreshToken
       );
 
+      if (store.getState().getCloudSessionGeneration() !== sessionGeneration) return;
       setCloudConfig({
         user: session.user,
         token: session.token,

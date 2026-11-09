@@ -230,6 +230,8 @@ export type FeaturePolicyStatus = 'idle' | 'loading' | 'ready' | 'stale' | 'erro
 export interface CloudConfig {
   apiUrl: string;
   hubUrl?: string;
+  /** In-memory provider session; never restored as authenticated from storage. */
+  sessionKind?: 'provider';
   token?: string;
   refreshToken?: string;
   tokenExpiresAt?: string;

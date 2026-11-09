@@ -1,6 +1,7 @@
 import type { ActiveScope, ApiRequest, Collection, HistoryItem, WorkspaceMode } from '../types/api';
 import { getScopeCacheKey } from './scopeCache';
 import type { WorkspaceResourceState, WorkspaceScopeSnapshot } from './scopeSnapshot';
+import type { CloudCacheArchiveState } from './cloudCacheArchive';
 
 export interface WorkspaceCachePersistenceInput {
   workspaceMode: WorkspaceMode;
@@ -34,6 +35,45 @@ function serializeScopeCache(
       history: input.serializeHistory(entry.history || []),
     },
   ]));
+}
+
+export function serializeCloudCacheArchives(
+  archives: CloudCacheArchiveState,
+  serializers: Pick<WorkspaceCachePersistenceInput, 'serializeRequest' | 'serializeCollection' | 'serializeHistory'>,
+): CloudCacheArchiveState {
+  const serializeArchive = (entry: CloudCacheArchiveState['unclaimed'][number]) => ({
+    ...entry,
+    scopeCache: serializeScopeCache(entry.scopeCache, serializers),
+    ...(entry.unscoped ? { unscoped: entry.unscoped.map((snapshot) => serializeScopeCache({ unscoped: snapshot }, serializers).unscoped) } : {}),
+  });
+  return {
+    version: 1,
+    owners: Object.fromEntries(Object.entries(archives.owners).map(([key, value]) => [key, serializeArchive(value)])),
+    unclaimed: archives.unclaimed.map(serializeArchive),
+    ...(archives.unsupportedVersions?.length ? { unsupportedVersions: archives.unsupportedVersions } : {}),
+  };
+}
+
+export function normalizeCloudCacheArchives(
+  archives: CloudCacheArchiveState | undefined,
+  normalizers: WorkspaceCacheNormalizers,
+): CloudCacheArchiveState {
+  if (!archives) return { version: 1, owners: {}, unclaimed: [] };
+  if (archives.version !== 1) {
+    return { version: 1, owners: {}, unclaimed: [], unsupportedVersions: [archives] };
+  }
+  const normalizeArchive = (entry: CloudCacheArchiveState['unclaimed'][number]) => ({
+    ...entry,
+    scopeCache: normalizePersistedWorkspaceScopeCache(entry.scopeCache, normalizers),
+    ...(entry.unscoped ? { unscoped: entry.unscoped.map((snapshot) => normalizePersistedWorkspaceScopeCache({ unscoped: snapshot }, normalizers).unscoped) } : {}),
+  });
+  return {
+    version: 1,
+    owners: Object.fromEntries(Object.entries(archives.owners || {}).map(([key, value]) => [key, normalizeArchive(value)])),
+    unclaimed: (archives.unclaimed || []).map(normalizeArchive),
+    ...(Array.isArray(archives.unsupportedVersions) && archives.unsupportedVersions.length
+      ? { unsupportedVersions: archives.unsupportedVersions } : {}),
+  };
 }
 
 export function preparePersistedWorkspaceCaches(
