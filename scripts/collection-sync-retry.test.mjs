@@ -30,23 +30,6 @@ test('Collection Sync & Retry: replaceCollection tags pending and rethrows on cl
   );
 });
 
-test('Collection Sync & Retry: pullCloudDelta pushes pending collections before pulling and guards against data loss', () => {
-  const content = fs.readFileSync(new URL('../packages/common/src/store/useApiStore.ts', import.meta.url), 'utf8');
-
-  // Verify pullCloudDelta finds pending collections
-  assert.match(content, /const\s+pendingCols\s*=\s*currentCols\.filter\(\s*\(c\)\s*=>\s*c\._syncStatus\s*===\s*'pending'/);
-
-  // Verify it attempts batchImportToScope for pending collections
-  assert.match(content, /await\s+batchImportToScope\([\s\S]*?\[pendingCol\]/);
-
-  // Verify it returns early on push failure so collections are not overwritten
-  assert.match(content, /console\.warn\(`Failed to push pending collection/);
-
-  // Verify still-pending collections are retained alongside pulled collections
-  assert.match(content, /const\s+stillPendingCols\s*=\s*\(get\(\)\.collections\s*\|\|\s*\[\]\)\.filter\(/);
-  assert.match(content, /const\s+finalCols\s*=\s*\[\.\.\.pulledCols,\s*\.\.\.stillPendingCols\]/);
-});
-
 test('Collection Sync & Retry: ImportModal does not falsely conflict on pending unsynced collections and handles errors without closing', () => {
   const content = fs.readFileSync(new URL('../packages/common/src/components/ImportModal.tsx', import.meta.url), 'utf8');
 

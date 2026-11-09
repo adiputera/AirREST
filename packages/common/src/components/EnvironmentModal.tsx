@@ -33,7 +33,7 @@ import { ConfirmModal } from './ConfirmModal';
 import { EnvironmentConflictModal } from './EnvironmentConflictModal';
 import { EnvironmentPermissionModal } from './EnvironmentPermissionModal';
 import { handleCodeEditorKeyDown } from '../lib/editorHelper';
-import { getDefaultPlatformAdapter } from '../lib/fetcher';
+import { usePlatformAdapter } from '../context';
 import { useBackHandler } from '../lib/backNavigation';
 
 interface EnvironmentModalProps {
@@ -42,6 +42,7 @@ interface EnvironmentModalProps {
 }
 
 export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onClose }) => {
+  const runtimeAdapter = usePlatformAdapter();
   const environments = useApiStore((state) => state.environments);
   const activeEnvironmentId = useApiStore((state) => state.activeEnvironmentId);
   const setActiveEnvironmentId = useApiStore((state) => state.setActiveEnvironmentId);
@@ -279,7 +280,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
     try {
       const jsonStr = exportPostmanEnvironment(currentEnv);
       const filename = `${String(currentEnv.name || 'environment').toLowerCase().replace(/\s+/g, '-')}.postman_environment.json`;
-      const adapter = getDefaultPlatformAdapter();
+      const adapter = runtimeAdapter;
 
       if (adapter?.saveFile) {
         const saved = await adapter.saveFile(filename, jsonStr, {
@@ -343,7 +344,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
   };
 
   const handleImportFileClick = async () => {
-    const adapter = getDefaultPlatformAdapter();
+    const adapter = runtimeAdapter;
     if (adapter?.capabilities?.supportsNativeFileSystem && adapter?.openFile) {
       try {
         setErrorMsg(null);

@@ -2,11 +2,16 @@
 import { CloudTransport } from '../types/platform';
 
 interface CloudClientState {
+  enabled: boolean;
   transport: CloudTransport | null;
   useDefaultTransport: boolean;
   tokenRefreshListeners: Set<TokenRefreshCallback>;
   authEvictedListeners: Set<AuthEvictedCallback>;
   refreshRequests: Map<string, Promise<SilentRefreshResult>>;
+  authorizeRequest?: CloudRequestAuthorizer;
+  passwordRefresh: boolean;
+  providerSessionActive: boolean;
+  sessionGeneration: number;
 }
 
 function createCloudClientState(
@@ -14,11 +19,15 @@ function createCloudClientState(
   useDefaultTransport = false,
 ): CloudClientState {
   return {
+    enabled: true,
     transport,
     useDefaultTransport,
     tokenRefreshListeners: new Set(),
     authEvictedListeners: new Set(),
     refreshRequests: new Map(),
+    passwordRefresh: true,
+    providerSessionActive: false,
+    sessionGeneration: 0,
   };
 }
 
@@ -47,15 +56,20 @@ async function cloudFetch(
   init: RequestInit,
   client = defaultCloudClientState,
 ): Promise<Response> {
+  if (!client.enabled) throw new Error('Cloud access is disabled for this product.');
   const signal = (init.signal as AbortSignal) || getDefaultCloudSignal();
   let response: Response;
   const transport = client.transport || (client.useDefaultTransport ? defaultCloudClientState.transport : null);
   if (transport) {
+    if (init.credentials && !transport.supportsCredentials) {
+      throw new Error('This cloud transport does not support credentialed requests.');
+    }
     response = await transport.fetch(url, {
       method: init.method || 'GET',
       headers: (init.headers instanceof Headers ? Object.fromEntries(init.headers.entries()) : (init.headers || {})) as Record<string, string>,
       body: init.body,
       signal,
+      ...(transport.supportsCredentials && init.credentials ? { credentials: init.credentials } : {}),
     });
   } else {
     response = await fetch(url, {
@@ -194,6 +208,12 @@ export interface ApiFetchOptions extends RequestInit {
   token?: string;
   refreshToken?: string;
 }
+
+/** Provider-controlled authorization; send retains the runtime transport and redirect policy. */
+export type CloudRequestAuthorizer = (
+  request: { endpoint: string; apiUrl: string; token?: string; refreshToken?: string; init: RequestInit },
+  send: (init: RequestInit) => Promise<Response>,
+) => Promise<Response>;
 
 const IDENTITY_REQUEST_LIMIT = 4 * 1024 * 1024;
 const GZIP_REQUEST_LIMIT = 3_000_000;
@@ -374,8 +394,14 @@ export async function fetchWithAuth(
   options: ApiFetchOptions,
   client = defaultCloudClientState,
 ): Promise<Response> {
+  if (!client.enabled) throw new Error('Cloud access is disabled for this product.');
+  const generation = client.sessionGeneration;
+  const ensureCurrentSession = () => {
+    if (generation !== client.sessionGeneration) throw new Error('Session changed. Please try again.');
+  };
   const { apiUrl, token, refreshToken, ...fetchInit } = options;
   const requestBody = await prepareRequestBody(endpoint, fetchInit.body, fetchInit.signal as AbortSignal | undefined);
+  ensureCurrentSession();
   const base = normalizeCloudApiUrl(apiUrl);
   const url = `${base}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`;
 
@@ -383,17 +409,37 @@ export async function fetchWithAuth(
   headers.set('Content-Type', 'application/json');
   headers.delete('Content-Encoding');
   if (requestBody.gzip) headers.set('Content-Encoding', 'gzip');
+  if (client.authorizeRequest) {
+    const init = { ...fetchInit, body: requestBody.body, headers };
+    const response = await client.authorizeRequest(
+      { endpoint, apiUrl: base, token, refreshToken, init },
+      (authorizedInit) => {
+        ensureCurrentSession();
+        return cloudFetch(url, authorizedInit, client);
+      },
+    );
+    ensureCurrentSession();
+    // The provider has already had the opportunity to retry or refresh. A
+    // final 401 invalidates only the bearer session associated with this call.
+    if (response.status === 401 && (token || client.providerSessionActive)) {
+      notifyAuthEvicted('Your session has expired or been revoked. Please sign in again.', token, client);
+      ensureCurrentSession();
+    }
+    return response;
+  }
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
   }
 
   const requestInit = { ...fetchInit, body: requestBody.body, headers };
   let response = await cloudFetch(url, requestInit, client);
+  ensureCurrentSession();
 
   // If 401 Unauthorized, attempt background refresh if refreshToken is available
-  if (response.status === 401 && refreshToken) {
+  if (response.status === 401 && refreshToken && client.passwordRefresh) {
     try {
       const result = await handleSilentRefresh(base, refreshToken, client);
+      ensureCurrentSession();
       if (result.token) {
         try {
           if (response.body && !response.bodyUsed) {
@@ -405,6 +451,7 @@ export async function fetchWithAuth(
         headers.set('Authorization', `Bearer ${result.token}`);
         // Retry the original request
         response = await cloudFetch(url, requestInit, client);
+        ensureCurrentSession();
         if (response.status === 401) notifyAuthEvicted('Your session has expired or been revoked. Please sign in again.', result.token, client);
       } else if (result.evicted) {
         notifyAuthEvicted('Your session has expired or been revoked. Please sign in again.', token, client);
@@ -412,10 +459,11 @@ export async function fetchWithAuth(
     } catch {
       // Network or transient error during refresh attempt - do not evict session
     }
-  } else if (response.status === 401 && !refreshToken) {
+  } else if (response.status === 401) {
     notifyAuthEvicted('Your session has expired or been revoked. Please sign in again.', token, client);
   }
 
+  ensureCurrentSession();
   return response;
 }
 
@@ -424,12 +472,47 @@ interface SilentRefreshResult {
   evicted: boolean;
 }
 
+export interface PasswordRefreshResult {
+  token: string | null;
+  refreshToken: string | null;
+  expiresAt?: string;
+  evicted: boolean;
+}
+
+/** Shared wire protocol; session ownership and refresh deduplication stay with each client. */
+export async function requestPasswordRefresh(
+  apiUrl: string,
+  refreshToken: string,
+  send: (url: string, init: RequestInit) => Promise<Response>,
+  readJson: (response: Response) => Promise<unknown>,
+  signal?: AbortSignal,
+): Promise<PasswordRefreshResult> {
+  const res = await send(`${apiUrl}/api/v1/auth/refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+    signal,
+  });
+  if (!res.ok) {
+    try {
+      if (res.body && !res.bodyUsed) await res.body.cancel();
+    } catch {
+      // Ignore stream cancellation failures.
+    }
+    return { token: null, refreshToken: null, evicted: res.status === 401 || res.status === 403 };
+  }
+  const data = unwrapData<{ token?: string; refresh_token?: string; expires_at?: string }>(await readJson(res));
+  if (!data?.token || !data.refresh_token) return { token: null, refreshToken: null, evicted: false };
+  return { token: data.token, refreshToken: data.refresh_token, expiresAt: data.expires_at, evicted: false };
+}
+
 async function handleSilentRefresh(
   apiUrl: string,
   refreshTokenStr: string,
   client = defaultCloudClientState,
 ): Promise<SilentRefreshResult> {
   const base = normalizeCloudApiUrl(apiUrl);
+  const generation = client.sessionGeneration;
   const key = `${base}:::${refreshTokenStr}`;
   const pending = client.refreshRequests.get(key);
   if (pending) return pending;
@@ -439,51 +522,24 @@ async function handleSilentRefresh(
       const refreshSignal = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
         ? AbortSignal.timeout(15000)
         : (typeof AbortController !== 'undefined' ? new AbortController().signal : undefined);
-      const res = await cloudFetch(`${base}/api/v1/auth/refresh`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: refreshTokenStr }),
-        signal: refreshSignal,
-      }, client);
-
-      if (res.status === 401 || res.status === 403) {
-        try {
-          if (res.body && !res.bodyUsed) {
-            await res.body.cancel();
-          }
-        } catch {
-          // ignore stream cancel error
-        }
-        return { token: null, evicted: true };
-      }
-
-      if (!res.ok) {
-        try {
-          if (res.body && !res.bodyUsed) {
-            await res.body.cancel();
-          }
-        } catch {
-          // ignore stream cancel error
-        }
-        return { token: null, evicted: false };
-      }
-
-      const json = await safeJson(res);
-      const data = unwrapData<any>(json);
-      if (data && data.token && data.refresh_token) {
+      const result = await requestPasswordRefresh(
+        base, refreshTokenStr, (url, init) => cloudFetch(url, init, client), safeJson, refreshSignal,
+      );
+      if (generation !== client.sessionGeneration) return { token: null, evicted: false };
+      if (result.token && result.refreshToken) {
         notifyTokenRefreshed({
-          token: data.token,
-          refreshToken: data.refresh_token,
-          expiresAt: data.expires_at,
+          token: result.token,
+          refreshToken: result.refreshToken,
+          expiresAt: result.expiresAt,
           previousRefreshToken: refreshTokenStr,
         }, client);
-        return { token: data.token as string, evicted: false };
+        return { token: result.token, evicted: false };
       }
-      return { token: null, evicted: false };
+      return { token: null, evicted: result.evicted };
     } catch {
       return { token: null, evicted: false };
     } finally {
-      client.refreshRequests.delete(key);
+      if (generation === client.sessionGeneration) client.refreshRequests.delete(key);
     }
   })();
 
@@ -493,13 +549,14 @@ async function handleSilentRefresh(
 
 // ----------------- Auth Endpoints -----------------
 
-export async function loginUser(apiUrl: string, email: string, password: string) {
+export async function loginUser(apiUrl: string, email: string, password: string, signal?: AbortSignal, client = defaultCloudClientState) {
   const base = normalizeCloudApiUrl(apiUrl);
   const res = await cloudFetch(`${base}/api/v1/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
-  });
+    signal,
+  }, client);
 
   const json = await safeJson(res);
   if (!res.ok) {
@@ -533,8 +590,14 @@ export async function registerUser(apiUrl: string, email: string, password: stri
   }>(json);
 }
 
-export async function getCurrentUser(apiUrl: string, token: string, refreshToken?: string) {
-  const res = await fetchWithAuth('/api/v1/auth/me', { apiUrl, token, refreshToken });
+export async function getCurrentUser(
+  apiUrl: string,
+  token: string | undefined,
+  refreshToken?: string,
+  signal?: AbortSignal,
+  client = defaultCloudClientState,
+) {
+  const res = await fetchWithAuth('/api/v1/auth/me', { apiUrl, token, refreshToken, signal }, client);
   const json = await safeJson(res);
   if (!res.ok) {
     throw new Error(extractError(json, 'Failed to fetch current user', res.status));
@@ -544,7 +607,7 @@ export async function getCurrentUser(apiUrl: string, token: string, refreshToken
 
 export async function fetchFeaturePolicy(
   apiUrl: string,
-  token: string,
+  token: string | undefined,
   refreshToken?: string,
   signal?: AbortSignal,
   client = defaultCloudClientState,
@@ -587,7 +650,8 @@ export async function changeUserPassword(
   currentPassword: string,
   newPassword: string,
   token?: string,
-  refreshToken?: string
+  refreshToken?: string,
+  client = defaultCloudClientState,
 ): Promise<{
   user: CloudUser;
   token: string;
@@ -603,7 +667,7 @@ export async function changeUserPassword(
       current_password: currentPassword,
       new_password: newPassword,
     }),
-  });
+  }, client);
 
   const json = await safeJson(res);
   if (!res.ok) {
@@ -622,7 +686,8 @@ export async function updateUserProfile(
   name: string,
   token?: string,
   refreshToken?: string,
-  avatarUrl?: string
+  avatarUrl?: string,
+  client = defaultCloudClientState,
 ): Promise<CloudUser> {
   const res = await fetchWithAuth('/api/v1/auth/profile', {
     method: 'PUT',
@@ -633,7 +698,7 @@ export async function updateUserProfile(
       name,
       avatar_url: avatarUrl,
     }),
-  });
+  }, client);
 
   const json = await safeJson(res);
   if (!res.ok) {
@@ -646,7 +711,7 @@ export async function updateUserProfile(
 
 export async function fetchUserWorkspaces(
   apiUrl: string,
-  token: string,
+  token: string | undefined,
   refreshToken?: string,
   signal?: AbortSignal,
   client = defaultCloudClientState,
@@ -662,7 +727,7 @@ export async function fetchUserWorkspaces(
 
 export async function createCloudWorkspace(
   apiUrl: string,
-  token: string,
+  token: string | undefined,
   workspace: { name: string; description?: string },
   refreshToken?: string,
   signal?: AbortSignal,
@@ -685,7 +750,7 @@ export async function createCloudWorkspace(
 
 export async function updateCloudWorkspace(
   apiUrl: string,
-  token: string,
+  token: string | undefined,
   workspaceId: string,
   workspace: { name: string; description?: string },
   refreshToken?: string,
@@ -709,7 +774,7 @@ export async function updateCloudWorkspace(
 
 export async function deleteCloudWorkspace(
   apiUrl: string,
-  token: string,
+  token: string | undefined,
   workspaceId: string,
   refreshToken?: string,
   signal?: AbortSignal,
@@ -731,7 +796,7 @@ export async function deleteCloudWorkspace(
 
 export async function fetchUserTeams(
   apiUrl: string,
-  token: string,
+  token: string | undefined,
   refreshToken?: string,
   signal?: AbortSignal,
   client = defaultCloudClientState,
@@ -748,7 +813,7 @@ export async function fetchUserTeams(
 export async function fetchTeamProjects(
   apiUrl: string,
   teamId: string,
-  token: string,
+  token: string | undefined,
   refreshToken?: string,
   signal?: AbortSignal,
   client = defaultCloudClientState,
@@ -766,7 +831,7 @@ export async function fetchTeamProjects(
 
 export async function batchImportToScope(
   apiUrl: string,
-  token: string,
+  token: string | undefined,
   scope: ActiveScope | { id: string; type: 'workspace' | 'project' } | string,
   collections: Collection[],
   refreshToken?: string,
@@ -819,7 +884,7 @@ export async function batchImportToScope(
 
 export async function moveScopeCollection(
   apiUrl: string,
-  token: string,
+  token: string | undefined,
   collectionId: string,
   targetScope: ActiveScope,
   refreshToken?: string,
@@ -857,7 +922,7 @@ export interface ReorderItemPayload {
 
 export async function reorderCollectionItems(
   apiUrl: string,
-  token: string,
+  token: string | undefined,
   collectionId: string,
   items: ReorderItemPayload[],
   refreshToken?: string,
@@ -909,7 +974,7 @@ function formatImportItem(item: any): any {
 
 export async function createScopeEnvironment(
   apiUrl: string,
-  token: string,
+  token: string | undefined,
   scope: ActiveScope,
   env: { name: string; variables: any[]; min_role?: string },
   refreshToken?: string,
@@ -946,7 +1011,7 @@ export async function createScopeEnvironment(
 
 export async function updateScopeEnvironment(
   apiUrl: string,
-  token: string,
+  token: string | undefined,
   envId: string,
   updates: { name?: string; variables?: any[]; min_role?: string; base_version?: number },
   refreshToken?: string,
@@ -984,7 +1049,7 @@ export async function updateScopeEnvironment(
 
 export async function deleteScopeEnvironment(
   apiUrl: string,
-  token: string,
+  token: string | undefined,
   envId: string,
   refreshToken?: string,
   signal?: AbortSignal,
@@ -1007,7 +1072,7 @@ export async function deleteScopeEnvironment(
 
 export async function deleteScopeCollection(
   apiUrl: string,
-  token: string,
+  token: string | undefined,
   collectionId: string,
   refreshToken?: string,
   signal?: AbortSignal,
@@ -1030,7 +1095,7 @@ export async function deleteScopeCollection(
 
 export async function updateScopeCollectionPermission(
   apiUrl: string,
-  token: string,
+  token: string | undefined,
   collectionId: string,
   minRole: ProjectRole,
   baseVersion: number,
@@ -1056,7 +1121,7 @@ export async function updateScopeCollectionPermission(
 
 export async function deleteScopeItem(
   apiUrl: string,
-  token: string,
+  token: string | undefined,
   itemId: string,
   refreshToken?: string,
   signal?: AbortSignal,
@@ -1083,7 +1148,7 @@ export async function deleteScopeItem(
  */
 export async function fetchScopeCollections(
   apiUrl: string,
-  token: string,
+  token: string | undefined,
   scope: ActiveScope,
   refreshToken?: string,
   signal?: AbortSignal,
@@ -1117,7 +1182,7 @@ export async function fetchScopeCollections(
  */
 export async function fetchCollectionById(
   apiUrl: string,
-  token: string,
+  token: string | undefined,
   collectionId: string,
   refreshToken?: string,
   signal?: AbortSignal,
@@ -1146,7 +1211,7 @@ export async function fetchCollectionById(
  */
 export async function fetchScopeEnvironments(
   apiUrl: string,
-  token: string,
+  token: string | undefined,
   scope: ActiveScope,
   refreshToken?: string,
   signal?: AbortSignal,
@@ -1175,9 +1240,12 @@ export async function fetchScopeEnvironments(
 }
 
 export interface CloudClientConfig {
+  enabled?: boolean;
   transport?: CloudTransport | null;
   /** Compatibility bridge for hosts that have not yet supplied a platform transport. */
   useDefaultTransport?: boolean;
+  authorizeRequest?: CloudRequestAuthorizer;
+  passwordRefresh?: boolean;
 }
 
 /**
@@ -1187,56 +1255,74 @@ export interface CloudClientConfig {
  */
 export function createCloudClient(config: CloudClientConfig = {}) {
   const state = createCloudClientState(config.transport ?? null, config.useDefaultTransport);
+  state.enabled = config.enabled ?? true;
+  state.authorizeRequest = config.authorizeRequest;
+  state.passwordRefresh = config.passwordRefresh ?? true;
 
   return Object.freeze({
+    loginUser: (apiUrl: string, email: string, password: string, signal?: AbortSignal) =>
+      loginUser(apiUrl, email, password, signal, state),
+    getCurrentUser: (apiUrl: string, token: string | undefined, refreshToken?: string, signal?: AbortSignal) =>
+      getCurrentUser(apiUrl, token, refreshToken, signal, state),
+    changeUserPassword: (apiUrl: string, currentPassword: string, newPassword: string, token?: string, refreshToken?: string) =>
+      changeUserPassword(apiUrl, currentPassword, newPassword, token, refreshToken, state),
+    updateUserProfile: (apiUrl: string, name: string, token?: string, refreshToken?: string, avatarUrl?: string) =>
+      updateUserProfile(apiUrl, name, token, refreshToken, avatarUrl, state),
     fetchWithAuth: (endpoint: string, options: ApiFetchOptions) => fetchWithAuth(endpoint, options, state),
-    fetchFeaturePolicy: (apiUrl: string, token: string, refreshToken?: string, signal?: AbortSignal) =>
+    fetchFeaturePolicy: (apiUrl: string, token: string | undefined, refreshToken?: string, signal?: AbortSignal) =>
       fetchFeaturePolicy(apiUrl, token, refreshToken, signal, state),
-    fetchUserWorkspaces: (apiUrl: string, token: string, refreshToken?: string, signal?: AbortSignal) =>
+    fetchUserWorkspaces: (apiUrl: string, token: string | undefined, refreshToken?: string, signal?: AbortSignal) =>
       fetchUserWorkspaces(apiUrl, token, refreshToken, signal, state),
-    fetchUserTeams: (apiUrl: string, token: string, refreshToken?: string, signal?: AbortSignal) =>
+    fetchUserTeams: (apiUrl: string, token: string | undefined, refreshToken?: string, signal?: AbortSignal) =>
       fetchUserTeams(apiUrl, token, refreshToken, signal, state),
-    createCloudWorkspace: (apiUrl: string, token: string, workspace: { name: string; description?: string }, refreshToken?: string, signal?: AbortSignal) =>
+    createCloudWorkspace: (apiUrl: string, token: string | undefined, workspace: { name: string; description?: string }, refreshToken?: string, signal?: AbortSignal) =>
       createCloudWorkspace(apiUrl, token, workspace, refreshToken, signal, state),
-    updateCloudWorkspace: (apiUrl: string, token: string, workspaceId: string, workspace: { name: string; description?: string }, refreshToken?: string, signal?: AbortSignal) =>
+    updateCloudWorkspace: (apiUrl: string, token: string | undefined, workspaceId: string, workspace: { name: string; description?: string }, refreshToken?: string, signal?: AbortSignal) =>
       updateCloudWorkspace(apiUrl, token, workspaceId, workspace, refreshToken, signal, state),
-    deleteCloudWorkspace: (apiUrl: string, token: string, workspaceId: string, refreshToken?: string, signal?: AbortSignal) =>
+    deleteCloudWorkspace: (apiUrl: string, token: string | undefined, workspaceId: string, refreshToken?: string, signal?: AbortSignal) =>
       deleteCloudWorkspace(apiUrl, token, workspaceId, refreshToken, signal, state),
-    fetchTeamProjects: (apiUrl: string, teamId: string, token: string, refreshToken?: string, signal?: AbortSignal) =>
+    fetchTeamProjects: (apiUrl: string, teamId: string, token: string | undefined, refreshToken?: string, signal?: AbortSignal) =>
       fetchTeamProjects(apiUrl, teamId, token, refreshToken, signal, state),
-    fetchScopeCollections: (apiUrl: string, token: string, scope: ActiveScope, refreshToken?: string, signal?: AbortSignal) =>
+    fetchScopeCollections: (apiUrl: string, token: string | undefined, scope: ActiveScope, refreshToken?: string, signal?: AbortSignal) =>
       fetchScopeCollections(apiUrl, token, scope, refreshToken, signal, state),
-    fetchCollectionById: (apiUrl: string, token: string, collectionId: string, refreshToken?: string, signal?: AbortSignal) =>
+    fetchCollectionById: (apiUrl: string, token: string | undefined, collectionId: string, refreshToken?: string, signal?: AbortSignal) =>
       fetchCollectionById(apiUrl, token, collectionId, refreshToken, signal, state),
-    fetchScopeEnvironments: (apiUrl: string, token: string, scope: ActiveScope, refreshToken?: string, signal?: AbortSignal) =>
+    fetchScopeEnvironments: (apiUrl: string, token: string | undefined, scope: ActiveScope, refreshToken?: string, signal?: AbortSignal) =>
       fetchScopeEnvironments(apiUrl, token, scope, refreshToken, signal, state),
-    batchImportToScope: (apiUrl: string, token: string, scope: ActiveScope | { id: string; type: 'workspace' | 'project' } | string, collections: Collection[], refreshToken?: string, signal?: AbortSignal) =>
+    batchImportToScope: (apiUrl: string, token: string | undefined, scope: ActiveScope | { id: string; type: 'workspace' | 'project' } | string, collections: Collection[], refreshToken?: string, signal?: AbortSignal) =>
       batchImportToScope(apiUrl, token, scope, collections, refreshToken, signal, state),
-    moveScopeCollection: (apiUrl: string, token: string, collectionId: string, targetScope: ActiveScope, refreshToken?: string, signal?: AbortSignal) =>
+    moveScopeCollection: (apiUrl: string, token: string | undefined, collectionId: string, targetScope: ActiveScope, refreshToken?: string, signal?: AbortSignal) =>
       moveScopeCollection(apiUrl, token, collectionId, targetScope, refreshToken, signal, state),
-    reorderCollectionItems: (apiUrl: string, token: string, collectionId: string, items: ReorderItemPayload[], refreshToken?: string, signal?: AbortSignal) =>
+    reorderCollectionItems: (apiUrl: string, token: string | undefined, collectionId: string, items: ReorderItemPayload[], refreshToken?: string, signal?: AbortSignal) =>
       reorderCollectionItems(apiUrl, token, collectionId, items, refreshToken, signal, state),
-    createScopeEnvironment: (apiUrl: string, token: string, scope: ActiveScope, env: { name: string; variables: any[]; min_role?: string }, refreshToken?: string, signal?: AbortSignal) =>
+    createScopeEnvironment: (apiUrl: string, token: string | undefined, scope: ActiveScope, env: { name: string; variables: any[]; min_role?: string }, refreshToken?: string, signal?: AbortSignal) =>
       createScopeEnvironment(apiUrl, token, scope, env, refreshToken, signal, state),
-    updateScopeEnvironment: (apiUrl: string, token: string, envId: string, updates: { name?: string; variables?: any[]; min_role?: string; base_version?: number }, refreshToken?: string, signal?: AbortSignal) =>
+    updateScopeEnvironment: (apiUrl: string, token: string | undefined, envId: string, updates: { name?: string; variables?: any[]; min_role?: string; base_version?: number }, refreshToken?: string, signal?: AbortSignal) =>
       updateScopeEnvironment(apiUrl, token, envId, updates, refreshToken, signal, state),
-    deleteScopeEnvironment: (apiUrl: string, token: string, envId: string, refreshToken?: string, signal?: AbortSignal) =>
+    deleteScopeEnvironment: (apiUrl: string, token: string | undefined, envId: string, refreshToken?: string, signal?: AbortSignal) =>
       deleteScopeEnvironment(apiUrl, token, envId, refreshToken, signal, state),
-    deleteScopeCollection: (apiUrl: string, token: string, collectionId: string, refreshToken?: string, signal?: AbortSignal) =>
+    deleteScopeCollection: (apiUrl: string, token: string | undefined, collectionId: string, refreshToken?: string, signal?: AbortSignal) =>
       deleteScopeCollection(apiUrl, token, collectionId, refreshToken, signal, state),
-    updateScopeCollectionPermission: (apiUrl: string, token: string, collectionId: string, minRole: ProjectRole, baseVersion: number, refreshToken?: string, signal?: AbortSignal) =>
+    updateScopeCollectionPermission: (apiUrl: string, token: string | undefined, collectionId: string, minRole: ProjectRole, baseVersion: number, refreshToken?: string, signal?: AbortSignal) =>
       updateScopeCollectionPermission(apiUrl, token, collectionId, minRole, baseVersion, refreshToken, signal, state),
-    deleteScopeItem: (apiUrl: string, token: string, itemId: string, refreshToken?: string, signal?: AbortSignal) =>
+    deleteScopeItem: (apiUrl: string, token: string | undefined, itemId: string, refreshToken?: string, signal?: AbortSignal) =>
       deleteScopeItem(apiUrl, token, itemId, refreshToken, signal, state),
     setTransport: (transport: CloudTransport | null) => {
       state.transport = transport;
     },
     getTransport: () => state.transport,
+    invalidateSession: () => {
+      state.sessionGeneration += 1;
+      state.refreshRequests.clear();
+    },
+    setProviderSessionActive: (active: boolean) => { state.providerSessionActive = active; },
     registerTokenRefreshCallback: (callback: TokenRefreshCallback | null) =>
       registerTokenRefreshListener(state, callback),
     registerAuthEvictedCallback: (callback: AuthEvictedCallback | null) =>
       registerAuthEvictedListener(state, callback),
     dispose: () => {
+      state.sessionGeneration += 1;
+      state.providerSessionActive = false;
       state.transport = null;
       state.useDefaultTransport = false;
       state.tokenRefreshListeners.clear();

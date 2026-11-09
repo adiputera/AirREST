@@ -27,8 +27,20 @@ type App struct {
 	Router chi.Router
 }
 
+// Options configures assembly without changing the default HTTP contract.
+type Options struct {
+	// AuthenticatorFactory can replace password-based request authentication.
+	// The supplied resolver continues to expose application users for RBAC.
+	AuthenticatorFactory func(middleware.TokenVerifier, middleware.UserResolver) middleware.Authenticator
+}
+
 // New initializes the entire AirREST backend application stack
 func New(ctx context.Context) (*App, error) {
+	return NewWithOptions(ctx, Options{})
+}
+
+// NewWithOptions assembles the same application with explicit dependencies.
+func NewWithOptions(ctx context.Context, options Options) (*App, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, &StartupError{Stage: StageConfig, Err: fmt.Errorf("failed to load configuration: %w", err)}
@@ -61,6 +73,11 @@ func New(ctx context.Context) (*App, error) {
 	// Initialize Services
 	tokenManager := token.NewTokenManager(cfg.JWTSecret, cfg.JWTExpirationHours, cfg.JWTRefreshExpirationDays)
 	authService := service.NewAuthService(userRepo, tokenManager)
+	authenticator, err := selectAuthenticator(options, tokenManager, authService)
+	if err != nil {
+		pool.Close()
+		return nil, &StartupError{Stage: StageConfig, Err: err}
+	}
 	workspaceService := service.NewWorkspaceService(workspaceRepo)
 	teamService := service.NewTeamService(teamRepo, userRepo)
 	projectService := service.NewProjectService(projectRepo, teamRepo, teamService)
@@ -146,7 +163,7 @@ func New(ctx context.Context) (*App, error) {
 
 		// Authenticated Routes
 		r.Group(func(r chi.Router) {
-			r.Use(middleware.Authenticate(tokenManager, authService))
+			r.Use(middleware.AuthenticateWith(authenticator))
 
 			// Auth profile & password management
 			r.Get("/auth/me", authHandler.Me)
@@ -255,6 +272,17 @@ func New(ctx context.Context) (*App, error) {
 		Pool:   pool,
 		Router: r,
 	}, nil
+}
+
+func selectAuthenticator(options Options, verifier middleware.TokenVerifier, users middleware.UserResolver) (middleware.Authenticator, error) {
+	if options.AuthenticatorFactory == nil {
+		return middleware.NewPasswordAuthenticator(verifier, users), nil
+	}
+	authenticator := options.AuthenticatorFactory(verifier, users)
+	if authenticator == nil {
+		return nil, errors.New("authenticator factory returned nil")
+	}
+	return authenticator, nil
 }
 
 // Close gracefully closes the underlying database pool

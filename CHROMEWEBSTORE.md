@@ -5,6 +5,8 @@
 
 > Chrome Web Store release notes describe browser-extension changes only. Do not include backend, Hub, or desktop release notes here.
 
+> 1.3.7: Sign-in, account actions, workspace discovery, and token refresh use the extension runtime's cloud connection. Pending refreshes, sign-in completions, and expiry messages no longer carry over to a new sign-in, changing cloud servers clears the previous session, cloud feature permissions recover correctly after token rotation, and pending cloud changes are retained separately for each account and retried when a workspace is reopened. File actions and permission prompts use their own runtime. Older cloud data without a verified owner is preserved for recovery and requires a fresh sign-in; unrecognized newer archive formats are preserved for download. Workspace actions follow the selected product profile, including required sign-in in cloud-only mode; incompatible store policies are rejected during runtime setup. Custom authentication providers can sign in without a bearer token using supported browser credentials and verified identity. Provider-session data is archived without restoring an unverified login, and revoked scopes are closed while pending changes are preserved. Invalid provider sessions are rejected during sign-in, and expired sessions are handled per runtime. Legacy cloud callbacks no longer affect unrelated runtime sessions.
+
 This document provides complete, copy-paste ready store listing metadata and privacy disclosures for both editions of AirREST:
 1. **Full Edition** (`npm run build:full` → `dist/`) — Online & Offline with optional cloud workspace sync.
 2. **Offline Edition** (`npm run build:offline` → `dist-offline/`) — 100% Offline & Local-only with zero cloud features.

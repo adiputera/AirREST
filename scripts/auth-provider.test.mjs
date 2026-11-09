@@ -36,7 +36,7 @@ test('password provider validates credentials and maps the existing password log
     password: 'secret',
   });
 
-  assert.deepEqual(received, ['https://example.test', 'user@example.com', 'secret']);
+  assert.deepEqual(received, ['https://example.test', 'user@example.com', 'secret', undefined]);
   assert.equal(passwordAuthProvider.id, 'password');
   assert.equal(passwordAuthProvider.capabilities.passwordCredentials, true);
   assert.equal(session.accessToken, 'access-token');
@@ -54,4 +54,21 @@ test('password provider rejects missing credentials before making a network requ
     passwordAuthProvider.signIn({ apiUrl: 'https://example.test', email: '', password: '' }),
     /email and password/i,
   );
+});
+
+test('a provider uses its injected login function and forwards the abort signal', async () => {
+  const { createPasswordAuthProvider } = loadPasswordAuthProvider(() => {
+    throw new Error('legacy login should not be called');
+  });
+  const controller = new AbortController();
+  let receivedSignal;
+  const provider = createPasswordAuthProvider(async (_url, _email, _password, signal) => {
+    receivedSignal = signal;
+    return { user: { id: 'user-1' }, token: 'scoped', refresh_token: 'refresh' };
+  });
+  const session = await provider.signIn({
+    apiUrl: 'https://example.test', email: 'user@example.com', password: 'secret', signal: controller.signal,
+  });
+  assert.equal(receivedSignal, controller.signal);
+  assert.equal(session.accessToken, 'scoped');
 });

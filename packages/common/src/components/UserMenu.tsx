@@ -4,7 +4,9 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useBackHandler } from '../lib/backNavigation';
 import { User, LogIn, KeyRound, LogOut, ChevronDown, Pencil } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
+import { isCloudSessionActive } from '../workspace/cloudSession';
 import { useAuthProvider, useProductPolicy } from '../context';
+import { useStoreContext } from '../store/storeContext';
 import { EditProfileModal } from './EditProfileModal';
 import { ChangePasswordModal } from './ChangePasswordModal';
 import { ConfirmModal } from './ConfirmModal';
@@ -17,6 +19,8 @@ interface UserMenuProps {
 export const UserMenu: React.FC<UserMenuProps> = ({ onOpenLogin }) => {
   const productPolicy = useProductPolicy();
   const authProvider = useAuthProvider();
+  const store = useStoreContext() || useApiStore;
+  const signingOut = useRef(false);
   const isOfflineOnly = !productPolicy.workspace.cloud;
   const [isOpen, setIsOpen] = useState(false);
   useBackHandler(isOpen, () => setIsOpen(false), 15);
@@ -32,16 +36,17 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onOpenLogin }) => {
   const logoutCloud = useApiStore((state) => state.logoutCloud);
 
   const user = cloudConfig.user;
-  const token = cloudConfig.token;
   useEffect(() => {
-    const requireSignIn = () => {
+    const requireSignIn = (event: Event) => {
+      const targetStore = (event as CustomEvent<{ store?: typeof store }>).detail?.store;
+      if (targetStore && targetStore !== store) return;
       setIsEditProfileOpen(false);
       setIsChangePasswordOpen(false);
       setIsInternalLoginOpen(true);
     };
     window.addEventListener('airrest:auth-required', requireSignIn);
     return () => window.removeEventListener('airrest:auth-required', requireSignIn);
-  }, []);
+  }, [store]);
 
   // Close dropdown on outside click or escape
   useEffect(() => {
@@ -73,7 +78,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onOpenLogin }) => {
   }
 
   // If not logged in, render the user button configured for login
-  if (!token) {
+  if (!isCloudSessionActive(cloudConfig)) {
     return (
       <>
         <button
@@ -300,11 +305,29 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onOpenLogin }) => {
         onClose={() => setIsSignOutConfirmOpen(false)}
         onConfirm={() => {
           setIsSignOutConfirmOpen(false);
-          logoutCloud();
+          if (signingOut.current) return;
+          signingOut.current = true;
+          const generation = store.getState().getCloudSessionGeneration();
+          const config = store.getState().cloudConfig;
+          void (async () => {
+            try {
+              await authProvider.signOut?.({
+                apiUrl: config.apiUrl,
+                user: config.user,
+                accessToken: config.token,
+                refreshToken: config.refreshToken,
+              });
+            } catch (error) {
+              console.warn('Provider sign-out failed:', error);
+            } finally {
+              if (store.getState().getCloudSessionGeneration() === generation) logoutCloud();
+              signingOut.current = false;
+            }
+          })();
         }}
-        title="Sign Out & Clear Session Data"
-        message="Are you sure you want to sign out? This will disconnect your account and clear all active cloud session data from this browser."
-        confirmText="Sign Out & Clear"
+        title="Sign Out"
+        message="Sign out of your account? Cloud credentials will be cleared. Cached data and unsynced changes remain on this device; some older data may require recovery."
+        confirmText="Sign Out"
         variant="danger"
       />
     </>

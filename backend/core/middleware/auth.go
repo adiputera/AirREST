@@ -9,7 +9,6 @@ import (
 
 	"github.com/adiputera/airrest-backend/core/domain"
 	"github.com/adiputera/airrest-backend/core/repository/postgres"
-	"github.com/adiputera/airrest-backend/core/service"
 	"github.com/adiputera/airrest-backend/pkg/response"
 	"github.com/adiputera/airrest-backend/pkg/token"
 	"github.com/google/uuid"
@@ -21,50 +20,94 @@ const (
 	UserContextKey contextKey = "currentUser"
 )
 
-// Authenticate extracts and validates JWT from Authorization: Bearer <token>
-func Authenticate(tm *token.TokenManager, authService *service.AuthService) func(http.Handler) http.Handler {
+// TokenVerifier validates an access credential. The password adapter retains JWT
+// token-version checks after resolving the current user from the database.
+type TokenVerifier interface {
+	ValidateToken(string) (*token.CustomClaims, error)
+}
+
+type UserResolver interface {
+	GetUserByID(context.Context, uuid.UUID) (*domain.User, error)
+}
+
+type AuthenticationError struct {
+	Status  int
+	Message string
+	Code    string
+}
+
+// Authenticator may implement a different credential protocol while returning
+// the application user used by the existing resource authorization checks.
+type Authenticator interface {
+	Authenticate(*http.Request) (*domain.User, *AuthenticationError)
+}
+
+type passwordAuthenticator struct {
+	verifier TokenVerifier
+	users    UserResolver
+}
+
+func NewPasswordAuthenticator(verifier TokenVerifier, users UserResolver) Authenticator {
+	return &passwordAuthenticator{verifier: verifier, users: users}
+}
+
+// Authenticate remains available for callers using the original JWT adapter.
+func Authenticate(verifier TokenVerifier, users UserResolver) func(http.Handler) http.Handler {
+	return AuthenticateWith(NewPasswordAuthenticator(verifier, users))
+}
+
+func AuthenticateWith(authenticator Authenticator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			authHeader := r.Header.Get("Authorization")
-			if authHeader == "" {
-				response.Error(w, http.StatusUnauthorized, "missing authorization header", "UNAUTHORIZED")
+			user, authErr := authenticator.Authenticate(r)
+			if authErr != nil {
+				response.Error(w, authErr.Status, authErr.Message, authErr.Code)
 				return
 			}
-
-			parts := strings.Split(authHeader, " ")
-			if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-				response.Error(w, http.StatusUnauthorized, "invalid authorization header format, expected 'Bearer <token>'", "UNAUTHORIZED")
+			if user == nil {
+				response.Error(w, http.StatusUnauthorized, "unauthenticated", "UNAUTHORIZED")
 				return
 			}
-
-			tokenStr := parts[1]
-			claims, err := tm.ValidateToken(tokenStr)
-			if err != nil {
-				response.Error(w, http.StatusUnauthorized, "invalid or expired token", "TOKEN_EXPIRED")
-				return
-			}
-
-			// Load user from database to ensure user still exists and hasn't changed roles
-			user, err := authService.GetUserByID(r.Context(), claims.UserID)
-			if err != nil {
-				slog.Error("auth middleware: failed to load user from database", "user_id", claims.UserID, "error", err)
-				if errors.Is(err, postgres.ErrUserNotFound) {
-					response.Error(w, http.StatusUnauthorized, "user account not found or deactivated", "UNAUTHORIZED")
-					return
-				}
-				response.Error(w, http.StatusInternalServerError, "internal database error during authentication", "DATABASE_ERROR")
-				return
-			}
-
-			if claims.TokenVersion == nil || *claims.TokenVersion != user.TokenVersion {
-				response.Error(w, http.StatusUnauthorized, "session revoked; sign in again", "SESSION_REVOKED")
-				return
-			}
-			// Database role is authoritative - do not overwrite with potentially stale JWT claims
 			ctx := context.WithValue(r.Context(), UserContextKey, user)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+func (a *passwordAuthenticator) Authenticate(r *http.Request) (*domain.User, *AuthenticationError) {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		return nil, &AuthenticationError{http.StatusUnauthorized, "missing authorization header", "UNAUTHORIZED"}
+	}
+
+	parts := strings.Split(authHeader, " ")
+	if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
+		return nil, &AuthenticationError{http.StatusUnauthorized, "invalid authorization header format, expected 'Bearer <token>'", "UNAUTHORIZED"}
+	}
+
+	tokenStr := parts[1]
+	claims, err := a.verifier.ValidateToken(tokenStr)
+	if err != nil || claims == nil {
+		return nil, &AuthenticationError{http.StatusUnauthorized, "invalid or expired token", "TOKEN_EXPIRED"}
+	}
+
+	// Load user from database to ensure user still exists and hasn't changed roles
+	user, err := a.users.GetUserByID(r.Context(), claims.UserID)
+	if err != nil {
+		slog.Error("auth middleware: failed to load user from database", "user_id", claims.UserID, "error", err)
+		if errors.Is(err, postgres.ErrUserNotFound) {
+			return nil, &AuthenticationError{http.StatusUnauthorized, "user account not found or deactivated", "UNAUTHORIZED"}
+		}
+		return nil, &AuthenticationError{http.StatusInternalServerError, "internal database error during authentication", "DATABASE_ERROR"}
+	}
+
+	if user == nil {
+		return nil, &AuthenticationError{http.StatusUnauthorized, "user account not found or deactivated", "UNAUTHORIZED"}
+	}
+	if claims.TokenVersion == nil || *claims.TokenVersion != user.TokenVersion {
+		return nil, &AuthenticationError{http.StatusUnauthorized, "session revoked; sign in again", "SESSION_REVOKED"}
+	}
+	return user, nil
 }
 
 // RequireSuperadmin ensures the authenticated user is a Superadmin

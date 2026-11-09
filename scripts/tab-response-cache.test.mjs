@@ -7,7 +7,7 @@ import ts from 'typescript';
 
 const require = createRequire(import.meta.url);
 
-function loadStore({ executeApiRequest = async () => ({ status: 200, statusText: 'OK', data: '{"ok":true}', timeMs: 50, sizeBytes: 10, headers: {} }) } = {}) {
+function loadStore({ executeApiRequest = async () => ({ status: 200, statusText: 'OK', data: '{"ok":true}', timeMs: 50, sizeBytes: 10, headers: {} }), cloudClient, storage, productPolicy } = {}) {
   const source = fs
     .readFileSync(new URL('../packages/common/src/store/useApiStore.ts', import.meta.url), 'utf8')
     .replaceAll('import.meta.env', '({})');
@@ -15,7 +15,7 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
   const exports = {};
-  const appStorage = {
+  const appStorage = storage || {
     getItem: async () => null,
     setItem: async () => {},
     removeItem: async () => {},
@@ -65,7 +65,8 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
             : tabs[0].id,
         };
       },
-      isScopeCacheFresh: (entry, ttlMs, now = Date.now()) => Boolean(entry?.lastSyncedAt && now - entry.lastSyncedAt < ttlMs),
+      isScopeCacheFresh: (entry, ttlMs, now = Date.now()) => Boolean(entry?.lastSyncedAt && now - entry.lastSyncedAt < ttlMs &&
+        !entry.collections?.some((item) => item._syncStatus === 'pending' || (item._origin === 'cloud' && typeof item.version !== 'number'))),
     },
     'scopeSnapshot': {
       snapshotWorkspaceResources: (resources, lastSyncedAt) => ({ ...resources, ...(lastSyncedAt !== undefined ? { lastSyncedAt } : {}) }),
@@ -87,13 +88,26 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
       },
     },
     'cloudSession': {
+      isCloudSessionActive: (config) => Boolean(config.token || (config.sessionKind === 'provider' && config.user?.id)),
       prepareCloudSessionUpdate: (current, requested, normalizeApiUrl) => {
         const updates = { ...requested };
         if (updates.apiUrl !== undefined) updates.apiUrl = normalizeApiUrl(updates.apiUrl);
+        if (updates.apiUrl !== undefined && updates.apiUrl !== current.apiUrl) {
+          for (const key of ['user', 'token', 'refreshToken', 'tokenExpiresAt', 'sessionKind', 'activeScope']) {
+            if (!Object.prototype.hasOwnProperty.call(updates, key)) updates[key] = undefined;
+          }
+        }
+        if (Object.prototype.hasOwnProperty.call(updates, 'user') && updates.user?.id !== current.user?.id) {
+          for (const key of ['token', 'refreshToken', 'tokenExpiresAt', 'sessionKind', 'activeScope']) {
+            if (!Object.prototype.hasOwnProperty.call(updates, key)) updates[key] = undefined;
+          }
+        }
         return {
           updates,
           startsNewSession: (updates.apiUrl !== undefined && updates.apiUrl !== current.apiUrl) ||
             (updates.user?.id !== undefined && updates.user.id !== current.user?.id) ||
+            (Object.prototype.hasOwnProperty.call(updates, 'sessionKind') &&
+              (updates.sessionKind === 'provider' || updates.sessionKind !== current.sessionKind)) ||
             (updates.token !== undefined && !current.token),
         };
       },
@@ -205,6 +219,7 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
       },
     },
     'cloudApi': {
+      normalizeCloudApiUrl: (url) => url,
       batchImportToScope: noop,
       registerTokenRefreshCallback: noop,
       registerAuthEvictedCallback: noop,
@@ -244,6 +259,24 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
     'storeContext': { StoreContext: {} },
   };
 
+  const loadWorkspaceModule = (name) => {
+    const source = fs.readFileSync(new URL(`../packages/common/src/workspace/${name}.ts`, import.meta.url), 'utf8');
+    const output = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+    const exports = {};
+    vm.runInNewContext(output, { exports, require: (id) => modules[id.split('/').at(-1)] || {}, Object, JSON, URL });
+    return exports;
+  };
+  const policyExports = {};
+  vm.runInNewContext(ts.transpileModule(fs.readFileSync(new URL('../packages/common/src/productPolicy.ts', import.meta.url), 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText, { exports: policyExports });
+  modules.productPolicy = policyExports;
+  modules.scopeSnapshot.snapshotWorkspaceResources = loadWorkspaceModule('scopeSnapshot').snapshotWorkspaceResources;
+  modules.cloudCacheArchive = loadWorkspaceModule('cloudCacheArchive');
+  const cachePersistence = loadWorkspaceModule('persistence');
+  modules.persistence.serializeCloudCacheArchives = cachePersistence.serializeCloudCacheArchives;
+  modules.persistence.normalizeCloudCacheArchives = cachePersistence.normalizeCloudCacheArchives;
+
   const resolveModule = (id) => {
     for (const [key, mod] of Object.entries(modules)) {
       if (id === key || id.endsWith(`/${key}`) || id.endsWith(`@/lib/${key}`)) {
@@ -272,8 +305,523 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
     TextDecoder,
   }, { filename: 'packages/common/src/store/useApiStore.ts' });
 
-  return exports.useApiStore;
+  return cloudClient || productPolicy
+    ? exports.createApiStore({ storage: appStorage, cloudClient, productPolicy: productPolicy || { edition: 'full', workspace: { cloud: true, offline: true } } })
+    : exports.useApiStore;
 }
+
+test('cloud-only product rejects offline workspace commands and clears the live view on logout', async () => {
+  const productPolicy = { edition: 'cloud', workspace: { cloud: true, offline: false } };
+  const store = loadStore({ productPolicy, cloudClient: { fetchFeaturePolicy: async () => ({ revision: 1, flags: {} }) } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(store.getState().workspaceMode, 'cloud');
+  const existing = store.getState().offlineWorkspaces.length;
+  assert.equal(store.getState().createOfflineWorkspace('Disallowed'), '');
+  assert.equal(store.getState().duplicateOfflineWorkspace('ws-default-local'), '');
+  store.getState().switchOfflineWorkspace('ws-default-local');
+  store.getState().setWorkspaceMode('offline');
+  await store.getState().setActiveScope({ type: 'offline_workspace', id: 'ws-default-local', name: 'Local' });
+  assert.equal(store.getState().workspaceMode, 'cloud');
+  assert.equal(store.getState().offlineWorkspaces.length, existing);
+  assert.equal(store.getState().recoverCloudCachesToOfflineWorkspaces().success, false);
+  assert.equal((await store.getState().moveCollection('unused', { type: 'offline_workspace', id: 'local', name: 'Local' })).success, false);
+  store.setState({ cloudConfig: { apiUrl: 'https://example.test', token: 'token', user: { id: 'a' }, activeScope: { type: 'workspace', id: 'a' } },
+    collections: [{ id: 'cloud', name: 'Cloud', items: [] }] });
+  store.getState().logoutCloud();
+  assert.equal(store.getState().workspaceMode, 'cloud');
+  assert.equal(store.getState().cloudConfig.token, undefined);
+  assert.equal(store.getState().collections.length, 0);
+  store.dispose();
+});
+
+test('offline-only product cannot switch to cloud through store commands', async () => {
+  const store = loadStore({ productPolicy: { edition: 'offline', workspace: { cloud: false, offline: true } } });
+  await new Promise((resolve) => setImmediate(resolve));
+  store.getState().setWorkspaceMode('cloud');
+  await store.getState().setActiveScope({ type: 'workspace', id: 'cloud', name: 'Cloud' });
+  assert.equal(store.getState().workspaceMode, 'offline');
+  assert.ok(store.getState().createOfflineWorkspace('Local'));
+  store.dispose();
+});
+
+test('offline-only rejects cloud configuration and workspace commands even with persisted credentials', async () => {
+  let calls = 0;
+  const cloudClient = {
+    createCloudWorkspace: async () => { calls++; }, updateCloudWorkspace: async () => { calls++; },
+    deleteCloudWorkspace: async () => { calls++; }, batchImportToScope: async () => { calls++; },
+    fetchUserWorkspaces: async () => { calls++; return []; }, fetchUserTeams: async () => { calls++; return []; },
+  };
+  const store = loadStore({ cloudClient, productPolicy: { edition: 'offline', workspace: { cloud: false, offline: true } } });
+  await new Promise((resolve) => setImmediate(resolve));
+  store.getState().setCloudConfig({ token: 'new-token', user: { id: 'one' } });
+  assert.equal(store.getState().cloudConfig.token, undefined);
+  store.setState({ cloudConfig: { apiUrl: 'https://example.test', token: 'old-token', activeScope: { type: 'workspace', id: 'saved' } } });
+  assert.equal((await store.getState().createCloudWorkspace('name')).success, false);
+  assert.equal((await store.getState().renameCloudWorkspace('saved', 'name')).success, false);
+  assert.equal((await store.getState().deleteCloudWorkspace('saved')).success, false);
+  assert.equal((await store.getState().importLocalToCloud()).success, false);
+  await store.getState().fetchScopes(true);
+  assert.equal(calls, 0);
+  store.dispose();
+});
+
+test('cloud-only hydration hides a previously active offline workspace without deleting it', async () => {
+  let saved = null;
+  const storage = { getItem: async () => saved, setItem: async (_key, value) => { saved = value; }, removeItem: async () => { saved = null; } };
+  const cloudClient = { fetchFeaturePolicy: async () => ({ revision: 1, flags: {} }) };
+  const full = loadStore({ storage, cloudClient, productPolicy: { edition: 'full', workspace: { cloud: true, offline: true } } });
+  await new Promise((resolve) => setImmediate(resolve));
+  const collectionId = full.getState().createCollection('Local data');
+  await new Promise((resolve) => setImmediate(resolve));
+  full.dispose();
+  const cloud = loadStore({ storage, cloudClient, productPolicy: { edition: 'cloud', workspace: { cloud: true, offline: false } } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(cloud.getState().workspaceMode, 'cloud');
+  assert.equal(cloud.getState().collections.some((entry) => entry.id === collectionId), false);
+  assert.equal(cloud.getState().offlineScopeCache['ws-default-local'].collections.some((entry) => entry.id === collectionId), true);
+  cloud.dispose();
+});
+
+test('unknown archive versions survive store restart and can be downloaded without opening them', async () => {
+  const future = { version: 2, payload: { pending: [{ id: 'future-draft', secret: 'keep' }] } };
+  let saved = JSON.stringify({ state: { cloudCacheArchives: future }, version: 0 });
+  const storage = { getItem: async () => saved, setItem: async (_key, value) => { saved = value; }, removeItem: async () => { saved = null; } };
+  const policy = { edition: 'full', workspace: { cloud: true, offline: true } };
+  const first = loadStore({ storage, productPolicy: policy });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(first.getState().cloudCacheArchives.unsupportedVersions[0].payload.pending[0].id, 'future-draft');
+  assert.equal(first.getState().collections.some((item) => item.id === 'future-draft'), false);
+  assert.equal(JSON.parse(first.getState().getCloudCacheRecoveryBackup()).unsupportedArchives[0].payload.pending[0].secret, 'keep');
+  first.getState().setHasConfiguredMode(true);
+  await new Promise((resolve) => setImmediate(resolve));
+  first.dispose();
+  const second = loadStore({ storage, productPolicy: policy });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(second.getState().cloudCacheArchives.unsupportedVersions[0].payload.pending[0].id, 'future-draft');
+  assert.equal(second.getState().getCloudCacheRecoveryCount(), 0);
+  second.dispose();
+});
+
+test('provider session data is archived at rest without restoring an unverified session', async () => {
+  let saved = null;
+  const storage = { getItem: async () => saved, setItem: async (_key, value) => { saved = value; }, removeItem: async () => { saved = null; } };
+  const policy = { edition: 'cloud', workspace: { cloud: true, offline: false } };
+  const first = loadStore({ storage, productPolicy: policy });
+  await new Promise((resolve) => setImmediate(resolve));
+  const owner = JSON.stringify(['https://example.test', 'user-one']);
+  first.setState({
+    workspaceMode: 'cloud', cloudCacheOwner: owner,
+    cloudConfig: { apiUrl: 'https://example.test', sessionKind: 'provider', user: { id: 'user-one' }, activeScope: { type: 'workspace', id: 'shared' } },
+    collections: [{ id: 'provider-draft', items: [], _syncStatus: 'pending' }],
+    scopeCache: {}, scopesCache: { workspaces: [{ id: 'shared' }], teamsWithProjects: [], lastFetchedAt: 1 },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const persisted = JSON.parse(saved).state;
+  assert.equal(persisted.cloudConfig.user, undefined);
+  assert.equal(persisted.cloudConfig.sessionKind, undefined);
+  assert.equal(persisted.collections.length, 0);
+  assert.equal(Object.keys(persisted.scopeCache).length, 0);
+  assert.equal(persisted.cloudCacheArchives.owners[owner].scopeCache['workspace:shared'].collections[0].id, 'provider-draft');
+  first.dispose();
+  const second = loadStore({ storage, productPolicy: policy, cloudClient: { fetchFeaturePolicy: async () => ({ revision: 1, flags: {} }) } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(second.getState().cloudConfig.user, undefined);
+  assert.equal(second.getState().cloudConfig.sessionKind, undefined);
+  assert.equal(second.getState().collections.length, 0);
+  assert.equal(second.getState().cloudCacheArchives.owners[owner].scopeCache['workspace:shared'].collections[0]._syncStatus, 'pending');
+  const scope = { type: 'workspace', id: 'shared', name: 'Shared' };
+  second.getState().setCloudConfig({ sessionKind: 'provider', user: { id: 'other-user' }, activeScope: scope });
+  assert.equal(second.getState().collections.some((entry) => entry.id === 'provider-draft'), false);
+  second.getState().setCloudConfig({ sessionKind: 'provider', user: { id: 'user-one' }, activeScope: scope });
+  assert.equal(second.getState().collections[0].id, 'provider-draft');
+  assert.equal(second.getState().collections[0]._syncStatus, 'pending');
+  second.dispose();
+});
+
+test('store synchronizes an identified provider session without a bearer token', async () => {
+  const calls = [];
+  const cloudClient = {
+    batchImportToScope: async (_url, token, _scope, collections) => { calls.push(['upload', token, collections[0].id]); },
+    fetchScopeCollections: async (_url, token) => { calls.push(['collections', token]); return []; },
+    fetchScopeEnvironments: async (_url, token) => { calls.push(['environments', token]); return []; },
+  };
+  const store = loadStore({ cloudClient, productPolicy: { edition: 'cloud', workspace: { cloud: true, offline: false } } });
+  await new Promise((resolve) => setImmediate(resolve));
+  store.setState({
+    workspaceMode: 'cloud', cloudCacheOwner: JSON.stringify(['https://example.test', 'user-one']),
+    cloudConfig: { apiUrl: 'https://example.test', sessionKind: 'provider', user: { id: 'user-one' }, activeScope: { type: 'workspace', id: 'shared' } },
+    collections: [{ id: 'draft', name: 'Draft', items: [], _syncStatus: 'pending', _origin: 'cloud' }],
+  });
+  await store.getState().pullCloudDelta();
+  assert.deepEqual(calls.map((entry) => entry[0]), ['upload', 'collections', 'environments']);
+  assert.ok(calls.every((entry) => entry[1] === undefined));
+  assert.equal(store.getState().syncStatus, 'synced');
+  store.dispose();
+});
+
+test('late provider uploads cannot modify a replacement session', async () => {
+  let finishUpload;
+  const cloudClient = {
+    batchImportToScope: () => new Promise((resolve) => { finishUpload = resolve; }),
+    fetchFeaturePolicy: async () => ({ revision: 1, flags: {} }),
+  };
+  const store = loadStore({ cloudClient, productPolicy: { edition: 'cloud', workspace: { cloud: true, offline: false } } });
+  await new Promise((resolve) => setImmediate(resolve));
+  const scope = { type: 'workspace', id: 'shared', name: 'Shared' };
+  store.setState({
+    workspaceMode: 'cloud', cloudCacheOwner: JSON.stringify(['https://example.test', 'one']),
+    cloudConfig: { apiUrl: 'https://example.test', sessionKind: 'provider', user: { id: 'one' }, activeScope: scope },
+    collections: [{ id: 'draft', name: 'Draft', items: [], _syncStatus: 'pending', _origin: 'cloud' }],
+  });
+  const pending = store.getState().pullCloudDelta();
+  await new Promise((resolve) => setImmediate(resolve));
+  store.getState().setCloudConfig({ sessionKind: 'provider', user: { id: 'two' }, activeScope: scope });
+  finishUpload();
+  await pending;
+  assert.equal(store.getState().cloudConfig.user.id, 'two');
+  assert.equal(store.getState().collections.some((entry) => entry.id === 'draft'), false);
+  const firstOwner = JSON.stringify(['https://example.test', 'one']);
+  assert.equal(store.getState().cloudCacheArchives.owners[firstOwner].scopeCache['workspace:shared'].collections[0]._syncStatus, 'pending');
+  store.dispose();
+});
+
+test('provider reauthentication preserves the previous scope and refuses unverified scopes', async () => {
+  const cloudClient = { fetchFeaturePolicy: async () => ({ revision: 1, flags: {} }) };
+  const store = loadStore({ cloudClient, productPolicy: { edition: 'cloud', workspace: { cloud: true, offline: false } } });
+  await new Promise((resolve) => setImmediate(resolve));
+  const owner = JSON.stringify(['https://example.test', 'one']);
+  const scopeA = { type: 'workspace', id: 'a', name: 'A' };
+  const scopeB = { type: 'workspace', id: 'b', name: 'B' };
+  store.setState({
+    workspaceMode: 'cloud', cloudCacheOwner: owner,
+    cloudConfig: { apiUrl: 'https://example.test', sessionKind: 'provider', user: { id: 'one' }, activeScope: scopeA },
+    collections: [{ id: 'draft-a', name: 'A', items: [], _syncStatus: 'pending' }],
+    scopeCache: {}, scopesCache: { workspaces: [scopeA], teamsWithProjects: [], lastFetchedAt: Date.now() },
+  });
+  store.getState().setCloudConfig({ sessionKind: 'provider', user: { id: 'one' }, activeScope: scopeB });
+  assert.equal(store.getState().collections.some((entry) => entry.id === 'draft-a'), false);
+  assert.equal(store.getState().cloudCacheArchives.owners[owner].scopeCache['workspace:a'].collections[0].id, 'draft-a');
+  assert.equal(store.getState().scopesCache, undefined);
+  await store.getState().setActiveScope(scopeA);
+  assert.equal(store.getState().cloudConfig.activeScope.id, 'b');
+  assert.match(store.getState().syncError, /not been verified/);
+  store.dispose();
+});
+
+test('revoked provider project is archived and closed even when the verified project list is empty', async () => {
+  const cloudClient = {
+    fetchUserWorkspaces: async () => [],
+    fetchUserTeams: async () => [{ id: 'team', name: 'Team' }],
+    fetchTeamProjects: async () => [],
+  };
+  const store = loadStore({ cloudClient, productPolicy: { edition: 'cloud', workspace: { cloud: true, offline: false } } });
+  await new Promise((resolve) => setImmediate(resolve));
+  const owner = JSON.stringify(['https://example.test', 'one']);
+  store.setState({
+    workspaceMode: 'cloud', cloudCacheOwner: owner,
+    cloudConfig: { apiUrl: 'https://example.test', sessionKind: 'provider', user: { id: 'one' }, activeScope: { type: 'project', id: 'project', teamId: 'team', name: 'Project' } },
+    collections: [{ id: 'pending', name: 'Pending', items: [], _syncStatus: 'pending' }], scopesCache: undefined,
+  });
+  await store.getState().fetchScopes(true);
+  assert.equal(store.getState().cloudConfig.sessionKind, undefined);
+  assert.equal(store.getState().collections.length, 0);
+  assert.equal(store.getState().cloudCacheArchives.owners[owner].scopeCache['project:project'].collections[0]._syncStatus, 'pending');
+  assert.match(store.getState().syncError, /revoked/);
+  store.dispose();
+});
+
+test('a failed project-list request does not misclassify access as revoked', async () => {
+  const cloudClient = {
+    fetchUserWorkspaces: async () => [],
+    fetchUserTeams: async () => [{ id: 'team', name: 'Team' }],
+    fetchTeamProjects: async () => { throw new Error('network unavailable'); },
+  };
+  const store = loadStore({ cloudClient, productPolicy: { edition: 'cloud', workspace: { cloud: true, offline: false } } });
+  await new Promise((resolve) => setImmediate(resolve));
+  store.setState({ cloudConfig: { apiUrl: 'https://example.test', sessionKind: 'provider', user: { id: 'one' }, activeScope: { type: 'project', id: 'project', teamId: 'team', name: 'Project' } }, scopesCache: undefined });
+  await store.getState().fetchScopes(true);
+  assert.equal(store.getState().cloudConfig.sessionKind, 'provider');
+  assert.equal(store.getState().cloudConfig.activeScope.id, 'project');
+  store.dispose();
+});
+
+test('revoked provider workspace is closed without deleting pending changes', async () => {
+  const cloudClient = { fetchUserWorkspaces: async () => [], fetchUserTeams: async () => [] };
+  const store = loadStore({ cloudClient, productPolicy: { edition: 'cloud', workspace: { cloud: true, offline: false } } });
+  await new Promise((resolve) => setImmediate(resolve));
+  const owner = JSON.stringify(['https://example.test', 'one']);
+  store.setState({ workspaceMode: 'cloud', cloudCacheOwner: owner,
+    cloudConfig: { apiUrl: 'https://example.test', sessionKind: 'provider', user: { id: 'one' }, activeScope: { type: 'workspace', id: 'workspace', name: 'Workspace' } },
+    collections: [{ id: 'pending', name: 'Pending', items: [], _syncStatus: 'pending' }], scopesCache: undefined });
+  await store.getState().fetchScopes(true);
+  assert.equal(store.getState().cloudConfig.sessionKind, undefined);
+  assert.equal(store.getState().collections.length, 0);
+  assert.equal(store.getState().cloudCacheArchives.owners[owner].scopeCache['workspace:workspace'].collections[0].id, 'pending');
+  store.dispose();
+});
+
+test('cloud-only closes a revoked project when team discovery returns no project or forbids access', async () => {
+  for (const forbidden of [false, true]) {
+    const cloudClient = { fetchTeamProjects: async () => {
+      if (forbidden) throw Object.assign(new Error('forbidden'), { status: 403 });
+      return [];
+    } };
+    const store = loadStore({ cloudClient, productPolicy: { edition: 'cloud', workspace: { cloud: true, offline: false } } });
+    await new Promise((resolve) => setImmediate(resolve));
+    const owner = JSON.stringify(['https://example.test', 'one']);
+    store.setState({ workspaceMode: 'cloud', cloudCacheOwner: owner,
+      cloudConfig: { apiUrl: 'https://example.test', sessionKind: 'provider', user: { id: 'one' }, activeScope: { type: 'project', id: 'project', teamId: 'team', name: 'Project' } },
+      collections: [{ id: 'pending', name: 'Pending', items: [], _syncStatus: 'pending' }], scopesCache: undefined });
+    await store.getState().fetchProjectsForTeam('team', true);
+    assert.equal(store.getState().workspaceMode, 'cloud');
+    assert.equal(store.getState().cloudConfig.sessionKind, undefined);
+    assert.equal(store.getState().collections.length, 0);
+    assert.equal(store.getState().cloudCacheArchives.owners[owner].scopeCache['project:project'].collections[0].id, 'pending');
+    assert.match(store.getState().syncError, /sign-in/);
+    store.dispose();
+  }
+});
+
+test('cloud-only provider can select a newly created workspace before the first scope refresh', async () => {
+  const cloudClient = {
+    createCloudWorkspace: async () => ({ id: 'new-workspace', name: 'Created' }),
+    fetchFeaturePolicy: async () => ({ revision: 1, flags: {} }),
+    fetchScopeCollections: async () => [], fetchScopeEnvironments: async () => [],
+  };
+  const store = loadStore({ cloudClient, productPolicy: { edition: 'cloud', workspace: { cloud: true, offline: false } } });
+  await new Promise((resolve) => setImmediate(resolve));
+  store.setState({ cloudConfig: { apiUrl: 'https://example.test', sessionKind: 'provider', user: { id: 'one' } }, scopesCache: undefined });
+  const result = await store.getState().createCloudWorkspace('Created');
+  assert.equal(result.success, true);
+  assert.equal(store.getState().cloudConfig.activeScope.id, 'new-workspace');
+  assert.equal(store.getState().scopesCache.workspaces[0].id, 'new-workspace');
+  assert.equal(store.getState().scopesCache.lastFetchedAt, 0);
+  store.dispose();
+});
+
+test('late cloud workspace mutations do not alter a replacement session', async () => {
+  for (const action of ['create', 'rename', 'delete']) {
+    let finish;
+    let signal;
+    const defer = (...args) => { signal = args.at(-1); return new Promise((resolve) => { finish = resolve; }); };
+    const cloudClient = { createCloudWorkspace: defer, updateCloudWorkspace: defer, deleteCloudWorkspace: defer,
+      fetchFeaturePolicy: async () => ({ revision: 1, flags: {} }) };
+    const store = loadStore({ cloudClient, productPolicy: { edition: 'cloud', workspace: { cloud: true, offline: false } } });
+    await new Promise((resolve) => setImmediate(resolve));
+    const scope = { type: 'workspace', id: 'one-workspace', name: 'One' };
+    store.setState({ cloudConfig: { apiUrl: 'https://example.test', sessionKind: 'provider', user: { id: 'one' }, activeScope: scope },
+      scopesCache: { workspaces: [{ id: 'one-workspace', name: 'One' }], teamsWithProjects: [], lastFetchedAt: 1 } });
+    const pending = action === 'create' ? store.getState().createCloudWorkspace('Created')
+      : action === 'rename' ? store.getState().renameCloudWorkspace('one-workspace', 'Renamed')
+        : store.getState().deleteCloudWorkspace('one-workspace');
+    store.getState().setCloudConfig({ sessionKind: 'provider', user: { id: 'two' }, activeScope: scope });
+    assert.equal(signal.aborted, true);
+    finish({ id: 'one-workspace', name: 'Renamed' });
+    const result = await pending;
+    assert.equal(result.success, false);
+    assert.equal(store.getState().cloudConfig.user.id, 'two');
+    assert.equal(store.getState().scopesCache, undefined);
+    store.dispose();
+  }
+});
+
+test('hydration quarantines a persisted provider marker and its active data', async () => {
+  const owner = JSON.stringify(['https://example.test', 'user-one']);
+  let saved = JSON.stringify({ version: 0, state: {
+    workspaceMode: 'cloud', cloudCacheOwner: owner,
+    cloudConfig: { apiUrl: 'https://example.test', sessionKind: 'provider', user: { id: 'user-one' }, activeScope: { type: 'workspace', id: 'shared' } },
+    collections: [{ id: 'draft', items: [], _syncStatus: 'pending' }], environments: [], tabs: [], history: [], scopeCache: {},
+  } });
+  const storage = { getItem: async () => saved, setItem: async (_key, value) => { saved = value; }, removeItem: async () => { saved = null; } };
+  const store = loadStore({ storage, productPolicy: { edition: 'cloud', workspace: { cloud: true, offline: false } } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(store.getState().cloudConfig.sessionKind, undefined);
+  assert.equal(store.getState().cloudConfig.user, undefined);
+  assert.equal(store.getState().collections.length, 0);
+  assert.equal(store.getState().cloudCacheArchives.owners[owner].scopeCache['workspace:shared'].collections[0].id, 'draft');
+  store.dispose();
+});
+
+test('legacy cloud data without proven ownership is quarantined on hydration and remains idempotent', async () => {
+  let saved = JSON.stringify({ version: 0, state: {
+    workspaceMode: 'cloud',
+    cloudConfig: { apiUrl: 'https://example.test', token: 'legacy-token', user: { id: 'unverified' }, activeScope: { type: 'workspace', id: 'shared', name: 'Shared' } },
+    collections: [{ id: 'legacy-draft', name: 'Draft', items: [], _syncStatus: 'pending' }], environments: [], tabs: [], history: [], scopeCache: {},
+  } });
+  const storage = { getItem: async () => saved, setItem: async (_key, value) => { saved = value; }, removeItem: async () => { saved = null; } };
+  const policy = { edition: 'cloud', workspace: { cloud: true, offline: false } };
+  const first = loadStore({ storage, productPolicy: policy });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(first.getState().cloudConfig.token, undefined);
+  assert.equal(first.getState().collections.length, 0);
+  assert.equal(first.getState().cloudCacheArchives.unclaimed[0].scopeCache['workspace:shared'].collections[0].id, 'legacy-draft');
+  first.getState().setHasConfiguredMode(true);
+  await new Promise((resolve) => setImmediate(resolve));
+  first.dispose();
+  const second = loadStore({ storage, productPolicy: policy });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(second.getState().cloudCacheArchives.unclaimed.length, 1);
+  assert.equal(second.getState().cloudCacheArchives.unclaimed[0].scopeCache['workspace:shared'].collections[0]._syncStatus, 'pending');
+  assert.equal(second.getState().collections.length, 0);
+  second.dispose();
+});
+
+test('switching cloud accounts preserves pending data without exposing it to another account', async () => {
+  const cloudClient = { fetchFeaturePolicy: async () => ({ revision: 1, flags: {} }) };
+  const store = loadStore({ cloudClient });
+  const scope = { type: 'workspace', id: 'shared-id', name: 'Workspace' };
+  const pending = { id: 'pending-a', name: 'Pending', items: [], _syncStatus: 'pending', _origin: 'cloud' };
+  store.setState({
+    workspaceMode: 'cloud',
+    cloudConfig: { apiUrl: 'https://example.test', token: 'token-a', user: { id: 'a' }, activeScope: scope },
+    cloudCacheOwner: JSON.stringify(['https://example.test', 'a']),
+    scopeCache: {}, collections: [pending], environments: [], history: [], lastSyncedAt: Date.now(),
+  });
+
+  store.getState().setCloudConfig({ token: 'token-b', user: { id: 'b' }, activeScope: scope });
+  assert.equal(store.getState().collections.length, 0);
+  assert.equal(Object.keys(store.getState().scopeCache).length, 0);
+  const ownerA = JSON.stringify(['https://example.test', 'a']);
+  assert.equal(store.getState().cloudCacheArchives.owners[ownerA].scopeCache['workspace:shared-id'].collections[0].id, 'pending-a');
+
+  store.getState().setCloudConfig({ token: 'token-a-new', user: { id: 'a' }, activeScope: scope });
+  assert.equal(store.getState().collections[0].id, 'pending-a');
+  assert.equal(store.getState().collections[0]._syncStatus, 'pending');
+  store.getState().logoutCloud();
+  assert.equal(store.getState().collections.some((item) => item.id === 'pending-a'), false);
+  assert.equal(store.getState().cloudCacheArchives.owners[ownerA].scopeCache['workspace:shared-id'].collections[0].id, 'pending-a');
+  const persisted = store.persist.getOptions().partialize(store.getState());
+  assert.equal(persisted.cloudCacheArchives.owners[ownerA].scopeCache['workspace:shared-id'].collections[0].id, 'pending-a');
+  store.dispose();
+});
+
+test('a pending cloud cache survives logout and restart for its verified owner', async () => {
+  let saved = null;
+  const storage = { getItem: async () => saved, setItem: async (_key, value) => { saved = value; }, removeItem: async () => { saved = null; } };
+  const cloudClient = { fetchFeaturePolicy: async () => ({ revision: 1, flags: {} }) };
+  const scope = { type: 'workspace', id: 'workspace-1', name: 'Workspace' };
+  const first = loadStore({ cloudClient, storage });
+  await new Promise((resolve) => setImmediate(resolve));
+  first.setState({ workspaceMode: 'cloud', cloudConfig: { apiUrl: 'https://example.test', token: 'token', user: { id: 'user-1' }, activeScope: scope },
+    cloudCacheOwner: JSON.stringify(['https://example.test', 'user-1']),
+    collections: [{ id: 'pending', name: 'Pending', items: [], _syncStatus: 'pending', _origin: 'cloud' }], lastSyncedAt: Date.now() });
+  first.getState().logoutCloud();
+  await new Promise((resolve) => setImmediate(resolve));
+  first.dispose();
+
+  const restored = loadStore({ cloudClient, storage });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(restored.getState().cloudConfig.token, undefined);
+  assert.equal(restored.getState().collections.some((entry) => entry.id === 'pending'), false);
+  restored.getState().setCloudConfig({ apiUrl: 'https://example.test', token: 'new-token', user: { id: 'user-1' }, activeScope: scope });
+  restored.getState().setWorkspaceMode('cloud');
+  assert.equal(restored.getState().collections[0].id, 'pending');
+  assert.equal(restored.getState().collections[0]._syncStatus, 'pending');
+  restored.dispose();
+});
+
+test('legacy cache without an ownership marker is preserved without assuming its owner', () => {
+  const store = loadStore({ cloudClient: { fetchFeaturePolicy: async () => ({ revision: 1, flags: {} }) } });
+  const scope = { type: 'workspace', id: 'workspace-1', name: 'Workspace' };
+  store.setState({ workspaceMode: 'cloud', cloudConfig: { apiUrl: 'https://example.test', token: 'credential-secret-123', user: { id: 'a' }, activeScope: scope },
+    cloudCacheOwner: null, collections: [{ id: 'legacy-pending', name: 'Pending', items: [], _syncStatus: 'pending' }],
+    environments: [{ id: 'env-1', name: 'Environment', variables: [{ id: 'value', key: 'k', currentValue: 'original', enabled: true }] }] });
+  store.getState().logoutCloud();
+  const archived = store.getState().cloudCacheArchives;
+  assert.equal(archived.unclaimed[0].scopeCache['workspace:workspace-1'].collections[0].id, 'legacy-pending');
+  assert.equal(archived.owners[JSON.stringify(['https://example.test', 'a'])], undefined);
+  const backup = JSON.parse(store.getState().getCloudCacheRecoveryBackup());
+  assert.equal(backup.format, 'AirREST cloud cache recovery');
+  assert.equal(backup.archives[0].scopeCache['workspace:workspace-1'].collections[0].id, 'legacy-pending');
+  assert.equal(JSON.stringify(backup).includes('credential-secret-123'), false);
+  assert.equal(store.getState().cloudCacheArchives.unclaimed.length, 1);
+  const recovered = store.getState().recoverCloudCachesToOfflineWorkspaces();
+  assert.equal(recovered.success, true);
+  assert.equal(recovered.workspaceCount, 1);
+  const workspace = store.getState().offlineWorkspaces.find((entry) => entry.name === 'Recovered workspace 1');
+  assert.ok(workspace);
+  assert.equal(store.getState().offlineScopeCache[workspace.id].collections[0].id, 'legacy-pending');
+  assert.equal(store.getState().offlineScopeCache[workspace.id].collections[0]._origin, 'offline');
+  assert.equal(store.getState().cloudCacheArchives.unclaimed.length, 1);
+  store.getState().offlineScopeCache[workspace.id].collections[0].name = 'Edited copy';
+  store.getState().offlineScopeCache[workspace.id].environments[0].variables[0].currentValue = 'edited';
+  assert.equal(store.getState().cloudCacheArchives.unclaimed[0].scopeCache['workspace:workspace-1'].collections[0].name, 'Pending');
+  assert.equal(store.getState().cloudCacheArchives.unclaimed[0].scopeCache['workspace:workspace-1'].environments[0].variables[0].currentValue, 'original');
+  store.dispose();
+});
+
+test('changing server clears the previous active scope and retains its pending snapshot', () => {
+  const store = loadStore({ cloudClient: { fetchFeaturePolicy: async () => ({ revision: 1, flags: {} }) } });
+  const scope = { type: 'workspace', id: 'scope-1', name: 'Workspace' };
+  const owner = JSON.stringify(['https://one.example', 'user-1']);
+  const otherOwner = JSON.stringify(['https://two.example', 'user-1']);
+  store.setState({ workspaceMode: 'cloud', cloudConfig: { apiUrl: 'https://one.example', token: 'token', refreshToken: 'refresh', user: { id: 'user-1' }, activeScope: scope },
+    cloudCacheOwner: owner, cloudCacheArchives: { version: 1, unclaimed: [], owners: { [otherOwner]: { scopeCache: { 'workspace:scope-1': { collections: [{ id: 'other-server', name: 'Other', items: [] }] } } } } },
+    collections: [{ id: 'pending', name: 'Pending', items: [], _syncStatus: 'pending' }] });
+  store.getState().setCloudConfig({ apiUrl: 'https://two.example' });
+  assert.equal(store.getState().cloudConfig.activeScope, undefined);
+  assert.equal(store.getState().cloudConfig.user, undefined);
+  assert.equal(store.getState().cloudConfig.token, undefined);
+  assert.equal(store.getState().cloudConfig.refreshToken, undefined);
+  assert.equal(store.getState().cloudCacheOwner, null);
+  assert.equal(store.getState().collections.length, 0);
+  assert.equal(store.getState().cloudCacheArchives.owners[owner].scopeCache['workspace:scope-1'].collections[0].id, 'pending');
+  assert.equal(store.getState().cloudCacheArchives.owners[otherOwner].scopeCache['workspace:scope-1'].collections[0].id, 'other-server');
+  store.getState().setCloudConfig({ user: { id: 'user-1' }, activeScope: scope });
+  assert.equal(store.getState().cloudCacheOwner, null);
+  assert.equal(store.getState().collections.length, 0);
+  store.dispose();
+});
+
+test('changing user without new credentials cannot open another user cache', async () => {
+  const store = loadStore({ cloudClient: { fetchFeaturePolicy: async () => ({ revision: 1, flags: {} }) } });
+  await new Promise((resolve) => setImmediate(resolve));
+  const scope = { type: 'workspace', id: 'shared', name: 'Shared' };
+  const firstOwner = JSON.stringify(['https://example.test', 'one']);
+  const secondOwner = JSON.stringify(['https://example.test', 'two']);
+  store.setState({ workspaceMode: 'cloud', cloudCacheOwner: firstOwner,
+    cloudConfig: { apiUrl: 'https://example.test', token: 'one-token', refreshToken: 'one-refresh', user: { id: 'one' }, activeScope: scope },
+    cloudCacheArchives: { version: 1, unclaimed: [], owners: { [secondOwner]: { scopeCache: { 'workspace:shared': { collections: [{ id: 'two-draft', items: [] }] } } } } },
+    collections: [{ id: 'one-draft', items: [], _syncStatus: 'pending' }] });
+  store.getState().setCloudConfig({ user: { id: 'two' }, activeScope: scope });
+  assert.equal(store.getState().cloudConfig.token, undefined);
+  assert.equal(store.getState().cloudConfig.refreshToken, undefined);
+  assert.equal(store.getState().cloudCacheOwner, null);
+  assert.equal(store.getState().collections.length, 0);
+  assert.equal(store.getState().cloudCacheArchives.owners[firstOwner].scopeCache['workspace:shared'].collections[0].id, 'one-draft');
+  assert.equal(store.getState().cloudCacheArchives.owners[secondOwner].scopeCache['workspace:shared'].collections[0].id, 'two-draft');
+  store.dispose();
+});
+
+test('feature policy accepts token rotation within a session and rejects results from a previous session', async () => {
+  const requests = [];
+  const cloudClient = { fetchFeaturePolicy: (_url, _token, _refresh, signal) => new Promise((resolve) => requests.push({ resolve, signal })) };
+  const store = loadStore({ cloudClient });
+  const policy = { revision: 1, flags: {} };
+
+  store.getState().setCloudConfig({ apiUrl: 'https://example.test', token: 'old', refreshToken: 'refresh', user: { id: 'one' } });
+  const generation = store.getState().getCloudSessionGeneration();
+  assert.equal(requests.length, 1);
+  store.getState().setCloudConfig({ token: 'rotated', refreshToken: 'new-refresh' });
+  assert.equal(store.getState().getCloudSessionGeneration(), generation);
+  requests[0].resolve(policy);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(store.getState().featurePolicyStatus, 'ready');
+  assert.equal(store.getState().featurePolicy.revision, 1);
+
+  const oldRequest = store.getState().refreshFeaturePolicy(true);
+  store.getState().setCloudConfig({ token: 'other', user: { id: 'two' } });
+  assert.notEqual(store.getState().getCloudSessionGeneration(), generation);
+  assert.equal(requests[1].signal.aborted, true);
+  assert.equal(requests.length, 3);
+  requests[1].resolve({ revision: 2, flags: {} });
+  await oldRequest;
+  assert.equal(store.getState().featurePolicyStatus, 'loading');
+  requests[2].resolve({ revision: 3, flags: {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(store.getState().featurePolicy.revision, 3);
+  store.dispose();
+});
 
 test('T-SEMI-PERSIST-1: Response is cached per-tab and restored when switching tabs in memory', async () => {
   const store = loadStore({
@@ -509,7 +1057,8 @@ test('T-EXT-TAB: switching tabs while sendRequest is in-flight does not overwrit
   const store = loadStore({
     executeApiRequest: () => reqPromise,
   });
-
+  store.getState();
+  await new Promise((resolve) => setImmediate(resolve));
   const tab1Id = store.getState().activeTabId;
   store.getState().updateActiveRequest({ url: 'https://api.example.com/slow' });
 

@@ -106,6 +106,7 @@ function loadProductionRuntime() {
         setCloudTransport: (t) => { currentCloudTransport = t; },
         getCloudTransport: () => currentCloudTransport,
         createCloudClient: ({ transport } = {}) => ({
+          loginUser: async () => { throw new Error('not configured'); },
           getTransport: () => transport ?? null,
           setTransport: () => {},
           registerTokenRefreshCallback: () => () => {},
@@ -129,10 +130,10 @@ function loadProductionRuntime() {
       };
     }
     if (id.includes('productPolicy')) {
-      return { createProductPolicy: (edition) => ({ edition, workspace: { cloud: edition !== 'offline' } }) };
+      return { createProductPolicy: (edition) => ({ edition, workspace: { cloud: edition !== 'offline' } }), validateProductPolicy: (policy) => policy };
     }
     if (id.includes('passwordAuthProvider')) {
-      return { passwordAuthProvider: { id: 'password', capabilities: {}, signIn: async () => { throw new Error('not configured'); } } };
+      return { createPasswordAuthProvider: () => ({ id: 'password', capabilities: {}, signIn: async () => { throw new Error('not configured'); } }) };
     }
     return {};
   };
@@ -787,6 +788,7 @@ test('D3 (P2): Multi-runtime isolation with production runtime and store instanc
       if (id.includes('asyncOperationCoordinator')) return runModule('../packages/common/src/store/asyncOperationCoordinator.ts', sandbox);
       if (id.includes('scopeCache')) return runModule('../packages/common/src/workspace/scopeCache.ts', sandbox);
       if (id.includes('scopeSnapshot')) return runModule('../packages/common/src/workspace/scopeSnapshot.ts', sandbox);
+      if (id.includes('cloudCacheArchive')) return runModule('../packages/common/src/workspace/cloudCacheArchive.ts', sandbox);
       if (id.includes('cloudSession')) return runModule('../packages/common/src/workspace/cloudSession.ts', sandbox);
       if (id.includes('cloudScopeTransition')) return runModule('../packages/common/src/workspace/cloudScopeTransition.ts', sandbox);
       if (id.includes('workspaceModeTransition')) return runModule('../packages/common/src/workspace/workspaceModeTransition.ts', sandbox);
@@ -796,7 +798,7 @@ test('D3 (P2): Multi-runtime isolation with production runtime and store instanc
       if (id.includes('cloudCollectionSync')) return runModule('../packages/common/src/workspace/cloudCollectionSync.ts', sandbox);
       if (id.includes('edition')) return { defaultProductPolicy: { workspace: { cloud: true } } };
       if (id.includes('productPolicy')) {
-        return { createProductPolicy: (edition) => ({ edition, workspace: { cloud: edition !== 'offline' } }) };
+        return { createProductPolicy: (edition) => ({ edition, workspace: { cloud: edition !== 'offline' } }), validateProductPolicy: (policy) => policy };
       }
       if (id.includes('storage')) return { appStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} }, onStorageCommit: () => () => {} };
       if (id.includes('fetcher')) return runModule('../packages/common/src/lib/fetcher.ts', sandbox);
@@ -804,6 +806,7 @@ test('D3 (P2): Multi-runtime isolation with production runtime and store instanc
       if (id.includes('postman')) return runModule('../packages/common/src/lib/postman.ts', sandbox);
       if (id.includes('scriptRunner')) return runModule('../packages/common/src/lib/scriptRunner.ts', sandbox);
       if (id.includes('urlParams')) return runModule('../packages/common/src/lib/urlParams.ts', sandbox);
+      if (id.includes('passwordAuthProvider')) return { createPasswordAuthProvider: () => ({}) };
       if (id.includes('cloudApi')) return runModule('../packages/common/src/lib/cloudApi.ts', sandbox);
       if (id.includes('treeHelper')) return runModule('../packages/common/src/lib/treeHelper.ts', sandbox);
       if (id.includes('useApiStore')) return runModule('../packages/common/src/store/useApiStore.ts', sandbox);
@@ -930,12 +933,12 @@ test('D3 (P2): Multi-runtime isolation with production runtime and store instanc
   runtimeA.store.getState().setCloudConfig({ token: 'token-A', refreshToken: 'ref-A' });
   runtimeB.store.getState().setCloudConfig({ token: 'token-B', refreshToken: 'ref-B' });
 
-  cloudApiModule.setCloudTransport({
+  runtimeB.cloudClient.setTransport({
     fetch: async () => new Response('Unauthorized', { status: 401 }),
   });
 
   try {
-    await cloudApiModule.fetchWithAuth('/api/v1/scopes', { apiUrl: 'http://localhost:8080', token: 'token-B' });
+    await runtimeB.cloudClient.fetchWithAuth('/api/v1/scopes', { apiUrl: 'http://localhost:8080', token: 'token-B' });
   } catch {
     // expected 401
   }
@@ -991,6 +994,7 @@ test('V1 (P1): Cross-origin refresh isolation - separate origins do not join or 
         if (id.includes('asyncOperationCoordinator')) return runModule('../packages/common/src/store/asyncOperationCoordinator.ts');
         if (id.includes('scopeCache')) return runModule('../packages/common/src/workspace/scopeCache.ts');
         if (id.includes('scopeSnapshot')) return runModule('../packages/common/src/workspace/scopeSnapshot.ts');
+        if (id.includes('cloudCacheArchive')) return runModule('../packages/common/src/workspace/cloudCacheArchive.ts');
         if (id.includes('cloudSession')) return runModule('../packages/common/src/workspace/cloudSession.ts');
         if (id.includes('cloudScopeTransition')) return runModule('../packages/common/src/workspace/cloudScopeTransition.ts');
         if (id.includes('workspaceModeTransition')) return runModule('../packages/common/src/workspace/workspaceModeTransition.ts');
@@ -1004,6 +1008,7 @@ test('V1 (P1): Cross-origin refresh isolation - separate origins do not join or 
         if (id.includes('postman')) return runModule('../packages/common/src/lib/postman.ts');
         if (id.includes('scriptRunner')) return runModule('../packages/common/src/lib/scriptRunner.ts');
         if (id.includes('urlParams')) return runModule('../packages/common/src/lib/urlParams.ts');
+        if (id.includes('passwordAuthProvider')) return { createPasswordAuthProvider: () => ({}) };
         if (id.includes('cloudApi')) return runModule('../packages/common/src/lib/cloudApi.ts');
         if (id.includes('treeHelper')) return runModule('../packages/common/src/lib/treeHelper.ts');
         if (id.includes('useApiStore')) return runModule('../packages/common/src/store/useApiStore.ts');
@@ -1117,6 +1122,7 @@ test('V2 (P2): Retried 401 after silent token rotation evicts the rotated token 
       if (id.includes('asyncOperationCoordinator')) return runModule('../packages/common/src/store/asyncOperationCoordinator.ts');
       if (id.includes('scopeCache')) return runModule('../packages/common/src/workspace/scopeCache.ts');
       if (id.includes('scopeSnapshot')) return runModule('../packages/common/src/workspace/scopeSnapshot.ts');
+      if (id.includes('cloudCacheArchive')) return runModule('../packages/common/src/workspace/cloudCacheArchive.ts');
       if (id.includes('cloudSession')) return runModule('../packages/common/src/workspace/cloudSession.ts');
       if (id.includes('cloudScopeTransition')) return runModule('../packages/common/src/workspace/cloudScopeTransition.ts');
       if (id.includes('workspaceModeTransition')) return runModule('../packages/common/src/workspace/workspaceModeTransition.ts');
@@ -1130,13 +1136,14 @@ test('V2 (P2): Retried 401 after silent token rotation evicts the rotated token 
       if (id.includes('postman')) return runModule('../packages/common/src/lib/postman.ts');
       if (id.includes('scriptRunner')) return runModule('../packages/common/src/lib/scriptRunner.ts');
       if (id.includes('urlParams')) return runModule('../packages/common/src/lib/urlParams.ts');
+      if (id.includes('passwordAuthProvider')) return { createPasswordAuthProvider: () => ({}) };
       if (id.includes('cloudApi')) return runModule('../packages/common/src/lib/cloudApi.ts');
       if (id.includes('treeHelper')) return runModule('../packages/common/src/lib/treeHelper.ts');
       if (id.includes('jwt')) return runModule('../packages/common/src/lib/jwt.ts');
       if (id.includes('requestDiff')) return runModule('../packages/common/src/lib/requestDiff.ts');
       if (id.includes('cloudSyncTransformer')) return runModule('../packages/common/src/lib/cloudSyncTransformer.ts');
       if (id.includes('edition')) return { defaultProductPolicy: { workspace: { cloud: true } } };
-      if (id.includes('productPolicy')) return { createProductPolicy: (edition) => ({ edition, workspace: { cloud: edition !== 'offline' } }) };
+      if (id.includes('productPolicy')) return { createProductPolicy: (edition) => ({ edition, workspace: { cloud: edition !== 'offline' } }), validateProductPolicy: (policy) => policy };
       if (id.includes('useApiStore')) return runModule('../packages/common/src/store/useApiStore.ts');
       if (id.includes('runtime')) return runModule('../packages/common/src/runtime.ts');
       return {};
@@ -1156,15 +1163,12 @@ test('V2 (P2): Retried 401 after silent token rotation evicts the rotated token 
     dispose: () => {},
   };
   const runtime = runtimeModule.createAirrestRuntime({ adapter });
-  runtime.store.getState().setCloudConfig({
-    apiUrl: 'http://localhost:8080',
-    token: 'initial-stale-token',
-    refreshToken: 'valid-refresh-token',
-  });
-
-  cloudApiModule.setCloudTransport({
+  runtime.cloudClient.setTransport({
     fetch: async (url, init) => {
       const urlStr = String(url);
+      if (urlStr.includes('/api/v1/feature-policy')) {
+        return new Response('{"data": {"revision": 1, "flags": {}}}', { status: 200 });
+      }
       if (urlStr.includes('/api/v1/auth/refresh')) {
         // Refresh rotates to a new token
         return new Response(JSON.stringify({
@@ -1181,9 +1185,14 @@ test('V2 (P2): Retried 401 after silent token rotation evicts the rotated token 
       return new Response('Unauthorized', { status: 401 });
     },
   });
+  runtime.store.getState().setCloudConfig({
+    apiUrl: 'http://localhost:8080',
+    token: 'initial-stale-token',
+    refreshToken: 'valid-refresh-token',
+  });
 
   try {
-    await cloudApiModule.fetchWithAuth('/api/v1/workspaces', {
+    await runtime.cloudClient.fetchWithAuth('/api/v1/workspaces', {
       apiUrl: 'http://localhost:8080',
       token: runtime.store.getState().cloudConfig.token,
       refreshToken: runtime.store.getState().cloudConfig.refreshToken,
@@ -1293,6 +1302,7 @@ test('V5 (P2): runtime.dispose() aborts in-flight request signals and prevents l
       if (id.includes('asyncOperationCoordinator')) return runModule('../packages/common/src/store/asyncOperationCoordinator.ts');
       if (id.includes('scopeCache')) return runModule('../packages/common/src/workspace/scopeCache.ts');
       if (id.includes('scopeSnapshot')) return runModule('../packages/common/src/workspace/scopeSnapshot.ts');
+      if (id.includes('cloudCacheArchive')) return runModule('../packages/common/src/workspace/cloudCacheArchive.ts');
       if (id.includes('cloudSession')) return runModule('../packages/common/src/workspace/cloudSession.ts');
       if (id.includes('cloudScopeTransition')) return runModule('../packages/common/src/workspace/cloudScopeTransition.ts');
       if (id.includes('workspaceModeTransition')) return runModule('../packages/common/src/workspace/workspaceModeTransition.ts');
@@ -1306,13 +1316,14 @@ test('V5 (P2): runtime.dispose() aborts in-flight request signals and prevents l
       if (id.includes('postman')) return runModule('../packages/common/src/lib/postman.ts');
       if (id.includes('scriptRunner')) return runModule('../packages/common/src/lib/scriptRunner.ts');
       if (id.includes('urlParams')) return runModule('../packages/common/src/lib/urlParams.ts');
+      if (id.includes('passwordAuthProvider')) return { createPasswordAuthProvider: () => ({}) };
       if (id.includes('cloudApi')) return runModule('../packages/common/src/lib/cloudApi.ts');
       if (id.includes('treeHelper')) return runModule('../packages/common/src/lib/treeHelper.ts');
       if (id.includes('jwt')) return runModule('../packages/common/src/lib/jwt.ts');
       if (id.includes('requestDiff')) return runModule('../packages/common/src/lib/requestDiff.ts');
       if (id.includes('cloudSyncTransformer')) return runModule('../packages/common/src/lib/cloudSyncTransformer.ts');
       if (id.includes('edition')) return { defaultProductPolicy: { workspace: { cloud: true } } };
-      if (id.includes('productPolicy')) return { createProductPolicy: (edition) => ({ edition, workspace: { cloud: edition !== 'offline' } }) };
+      if (id.includes('productPolicy')) return { createProductPolicy: (edition) => ({ edition, workspace: { cloud: edition !== 'offline' } }), validateProductPolicy: (policy) => policy };
       if (id.includes('useApiStore')) return runModule('../packages/common/src/store/useApiStore.ts');
       if (id.includes('runtime')) return runModule('../packages/common/src/runtime.ts');
       return {};
@@ -1420,6 +1431,7 @@ test('R2 (P2): debounced environment cloud sync pending in transport is aborted 
       if (id.includes('asyncOperationCoordinator')) return runModule('../packages/common/src/store/asyncOperationCoordinator.ts');
       if (id.includes('scopeCache')) return runModule('../packages/common/src/workspace/scopeCache.ts');
       if (id.includes('scopeSnapshot')) return runModule('../packages/common/src/workspace/scopeSnapshot.ts');
+      if (id.includes('cloudCacheArchive')) return runModule('../packages/common/src/workspace/cloudCacheArchive.ts');
       if (id.includes('cloudSession')) return runModule('../packages/common/src/workspace/cloudSession.ts');
       if (id.includes('cloudScopeTransition')) return runModule('../packages/common/src/workspace/cloudScopeTransition.ts');
       if (id.includes('workspaceModeTransition')) return runModule('../packages/common/src/workspace/workspaceModeTransition.ts');
@@ -1433,13 +1445,14 @@ test('R2 (P2): debounced environment cloud sync pending in transport is aborted 
       if (id.includes('postman')) return runModule('../packages/common/src/lib/postman.ts');
       if (id.includes('scriptRunner')) return runModule('../packages/common/src/lib/scriptRunner.ts');
       if (id.includes('urlParams')) return runModule('../packages/common/src/lib/urlParams.ts');
+      if (id.includes('passwordAuthProvider')) return { createPasswordAuthProvider: () => ({}) };
       if (id.includes('cloudApi')) return runModule('../packages/common/src/lib/cloudApi.ts');
       if (id.includes('treeHelper')) return runModule('../packages/common/src/lib/treeHelper.ts');
       if (id.includes('jwt')) return runModule('../packages/common/src/lib/jwt.ts');
       if (id.includes('requestDiff')) return runModule('../packages/common/src/lib/requestDiff.ts');
       if (id.includes('cloudSyncTransformer')) return runModule('../packages/common/src/lib/cloudSyncTransformer.ts');
       if (id.includes('edition')) return { defaultProductPolicy: { workspace: { cloud: true } } };
-      if (id.includes('productPolicy')) return { createProductPolicy: (edition) => ({ edition, workspace: { cloud: edition !== 'offline' } }) };
+      if (id.includes('productPolicy')) return { createProductPolicy: (edition) => ({ edition, workspace: { cloud: edition !== 'offline' } }), validateProductPolicy: (policy) => policy };
       if (id.includes('useApiStore')) return runModule('../packages/common/src/store/useApiStore.ts');
       if (id.includes('runtime')) return runModule('../packages/common/src/runtime.ts');
       return {};
@@ -1454,7 +1467,7 @@ test('R2 (P2): debounced environment cloud sync pending in transport is aborted 
 
   let deferredResolve;
   let capturedSignal = null;
-  cloudApiModule.setCloudTransport({
+  const cloudTransport = {
     fetch: async (url, init) => {
       capturedSignal = init?.signal;
       return new Promise((resolve) => {
@@ -1463,10 +1476,11 @@ test('R2 (P2): debounced environment cloud sync pending in transport is aborted 
         }), { status: 200, headers: { 'content-type': 'application/json' } }));
       });
     }
-  });
+  };
 
   const adapter = {
     id: 'test-adapter',
+    cloudTransport,
     hasHostPermission: async () => true,
     requestHostPermission: async () => true,
     dispose: () => {},
@@ -1555,6 +1569,7 @@ export async function setupRuntimeModules(customStorage = null) {
       if (id.includes('asyncOperationCoordinator')) return runModule('../packages/common/src/store/asyncOperationCoordinator.ts');
       if (id.includes('scopeCache')) return runModule('../packages/common/src/workspace/scopeCache.ts');
       if (id.includes('scopeSnapshot')) return runModule('../packages/common/src/workspace/scopeSnapshot.ts');
+      if (id.includes('cloudCacheArchive')) return runModule('../packages/common/src/workspace/cloudCacheArchive.ts');
       if (id.includes('cloudSession')) return runModule('../packages/common/src/workspace/cloudSession.ts');
       if (id.includes('cloudScopeTransition')) return runModule('../packages/common/src/workspace/cloudScopeTransition.ts');
       if (id.includes('workspaceModeTransition')) return runModule('../packages/common/src/workspace/workspaceModeTransition.ts');
@@ -1568,13 +1583,14 @@ export async function setupRuntimeModules(customStorage = null) {
       if (id.includes('postman')) return runModule('../packages/common/src/lib/postman.ts');
       if (id.includes('scriptRunner')) return runModule('../packages/common/src/lib/scriptRunner.ts');
       if (id.includes('urlParams')) return runModule('../packages/common/src/lib/urlParams.ts');
+      if (id.includes('passwordAuthProvider')) return { createPasswordAuthProvider: () => ({}) };
       if (id.includes('cloudApi')) return runModule('../packages/common/src/lib/cloudApi.ts');
       if (id.includes('treeHelper')) return runModule('../packages/common/src/lib/treeHelper.ts');
       if (id.includes('jwt')) return runModule('../packages/common/src/lib/jwt.ts');
       if (id.includes('requestDiff')) return runModule('../packages/common/src/lib/requestDiff.ts');
       if (id.includes('cloudSyncTransformer')) return runModule('../packages/common/src/lib/cloudSyncTransformer.ts');
       if (id.includes('edition')) return { defaultProductPolicy: { workspace: { cloud: true } } };
-      if (id.includes('productPolicy')) return { createProductPolicy: (edition) => ({ edition, workspace: { cloud: edition !== 'offline' } }) };
+      if (id.includes('productPolicy')) return { createProductPolicy: (edition) => ({ edition, workspace: { cloud: edition !== 'offline' } }), validateProductPolicy: (policy) => policy };
       if (id.includes('useApiStore')) return runModule('../packages/common/src/store/useApiStore.ts');
       if (id.includes('runtime')) return runModule('../packages/common/src/runtime.ts');
       return {};
@@ -1750,12 +1766,12 @@ test('T-S1c (S1): maintainer cannot move collection requiring admin role in proj
 });
 
 test('T-G1 (G1): runtime.dispose() aborts in-flight batchImportToScope signal, suppresses pullCloudDelta, and ignores late errors', async () => {
-  const { runtimeModule, cloudApiModule } = await setupRuntimeModules();
+  const { runtimeModule } = await setupRuntimeModules();
   let capturedSignal = null;
   let deferredResolve = null;
   let pullDeltaCalls = 0;
 
-  cloudApiModule.setCloudTransport({
+  const cloudTransport = {
     fetch: async (url, init) => {
       if (url.includes('/api/v1/sync/import-batch')) {
         capturedSignal = init?.signal;
@@ -1765,10 +1781,11 @@ test('T-G1 (G1): runtime.dispose() aborts in-flight batchImportToScope signal, s
       }
       return new Response(JSON.stringify({ data: { collections: [] } }), { status: 200 });
     },
-  });
+  };
 
   const adapter = {
     id: 'test-adapter',
+    cloudTransport,
     hasHostPermission: async () => true,
     requestHostPermission: async () => true,
     dispose: () => {},
@@ -1901,12 +1918,13 @@ test('T-VN2 (V-NEW-2): stale 401 on old session token does NOT trigger dual-stor
 });
 
 test('T-VN4 (V-NEW-4): user cannot escalate environment minRole beyond their own privilege in create, update, or replace', async () => {
-  const { runtimeModule, cloudApiModule } = await setupRuntimeModules();
-  cloudApiModule.setCloudTransport({
+  const { runtimeModule } = await setupRuntimeModules();
+  const cloudTransport = {
     fetch: async () => new Response(JSON.stringify({ data: { success: true, version: 2 } }), { status: 200 }),
-  });
+  };
   const adapter = {
     id: 'test-adapter',
+    cloudTransport,
     hasHostPermission: async () => true,
     requestHostPermission: async () => true,
     dispose: () => {},

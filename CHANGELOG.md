@@ -10,9 +10,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.3.7] - 2026-11-06
 
 ### Fixed
+- **Runtime Login Isolation**: Password sign-in now uses its runtime's cloud transport, including cancellation, instead of sharing the legacy global transport across application instances.
+- **Deployment and Account Isolation**: Switching servers or identities clears old credentials unless a new sign-in explicitly supplies them, and cannot reopen another account's cache as an unauthenticated user.
+- **Cloud Cache Keys**: Invalid deployment URLs and URLs that still contain credentials or query data are not used as cache-owner keys; their snapshots remain available for recovery.
+- **Invalid Provider Sessions**: Sign-in rejects sessions without a user ID or supported access token before discovering scopes or opening cached cloud data.
+- **Session Expiry Race**: A delayed session-expiry message no longer overwrites the state of a newly signed-in account or a disposed runtime.
+- **Feature Policy Refresh**: Token rotation no longer leaves feature permissions loading indefinitely, and requests from an earlier session are cancelled and ignored.
+- **Sign-in Scope Isolation**: Workspace discovery uses the active runtime's cloud client. Closing sign-in cancels pending work, and late results cannot replace a session changed in the meantime.
+- **Sign-in Completion Isolation**: A replaced session cannot finish an earlier sign-in or use its local-import prompt after the initial cloud synchronization completes.
+- **Account and Destination Isolation**: Account changes and collection destination discovery use the runtime cloud client; late account results are ignored after a session change.
+- **Runtime Auth Notifications**: Session-expiry prompts are scoped to the affected runtime rather than opening sign-in in every runtime.
+- **Legacy Auth Callback Isolation**: Runtime-owned sessions no longer subscribe to legacy global cloud callbacks, preventing requests from another client from changing their tokens or signing them out. Injected legacy stores may explicitly enable the compatibility bridge.
+- **Runtime File and Permission Isolation**: Import, export, response downloads, and host permission prompts use the adapter belonging to their application runtime, including when multiple runtimes share a page.
+- **Custom Provider Session Expiry**: A final unauthorized response from a custom auth provider now expires only the associated current bearer session, while late responses from an earlier session are ignored.
+- **Refresh Session Isolation**: A cloud client invalidates pending refreshes on account changes, including when consecutive sessions happen to use the same refresh token.
+- **Cloud Cache Ownership**: Cloud workspace snapshots and pending changes are archived by server and user during sign-out or account changes, then restored only for the matching account. Legacy snapshots without a known owner are retained separately.
+- **Legacy Cloud Cache Hydration**: Cloud data without proven ownership is quarantined when storage loads, with pending changes retained for recovery and a fresh sign-in required.
+- **Cloud Cache Recovery**: Preserved legacy snapshots without a verified owner can be downloaded or copied into separate offline workspaces without assigning them to a cloud account or automatically uploading them.
+- **Cloud Cache Format Downgrades**: Archives in an unrecognized newer format are retained across restarts and included in the recovery download without being opened or assigned to an account.
+- **Product Workspace Boundaries**: Cloud-only runtimes reject offline workspace actions and clear the active view on sign-out; offline-only runtimes reject cloud scope changes. Previously stored offline data remains intact when opening the cloud-only profile.
+- **Offline-only Cloud Commands**: The offline profile rejects cloud configuration and workspace commands even when credentials from another profile remain in storage; its runtime cloud client cannot fall back to direct network access.
+- **Cloud-only Revoked Projects**: Losing project or team access returns the cloud-only profile to sign-in while preserving pending work, rather than leaving the revoked project visible.
+- **Cloud-only Sign-in**: The required sign-in dialog remains open until a cloud session is established and offers preserved-data downloads before authentication; Full edition sign-in remains dismissible.
+- **Cloud Workspace Actions**: A newly created workspace is selectable before the first scope refresh, and late create, rename, or delete results cannot change a replacement session.
 - **Complete Desktop Update Manifest**: Desktop builds remain parallel, while one final job generates and publishes `latest.json` from signed release assets for both macOS architectures, Linux, and Windows. Missing assets or signatures stop publication; overlapping release runs are serialized to prevent manifest replacement races.
 
 ### Changed
+- **Cloud Transport Credentials**: Custom auth providers can request browser credentials through transports that explicitly support them; unsupported transports reject these requests instead of silently dropping the setting.
+- **Provider Client Preparation**: Cloud client identity lookup and resource methods can accept a missing bearer token for providers that authorize requests themselves, while retaining isolated runtime transports.
+- **Provider Session Persistence Preparation**: Provider-session workspace data is archived by owner when saved, while its active view and authentication marker are withheld until the provider can verify a new session.
+- **Provider Session Support**: A provider can sign in without a bearer token when it authorizes requests itself; identity is verified before and after scope discovery, and the store and interface recognize the resulting in-memory session. A final unauthorized response expires that runtime's provider session.
+- **Provider Scope Verification**: Reauthentication preserves the previous scope's pending changes, refreshes the accessible scope list, and prevents opening other cached scopes before they have been verified for that session.
+- **Authentication Contract Clarification**: The API guides and collection distinguish the default bearer backend from optional cookie-backed providers that require a separately configured proxy or authenticator.
+- **Revoked Scope Handling**: When a provider loses access to its active workspace or project, cached changes are preserved while the revoked scope is closed. A failed project-list request does not by itself imply revocation.
+- **Pending Cloud Retry**: A recently synced workspace with pending changes no longer skips synchronization when reopened or restored after sign-in.
+- **Authentication Boundaries**: Cloud providers may supply request authorization and sign-out without using password refresh; backend authentication now selects a replaceable authenticator while the password adapter preserves JWT validation, database roles, and session revocation checks.
+- **Backend Auth Composition**: Applications can supply an authenticator factory at startup through `app.NewWithOptions`; the existing `app.New` continues to select password authentication.
+- **Validated Product Policy**: Runtime composition rejects malformed or inconsistent workspace policies and uses immutable edition presets.
+- **Store Policy Consistency**: Stores created directly validate and retain an immutable edition policy; injecting a tagged store into a runtime with a different policy is rejected. Legacy untagged injected stores remain supported.
+- **Runtime Composition API**: The stable runtime entry point exports the store factory and its types for explicitly composed product profiles, while keeping the existing store exports available.
+- **Shared Refresh Protocol**: Hub and Studio use the same password-token refresh protocol while retaining independent sessions, request deduplication, and auth callbacks.
 - **Product Policy Foundation**: Centralized edition capabilities in an immutable policy injected into each application runtime and store. Shared UI now consumes that runtime policy instead of build-global edition checks, preserving existing Full and Offline behavior while preparing an online-only product edition for future authentication and workspace work.
 - **Authentication Provider Foundation**: Added an injectable authentication provider contract with the existing password login as its default implementation. Login and account controls now follow provider capabilities, allowing a future identity provider to replace the sign-in flow without altering shared Studio workflows.
 - **Cloud Client Foundation**: Added an isolated cloud transport and refresh lifecycle factory. Runtime-owned store reads and mutations now use that client, while legacy named exports remain as a compatibility bridge for existing consumers.

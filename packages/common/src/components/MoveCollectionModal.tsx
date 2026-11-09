@@ -14,6 +14,7 @@ import {
   Laptop,
 } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
+import { isCloudSessionActive } from '../workspace/cloudSession';
 import { Collection, ActiveScope } from '../types/api';
 import {
   fetchUserWorkspaces,
@@ -21,7 +22,7 @@ import {
   fetchTeamProjects,
 } from '../lib/cloudApi';
 import { getRoleFromJwt, canModifyCollection, hasScopePermission } from '../lib/jwt';
-import { useProductPolicy } from '../context';
+import { useCloudClient, useProductPolicy } from '../context';
 import { useBackHandler } from '../lib/backNavigation';
 
 interface MoveCollectionModalProps {
@@ -42,6 +43,7 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
   onClose,
   collection,
 }) => {
+  const cloudClient = useCloudClient();
   const productPolicy = useProductPolicy();
   const isOfflineOnly = !productPolicy.workspace.cloud;
   const workspaceMode = useApiStore((state) => state.workspaceMode);
@@ -76,6 +78,7 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
     }
 
     let isMounted = true;
+    const controller = new AbortController();
     setIsLoadingTargets(true);
     setErrorMsg(null);
 
@@ -84,7 +87,7 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
         const options: TargetOption[] = [];
 
         // 1. Offline Workspaces (available in all editions)
-        const otherOfflineWorkspaces = isSourceProject
+        const otherOfflineWorkspaces = isSourceProject || productPolicy.workspace.offline === false
           ? []
           : (offlineWorkspaces || []).filter(
             (w) => !(workspaceMode === 'offline' && w.id === activeOfflineWorkspaceId)
@@ -104,22 +107,23 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
         }
 
         // 2. Cloud Workspaces & Projects (Full edition only, if authenticated)
-        if (!isOfflineOnly && cloudConfig.token) {
+        if (!isOfflineOnly && isCloudSessionActive(cloudConfig)) {
           const effectiveUserRole = (cloudConfig.user?.role || getRoleFromJwt(cloudConfig.token) || '').toLowerCase();
           const isSuperadmin = effectiveUserRole === 'superadmin';
 
           const [workspaces, teams] = await Promise.all([
-            fetchUserWorkspaces(cloudConfig.apiUrl, cloudConfig.token!, cloudConfig.refreshToken).catch(() => []),
-            fetchUserTeams(cloudConfig.apiUrl, cloudConfig.token!, cloudConfig.refreshToken).catch(() => []),
+            (cloudClient?.fetchUserWorkspaces ?? fetchUserWorkspaces)(cloudConfig.apiUrl, cloudConfig.token, cloudConfig.refreshToken, controller.signal).catch(() => []),
+            (cloudClient?.fetchUserTeams ?? fetchUserTeams)(cloudConfig.apiUrl, cloudConfig.token, cloudConfig.refreshToken, controller.signal).catch(() => []),
           ]);
 
           const teamProjects = await Promise.all(
             teams.map(async (t) => {
-              const projs = await fetchTeamProjects(
+              const projs = await (cloudClient?.fetchTeamProjects ?? fetchTeamProjects)(
                 cloudConfig.apiUrl,
                 t.id,
-                cloudConfig.token!,
-                cloudConfig.refreshToken
+                cloudConfig.token,
+                cloudConfig.refreshToken,
+                controller.signal,
               ).catch(() => []);
               return { team: t, projects: projs };
             })
@@ -209,8 +213,9 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
 
     return () => {
       isMounted = false;
+      controller.abort();
     };
-  }, [isOpen, cloudConfig.token, workspaceMode, activeOfflineWorkspaceId, offlineWorkspaces]);
+  }, [isOpen, cloudClient, productPolicy, cloudConfig.apiUrl, cloudConfig.token, cloudConfig.sessionKind, cloudConfig.user?.id, cloudConfig.refreshToken, workspaceMode, activeOfflineWorkspaceId, offlineWorkspaces]);
 
   if (!isOpen || !collection) return null;
 

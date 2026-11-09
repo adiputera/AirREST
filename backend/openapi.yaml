@@ -6,6 +6,8 @@ info:
     # AirREST Cloud Backend API Specification & Contract
 
     This document defines the formal API Contract for the AirREST backend synchronization and collaboration service.
+    The default backend uses bearer JWT authentication. A custom client provider may use a separate cookie-backed
+    proxy or replacement authenticator, but cookie authentication is not provided by the default backend contract.
     Any backend implementation (written in Go, Node.js/TypeScript, Python, Java, Rust, C#, PHP, etc.) that complies
     with this specification will work as an immediate drop-in replacement for:
     - **AirREST Chrome Extension** (DevTools / Popup REST client)

@@ -40,13 +40,13 @@ import { MoveRequestModal } from './MoveRequestModal';
 import { ImportModal } from './ImportModal';
 import { isDescendantOf } from '../lib/treeHelper';
 import { canModifyCollection, hasScopePermission } from '../lib/jwt';
-import { getDefaultPlatformAdapter } from '../lib/fetcher';
+
 import { ScopeSwitcher } from './ScopeSwitcher';
 import { UserMenu } from './UserMenu';
 import { MobileThemeSegmentedControl } from './ThemeToggle';
 import { ModeSelectorModal } from './ModeSelectorModal';
 import { CloudAuthModal } from './CloudAuthModal';
-import { useProductPolicy } from '../context';
+import { usePlatformAdapter, useProductPolicy } from '../context';
 
 function filterCollectionItems(items: CollectionItem[], query: string): CollectionItem[] {
   const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -892,6 +892,7 @@ export interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
+  const runtimeAdapter = usePlatformAdapter();
   const productPolicy = useProductPolicy();
   const isOfflineOnly = !productPolicy.workspace.cloud;
   const sidebarTab = useApiStore((state) => state.sidebarTab);
@@ -1255,7 +1256,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
       }
       const json = exportPostmanCollection(col);
       const filename = `${col.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-postman-v2.1.json`;
-      const adapter = getDefaultPlatformAdapter();
+      const adapter = runtimeAdapter;
 
       if (adapter?.saveFile) {
         await adapter.saveFile(filename, json, {
@@ -2051,11 +2052,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
 
       {!isOfflineOnly && (
         <>
-          <ModeSelectorModal
-            isOpen={isModeSelectorOpen}
-            onClose={() => setIsModeSelectorOpen(false)}
-            onSelectCloud={() => setIsCloudAuthOpen(true)}
-          />
+          {productPolicy.workspace.offline !== false && (
+            <ModeSelectorModal
+              isOpen={isModeSelectorOpen}
+              onClose={() => setIsModeSelectorOpen(false)}
+              onSelectCloud={() => setIsCloudAuthOpen(true)}
+            />
+          )}
           <CloudAuthModal
             isOpen={isCloudAuthOpen}
             onClose={() => setIsCloudAuthOpen(false)}

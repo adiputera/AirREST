@@ -1,4 +1,4 @@
-import type { ActiveScope } from '../types/api';
+import type { ActiveScope, Collection } from '../types/api';
 
 export interface CachedScopeTabs<TTab> {
   tabs?: TTab[];
@@ -23,9 +23,13 @@ export function resolveCachedScopeTabs<TTab extends { id: string }>(
 }
 
 export function isScopeCacheFresh(
-  entry: Pick<CachedScopeTabs<unknown>, 'lastSyncedAt'> | undefined,
+  entry: (Pick<CachedScopeTabs<unknown>, 'lastSyncedAt'> & {
+    collections?: Array<Pick<Collection, '_syncStatus' | '_origin' | 'version'>>;
+  }) | undefined,
   ttlMs: number,
   now = Date.now(),
 ): boolean {
-  return Boolean(entry?.lastSyncedAt && now - entry.lastSyncedAt < ttlMs);
+  const hasPending = entry?.collections?.some((collection) => collection._syncStatus === 'pending' ||
+    (collection._origin === 'cloud' && typeof collection.version !== 'number'));
+  return Boolean(entry?.lastSyncedAt && now - entry.lastSyncedAt < ttlMs && !hasPending);
 }

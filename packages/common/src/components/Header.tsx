@@ -1,32 +1,28 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Upload, Globe, Settings2, Menu, ChevronDown, Check } from 'lucide-react';
+import { Upload, Download, Globe, Settings2, Menu, ChevronDown, Check } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
+import { isCloudSessionActive } from '../workspace/cloudSession';
 import { ImportModal } from './ImportModal';
 import { EnvironmentModal } from './EnvironmentModal';
 import { EnvironmentOccModal } from './EnvironmentOccModal';
+import { ConfirmModal } from './ConfirmModal';
 import { ModeSelectorModal } from './ModeSelectorModal';
 import { CloudAuthModal } from './CloudAuthModal';
 import { ScopeSwitcher } from './ScopeSwitcher';
 import { UserMenu } from './UserMenu';
 import { DesktopThemeToggle } from './ThemeToggle';
 import { hasScopePermission } from '../lib/jwt';
-import { useAirrestRuntime, useProductPolicy } from '../context';
+import { usePlatformAdapter, useProductPolicy } from '../context';
 import { useBackHandler } from '../lib/backNavigation';
 
 export const Header: React.FC<{ onOpenSidebar?: () => void }> = ({ onOpenSidebar }) => {
   const productPolicy = useProductPolicy();
   const isOfflineOnly = !productPolicy.workspace.cloud;
-  let isDesktop = false;
-  let isAndroid = false;
-  try {
-    const runtime = useAirrestRuntime();
-    isDesktop = runtime?.adapter?.platformId === 'desktop';
-    isAndroid = runtime?.adapter?.platformId === 'android';
-  } catch {
-    // fallback if outside runtime context
-  }
+  const runtimeAdapter = usePlatformAdapter();
+  const isDesktop = runtimeAdapter?.platformId === 'desktop';
+  const isAndroid = runtimeAdapter?.platformId === 'android';
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [isEnvModalOpen, setIsEnvModalOpen] = useState(false);
   const [isModeSelectorOpen, setIsModeSelectorOpen] = useState(false);
@@ -45,6 +41,35 @@ export const Header: React.FC<{ onOpenSidebar?: () => void }> = ({ onOpenSidebar
   const hasConfiguredMode = useApiStore((state) => state.hasConfiguredMode);
   const workspaceMode = useApiStore((state) => state.workspaceMode);
   const cloudConfig = useApiStore((state) => state.cloudConfig);
+  const recoverableCount = useApiStore((state) => state.getCloudCacheRecoveryCount());
+  const unsupportedArchiveCount = useApiStore((state) => state.cloudCacheArchives?.unsupportedVersions?.length || 0);
+  const getCloudCacheRecoveryBackup = useApiStore((state) => state.getCloudCacheRecoveryBackup);
+  const recoverCloudCachesToOfflineWorkspaces = useApiStore((state) => state.recoverCloudCachesToOfflineWorkspaces);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null);
+  const [isRecoveryOpen, setIsRecoveryOpen] = useState(false);
+
+  const downloadRecoveredCache = async () => {
+    try {
+      setRecoveryError(null);
+      setRecoveryMessage(null);
+      const backup = getCloudCacheRecoveryBackup();
+      if (runtimeAdapter?.saveFile) {
+        await runtimeAdapter.saveFile('airrest-cloud-cache-recovery.json', backup, {
+          filters: [{ name: 'JSON', extensions: ['json'] }], mimeType: 'application/json',
+        });
+      } else {
+        const url = URL.createObjectURL(new Blob([backup], { type: 'application/json' }));
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'airrest-cloud-cache-recovery.json';
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+    } catch {
+      setRecoveryError('Could not save the recovery file. Please try again.');
+    }
+  };
 
   const activeEnv = (environments || []).find((e) => e.id === activeEnvironmentId);
   const activeEnvName = activeEnv ? activeEnv.name : 'No Environment';
@@ -87,10 +112,16 @@ export const Header: React.FC<{ onOpenSidebar?: () => void }> = ({ onOpenSidebar
 
   // Automatically prompt on first launch if storage mode is not yet configured (Full edition only)
   useEffect(() => {
-    if (!isOfflineOnly && !hasConfiguredMode) {
+    if (!isOfflineOnly && productPolicy.workspace.offline !== false && !hasConfiguredMode) {
       setIsModeSelectorOpen(true);
     }
-  }, [isOfflineOnly, hasConfiguredMode]);
+  }, [isOfflineOnly, productPolicy, hasConfiguredMode]);
+
+  useEffect(() => {
+    if (productPolicy.workspace.cloud && productPolicy.workspace.offline === false && !isCloudSessionActive(cloudConfig)) {
+      setIsCloudAuthOpen(true);
+    }
+  }, [productPolicy, cloudConfig.token, cloudConfig.sessionKind, cloudConfig.user?.id]);
 
   return (
     <>
@@ -249,6 +280,23 @@ export const Header: React.FC<{ onOpenSidebar?: () => void }> = ({ onOpenSidebar
           </div>
         </div>
 
+        {(recoverableCount > 0 || unsupportedArchiveCount > 0) && (
+          <div className="flex shrink-0 items-center gap-1 md:hidden">
+            <button type="button" onClick={() => void downloadRecoveredCache()}
+              aria-label="Download preserved cloud data" title="Download preserved data, which may include sensitive values and unsupported archives"
+              className="rounded-lg border border-amber-500/40 p-1.5 text-amber-600 dark:text-amber-300">
+              <Download className="h-4 w-4" />
+            </button>
+            {recoverableCount > 0 && productPolicy.workspace.offline !== false && (
+              <button type="button" onClick={() => setIsRecoveryOpen(true)}
+                aria-label="Restore preserved data locally" title="Restore preserved data locally"
+                className="rounded-lg border border-amber-500/40 p-1.5 text-amber-600 dark:text-amber-300">
+                <Upload className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Desktop Global Actions (Desktop only: Env Selector, Theme Toggle, Import, UserMenu) */}
         <div className="hidden md:flex items-center gap-1.5 lg:gap-2 shrink-0">
           {/* Environment Selector */}
@@ -365,6 +413,23 @@ export const Header: React.FC<{ onOpenSidebar?: () => void }> = ({ onOpenSidebar
           {/* Desktop Theme Mode Toggle */}
           <DesktopThemeToggle />
 
+          {(recoverableCount > 0 || unsupportedArchiveCount > 0) && (
+            <div className="flex items-center gap-1">
+            <button type="button" onClick={() => void downloadRecoveredCache()}
+              aria-label="Download preserved cloud data" title="Download preserved data, which may include sensitive values and unsupported archives"
+              className="flex items-center gap-1 rounded-lg border border-amber-500/40 px-2 py-1.5 text-xs text-amber-600 dark:text-amber-300">
+              <Download className="h-3.5 w-3.5" />
+              <span className="hidden xl:inline">Recover data</span>
+            </button>
+            {recoverableCount > 0 && productPolicy.workspace.offline !== false && (
+              <button type="button" onClick={() => setIsRecoveryOpen(true)}
+                className="rounded-lg border border-amber-500/40 px-2 py-1.5 text-xs text-amber-600 dark:text-amber-300">
+                Restore locally
+              </button>
+            )}
+            </div>
+          )}
+
           {!isProjectReadOnly && (
             <button
               onClick={() => setIsImportOpen(true)}
@@ -381,17 +446,36 @@ export const Header: React.FC<{ onOpenSidebar?: () => void }> = ({ onOpenSidebar
         </div>
       </header>
 
+      {recoveryError && <div role="alert" className="px-3 py-1 text-xs text-rose-500">{recoveryError}</div>}
+      {recoveryMessage && <div role="status" className="px-3 py-1 text-xs text-tx-secondary">{recoveryMessage}</div>}
+
       {/* Modals */}
       <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} />
       <EnvironmentModal isOpen={isEnvModalOpen} onClose={() => setIsEnvModalOpen(false)} />
       <EnvironmentOccModal />
+      <ConfirmModal
+        isOpen={isRecoveryOpen}
+        onClose={() => setIsRecoveryOpen(false)}
+        onConfirm={() => {
+          const result = recoverCloudCachesToOfflineWorkspaces();
+          setIsRecoveryOpen(false);
+          setRecoveryError(result.success ? null : result.error || 'Could not restore the preserved data.');
+          setRecoveryMessage(result.success ? `Created ${result.workspaceCount} local workspace(s). The preserved originals remain available.` : null);
+        }}
+        title="Restore preserved data locally"
+        message="Create local workspace copies of the preserved data? The original archives remain on this device and nothing is uploaded automatically."
+        confirmText="Restore locally"
+        variant="primary"
+      />
       {!isOfflineOnly && (
         <>
-          <ModeSelectorModal
-            isOpen={isModeSelectorOpen}
-            onClose={() => setIsModeSelectorOpen(false)}
-            onSelectCloud={() => setIsCloudAuthOpen(true)}
-          />
+          {productPolicy.workspace.offline !== false && (
+            <ModeSelectorModal
+              isOpen={isModeSelectorOpen}
+              onClose={() => setIsModeSelectorOpen(false)}
+              onSelectCloud={() => setIsCloudAuthOpen(true)}
+            />
+          )}
           <CloudAuthModal
             isOpen={isCloudAuthOpen}
             onClose={() => setIsCloudAuthOpen(false)}

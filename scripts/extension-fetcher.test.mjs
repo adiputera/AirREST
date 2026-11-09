@@ -281,7 +281,7 @@ test('T-EXT-ERR: executeApiRequest with chromeAdapter classifies Chromium net::E
   const adapterExports = {};
   vm.runInNewContext(compiledAdapter, {
     exports: adapterExports,
-    require: (id) => (id === '@airrest/common' ? fetcher : require(id)),
+    require: (id) => (id === '@airrest/common' || id === '@airrest/common/platform' ? fetcher : require(id)),
     fetch: fetchImpl,
     Blob: class {},
     URL: { createObjectURL: () => '', revokeObjectURL: () => {} },
