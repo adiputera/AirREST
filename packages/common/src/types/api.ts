@@ -71,6 +71,11 @@ export interface ApiRequest {
 }
 
 export type NetworkErrorCategory = 'ssl' | 'connection_refused' | 'dns' | 'timeout' | 'other';
+
+/** Local editor state; deletion metadata is never saved into collections. */
+export interface RequestTab extends ApiRequest {
+  deletedFromCollection?: string;
+}
 export type ScriptErrorStage = 'pre-request' | 'post-response';
 export type RequestFailureKind = 'cancelled' | 'timeout' | 'response_too_large' | 'host_permission' | 'transport';
 

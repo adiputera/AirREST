@@ -1,3 +1,8 @@
+/**
+ * @deprecated Application shells should use explicit public subpaths
+ * (`@airrest/common/runtime`, `/configuration`, `/ui`, and `/platform`).
+ * This broad legacy surface remains only for backwards compatibility.
+ */
 export * from './types';
 export * from './runtime';
 export * from './context';

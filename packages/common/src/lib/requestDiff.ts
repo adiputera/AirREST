@@ -1,5 +1,6 @@
 import {
   ApiRequest,
+  RequestTab,
   Collection,
   CollectionItem,
   KeyValuePair,
@@ -173,7 +174,7 @@ export function findSavedRequestInCollections(
  * 1. If it belongs to a saved collection item, compares with that saved item.
  * 2. If it is not in any collection, checks whether it has non-empty content compared to a blank request.
  */
-export function isRequestModified(tab?: ApiRequest | null, collections: Collection[] = []): boolean {
+export function isRequestModified(tab?: RequestTab | null, collections: Collection[] = []): boolean {
   if (!tab || !tab.id) return false;
 
   const saved = findSavedRequestInCollections(collections || [], tab.id);
@@ -184,8 +185,8 @@ export function isRequestModified(tab?: ApiRequest | null, collections: Collecti
     return normTab !== normSaved;
   }
 
-  // Not in any collection: dirty if user has entered any data
-  return !isBlankRequest(tab);
+  // Deleted saved requests need recovery even if their content was blank.
+  return Boolean(tab.deletedFromCollection) || !isBlankRequest(tab);
 }
 
 function makeUUID(): string {

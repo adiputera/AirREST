@@ -22,6 +22,16 @@ export interface WorkspaceCacheNormalizers {
   normalizeHistory: (history: HistoryItem[]) => HistoryItem[];
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isCloudCacheArchive(value: unknown): value is CloudCacheArchiveState['unclaimed'][number] {
+  return isRecord(value) && isRecord(value.scopeCache) &&
+    (value.scopesCache === undefined || isRecord(value.scopesCache)) &&
+    (value.unscoped === undefined || (Array.isArray(value.unscoped) && value.unscoped.every(isRecord)));
+}
+
 function serializeScopeCache(
   cache: Record<string, WorkspaceScopeSnapshot>,
   input: Pick<WorkspaceCachePersistenceInput, 'serializeRequest' | 'serializeCollection' | 'serializeHistory'>,
@@ -55,24 +65,44 @@ export function serializeCloudCacheArchives(
 }
 
 export function normalizeCloudCacheArchives(
-  archives: CloudCacheArchiveState | undefined,
+  archives: unknown,
   normalizers: WorkspaceCacheNormalizers,
 ): CloudCacheArchiveState {
-  if (!archives) return { version: 1, owners: {}, unclaimed: [] };
-  if (archives.version !== 1) {
+  if (archives === undefined || archives === null) return { version: 1, owners: {}, unclaimed: [] };
+  if (!isRecord(archives)) {
     return { version: 1, owners: {}, unclaimed: [], unsupportedVersions: [archives] };
   }
+
+  // The initial archive shape did not write a version. It is structurally
+  // compatible with v1, so migrate it in place rather than quarantining data.
+  const isLegacyUnversionedArchive = archives.version === undefined &&
+    (archives.owners !== undefined || archives.unclaimed !== undefined);
+  if (archives.version !== 1 && !isLegacyUnversionedArchive) {
+    return { version: 1, owners: {}, unclaimed: [], unsupportedVersions: [archives] };
+  }
+
   const normalizeArchive = (entry: CloudCacheArchiveState['unclaimed'][number]) => ({
     ...entry,
     scopeCache: normalizePersistedWorkspaceScopeCache(entry.scopeCache, normalizers),
     ...(entry.unscoped ? { unscoped: entry.unscoped.map((snapshot) => normalizePersistedWorkspaceScopeCache({ unscoped: snapshot }, normalizers).unscoped) } : {}),
   });
+  const owners = isRecord(archives.owners)
+    ? Object.fromEntries(Object.entries(archives.owners)
+      .filter((entry): entry is [string, CloudCacheArchiveState['unclaimed'][number]] => isCloudCacheArchive(entry[1]))
+      .map(([key, value]) => [key, normalizeArchive(value)]))
+    : {};
+  const unclaimed = Array.isArray(archives.unclaimed)
+    ? archives.unclaimed.filter(isCloudCacheArchive).map(normalizeArchive)
+    : [];
+  const unsupportedVersions = Array.isArray(archives.unsupportedVersions)
+    ? archives.unsupportedVersions
+    : [];
+
   return {
     version: 1,
-    owners: Object.fromEntries(Object.entries(archives.owners || {}).map(([key, value]) => [key, normalizeArchive(value)])),
-    unclaimed: (archives.unclaimed || []).map(normalizeArchive),
-    ...(Array.isArray(archives.unsupportedVersions) && archives.unsupportedVersions.length
-      ? { unsupportedVersions: archives.unsupportedVersions } : {}),
+    owners,
+    unclaimed,
+    ...(unsupportedVersions.length ? { unsupportedVersions } : {}),
   };
 }
 

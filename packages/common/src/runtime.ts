@@ -25,12 +25,15 @@ import {
 import { createPasswordAuthProvider } from './auth/passwordAuthProvider';
 import type { AuthProvider } from './auth/types';
 import { isCloudSessionActive } from './workspace/cloudSession';
+import { validateApplicationDistributionConfig, type ApplicationDistributionConfig } from './distributionConfig';
 
 export interface AirrestRuntimeConfig {
   adapter: PlatformAdapter;
   /** @deprecated Prefer productPolicy so every runtime dependency shares one policy. */
   edition?: ProductEdition;
   productPolicy?: ProductPolicy;
+  /** Validated product, backend, auth, and update-source configuration for this app composition. */
+  distributionConfig?: ApplicationDistributionConfig;
   authProvider?: AuthProvider;
   cloudClient?: CloudClient;
   /** Opt in only when an injected legacy store makes requests through module-level cloud APIs. */
@@ -53,10 +56,19 @@ export interface AirrestRuntime {
 }
 
 export function createAirrestRuntime(config: AirrestRuntimeConfig): AirrestRuntime {
-  const { adapter, edition = 'full', assets = {} } = config;
-  const productPolicy = config.productPolicy !== undefined ? validateProductPolicy(config.productPolicy) : createProductPolicy(edition);
-  if (config.edition !== undefined && config.productPolicy !== undefined && config.edition !== productPolicy.edition) {
+  const { adapter, assets = {} } = config;
+  const edition = config.edition ?? 'full';
+  const distributionConfig = config.distributionConfig === undefined
+    ? undefined
+    : validateApplicationDistributionConfig(config.distributionConfig);
+  const productPolicy = config.productPolicy !== undefined
+    ? validateProductPolicy(config.productPolicy)
+    : distributionConfig?.workspace.policy ?? createProductPolicy(edition);
+  if (config.edition !== undefined && productPolicy.edition !== config.edition) {
     throw new Error('The edition and product policy must match.');
+  }
+  if (distributionConfig !== undefined && distributionConfig.workspace.policy !== productPolicy) {
+    throw new Error('The distribution configuration and product policy must match.');
   }
   if (config.store?.productPolicy !== undefined && validateProductPolicy(config.store.productPolicy) !== productPolicy) {
     throw new Error('The injected store uses a different product policy than this runtime.');
@@ -71,6 +83,9 @@ export function createAirrestRuntime(config: AirrestRuntimeConfig): AirrestRunti
     passwordRefresh: !config.authProvider || config.authProvider.id === 'password',
   });
   const authProvider = config.authProvider ?? createPasswordAuthProvider(cloudClient.loginUser);
+  if (distributionConfig !== undefined && distributionConfig.auth.providerId !== authProvider.id) {
+    throw new Error('The distribution configuration and auth provider must match.');
+  }
 
   // Each runtime creates its own isolated store instance unless explicitly injected
   const store = config.store || createApiStore({

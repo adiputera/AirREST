@@ -8,9 +8,9 @@ import {
 } from '../androidUpdater';
 
 export function AndroidUpdateBanner({
-  repo = 'adiputera/AirREST',
+  repo,
   currentVersion = typeof __AIRREST_VERSION__ !== 'undefined' ? __AIRREST_VERSION__ : '0.0.0',
-}: { repo?: string; currentVersion?: string }) {
+}: { repo: string; currentVersion?: string }) {
   const [release, setRelease] = useState<GitHubRelease | null>(null);
   const [status, setStatus] = useState<AndroidUpdateStatus>(IDLE_UPDATE);
   const [dismissed, setDismissed] = useState(false);

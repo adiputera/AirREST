@@ -42,8 +42,17 @@ export function createProductPolicy(edition: ProductEdition): ProductPolicy {
 }
 
 /** Validate injected configuration and return the immutable canonical preset. */
-export function validateProductPolicy(policy: ProductPolicy): ProductPolicy {
-  if (!policy || typeof policy !== 'object' || typeof policy.edition !== 'string' || !isProductEdition(policy.edition)) {
+function isProductPolicyShape(value: unknown): value is {
+  edition: unknown;
+  workspace: { offline?: unknown; cloud?: unknown };
+} {
+  if (!value || typeof value !== 'object' || !('edition' in value) || !('workspace' in value)) return false;
+  const workspace = value.workspace;
+  return !!workspace && typeof workspace === 'object';
+}
+
+export function validateProductPolicy(policy: unknown): ProductPolicy {
+  if (!isProductPolicyShape(policy) || typeof policy.edition !== 'string' || !isProductEdition(policy.edition)) {
     throw new Error('Invalid product policy edition.');
   }
   const expected = createProductPolicy(policy.edition);

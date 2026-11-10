@@ -12,9 +12,11 @@ function loadClient(file, fetch) {
   const exports = {};
   const require = (id) => {
     if (id === '@airrest/common/cloud') return loadClient('packages/common/src/lib/cloudApi.ts', fetch);
+    if (id === '@airrest/common/configuration') return loadClient('packages/common/src/distributionConfig.ts', fetch);
+    if (id === './productPolicy') return loadClient('packages/common/src/productPolicy.ts', fetch);
     throw new Error(`Unexpected import: ${id}`);
   };
-  vm.runInNewContext(compiled, { exports, require, fetch, Headers, Response, TextEncoder, console }, { filename: file });
+  vm.runInNewContext(compiled, { exports, require, fetch, Headers, Response, TextEncoder, URL, console }, { filename: file });
   return exports;
 }
 

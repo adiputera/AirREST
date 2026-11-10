@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.3.7] - 2026-11-06
+## [1.3.8] - 2026-11-10
+
+### Added
+- **Deleted Request Tabs**: Open requests whose request, folder, or collection is removed during cloud sync now show a Deleted badge and recovery guidance. Local edits and responses remain available; Save lets users choose a collection and save the request again. The marker survives reload and Undo/Redo, clears after saving, and is not applied when collection details fail to load.
 
 ### Fixed
 - **Runtime Login Isolation**: Password sign-in now uses its runtime's cloud transport, including cancellation, instead of sharing the legacy global transport across application instances.
@@ -26,12 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Refresh Session Isolation**: A cloud client invalidates pending refreshes on account changes, including when consecutive sessions happen to use the same refresh token.
 - **Cloud Cache Ownership**: Cloud workspace snapshots and pending changes are archived by server and user during sign-out or account changes, then restored only for the matching account. Legacy snapshots without a known owner are retained separately.
 - **Legacy Cloud Cache Hydration**: Cloud data without proven ownership is quarantined when storage loads, with pending changes retained for recovery and a fresh sign-in required.
-- **Cloud Cache Recovery**: Preserved legacy snapshots without a verified owner can be downloaded or copied into separate offline workspaces without assigning them to a cloud account or automatically uploading them.
-- **Cloud Cache Format Downgrades**: Archives in an unrecognized newer format are retained across restarts and included in the recovery download without being opened or assigned to an account.
+- **Cloud Cache Recovery**: Preserved legacy snapshots without a verified owner remain quarantined locally and are never assigned to a cloud account or uploaded automatically.
+- **Cloud Cache Archive Migration**: Legacy unversioned archive data now migrates to the current archive format during hydration, while malformed entries remain unavailable and newer formats continue to be retained as opaque recovery data.
+- **Cloud Cache Format Downgrades**: Archives in an unrecognized newer format are retained across restarts as opaque recovery data without being opened or assigned to an account.
 - **Product Workspace Boundaries**: Cloud-only runtimes reject offline workspace actions and clear the active view on sign-out; offline-only runtimes reject cloud scope changes. Previously stored offline data remains intact when opening the cloud-only profile.
 - **Offline-only Cloud Commands**: The offline profile rejects cloud configuration and workspace commands even when credentials from another profile remain in storage; its runtime cloud client cannot fall back to direct network access.
 - **Cloud-only Revoked Projects**: Losing project or team access returns the cloud-only profile to sign-in while preserving pending work, rather than leaving the revoked project visible.
-- **Cloud-only Sign-in**: The required sign-in dialog remains open until a cloud session is established and offers preserved-data downloads before authentication; Full edition sign-in remains dismissible.
+- **Cloud-only Sign-in**: The required sign-in dialog remains open until a cloud session is established; Full edition sign-in remains dismissible.
 - **Cloud Workspace Actions**: A newly created workspace is selectable before the first scope refresh, and late create, rename, or delete results cannot change a replacement session.
 - **Complete Desktop Update Manifest**: Desktop builds remain parallel, while one final job generates and publishes `latest.json` from signed release assets for both macOS architectures, Linux, and Windows. Missing assets or signatures stop publication; overlapping release runs are serialized to prevent manifest replacement races.
 
@@ -63,6 +67,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Workspace Persistence Foundation**: Moved workspace cache serialization and rehydration normalization into a pure module while preserving attachment-safe storage and the existing persisted format.
 - **Cloud Sync Collection Foundation**: Moved unchanged-cache reuse, partial collection fallback, and retention of pending local collections into a pure workspace helper while preserving existing cloud-sync behavior.
 - **Cloud Collection Sync Foundation**: Moved pending-upload and metadata/detail reconciliation orchestration behind injected workspace callbacks, leaving the store responsible for UI state, cancellation, and error presentation.
+- **Workspace Sync Service**: Moved the cloud upload/reconcile/environment-load lifecycle into a stateless workspace service with injected I/O, so the store remains a compatibility facade for state, cancellation, and UI updates.
+- **Distribution Configuration**: Added the validated `@airrest/common/configuration` composition contract for backend, authentication provider, workspace policy, and update sources. Native, extension, and Hub startup now reject malformed build configuration before use, while signing material remains in native tooling and CI secrets.
+- **Stable Application Imports**: Application shells now consume explicit runtime, UI, platform, and configuration entry points; the broad package-root export remains a documented compatibility surface for existing consumers.
 
 ## [1.3.6] - 2026-11-06
 

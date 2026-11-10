@@ -145,21 +145,6 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
         return { offlineScopeCache: offline, scopeCache: cloud, targetCache, targetResources: { collections: targetCache?.collections || [], environments: targetCache?.environments || [], activeEnvironmentId: targetCache?.activeEnvironmentId || null, tabs, activeTabId: targetCache?.activeTabId && tabs.some((tab) => tab.id === targetCache.activeTabId) ? targetCache.activeTabId : tabs[0].id, history: targetCache?.history || [] }, isCloudCacheFresh: Boolean(targetCache?.lastSyncedAt && Date.now() - targetCache.lastSyncedAt < cacheTtlMs) };
       },
     },
-    'cloudDeltaState': {
-      prepareCloudDeltaState: ({ scope, scopeCache, collections, pulledEnvironments, currentEnvironments, activeEnvironmentId, tabs, activeTabId, history, partialCollectionCount, syncedAt }) => {
-        const environments = pulledEnvironments.map((environment) => {
-          const current = currentEnvironments.find((candidate) => candidate.id === environment.id);
-          return current ? { ...environment, variables: environment.variables.map((variable) => {
-            const local = current.variables.find((candidate) => candidate.id === variable.id || candidate.key === variable.key);
-            return { ...variable, currentValue: local?.currentValue !== undefined ? local.currentValue : variable.initialValue };
-          }) } : environment;
-        });
-        const nextActiveEnvironmentId = environments.some((environment) => environment.id === activeEnvironmentId) ? activeEnvironmentId : (environments[0]?.id || null);
-        const key = `${scope.type}:${scope.id}`;
-        const hasPartial = partialCollectionCount > 0;
-        return { collections, environments, activeEnvironmentId: nextActiveEnvironmentId, scopeCache: { ...scopeCache, [key]: { ...scopeCache[key], collections, environments, activeEnvironmentId: nextActiveEnvironmentId, tabs, activeTabId, history, lastSyncedAt: syncedAt } }, syncStatus: hasPartial ? 'error' : 'synced', syncError: hasPartial ? `${partialCollectionCount} collection detail${partialCollectionCount === 1 ? '' : 's'} could not be loaded. Click sync to retry.` : null, lastSyncedAt: syncedAt };
-      },
-    },
     'persistence': {
       preparePersistedWorkspaceCaches: ({ workspaceMode, activeOfflineWorkspaceId, activeCloudScope, lastSyncedAt, resources, offlineScopeCache, scopeCache, serializeRequest, serializeCollection, serializeHistory }) => {
         const serializeCache = (cache) => Object.fromEntries(Object.entries(cache).map(([key, entry]) => [key, { ...entry, tabs: (entry.tabs || []).map(serializeRequest), collections: (entry.collections || []).map(serializeCollection), history: serializeHistory(entry.history || []) }]));
@@ -248,12 +233,6 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
       })),
     },
     'edition': { defaultProductPolicy: { workspace: { cloud: false } } },
-    'requestDiff': {
-      findSavedRequestInCollections: noop,
-      alignCollectionItemIds: noop,
-      flattenCollectionRequests: noop,
-      alignEnvironmentVariableIds: noop,
-    },
     'jwt': { canModifyCollection: () => true, hasScopePermission: () => true },
     'theme': { applyTheme: noop },
     'storeContext': { StoreContext: {} },
@@ -271,8 +250,16 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText, { exports: policyExports });
   modules.productPolicy = policyExports;
+  const requestDiff = {};
+  vm.runInNewContext(ts.transpileModule(fs.readFileSync(new URL('../packages/common/src/lib/requestDiff.ts', import.meta.url), 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText, { exports: requestDiff });
+  modules.requestDiff = requestDiff;
+  modules.cloudDeltaState = loadWorkspaceModule('cloudDeltaState');
   modules.scopeSnapshot.snapshotWorkspaceResources = loadWorkspaceModule('scopeSnapshot').snapshotWorkspaceResources;
   modules.cloudCacheArchive = loadWorkspaceModule('cloudCacheArchive');
+  modules.cloudCacheRecovery = loadWorkspaceModule('cloudCacheRecovery');
+  modules.cloudWorkspaceSync = loadWorkspaceModule('cloudWorkspaceSync');
   const cachePersistence = loadWorkspaceModule('persistence');
   modules.persistence.serializeCloudCacheArchives = cachePersistence.serializeCloudCacheArchives;
   modules.persistence.normalizeCloudCacheArchives = cachePersistence.normalizeCloudCacheArchives;
@@ -456,6 +443,69 @@ test('store synchronizes an identified provider session without a bearer token',
   assert.deepEqual(calls.map((entry) => entry[0]), ['upload', 'collections', 'environments']);
   assert.ok(calls.every((entry) => entry[1] === undefined));
   assert.equal(store.getState().syncStatus, 'synced');
+  store.dispose();
+});
+
+test('sync deletion keeps the active request and response, and saving reattaches the tab', async () => {
+  const cloudClient = {
+    fetchScopeCollections: async () => [],
+    fetchScopeEnvironments: async () => [],
+    batchImportToScope: async () => {},
+  };
+  const store = loadStore({ cloudClient });
+  await new Promise((resolve) => setImmediate(resolve));
+  const request = { ...store.getState().tabs[0], name: 'Example', url: 'https://example.com', bodyContent: 'local edits' };
+  const response = { status: 200, data: 'retained response' };
+  store.setState({
+    workspaceMode: 'cloud',
+    cloudConfig: { apiUrl: 'https://example.test', token: 'test-token', activeScope: { type: 'workspace', id: 'shared' } },
+    collections: [{ id: 'original', name: 'Original', version: 1, _origin: 'cloud', items: [
+      { id: request.id, type: 'request', request: { ...request, bodyContent: 'saved' } },
+    ] }],
+    tabs: [request], activeTabId: request.id, activeResponse: response, tabResponses: { [request.id]: response },
+  });
+  store.getState().updateActiveRequest({ name: 'Edited example' });
+  await store.getState().pullCloudDelta();
+  assert.equal(store.getState().collections.length, 0);
+  assert.equal(store.getState().tabs[0].deletedFromCollection, 'Original');
+  assert.equal(store.getState().tabs[0].bodyContent, 'local edits');
+  assert.equal(store.getState().activeResponse, response);
+  assert.equal(store.getState().tabResponses[request.id], response);
+  assert.equal(store.getState().saveActiveRequest().isDirectSaved, false);
+  store.getState().undoActiveRequest();
+  assert.equal(store.getState().tabs[0].name, 'Example');
+  assert.equal(store.getState().tabs[0].deletedFromCollection, 'Original');
+  store.getState().redoActiveRequest();
+  assert.equal(store.getState().tabs[0].name, 'Edited example');
+  assert.equal(store.getState().tabs[0].deletedFromCollection, 'Original');
+  store.getState().duplicateTab(request.id);
+  assert.equal(store.getState().tabs[1].deletedFromCollection, undefined);
+  store.getState().setActiveTabId(request.id);
+  store.setState({ collections: [{ id: 'destination', name: 'Destination', items: [] }] });
+  const target = { ...store.getState().tabs[0], id: 'new-request' };
+  store.getState().saveRequestToCollection('destination', null, target);
+  const saved = store.getState().collections[0].items[0].request;
+  store.getState().updateActiveRequest({ id: saved.id, name: saved.name });
+  assert.equal(saved.deletedFromCollection, undefined);
+  assert.equal(saved.bodyContent, 'local edits');
+  assert.equal(store.getState().tabs[0].deletedFromCollection, undefined);
+  assert.equal(store.getState().activeTabId, saved.id);
+  assert.equal(store.getState().tabResponses[saved.id], response);
+  assert.equal(store.getState().saveActiveRequest().isDirectSaved, true);
+  store.dispose();
+});
+
+test('failed sync keeps the saved tab unmarked', async () => {
+  const store = loadStore({ cloudClient: { fetchScopeCollections: async () => { throw new Error('Offline'); } } });
+  await new Promise((resolve) => setImmediate(resolve));
+  const request = store.getState().tabs[0];
+  store.setState({ workspaceMode: 'cloud', cloudConfig: { apiUrl: 'https://example.test', token: 'test-token', activeScope: { type: 'workspace', id: 'shared' } },
+    collections: [{ id: 'original', name: 'Original', version: 1, items: [{ id: request.id, type: 'request', request }] }],
+  });
+  await store.getState().pullCloudDelta();
+  assert.equal(store.getState().syncStatus, 'error');
+  assert.equal(store.getState().tabs[0].deletedFromCollection, undefined);
+  assert.equal(store.getState().collections.length, 1);
   store.dispose();
 });
 
@@ -747,6 +797,29 @@ test('legacy cache without an ownership marker is preserved without assuming its
   store.getState().offlineScopeCache[workspace.id].environments[0].variables[0].currentValue = 'edited';
   assert.equal(store.getState().cloudCacheArchives.unclaimed[0].scopeCache['workspace:workspace-1'].collections[0].name, 'Pending');
   assert.equal(store.getState().cloudCacheArchives.unclaimed[0].scopeCache['workspace:workspace-1'].environments[0].variables[0].currentValue, 'original');
+  store.dispose();
+});
+
+test('an imported recovery backup stays unclaimed until it is explicitly copied to an offline workspace', () => {
+  const store = loadStore({ productPolicy: { edition: 'full', workspace: { cloud: true, offline: true } } });
+  const backup = JSON.stringify({
+    format: 'AirREST cloud cache recovery', version: 1,
+    archives: [{ scopeCache: { 'workspace:imported': {
+      collections: [{ id: 'imported-draft', name: 'Imported', items: [], _syncStatus: 'pending' }],
+      environments: [], tabs: [], history: [],
+    } } }],
+  });
+
+  const imported = store.getState().importCloudCacheRecoveryBackup(backup);
+
+  assert.equal(imported.success, true);
+  assert.equal(store.getState().cloudCacheArchives.unclaimed.length, 1);
+  assert.equal(store.getState().collections.some((collection) => collection.id === 'imported-draft'), false);
+  const recovered = store.getState().recoverCloudCachesToOfflineWorkspaces();
+  assert.equal(recovered.success, true);
+  assert.equal(store.getState().offlineWorkspaces.some((workspace) =>
+    store.getState().offlineScopeCache[workspace.id]?.collections.some((collection) => collection.id === 'imported-draft'),
+  ), true);
   store.dispose();
 });
 

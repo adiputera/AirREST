@@ -146,6 +146,8 @@ TAURI_UPDATER_PUBLIC_KEY="<your-public-key-here>" npm run build:desktop
 
 If omitted, updater checks log an informational warning and remain inactive without crashing the application. Releases are cryptographically signed using repository secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_UPDATER_PUBLIC_KEY`.
 
+For a product variant, configure the desktop updater endpoint in the native Tauri build configuration and use the matching public key in CI. The endpoint is public distribution metadata; signing private keys and tenant credentials must remain in CI secrets and never in client configuration.
+
 ### Automated Multi-OS Releases (GitHub Actions)
 
 The repository includes a cross-platform release workflow (`.github/workflows/desktop-release.yml`):
@@ -338,6 +340,14 @@ The Go backend natively runs as a Vercel Serverless Function via `@vercel/go`:
 |---|---|---|---|
 | `VITE_API_URL` | Optional | `http://localhost:8080` | Backend API URL for the Hub web management client. |
 
+### Native Product Composition
+
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `AIRREST_ANDROID_RELEASE_REPOSITORY` | Optional | `adiputera/AirREST` | Build-time `owner/repository` source for Android release checks. Invalid values stop application startup. |
+
+Product variants should use `@airrest/common/configuration` to validate backend URL, auth provider ID, workspace edition, and update source at their composition root. Backend URLs must be HTTPS outside loopback development; credentials, query data, and fragments are rejected.
+
 ---
 
 ## 7. Complete Scripts & Testing Reference
@@ -422,4 +432,3 @@ AIRREST_TEST_DATABASE_URL='postgres://postgres@127.0.0.1:55432/airrest_test?sslm
 
 docker stop airrest-test-db
 ```
-

@@ -274,6 +274,8 @@ function loadStore({ executePreRequestScript, executeApiRequest, cloudApi = {}, 
   modules.productPolicy = policyExports;
   modules.scopeSnapshot.snapshotWorkspaceResources = loadWorkspaceModule('scopeSnapshot').snapshotWorkspaceResources;
   modules.cloudCacheArchive = loadWorkspaceModule('cloudCacheArchive');
+  modules.cloudCacheRecovery = loadWorkspaceModule('cloudCacheRecovery');
+  modules.cloudWorkspaceSync = loadWorkspaceModule('cloudWorkspaceSync');
   const cachePersistence = loadWorkspaceModule('persistence');
   modules.persistence.serializeCloudCacheArchives = cachePersistence.serializeCloudCacheArchives;
   modules.persistence.normalizeCloudCacheArchives = cachePersistence.normalizeCloudCacheArchives;
@@ -966,6 +968,7 @@ function loadExtensionRuntime(domEnv = {}) {
         if (id.includes('scriptRunner')) return runnerExports;
         if (id.includes('cloudSession')) return { isCloudSessionActive: (config) => Boolean(config.token || (config.sessionKind === 'provider' && config.user?.id)) };
         if (id.includes('fetcher')) return { setDefaultPlatformAdapter: () => {}, getDefaultPlatformAdapter: () => null };
+        if (id.includes('distributionConfig')) return { validateApplicationDistributionConfig: (config) => config };
         if (id.includes('productPolicy')) {
           return { createProductPolicy: (edition) => ({ edition, workspace: { cloud: edition !== 'offline' } }) };
         }

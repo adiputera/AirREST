@@ -99,3 +99,21 @@ test('unknown archive versions survive repeated normalization and serialization 
   assert.deepEqual(JSON.parse(JSON.stringify(second.unsupportedVersions)), [future]);
   assert.equal(second.unclaimed.length, 0);
 });
+
+test('unversioned archive data migrates to version 1 while malformed entries remain unavailable', () => {
+  const { normalizeCloudCacheArchives } = loadWorkspacePersistence();
+  const snapshot = { ...resources, lastSyncedAt: 456 };
+  const legacy = {
+    owners: { owner: { scopeCache: { 'workspace:legacy': snapshot } }, malformed: { unscoped: 'not-an-array' } },
+    unclaimed: [{ scopeCache: { 'workspace:unclaimed': snapshot } }, { scopeCache: 'not-an-object' }],
+  };
+  const normalizers = { normalizeRequest: (value) => value, normalizeCollections: (value) => value, normalizeHistory: (value) => value };
+
+  const migrated = normalizeCloudCacheArchives(legacy, normalizers);
+
+  assert.equal(migrated.version, 1);
+  assert.equal(migrated.owners.owner.scopeCache['workspace:legacy'].lastSyncedAt, 456);
+  assert.equal(migrated.owners.malformed, undefined);
+  assert.equal(migrated.unclaimed.length, 1);
+  assert.equal(migrated.unclaimed[0].scopeCache['workspace:unclaimed'].collections[0].id, 'collection-1');
+});

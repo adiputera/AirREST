@@ -1,5 +1,6 @@
 import { User, Team, TeamMember, Project, ProjectMember, Collection, Environment, ProjectRole, FeaturePolicy, FeatureFlags } from '../types';
 import { requestPasswordRefresh } from '@airrest/common/cloud';
+import { createApplicationDistributionConfig } from '@airrest/common/configuration';
 
 export interface TokenRefreshCallback {
   (tokens: { token: string; refreshToken: string; expiresAt: string; previousRefreshToken: string }): void;
@@ -65,8 +66,16 @@ function createApiError(json: any, status: number, fallback: string): ApiError {
   return new ApiError(extractError(json, fallback), status, json?.code, json?.data);
 }
 
-export const DEFAULT_API_URL: string =
-  (import.meta.env.VITE_API_URL ? String(import.meta.env.VITE_API_URL) : 'http://localhost:8080').replace(/\/+$/, '');
+const hubDistributionConfig = createApplicationDistributionConfig({
+  backend: {
+    apiUrl: import.meta.env.VITE_API_URL ? String(import.meta.env.VITE_API_URL) : 'http://localhost:8080',
+    allowCustomUrl: true,
+  },
+  auth: { providerId: 'password' },
+  workspace: { edition: 'full' },
+});
+
+export const DEFAULT_API_URL = hubDistributionConfig.backend.apiUrl ?? 'http://localhost:8080';
 
 export async function fetchWithAuth(endpoint: string, options: ApiFetchOptions): Promise<Response> {
   const generation = sessionGeneration;

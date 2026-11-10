@@ -6,13 +6,19 @@ import { exit, onBackButtonPress } from '@tauri-apps/api/app';
 import { tauriAdapter } from './adapters/tauriAdapter';
 import { DesktopUpdateBanner } from './components/DesktopUpdateBanner';
 import { AndroidUpdateBanner } from './components/AndroidUpdateBanner';
+import { nativeDistributionConfig } from './distributionConfig';
 import './index.css';
 
 initEarlyTheme();
 
+const androidReleaseRepository = nativeDistributionConfig.updates.androidReleaseRepository;
+if (androidReleaseRepository === undefined) {
+  throw new Error('Native Android builds require an Android release repository.');
+}
+
 const runtime = createAirrestRuntime({
   adapter: __AIRREST_ANDROID__ ? { ...tauriAdapter, platformId: 'android' } : tauriAdapter,
-  edition: 'full',
+  distributionConfig: nativeDistributionConfig,
 });
 
 window.addEventListener('beforeunload', () => {
@@ -30,7 +36,7 @@ if (__AIRREST_ANDROID__) {
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
     <AirrestProvider runtime={runtime}>
-      {__AIRREST_ANDROID__ ? <AndroidUpdateBanner /> : <DesktopUpdateBanner />}
+      {__AIRREST_ANDROID__ ? <AndroidUpdateBanner repo={androidReleaseRepository} /> : <DesktopUpdateBanner />}
       <App />
     </AirrestProvider>
   </React.StrictMode>,
