@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.7] - 2026-11-10
+
+### Added
+- **Folder Move Feature**:
+  - **Move Folder Action**: Added a **Move Folder** action item with an accessible `FolderInput` icon to the folder three-dots context menu in the collection sidebar, enabling developers to easily reorganize entire folders.
+  - **Interactive MoveFolderModal Component**: Created `MoveFolderModal` (`packages/common/src/components/MoveFolderModal.tsx`) with target collection selection, target folder dropdown, current path breadcrumb, and item count badge.
+  - **Self-Move & Circular Nesting Prevention**: Protected folder hierarchies against circular references by automatically excluding the folder itself and all its descendant subfolders from the target folder selection list in the UI, and verifying ancestry via `isDescendantOf` in the store reducer.
+  - **Cross-Collection & Intra-Collection Relocation**: Supported moving folders into other folders or to the collection root (`targetFolderId: null`), both within the same collection and across different collections in the active scope.
+  - **Role-Based Access Control & Cloud Sync**: Enforced source and target collection edit permissions (`canModifyCollection`), and automatically synchronized folder relocation across connected devices via `batchImportToScope` in cloud workspace mode.
+  - **Helper Utilities & Automated Verification**: Introduced `findSavedFolderInCollections` in `packages/common/src/lib/requestDiff.ts`, exported through `@airrest/common`, and added full test coverage in `scripts/move-folder.test.mjs`.
+
 ## [1.3.6] - 2026-11-06
 
 ### Changed

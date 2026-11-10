@@ -1,6 +1,6 @@
 # Chrome Web Store Listings — AirREST
 
-> Last Updated: 2026-11-06  
+> Last Updated: 2026-11-10  
 > Store URL: https://chromewebstore.google.com/detail/airrest-rest-client/kpajbolnoepgalhoinilfdfpcmgbdlld
 
 > Chrome Web Store release notes describe browser-extension changes only. Do not include backend, Hub, or desktop release notes here.
@@ -68,6 +68,7 @@ SUPPORT
 For questions, bug reports, or feature suggestions, visit the project repository on GitHub:
 https://github.com/adiputera/AirREST
 
+Version 1.3.7 — Added interactive Move Folder support to the collection sidebar: developers can now easily move entire folders to another folder or collection with automatic circular nesting prevention, breadcrumb navigation, and cloud workspace synchronization.
 Version 1.3.6 — Fixed request editor vertical height responsiveness: dragging the request/response split resizer downwards now dynamically expands the Payload Builder CodeMirror editor, preview view, and script textareas (Pre-request, Tests, and GraphQL) to seamlessly fill available panel space without dead space.
 Version 1.3.4 — Improved sandbox script diagnostics: if a post-response script redeclares an injected parameter such as `response`, AirREST now explains the name collision and suggests using a safe local name such as `responseJson`. Added regression coverage for sandbox origin and prototype protections, and corrected shared payload-formatting lint issues plus prerelease release-badge updates.
 Version 1.3.3 — Added per-tab in-memory undo (Ctrl+Z / Cmd+Z) and redo (Ctrl+Y / Ctrl+Shift+Z) history tracking up to 50 snapshots across body edits, parameters, headers, and configurations; discrete snapshot capture for bulk paste and Beautify actions; two-way controlled editor synchronization; compact mobile-friendly header action buttons in the request editor; resilient JSON formatting with automatic recovery from relaxed syntax; debounced real-time syntax validation; CodeMirror 6 line numbers and code folding (collapse/expand objects and lists) across Request Body and Response Viewer; interactive desktop sidebar drag-to-resize with persistent custom width (220px to 800px); global studio request vs response split-pane resizer with persistent height and independent dual-pane scrolling across all request subtabs; and seamless request section collapse with automatic height shrinking and response viewer elevation.
@@ -168,6 +169,7 @@ SUPPORT
 For questions, bug reports, or feature suggestions, visit the project repository on GitHub:
 https://github.com/adiputera/AirREST
 
+Version 1.3.7 — Added interactive Move Folder support to the collection sidebar: developers can now easily move entire folders to another folder or collection with automatic circular nesting prevention and breadcrumb navigation.
 Version 1.3.6 — Fixed request editor vertical height responsiveness: dragging the request/response split resizer downwards now dynamically expands the Payload Builder CodeMirror editor, preview view, and script textareas (Pre-request, Tests, and GraphQL) to seamlessly fill available panel space without dead space.
 Version 1.3.3 — Added per-tab in-memory undo (Ctrl+Z / Cmd+Z) and redo (Ctrl+Y / Ctrl+Shift+Z) history tracking up to 50 snapshots across body edits, parameters, headers, and configurations; discrete snapshot capture for bulk paste and Beautify actions; two-way controlled editor synchronization; compact mobile-friendly header action buttons in the request editor; resilient JSON formatting with automatic recovery from relaxed syntax; debounced real-time syntax validation; CodeMirror 6 line numbers and code folding (collapse/expand objects and lists) across Request Body and Response Viewer; interactive desktop sidebar drag-to-resize with persistent custom width (220px to 800px); global studio request vs response split-pane resizer with persistent height and independent dual-pane scrolling across all request subtabs; and seamless request section collapse with automatic height shrinking and response viewer elevation.
 Version 1.3.2 — Hardened sandbox origin validation in packaged production extension builds, restricting localhost postMessage access to local development modes; declared typed Vite environment configuration; and synchronized Postman environment export metadata.
