@@ -37,6 +37,7 @@ import { ConfirmModal } from './ConfirmModal';
 import { MoveCollectionModal } from './MoveCollectionModal';
 import { CollectionPermissionModal } from './CollectionPermissionModal';
 import { MoveRequestModal } from './MoveRequestModal';
+import { MoveFolderModal } from './MoveFolderModal';
 import { ImportModal } from './ImportModal';
 import { isDescendantOf } from '../lib/treeHelper';
 import { canModifyCollection, hasScopePermission } from '../lib/jwt';
@@ -160,6 +161,7 @@ interface FolderItemProps {
   onSelectRequest: (req: ApiRequest) => void;
   onRequestDelete: (item: CollectionItem) => void;
   onRequestMove: (item: CollectionItem, collectionId: string) => void;
+  onRequestMoveFolder?: (item: CollectionItem, collectionId: string) => void;
   draggedItem: DraggedItemState | null;
   setDraggedItem: (item: DraggedItemState | null) => void;
   onReorderItem: (
@@ -184,6 +186,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
   onSelectRequest,
   onRequestDelete,
   onRequestMove,
+  onRequestMoveFolder,
   draggedItem,
   setDraggedItem,
   onReorderItem,
@@ -538,6 +541,18 @@ const FolderItem: React.FC<FolderItemProps> = ({
                           </button>
                           <button
                             type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setIsMenuOpen(false);
+                              onRequestMoveFolder?.(item, collectionId);
+                            }}
+                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-tx-secondary hover:bg-hover hover:text-amber-500 transition"
+                          >
+                            <FolderInput className="h-3.5 w-3.5 text-amber-500 dark:text-amber-400" />
+                            <span>Move Folder</span>
+                          </button>
+                          <button
+                            type="button"
                             onClick={handleCreateRequest}
                             className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-tx-secondary hover:bg-hover hover:text-sky-500 transition"
                           >
@@ -691,6 +706,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
                 onSelectRequest={onSelectRequest}
                 onRequestDelete={onRequestDelete}
                 onRequestMove={onRequestMove}
+                onRequestMoveFolder={onRequestMoveFolder}
                 draggedItem={draggedItem}
                 setDraggedItem={setDraggedItem}
                 onReorderItem={onReorderItem}
@@ -1088,6 +1104,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
   const [creatingFolderInCol, setCreatingFolderInCol] = useState<string | null>(null);
   const [newFolderName, setNewFolderName] = useState('');
   const [requestToMove, setRequestToMove] = useState<{
+    item: CollectionItem;
+    collectionId: string;
+  } | null>(null);
+  const [folderToMove, setFolderToMove] = useState<{
     item: CollectionItem;
     collectionId: string;
   } | null>(null);
@@ -1865,6 +1885,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
                                     collectionId: colId,
                                   })
                                 }
+                                onRequestMoveFolder={(targetItem, colId) =>
+                                  setFolderToMove({
+                                    item: targetItem,
+                                    collectionId: colId,
+                                  })
+                                }
                                 draggedItem={draggedItem}
                                 setDraggedItem={setDraggedItem}
                                 onReorderItem={reorderItem}
@@ -2043,6 +2069,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
         onClose={() => setRequestToMove(null)}
         item={requestToMove?.item || null}
         sourceCollectionId={requestToMove?.collectionId || ''}
+      />
+
+      <MoveFolderModal
+        isOpen={!!folderToMove}
+        onClose={() => setFolderToMove(null)}
+        item={folderToMove?.item || null}
+        sourceCollectionId={folderToMove?.collectionId || ''}
       />
 
       <ImportModal

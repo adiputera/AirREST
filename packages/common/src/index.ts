@@ -39,3 +39,5 @@ export * from './lib/payloadCompiler';
 export * from './lib/payloadReverseParser';
 export * from './components/payload';
 export * from './components/ThemeToggle';
+export * from './components/MoveRequestModal';
+export * from './components/MoveFolderModal';
