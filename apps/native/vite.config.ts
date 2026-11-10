@@ -11,6 +11,7 @@ export default defineConfig(() => ({
   define: {
     __AIRREST_ANDROID__: JSON.stringify(process.env.TAURI_ENV_PLATFORM === 'android'),
     __AIRREST_VERSION__: JSON.stringify(pkg.version),
+    __AIRREST_ANDROID_RELEASE_REPOSITORY__: JSON.stringify(process.env.AIRREST_ANDROID_RELEASE_REPOSITORY || 'adiputera/AirREST'),
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

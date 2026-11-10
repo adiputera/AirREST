@@ -64,55 +64,9 @@ test('cloud resources without a scope are retained for recovery but not automati
   assert.equal(later.owners[owner].unscoped[0].collections[0].id, 'draft');
 });
 
-test('recovery control writes the selected backup through the owning runtime adapter', async () => {
-  const source = fs.readFileSync(new URL('../packages/common/src/components/Header.tsx', import.meta.url), 'utf8').replaceAll('import.meta.env', '({})');
-  const compiled = ts.transpileModule(source, { compilerOptions: {
-    module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React, esModuleInterop: true,
-  } }).outputText;
-  const calls = [];
-  const runtime = { adapter: { platformId: 'desktop', saveFile: async (...args) => { calls.push(args); return true; } } };
-  const state = { environments: [], activeEnvironmentId: null, hasConfiguredMode: true, workspaceMode: 'offline', cloudConfig: {},
-    cloudCacheOwner: null, cloudCacheArchives: { unclaimed: [{ scopeCache: {} }], owners: {} },
-    getCloudCacheRecoveryCount: () => 1,
-    getCloudCacheRecoveryBackup: () => '{"format":"AirREST cloud cache recovery"}', setActiveEnvironmentId() {} };
-  const react = { __esModule: true, default: { createElement: (type, props, ...children) => ({ type, props: props || {}, children }), Fragment: 'fragment' },
-    useState: (value) => [value, () => {}], useEffect: () => {}, useRef: (value) => ({ current: value }) };
-  const modules = { react, 'lucide-react': {}, '../store/useApiStore': { useApiStore: (selector) => selector(state) },
-    '../context': { usePlatformAdapter: () => runtime.adapter, useProductPolicy: () => ({ workspace: { cloud: true } }) },
-    '../lib/fetcher': { getDefaultPlatformAdapter: () => null }, '../lib/backNavigation': { useBackHandler: () => {} },
-    '../lib/jwt': { hasScopePermission: () => true } };
-  const exports = {};
-  vm.runInNewContext(compiled, { exports, require: (id) => modules[id] || {}, setTimeout });
-  const tree = exports.Header({});
-  function find(node) {
-    if (Array.isArray(node)) return node.map(find).find(Boolean);
-    if (!node || typeof node !== 'object') return null;
-    if (node.props?.['aria-label'] === 'Download preserved cloud data') return node;
-    return find(node.children);
-  }
-  const control = find(tree);
-  assert.ok(control);
-  control.props.onClick();
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(calls[0][0], 'airrest-cloud-cache-recovery.json');
-  assert.equal(calls[0][1], '{"format":"AirREST cloud cache recovery"}');
-  assert.equal(state.cloudCacheArchives.unclaimed.length, 1);
-  const secondCalls = [];
-  runtime.adapter = { platformId: 'desktop', saveFile: async (...args) => { secondCalls.push(args); return true; } };
-  const secondTree = exports.Header({});
-  find(secondTree).props.onClick();
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(calls.length, 1);
-  assert.equal(secondCalls[0][0], 'airrest-cloud-cache-recovery.json');
-  state.getCloudCacheRecoveryCount = () => 0;
-  state.cloudCacheArchives = { unclaimed: [], owners: {}, unsupportedVersions: [{ version: 2 }] };
-  const unsupportedTree = exports.Header({});
-  assert.ok(find(unsupportedTree), 'unsupported archives remain downloadable');
-  function findRestore(node) {
-    if (Array.isArray(node)) return node.map(findRestore).find(Boolean);
-    if (!node || typeof node !== 'object') return null;
-    if (node.props?.['aria-label'] === 'Restore preserved data locally') return node;
-    return findRestore(node.children);
-  }
-  assert.equal(findRestore(unsupportedTree), undefined);
+test('header does not expose cloud-cache recovery controls', () => {
+  const source = fs.readFileSync(new URL('../packages/common/src/components/Header.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /Import preserved cloud data/);
+  assert.doesNotMatch(source, /Download preserved cloud data/);
+  assert.doesNotMatch(source, /Restore preserved data locally/);
 });

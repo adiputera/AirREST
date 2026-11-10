@@ -1,11 +1,12 @@
 {
   "name": "@airrest/common",
-  "version": "1.3.7",
+  "version": "1.3.8",
   "private": true,
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
     "./runtime": "./src/public/runtime.ts",
+    "./configuration": "./src/public/configuration.ts",
     "./ui": "./src/public/ui.ts",
     "./platform": "./src/public/platform.ts",
     "./types": "./src/types/index.ts",

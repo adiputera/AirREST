@@ -25,9 +25,12 @@ function load(file, overrides = {}, globals = {}) {
   }).outputText;
   const exports = {};
   vm.runInNewContext(compiled, {
-    exports, console, Headers, Response, TextEncoder, Error, VITE_ENV: {},
+    exports, console, Headers, Response, TextEncoder, URL, Error, VITE_ENV: {},
     require: (id) => id in overrides ? overrides[id]
       : id === '@airrest/common/cloud' ? load('packages/common/src/lib/cloudApi.ts', {}, globals)
+        : id === '@airrest/common/configuration' ? load('packages/common/src/distributionConfig.ts', {
+          './productPolicy': load('packages/common/src/productPolicy.ts', {}, globals),
+        }, globals)
         : require(id),
     ...globals,
   }, { filename: file });

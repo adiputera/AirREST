@@ -1,4 +1,5 @@
-import type { ActiveScope, ApiRequest, Collection, Environment, HistoryItem, SyncStatus } from '../types/api';
+import type { ActiveScope, RequestTab, Collection, Environment, HistoryItem, SyncStatus } from '../types/api';
+import { findSavedRequestInCollections } from '../lib/requestDiff';
 import { getScopeCacheKey } from './scopeCache';
 import { snapshotWorkspaceResources, type WorkspaceScopeSnapshot } from './scopeSnapshot';
 
@@ -6,10 +7,11 @@ export interface CloudDeltaStateInput {
   scope: ActiveScope;
   scopeCache: Record<string, WorkspaceScopeSnapshot>;
   collections: Collection[];
+  currentCollections: Collection[];
   pulledEnvironments: Environment[];
   currentEnvironments: Environment[];
   activeEnvironmentId: string | null;
-  tabs: ApiRequest[];
+  tabs: RequestTab[];
   activeTabId: string;
   history: HistoryItem[];
   partialCollectionCount: number;
@@ -18,6 +20,7 @@ export interface CloudDeltaStateInput {
 
 export interface CloudDeltaState {
   collections: Collection[];
+  tabs: RequestTab[];
   environments: Environment[];
   activeEnvironmentId: string | null;
   scopeCache: Record<string, WorkspaceScopeSnapshot>;
@@ -50,6 +53,19 @@ export function preserveEnvironmentCurrentValues(
 
 /** Builds the cache and UI state from data already fetched by a cloud sync. */
 export function prepareCloudDeltaState(input: CloudDeltaStateInput): CloudDeltaState {
+  const tabs = input.tabs.map((tab) => {
+    if (findSavedRequestInCollections(input.collections, tab.id)) {
+      if (!tab.deletedFromCollection) return tab;
+      const restoredTab = { ...tab };
+      delete restoredTab.deletedFromCollection;
+      return restoredTab;
+    }
+    const previous = findSavedRequestInCollections(input.currentCollections, tab.id);
+    if (!previous || input.collections.some((collection) => collection.id === previous.collection.id && collection.isPartial)) {
+      return tab;
+    }
+    return { ...tab, deletedFromCollection: previous.collection.name };
+  });
   const environments = preserveEnvironmentCurrentValues(input.pulledEnvironments, input.currentEnvironments);
   const activeEnvironmentId = environments.some((environment) => environment.id === input.activeEnvironmentId)
     ? input.activeEnvironmentId
@@ -63,7 +79,7 @@ export function prepareCloudDeltaState(input: CloudDeltaStateInput): CloudDeltaS
         collections: input.collections,
         environments,
         activeEnvironmentId,
-        tabs: input.tabs,
+        tabs,
         activeTabId: input.activeTabId,
         history: input.history,
       }, input.syncedAt),
@@ -72,6 +88,7 @@ export function prepareCloudDeltaState(input: CloudDeltaStateInput): CloudDeltaS
   const hasPartialCollections = input.partialCollectionCount > 0;
   return {
     collections: input.collections,
+    tabs,
     environments,
     activeEnvironmentId,
     scopeCache,

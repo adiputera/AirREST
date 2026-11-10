@@ -478,6 +478,11 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
     <>
       <div className={`flex flex-col flex-1 min-h-full border-b border-line bg-surface px-3.5 pt-2 ${isConfigCollapsed ? 'pb-0' : 'pb-1.5'}`}>
         {/* Request Name and Actions Bar */}
+        {currentTab.deletedFromCollection && !savedRequestInfo && (
+          <div role="status" className="mb-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+            This request or its collection was deleted during sync. Your open copy is still here. Use Save to choose a collection and save it as a new request.
+          </div>
+        )}
         <div className="mb-1.5 flex items-center justify-between gap-2 min-h-[28px] shrink-0">
           {isNarrowScreen && isEditingNameOnMobile ? (
             /* Mobile Full-Width Request Name Edit Mode */

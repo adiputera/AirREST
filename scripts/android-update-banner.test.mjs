@@ -171,7 +171,7 @@ function bannerHarness({ savedStatus = status('idle'), cached = true, openerFail
     fetch: async () => ({ ok: false }), AbortController, console,
     setTimeout: () => 1, clearTimeout() {}, setInterval: () => 2, clearInterval() {},
   });
-  const render = () => { cursor = 0; return exports.AndroidUpdateBanner({ currentVersion: '1.3.3' }); };
+  const render = () => { cursor = 0; return exports.AndroidUpdateBanner({ repo: 'adiputera/AirREST', currentVersion: '1.3.3' }); };
   const settle = async () => { await new Promise(resolve => setImmediate(resolve)); return render(); };
   return { calls, storage, render, settle,
     async mount() { render(); effects.splice(0).forEach(effect => cleanups.push(effect())); return settle(); },

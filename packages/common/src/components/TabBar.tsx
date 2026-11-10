@@ -190,7 +190,10 @@ export const TabBar: React.FC = () => {
             const displayName = tab.name || tab.url || 'Untitled Request';
             const isDirty = isRequestModified(tab, collections);
             const saved = findSavedRequestInCollections(collections, tab.id);
-            const tabTitle = saved
+            const isDeleted = Boolean(tab.deletedFromCollection && !saved);
+            const tabTitle = isDeleted
+              ? `${displayName} — Deleted from ${tab.deletedFromCollection}. Save to a collection to keep this request.`
+              : saved
               ? `${displayName} (${saved.collection.name})`
               : displayName;
 
@@ -209,6 +212,15 @@ export const TabBar: React.FC = () => {
                 <span className="truncate max-w-[105px]" title={tabTitle}>
                   {displayName}
                 </span>
+
+                {isDeleted && (
+                  <span
+                    className="shrink-0 rounded bg-amber-500/15 px-1 text-[10px] text-amber-700 dark:text-amber-300"
+                    title={tabTitle}
+                  >
+                    Deleted
+                  </span>
+                )}
 
                 {isDirty && (
                   <span

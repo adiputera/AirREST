@@ -6,6 +6,7 @@ export type { ApiStore } from './storeContext';
 import { appStorage } from '../lib/storage';
 import {
   ApiRequest,
+  RequestTab,
   ApiResponse,
   Collection,
   CollectionItem,
@@ -95,9 +96,9 @@ import { prepareCloudDeltaState } from '../workspace/cloudDeltaState';
 import { normalizeCloudCacheArchives, normalizePersistedWorkspaceScopeCache, preparePersistedWorkspaceCaches, serializeCloudCacheArchives } from '../workspace/persistence';
 import { archiveCloudCache, captureCloudCache, cloudCacheOwnerKey, emptyCloudCacheArchives, getArchivedScope, readCloudCache, type CloudCacheArchiveState } from '../workspace/cloudCacheArchive';
 import {
-  pullCloudCollections,
-  pushPendingCloudCollections,
-} from '../workspace/cloudCollectionSync';
+  synchronizeCloudWorkspace,
+} from '../workspace/cloudWorkspaceSync';
+import { importCloudCacheRecoveryBackup } from '../workspace/cloudCacheRecovery';
 
 const FEATURE_POLICY_TTL_MS = 30 * 60 * 1000;
 
@@ -332,7 +333,7 @@ export const defaultOfflineWorkspace: OfflineWorkspace = {
 };
 
 export interface ApiStoreState {
-  tabs: ApiRequest[];
+  tabs: RequestTab[];
   activeTabId: string;
   activeResponse: ApiResponse | null;
   tabResponses: Record<string, ApiResponse>;
@@ -489,6 +490,7 @@ export interface ApiStoreState {
   getCloudSessionGeneration: () => number;
   getCloudCacheRecoveryCount: () => number;
   getCloudCacheRecoveryBackup: () => string;
+  importCloudCacheRecoveryBackup: (serialized: string) => { success: boolean; archiveCount: number; unsupportedArchiveCount: number; error?: string };
   recoverCloudCachesToOfflineWorkspaces: () => { success: boolean; workspaceCount: number; error?: string };
   refreshFeaturePolicy: (force?: boolean) => Promise<FeaturePolicy | null>;
   isFeatureEnabled: (feature: keyof FeatureFlags) => boolean;
@@ -1075,6 +1077,24 @@ export function createApiStore(
             ? { unsupportedArchives: state.cloudCacheArchives.unsupportedVersions } : {}),
         }, null, 2);
       },
+      importCloudCacheRecoveryBackup: (serialized) => {
+        const imported = importCloudCacheRecoveryBackup(get().cloudCacheArchives, serialized);
+        if (!imported.success) {
+          return { success: false, archiveCount: 0, unsupportedArchiveCount: 0, error: imported.error };
+        }
+        set({ cloudCacheArchives: normalizeCloudCacheArchives(imported.archives, {
+          normalizeRequest: normalizePersistedRequestAttachments,
+          normalizeCollections: (collections: Collection[]) => ensureUniqueCollectionItemIds(
+            collections.map(normalizeCollectionAttachments),
+          ),
+          normalizeHistory: normalizeHistoryAttachments,
+        }) });
+        return {
+          success: true,
+          archiveCount: imported.archiveCount,
+          unsupportedArchiveCount: imported.unsupportedArchiveCount,
+        };
+      },
       recoverCloudCachesToOfflineWorkspaces: () => {
         if (!allowsOfflineWorkspace) return { success: false, workspaceCount: 0, error: 'Offline workspaces are disabled for this product.' };
         const state = get();
@@ -1334,9 +1354,9 @@ export function createApiStore(
         const token = cloudConfig.token;
         set({ syncStatus: 'syncing', syncError: null });
         try {
-          const pushResult = await pushPendingCloudCollections({
-            collections: get().collections || [],
-            upload: async (collection) => batchImportToScope(
+          const syncResult = await synchronizeCloudWorkspace({
+            currentCollections: get().collections || [],
+            uploadPendingCollection: async (collection) => batchImportToScope(
               cloudConfig.apiUrl,
               token,
               requestedScope,
@@ -1344,68 +1364,61 @@ export function createApiStore(
               cloudConfig.refreshToken,
               operation.controller.signal,
             ),
-            isCurrent: () => isAsyncOperationCurrent(operation),
-            isAborted: () => operation.controller.signal.aborted,
-            onUploaded: (collection) => set((state) => ({
-              collections: state.collections.map((candidate) =>
-                candidate.id === collection.id ? { ...candidate, _syncStatus: 'synced' } : candidate,
-              ),
-            })),
-          });
-          if (pushResult.status === 'cancelled') return;
-          if (pushResult.status === 'failed') {
-            console.warn(`Failed to push pending collection "${pushResult.collection.name}" to cloud:`, pushResult.error);
-            const errorMessage = pushResult.error instanceof Error ? pushResult.error.message : String(pushResult.error);
-            set({
-              syncStatus: 'error',
-              syncError: errorMessage || `Failed to upload pending collection "${pushResult.collection.name}"`,
-            });
-            return;
-          }
-
-          const collectionsResult = await pullCloudCollections({
-            currentCollections: get().collections || [],
-            fetchMetadata: () => fetchScopeCollectionsForRuntime(
+            fetchCollectionMetadata: () => fetchScopeCollectionsForRuntime(
               cloudConfig.apiUrl,
               token,
               requestedScope,
               cloudConfig.refreshToken,
               operation.controller.signal,
             ),
-            fetchDetail: (collectionId) => fetchCollectionByIdForRuntime(
-                cloudConfig.apiUrl,
-                token,
-                collectionId,
-                cloudConfig.refreshToken,
+            fetchCollectionDetail: (collectionId) => fetchCollectionByIdForRuntime(
+              cloudConfig.apiUrl,
+              token,
+              collectionId,
+              cloudConfig.refreshToken,
+              operation.controller.signal,
+            ),
+            fetchEnvironments: () => fetchScopeEnvironmentsForRuntime(
+              cloudConfig.apiUrl,
+              cloudConfig.token,
+              requestedScope,
+              cloudConfig.refreshToken,
               operation.controller.signal,
             ),
             buildCollection: buildCollectionFromDetails,
+            buildEnvironments: buildEnvironmentsFromDelta,
             isCurrent: () => isAsyncOperationCurrent(operation),
-            onDetailFetchError: (metadata, error) => console.warn(`Failed to fetch details for collection ${metadata.id}:`, error),
+            isAborted: () => operation.controller.signal.aborted,
+            onPendingCollectionUploaded: (collection) => set((state) => ({
+              collections: state.collections.map((candidate) =>
+                candidate.id === collection.id ? { ...candidate, _syncStatus: 'synced' } : candidate,
+              ),
+            })),
+            onCollectionDetailFetchError: (metadata, error) => console.warn(`Failed to fetch details for collection ${metadata.id}:`, error),
           });
-          if (collectionsResult.status === 'cancelled') return;
-
-          const envList = await fetchScopeEnvironmentsForRuntime(
-            cloudConfig.apiUrl,
-            cloudConfig.token,
-            requestedScope,
-            cloudConfig.refreshToken,
-            operation.controller.signal
-          );
-          if (!isAsyncOperationCurrent(operation)) return;
-          const pulledEnvs = buildEnvironmentsFromDelta(envList);
+          if (syncResult.status === 'cancelled') return;
+          if (syncResult.status === 'push_failed') {
+            console.warn(`Failed to push pending collection "${syncResult.collection.name}" to cloud:`, syncResult.error);
+            const errorMessage = syncResult.error instanceof Error ? syncResult.error.message : String(syncResult.error);
+            set({
+              syncStatus: 'error',
+              syncError: errorMessage || `Failed to upload pending collection "${syncResult.collection.name}"`,
+            });
+            return;
+          }
           const currentState = get();
           const deltaState = prepareCloudDeltaState({
             scope: requestedScope,
             scopeCache: currentState.scopeCache || {},
-            collections: collectionsResult.collections,
-            pulledEnvironments: pulledEnvs,
+            collections: syncResult.collections,
+            currentCollections: currentState.collections,
+            pulledEnvironments: syncResult.environments,
             currentEnvironments: currentState.environments || [],
             activeEnvironmentId: currentState.activeEnvironmentId,
             tabs: currentState.tabs,
             activeTabId: currentState.activeTabId,
             history: currentState.history,
-            partialCollectionCount: collectionsResult.partialCollectionCount,
+            partialCollectionCount: syncResult.partialCollectionCount,
             syncedAt: Date.now(),
           });
 
@@ -2953,7 +2966,7 @@ export function createApiStore(
         set((state) => {
           const sourceTab = state.tabs.find((t) => t.id === id);
           if (!sourceTab) return state;
-          const duplicatedTab: ApiRequest = {
+          const duplicatedTab: RequestTab = {
             ...sourceTab,
             id: generateId(),
             name: `${sourceTab.name || 'Untitled Request'} (Copy)`,
@@ -2964,6 +2977,7 @@ export function createApiStore(
             bodyFormData: sourceTab.bodyFormData ? sourceTab.bodyFormData.map((f) => ({ ...f, id: generateId() })) : [],
             bodyUrlEncoded: sourceTab.bodyUrlEncoded ? sourceTab.bodyUrlEncoded.map((u) => ({ ...u, id: generateId() })) : [{ id: generateId(), key: '', value: '', enabled: true }],
           };
+          delete duplicatedTab.deletedFromCollection;
           const index = state.tabs.findIndex((t) => t.id === id);
           const newTabs = [...state.tabs];
           newTabs.splice(index + 1, 0, duplicatedTab);
@@ -3013,6 +3027,10 @@ export function createApiStore(
             tabResponses: nextTabResponses,
             tabs: state.tabs.map((tab) => {
               if (tab.id !== state.activeTabId) return tab;
+              if (updates.id !== undefined && updates.id !== tab.id) {
+                tab = { ...tab };
+                delete tab.deletedFromCollection;
+              }
               if (updates.url !== undefined && updates.url !== tab.url) {
                 const syncedParams = updates.params !== undefined ? updates.params : parseQueryParamsFromUrl(updates.url, tab.params);
                 const syncedPathVars = updates.pathVariables !== undefined ? updates.pathVariables : parsePathVariablesFromUrl(updates.url, tab.pathVariables);
@@ -3569,9 +3587,10 @@ export function createApiStore(
             history.future.shift();
           }
 
-          const restoredTab: ApiRequest = {
+          const restoredTab: RequestTab = {
             ...cloneRequestPreservingAttachments(previousState),
             id: activeTab.id,
+            deletedFromCollection: activeTab.deletedFromCollection,
           };
 
           return {
@@ -3601,9 +3620,10 @@ export function createApiStore(
             history.past.shift();
           }
 
-          const restoredTab: ApiRequest = {
+          const restoredTab: RequestTab = {
             ...cloneRequestPreservingAttachments(nextState),
             id: activeTab.id,
+            deletedFromCollection: activeTab.deletedFromCollection,
           };
 
           return {
@@ -4458,7 +4478,8 @@ export function createApiStore(
         let assignedReqId = request.id;
 
         set((state) => {
-          const cleanReq = cloneRequestPreservingAttachments(request);
+          const cleanReq: RequestTab = cloneRequestPreservingAttachments(request);
+          delete cleanReq.deletedFromCollection;
 
           const insertOrUpdateInList = (items: CollectionItem[]): CollectionItem[] => {
             const existingIdx = items.findIndex(
