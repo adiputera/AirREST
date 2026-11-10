@@ -169,6 +169,42 @@ export function findSavedRequestInCollections(
 }
 
 /**
+ * Finds a saved folder in collections that matches the given folder ID.
+ */
+export function findSavedFolderInCollections(
+  collections: Collection[],
+  folderId: string
+): { collection: Collection; parentFolderId: string | null; folder: CollectionItem } | null {
+  if (!folderId || !Array.isArray(collections)) return null;
+
+  for (const col of collections) {
+    const searchItems = (
+      items: CollectionItem[] = [],
+      parentFolderId: string | null
+    ): { collection: Collection; parentFolderId: string | null; folder: CollectionItem } | null => {
+      for (const item of items || []) {
+        if (!item) continue;
+        if (item.type === 'folder') {
+          if (item.id === folderId) {
+            return { collection: col, parentFolderId, folder: item };
+          }
+          if (item.items) {
+            const found = searchItems(item.items, item.id);
+            if (found) return found;
+          }
+        }
+      }
+      return null;
+    };
+
+    const result = searchItems(col?.items || [], null);
+    if (result) return result;
+  }
+
+  return null;
+}
+
+/**
  * Determines whether a tab has unsaved changes.
  * 1. If it belongs to a saved collection item, compares with that saved item.
  * 2. If it is not in any collection, checks whether it has non-empty content compared to a blank request.
