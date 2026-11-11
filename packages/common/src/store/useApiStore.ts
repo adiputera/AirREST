@@ -35,7 +35,7 @@ import {
 } from '../types/api';
 import { applyTheme } from '../lib/theme';
 import { executeApiRequest } from '../lib/fetcher';
-import type { PlatformAdapter } from '../types/platform';
+import type { PlatformAdapter, ScriptRequest } from '../types/platform';
 import { revokeBlobUrl, revokeBlobUrls } from '../lib/blobManager';
 import {
   importPostmanCollection,
@@ -322,6 +322,14 @@ export interface EnvironmentOccConflict {
   remote: Environment;
 }
 
+export interface SaveRequestToCollectionResult {
+  success: boolean;
+  sourceTabId?: string;
+  savedRequestId?: string;
+  cloudStatus: 'not-applicable' | 'pending';
+  error?: string;
+}
+
 export const DEFAULT_OFFLINE_WORKSPACE_ID = 'ws-default-local';
 
 export const defaultOfflineWorkspace: OfflineWorkspace = {
@@ -430,7 +438,12 @@ export interface ApiStoreState {
   createRequestInCollection: (collectionId: string, folderId: string | null, name?: string) => ApiRequest | null;
   deleteCollectionItem: (collectionId: string, itemId: string) => void;
   renameCollectionItem: (collectionId: string, itemId: string, name: string) => void;
-  saveRequestToCollection: (collectionId: string, folderId: string | null, request: ApiRequest) => void;
+  saveRequestToCollection: (
+    collectionId: string,
+    folderId: string | null,
+    request: ApiRequest,
+    sourceTabId?: string,
+  ) => SaveRequestToCollectionResult;
   saveActiveRequest: () => { success: boolean; isDirectSaved: boolean };
   addCollection: (collection: Collection) => Promise<void> | void;
   replaceCollection: (existingId: string, newCollection: Collection) => Promise<void>;
@@ -580,6 +593,9 @@ export function createApiStore(
   const envSyncDebounceTimers: Record<string, ReturnType<typeof setTimeout>> = {};
   const envSyncInFlight: Record<string, boolean> = {};
   const envSyncQueued: Record<string, boolean> = {};
+  const collectionSaveSyncRevisions = new Map<string, number>();
+  const collectionSaveSyncQueues = new Map<string, Promise<void>>();
+  let collectionSaveSyncGeneration = 0;
   const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
   let isStoreDisposed = false;
   let cloudSessionGeneration = 0;
@@ -708,7 +724,81 @@ export function createApiStore(
     return asyncOperations.isCurrent(operation);
   }
 
+  function queueSavedCollectionSync(
+    collection: Collection,
+    scope: ActiveScope,
+    cloudConfig: ApiStoreState['cloudConfig'],
+    revision: number,
+    get: () => ApiStoreState,
+    set: (fn: (state: ApiStoreState) => Partial<ApiStoreState>) => void,
+  ): void {
+    const queueKey = `${scope.type}:${scope.id}:${collection.id}`;
+    const generation = collectionSaveSyncGeneration;
+    const previous = collectionSaveSyncQueues.get(queueKey) ?? Promise.resolve();
+
+    const task = previous.catch(() => undefined).then(async () => {
+      if (generation !== collectionSaveSyncGeneration || isStoreDisposed) return;
+
+      const operation = beginAsyncOperation();
+      try {
+        await batchImportToScope(
+          cloudConfig.apiUrl,
+          cloudConfig.token,
+          scope,
+          [collection],
+          cloudConfig.refreshToken,
+          operation.controller.signal,
+        );
+
+        if (
+          !isAsyncOperationCurrent(operation) ||
+          generation !== collectionSaveSyncGeneration ||
+          collectionSaveSyncRevisions.get(collection.id) !== revision ||
+          get().cloudConfig.activeScope?.id !== scope.id ||
+          get().cloudConfig.activeScope?.type !== scope.type
+        ) {
+          return;
+        }
+
+        set((state) => ({
+          collections: state.collections.map((candidate) =>
+            candidate.id === collection.id ? { ...candidate, _syncStatus: 'synced' } : candidate,
+          ),
+        }));
+      } catch (error: unknown) {
+        if (
+          operation.controller.signal.aborted ||
+          !isAsyncOperationCurrent(operation) ||
+          generation !== collectionSaveSyncGeneration ||
+          collectionSaveSyncRevisions.get(collection.id) !== revision
+        ) {
+          return;
+        }
+
+        const message = error instanceof Error ? error.message : 'Failed to sync saved request to cloud';
+        console.error('Failed to sync saved request to cloud:', error);
+        set((state) => ({
+          collections: state.collections.map((candidate) =>
+            candidate.id === collection.id ? { ...candidate, _syncStatus: 'pending' } : candidate,
+          ),
+          syncStatus: 'error',
+          syncError: message,
+        }));
+      } finally {
+        completeAsyncOperation(operation);
+      }
+    });
+
+    collectionSaveSyncQueues.set(queueKey, task);
+    void task.finally(() => {
+      if (collectionSaveSyncQueues.get(queueKey) === task) {
+        collectionSaveSyncQueues.delete(queueKey);
+      }
+    });
+  }
+
   function invalidateAsyncOperations({ session = false }: { session?: boolean } = {}) {
+    collectionSaveSyncGeneration += 1;
     asyncOperations.invalidate({ session });
     if (session) {
       cloudSessionGeneration += 1;
@@ -3673,12 +3763,26 @@ export function createApiStore(
             });
           }
 
+          // Construct script request snapshot
+          const scriptRequest: ScriptRequest = {
+            url: activeReq.url,
+            method: activeReq.method,
+            headers: activeReq.headers,
+            params: activeReq.params,
+            body: {
+              mode: activeReq.bodyType,
+              raw: activeReq.bodyContent,
+              urlencoded: activeReq.bodyUrlEncoded,
+              formdata: activeReq.bodyFormData?.map((f) => ({ key: f.key, value: f.value, enabled: f.enabled })),
+            },
+          };
+
           // 2. Execute Pre-request Script (if present)
           const scriptResult = await executePreRequestScript(
             activeReq.preRequestScript || '',
             envVarsMap,
             {},
-            { signal: operation.controller.signal, scriptExecutor: boundAdapter?.scriptExecutor }
+            { signal: operation.controller.signal, scriptExecutor: boundAdapter?.scriptExecutor, request: scriptRequest }
           );
 
           if (!isAsyncOperationCurrent(operation)) return;
@@ -3747,9 +3851,56 @@ export function createApiStore(
             ...scriptResult.variables,
           };
 
+          // If the script mutated the request (query params, headers, url):
+          let reqToSend = activeReq;
+          if (scriptResult.mutatedRequest) {
+            const { url: mutatedUrl, queryParams: mutatedQueryParams, headers: mutatedHeaders } = scriptResult.mutatedRequest;
+            let effectiveUrl = activeReq.url;
+            let effectiveParams = activeReq.params;
+            let effectiveHeaders = activeReq.headers;
+
+            if (mutatedQueryParams && mutatedQueryParams.length > 0) {
+              effectiveParams = mutatedQueryParams.map((qp) => {
+                const existing = (activeReq.params || []).find((p) => p.key === qp.key);
+                return {
+                  id: existing?.id || generateId(),
+                  key: qp.key,
+                  value: qp.value,
+                  enabled: true,
+                  description: existing?.description,
+                };
+              });
+              if (mutatedUrl) {
+                effectiveUrl = mutatedUrl;
+              }
+            } else if (mutatedUrl) {
+              effectiveUrl = mutatedUrl;
+            }
+
+            if (mutatedHeaders && mutatedHeaders.length > 0) {
+              effectiveHeaders = mutatedHeaders.map((mh) => {
+                const existing = (activeReq.headers || []).find((h) => h.key.toLowerCase() === mh.key.toLowerCase());
+                return {
+                  id: existing?.id || generateId(),
+                  key: mh.key,
+                  value: mh.value,
+                  enabled: true,
+                  description: existing?.description,
+                };
+              });
+            }
+
+            reqToSend = {
+              ...activeReq,
+              url: effectiveUrl,
+              params: effectiveParams,
+              headers: effectiveHeaders,
+            };
+          }
+
           // 3. Dispatch API request with interpolated variables
           const response = await executeApiRequest(
-            activeReq,
+            reqToSend,
             finalVariables,
             operation.controller.signal,
             boundAdapter
@@ -3767,7 +3918,7 @@ export function createApiStore(
               response,
               finalVariables,
               scriptResult.variables,
-              { signal: operation.controller.signal, scriptExecutor: boundAdapter?.scriptExecutor }
+              { signal: operation.controller.signal, scriptExecutor: boundAdapter?.scriptExecutor, request: scriptRequest }
             );
 
             if (!isAsyncOperationCurrent(operation)) return;
@@ -4471,140 +4622,141 @@ export function createApiStore(
         }
       },
 
-      saveRequestToCollection: (collectionId, folderId, request) => {
-        const { workspaceMode, cloudConfig, collections } = get();
-        const col = collections.find((c) => c.id === collectionId);
-        if (col) {
-          if (!canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
-            console.warn(`User lacks permission to modify collection "${col.name}"`);
-            return;
-          }
+      saveRequestToCollection: (collectionId, folderId, request, sourceTabId) => {
+        const { workspaceMode, cloudConfig, collections, tabs } = get();
+        const collection = collections.find((candidate) => candidate.id === collectionId);
+        if (!collection) {
+          return { success: false, cloudStatus: 'not-applicable', error: 'The target collection no longer exists.' };
+        }
+        if (!canModifyCollection(collection.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+          return { success: false, cloudStatus: 'not-applicable', error: `Collection "${collection.name}" is read-only.` };
         }
 
-        let assignedReqId = request.id;
+        const findFolder = (items: CollectionItem[]): CollectionItem | undefined => {
+          for (const item of items) {
+            if (item.type !== 'folder') continue;
+            if (item.id === folderId) return item;
+            const nested = findFolder(item.items || []);
+            if (nested) return nested;
+          }
+          return undefined;
+        };
+        const targetItems = folderId ? findFolder(collection.items || [])?.items : collection.items || [];
+        if (!targetItems) {
+          return { success: false, cloudStatus: 'not-applicable', error: 'The target folder no longer exists.' };
+        }
+        if (sourceTabId && !tabs.some((tab) => tab.id === sourceTabId)) {
+          return { success: false, sourceTabId, cloudStatus: 'not-applicable', error: 'The source tab is no longer open.' };
+        }
+
+        const existingItem = targetItems.find(
+          (item) => item.type === 'request' && (item.id === request.id || item.request?.id === request.id),
+        );
+        const savedRequestId = existingItem?.id ?? (request.id.trim() || generateId());
+        const targetTabAlreadyOpen = sourceTabId && savedRequestId !== sourceTabId && tabs.some((tab) => tab.id === savedRequestId);
+        if (targetTabAlreadyOpen) {
+          return {
+            success: false,
+            sourceTabId,
+            cloudStatus: 'not-applicable',
+            error: 'The request being replaced is already open in another tab. Close it before replacing.',
+          };
+        }
+
+        const shouldSync = !isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && cloudConfig.activeScope;
+        const cleanRequest: RequestTab = cloneRequestPreservingAttachments({ ...request, id: savedRequestId });
+        delete cleanRequest.deletedFromCollection;
 
         set((state) => {
-          const cleanReq: RequestTab = cloneRequestPreservingAttachments(request);
-          delete cleanReq.deletedFromCollection;
-
           const insertOrUpdateInList = (items: CollectionItem[]): CollectionItem[] => {
-            const existingIdx = items.findIndex(
-              (item) => item.type === 'request' && (item.id === cleanReq.id || item.request?.id === cleanReq.id)
+            const existingIndex = items.findIndex(
+              (item) => item.type === 'request' && (item.id === savedRequestId || item.request?.id === savedRequestId),
             );
-
-            if (existingIdx >= 0) {
+            if (existingIndex >= 0) {
               const updated = [...items];
-              assignedReqId = updated[existingIdx].id;
-              cleanReq.id = assignedReqId;
-              updated[existingIdx] = {
-                ...updated[existingIdx],
-                name: cleanReq.name,
-                request: cleanReq,
-              };
+              updated[existingIndex] = { ...updated[existingIndex], name: cleanRequest.name, request: cleanRequest };
               return updated;
             }
-
-            const isUUID = cleanReq.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanReq.id);
-            assignedReqId = isUUID ? cleanReq.id : generateId();
-            cleanReq.id = assignedReqId;
-
-            return [
-              ...items,
-              {
-                id: assignedReqId,
-                name: cleanReq.name || 'Untitled Request',
-                type: 'request',
-                request: cleanReq,
-              },
-            ];
+            return [...items, { id: savedRequestId, name: cleanRequest.name || 'Untitled Request', type: 'request', request: cleanRequest }];
           };
+          const updateFolderItems = (items: CollectionItem[]): CollectionItem[] => items.map((item) => {
+            if (item.type !== 'folder') return item;
+            if (item.id === folderId) return { ...item, items: insertOrUpdateInList(item.items || []) };
+            return { ...item, items: updateFolderItems(item.items || []) };
+          });
 
-          const collections = state.collections.map((col) => {
-            if (col.id !== collectionId) return col;
-
-            if (!folderId) {
-              return {
-                ...col,
-                items: insertOrUpdateInList(col.items),
-                updatedAt: Date.now(),
-              };
-            }
-
-            const updateFolderItems = (items: CollectionItem[]): CollectionItem[] => {
-              return items.map((item) => {
-                if (item.type === 'folder') {
-                  if (item.id === folderId) {
-                    return {
-                      ...item,
-                      items: insertOrUpdateInList(item.items || []),
-                    };
-                  }
-                  return {
-                    ...item,
-                    items: updateFolderItems(item.items || []),
-                  };
-                }
-                return item;
-              });
-            };
-
-            return {
-              ...col,
-              items: updateFolderItems(col.items),
+          const nextCollections = state.collections.map((candidate) => candidate.id === collectionId
+            ? {
+              ...candidate,
+              items: folderId ? updateFolderItems(candidate.items || []) : insertOrUpdateInList(candidate.items || []),
               updatedAt: Date.now(),
-            };
-          });
-
-          const tabs = state.tabs.map((tab) => {
-            if (tab.id === request.id) {
-              return { ...tab, id: assignedReqId, name: cleanReq.name };
+              ...(shouldSync ? { _syncStatus: 'pending' as const } : {}),
             }
-            return tab;
-          });
+            : candidate,
+          );
 
-          const nextActiveTabId = state.activeTabId === request.id ? assignedReqId : state.activeTabId;
+          if (!sourceTabId) return { collections: nextCollections };
 
+          if (sourceTabId !== savedRequestId) {
+            const sourceHistory = tabUndoHistory[sourceTabId];
+            if (sourceHistory) {
+              tabUndoHistory[savedRequestId] = sourceHistory;
+              delete tabUndoHistory[sourceTabId];
+            }
+            // The typing timer closure deletes the key it was created for, so moving it to the
+            // new ID would leave a stale entry that merges the next edit into the pre-save group.
+            const sourceTimer = undoTypingTimers[sourceTabId];
+            if (sourceTimer) {
+              clearTimeout(sourceTimer);
+              delete undoTypingTimers[sourceTabId];
+            }
+          }
+
+          const nextTabResponses = { ...(state.tabResponses || {}) };
+          if (sourceTabId !== savedRequestId && nextTabResponses[sourceTabId]) {
+            nextTabResponses[savedRequestId] = nextTabResponses[sourceTabId];
+            delete nextTabResponses[sourceTabId];
+          }
+          const nextActiveTabId = state.activeTabId === sourceTabId ? savedRequestId : state.activeTabId;
           return {
-            collections,
-            tabs,
+            collections: nextCollections,
+            tabs: state.tabs.map((tab) => tab.id === sourceTabId
+              ? { ...tab, id: savedRequestId, name: cleanRequest.name, updatedAt: Date.now() }
+              : tab,
+            ),
             activeTabId: nextActiveTabId,
+            tabResponses: nextTabResponses,
+            activeResponse: nextActiveTabId === state.activeTabId
+              ? state.activeResponse
+              : nextTabResponses[nextActiveTabId] || null,
+            canUndoActiveRequest: (tabUndoHistory[nextActiveTabId]?.past.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[nextActiveTabId]?.future.length ?? 0) > 0,
           };
         });
 
-        const updatedCols = get().collections;
-        if (!isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && cloudConfig.activeScope) {
-          const updatedCol = updatedCols.find((c) => c.id === collectionId);
-          if (updatedCol) {
-            const operation = beginAsyncOperation();
-            batchImportToScope(
-              cloudConfig.apiUrl,
-              cloudConfig.token,
-              cloudConfig.activeScope,
-              [updatedCol],
-              cloudConfig.refreshToken,
-              operation.controller.signal
-            ).then(() => {
-              if (!isAsyncOperationCurrent(operation) || isStoreDisposed) return;
-              set((state) => ({
-                collections: state.collections.map((c) =>
-                  c.id === collectionId ? { ...c, _syncStatus: 'synced' } : c
-                ),
-              }));
-            }).catch((err) => {
-              if (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation)) return;
-              console.error('Failed to sync updated collection item to cloud:', err);
-              set((state) => ({
-                collections: state.collections.map((c) =>
-                  c.id === collectionId ? { ...c, _syncStatus: 'pending' } : c
-                ),
-                syncStatus: 'error',
-                syncError: err.message || 'Failed to sync updated collection item to cloud',
-              }));
-            }).finally(() => {
-              completeAsyncOperation(operation);
-            });
+        const syncScope = shouldSync ? cloudConfig.activeScope : undefined;
+        if (syncScope) {
+          const updatedCollection = get().collections.find((candidate) => candidate.id === collectionId);
+          if (updatedCollection) {
+            const revision = (collectionSaveSyncRevisions.get(collectionId) ?? 0) + 1;
+            collectionSaveSyncRevisions.set(collectionId, revision);
+            queueSavedCollectionSync(
+              cloneCollectionPreservingAttachments(updatedCollection),
+              syncScope,
+              cloudConfig,
+              revision,
+              get,
+              set,
+            );
           }
         }
+
+        return {
+          success: true,
+          ...(sourceTabId ? { sourceTabId } : {}),
+          savedRequestId,
+          cloudStatus: shouldSync ? 'pending' : 'not-applicable',
+        };
       },
 
       saveActiveRequest: () => {
@@ -4617,8 +4769,8 @@ export function createApiStore(
           if (!canModifyCollection(saved.collection.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
             return { success: false, isDirectSaved: false };
           }
-          saveRequestToCollection(saved.collection.id, saved.folderId, currentTab);
-          return { success: true, isDirectSaved: true };
+          const result = saveRequestToCollection(saved.collection.id, saved.folderId, currentTab, currentTab.id);
+          return { success: result.success, isDirectSaved: result.success };
         }
 
         return { success: false, isDirectSaved: false };

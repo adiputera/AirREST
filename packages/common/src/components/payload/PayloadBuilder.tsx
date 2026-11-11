@@ -32,6 +32,8 @@ interface PayloadBuilderProps {
   format: 'json' | 'xml';
   bodyContent: string;
   onBodyContentChange: (newContent: string, isDiscrete?: boolean) => void;
+  onUndo?: () => void;
+  onRedo?: () => void;
 }
 
 type ViewMode = 'builder' | 'preview' | 'raw';
@@ -40,6 +42,8 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
   format,
   bodyContent,
   onBodyContentChange,
+  onUndo,
+  onRedo,
 }) => {
   const initialParse = useMemo(() => {
     if (bodyContent && bodyContent.trim()) {
@@ -521,13 +525,16 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
       <CodeEditor
         ref={isModal ? modalCodeEditorRef : codeEditorRef}
         value={rawText}
-        onChange={(val) => {
+        onChange={(val, isDiscrete) => {
           isInternalUpdateRef.current = true;
           setRawText(val);
-          onBodyContentChange(val);
+          onBodyContentChange(val, isDiscrete);
           triggerValidation(val, 500);
         }}
         language={format}
+        historyMode="external"
+        onUndo={onUndo}
+        onRedo={onRedo}
         height="100%"
         minHeight={140}
         placeholder={

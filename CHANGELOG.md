@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.9] - 2026-11-11
+
+### Added
+- **Script Sandbox `pm.request` Object**: Added full support for `pm.request` inside pre-request and test scripts across desktop QuickJS and extension sandboxes, enabling inspecting `pm.request.url` (with PropertyList query operations `.get()`, `.upsert()`, `.add()`, `.remove()`, `.has()`, `.all()`), `pm.request.headers`, `pm.request.method`, and `pm.request.body`, with mutations propagated to in-flight requests.
+- **Script Sandbox `CryptoJS` Support**: Embedded standalone minified `CryptoJS` into the scripting sandbox for both browser extension and desktop QuickJS (with on-demand loading), supporting AES (CBC/ECB), DES, TripleDES, SHA256, SHA512, MD5, and HMAC algorithms out-of-the-box.
+
+### Fixed
+- **Request Save Targeting**: Saving a non-active tab now updates only that source tab and its intended collection item. Failed target validation keeps the tab open, and replacing a request already open elsewhere is rejected to prevent identity collisions.
+- **Cloud Save Ordering**: Consecutive saves to the same cloud collection are queued and revision-checked. A late acknowledgement can no longer mark a newer unsynced save as successful.
+- **Request Body Editor**: Ctrl/Cmd+Z and redo now use one request history, JSON body comments toggle with Ctrl/Cmd+/, and Beautify preserves comments, templates, string contents, and large numeric values.
+- **JSON Beautify Layout**: Trailing comments such as `"a": 1, // note` stay on the property they describe, and objects or arrays that contain only comments keep the surrounding indentation intact.
+- **Undo After First Save**: The first edit after saving a new request is recorded as its own undo step instead of merging into the pre-save typing group.
+- **Tab Close Focus**: Closing a tab that has unsaved changes immediately switches active focus to that tab, so the editor displays its contents while the confirmation prompt is open.
+
 ## [1.3.8] - 2026-11-10
 
 ### Added

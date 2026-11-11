@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
 import { EditorView, lineNumbers, highlightActiveLineGutter, keymap, placeholder as cmPlaceholder } from '@codemirror/view';
-import { EditorState, Compartment } from '@codemirror/state';
+import { Annotation, EditorState, Compartment, Transaction } from '@codemirror/state';
 import { foldGutter, foldAll, unfoldAll, syntaxHighlighting, indentUnit, foldKeymap, HighlightStyle } from '@codemirror/language';
-import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
-import { json } from '@codemirror/lang-json';
+import { defaultKeymap, history, historyKeymap, indentWithTab, toggleComment } from '@codemirror/commands';
+import { json, jsonLanguage } from '@codemirror/lang-json';
 import { xml } from '@codemirror/lang-xml';
 import { tags as t } from '@lezer/highlight';
 import { useApiStore } from '../../store/useApiStore';
@@ -18,7 +18,7 @@ export interface CodeEditorHandle {
 
 export interface CodeEditorProps {
   value: string;
-  onChange?: (value: string) => void;
+  onChange?: (value: string, isDiscrete?: boolean) => void;
   readOnly?: boolean;
   language?: 'json' | 'xml' | 'text';
   placeholder?: string;
@@ -28,7 +28,12 @@ export interface CodeEditorProps {
   className?: string;
   lineNumbers?: boolean;
   foldGutter?: boolean;
+  historyMode?: 'editor' | 'external';
+  onUndo?: () => void;
+  onRedo?: () => void;
 }
+
+const externalValueSync = Annotation.define<boolean>();
 
 /**
  * High-contrast dark syntax highlighting style.
@@ -176,6 +181,9 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
       className = '',
       lineNumbers: showLineNumbers = true,
       foldGutter: showFoldGutter = true,
+      historyMode = 'editor',
+      onUndo,
+      onRedo,
     },
     ref
   ) => {
@@ -197,6 +205,11 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
     valueRef.current = value;
     const onChangeRef = useRef(onChange);
     onChangeRef.current = onChange;
+    const onUndoRef = useRef(onUndo);
+    onUndoRef.current = onUndo;
+    const onRedoRef = useRef(onRedo);
+    onRedoRef.current = onRedo;
+    const isDiscreteChangeRef = useRef(false);
 
     useImperativeHandle(
       ref,
@@ -221,7 +234,17 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
 
     // Helper to get language extension
     const getLanguageExtension = (lang: 'json' | 'xml' | 'text') => {
-      if (lang === 'json') return json();
+      if (lang === 'json') {
+        return [
+          json(),
+          jsonLanguage.data.of({
+            commentTokens: {
+              line: '//',
+              block: { open: '/*', close: '*/' },
+            },
+          }),
+        ];
+      }
       if (lang === 'xml') return xml();
       return [];
     };
@@ -265,20 +288,68 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
       }
 
       if (!readOnly) {
-        extensions.push(history());
-        extensions.push(
-          keymap.of([
-            indentWithTab,
-            ...defaultKeymap,
-            ...historyKeymap,
-            ...foldKeymap,
-          ])
-        );
+        const keyBindings = [indentWithTab, ...defaultKeymap, ...foldKeymap];
+        if (historyMode === 'external') {
+          const commentBinding = language === 'json'
+            ? [{
+                key: 'Mod-/',
+                run: (view: EditorView) => {
+                  isDiscreteChangeRef.current = true;
+                  const changed = toggleComment(view);
+                  if (!changed) isDiscreteChangeRef.current = false;
+                  return changed;
+                },
+                preventDefault: true,
+                stopPropagation: true,
+              }]
+            : [];
+          extensions.push(
+            keymap.of([
+              {
+                key: 'Mod-z',
+                run: () => {
+                  onUndoRef.current?.();
+                  return true;
+                },
+                preventDefault: true,
+                stopPropagation: true,
+              },
+              {
+                key: 'Mod-Shift-z',
+                run: () => {
+                  onRedoRef.current?.();
+                  return true;
+                },
+                preventDefault: true,
+                stopPropagation: true,
+              },
+              {
+                key: 'Mod-y',
+                run: () => {
+                  onRedoRef.current?.();
+                  return true;
+                },
+                preventDefault: true,
+                stopPropagation: true,
+              },
+              ...commentBinding,
+              ...keyBindings.filter((binding) => !['Mod-z', 'Mod-Shift-z', 'Mod-y'].includes(binding.key || '')),
+            ])
+          );
+        } else {
+          extensions.push(history());
+          extensions.push(keymap.of([...keyBindings, ...historyKeymap]));
+        }
         extensions.push(
           EditorView.updateListener.of((update) => {
-            if (update.docChanged && onChangeRef.current) {
+            const isExternalValueSync = update.transactions.some((transaction) =>
+              transaction.annotation(externalValueSync)
+            );
+            if (update.docChanged && !isExternalValueSync && onChangeRef.current) {
               const newDoc = update.state.doc.toString();
-              onChangeRef.current(newDoc);
+              const isDiscreteChange = isDiscreteChangeRef.current;
+              isDiscreteChangeRef.current = false;
+              onChangeRef.current(newDoc, isDiscreteChange);
             }
           })
         );
@@ -302,7 +373,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
         view.destroy();
         viewRef.current = null;
       };
-    }, [showLineNumbers, showFoldGutter, readOnly]);
+    }, [showLineNumbers, showFoldGutter, readOnly, historyMode]);
 
     // Synchronize external value changes (e.g. from Undo / Redo or tab switch)
     useEffect(() => {
@@ -312,6 +383,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
       if (currentDoc !== value) {
         view.dispatch({
           changes: { from: 0, to: currentDoc.length, insert: value || '' },
+          annotations: [externalValueSync.of(true), Transaction.addToHistory.of(false)],
         });
       }
     }, [value]);

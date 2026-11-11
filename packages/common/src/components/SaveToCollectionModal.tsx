@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { Bookmark, X, Check, AlertCircle, AlertTriangle, Copy, RefreshCw } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
+import type { SaveRequestToCollectionResult } from '../store/useApiStore';
 import { ApiRequest, CollectionItem, HttpMethod } from '../types/api';
 import {
   findSavedRequestInCollections,
@@ -19,7 +20,7 @@ interface SaveToCollectionModalProps {
   onClose: () => void;
   request: ApiRequest;
   isSaveAs?: boolean;
-  onSaved?: () => void;
+  onSaved?: (result: SaveRequestToCollectionResult) => void;
 }
 
 interface RequestConflictState {
@@ -51,7 +52,6 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
   const collections = useApiStore((state) => state.collections);
   const createCollection = useApiStore((state) => state.createCollection);
   const saveRequestToCollection = useApiStore((state) => state.saveRequestToCollection);
-  const updateActiveRequest = useApiStore((state) => state.updateActiveRequest);
   const workspaceMode = useApiStore((state) => state.workspaceMode);
   const cloudConfig = useApiStore((state) => state.cloudConfig);
 
@@ -207,18 +207,22 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
           updatedAt: Date.now(),
         };
 
-    saveRequestToCollection(
+    const result = saveRequestToCollection(
       targetCollectionId,
       targetFolder,
-      targetRequest
+      targetRequest,
+      request.id,
     );
-    updateActiveRequest({ id: targetRequest.id, name: finalName });
+    if (!result.success) {
+      setErrorMsg(result.error || 'Failed to save the request.');
+      return;
+    }
 
     setIsSaved(true);
     setSavedActionText('Saved!');
     setTimeout(() => {
       setIsSaved(false);
-      onSaved?.();
+      onSaved?.(result);
       onClose();
     }, 600);
   };
@@ -234,19 +238,23 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
       updatedAt: Date.now(),
     };
 
-    saveRequestToCollection(
+    const result = saveRequestToCollection(
       conflict.targetCollectionId,
       conflict.targetFolderId,
-      targetRequest
+      targetRequest,
+      request.id,
     );
-    updateActiveRequest({ id: newId, name: conflict.suggestedCopyName });
+    if (!result.success) {
+      setErrorMsg(result.error || 'Failed to save the request copy.');
+      return;
+    }
 
     setIsSaved(true);
     setSavedActionText('Saved copy!');
     setTimeout(() => {
       setIsSaved(false);
       setConflict(null);
-      onSaved?.();
+      onSaved?.(result);
       onClose();
     }, 600);
   };
@@ -264,19 +272,23 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
     const savedExisting = findSavedRequestInCollections(collections, conflict.existingRequest.id);
     const resolvedFolderId = savedExisting ? savedExisting.folderId : conflict.targetFolderId;
 
-    saveRequestToCollection(
+    const result = saveRequestToCollection(
       conflict.targetCollectionId,
       resolvedFolderId,
-      targetRequest
+      targetRequest,
+      request.id,
     );
-    updateActiveRequest({ id: conflict.existingRequest.id, name: conflict.existingRequest.name });
+    if (!result.success) {
+      setErrorMsg(result.error || 'Failed to replace the request.');
+      return;
+    }
 
     setIsSaved(true);
     setSavedActionText('Replaced!');
     setTimeout(() => {
       setIsSaved(false);
       setConflict(null);
-      onSaved?.();
+      onSaved?.(result);
       onClose();
     }, 600);
   };

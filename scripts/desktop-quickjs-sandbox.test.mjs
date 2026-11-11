@@ -14,6 +14,13 @@ function loadProductionQuickJSRunner(options = {}) {
   const protoExports = {};
   vm.runInNewContext(protoCompiled, { exports: protoExports, console, TextEncoder }, { filename: 'scriptProtocol.ts' });
 
+  const cryptoSrc = fs.readFileSync(new URL('../packages/common/src/lib/cryptoJsSource.ts', import.meta.url), 'utf8');
+  const cryptoCompiled = ts.transpileModule(cryptoSrc, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const cryptoExports = {};
+  vm.runInNewContext(cryptoCompiled, { exports: cryptoExports }, { filename: 'cryptoJsSource.ts' });
+
   const runnerSrc = fs.readFileSync(new URL('../apps/native/src/scripts/quickjsRunner.ts', import.meta.url), 'utf8');
   const runnerCompiled = ts.transpileModule(runnerSrc, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -46,6 +53,7 @@ function loadProductionQuickJSRunner(options = {}) {
     },
     '@airrest/common': protoExports,
     '@airrest/common/protocol': protoExports,
+    '@airrest/common/crypto': cryptoExports,
   };
   const customRequire = (id) => requireMap[id] || require(id);
   vm.runInNewContext(runnerCompiled, {
@@ -84,7 +92,7 @@ test('Gate P0.3: pm.environment set, get, unset, toObject', async () => {
     variables: {},
   });
 
-  assert.equal(result.success, true);
+  assert.equal(result.success, true, result.error);
   assert.equal(result.environment.token, 'secret-xyz');
   assert.equal(result.environment.count, '42');
   assert.equal(result.environment.old_key, undefined);
@@ -102,7 +110,7 @@ test('Gate P0.3: pm.variables set and fallback to environment', async () => {
     variables: {},
   });
 
-  assert.equal(result.success, true);
+  assert.equal(result.success, true, result.error);
   assert.equal(result.variables.temp, 'transient_val');
   assert.equal(result.environment.inherited_echo, 'hello_from_env');
 });
@@ -128,8 +136,84 @@ test('Gate P0.3: pm.response inspection and status assertions', async () => {
     },
   });
 
-  assert.equal(result.success, true);
+  assert.equal(result.success, true, result.error);
   assert.equal(result.environment.captured_username, 'Alice');
+});
+
+test('Gate P0.3: pm.request url, query, and headers inspection and mutation', async () => {
+  const result = await runScriptInQuickJS({
+    script: `
+      const plainPassword = pm.request.url.query.get("password");
+      pm.environment.set("extracted_pwd", plainPassword);
+      pm.expect(pm.request.method).to.equal("POST");
+      pm.expect(pm.request.headers.get("content-type")).to.equal("application/json");
+
+      pm.request.url.query.upsert({ key: "encryptedPassword", value: "cipher_hex_999" });
+      pm.request.headers.upsert({ key: "X-Auth-Token", value: "token-abc" });
+      pm.environment.set("has_user_param", pm.request.url.query.has("userId") ? "yes" : "no");
+    `,
+    environment: {},
+    variables: {},
+    request: {
+      url: 'https://api.example.com/api/v1/login?userId=testuser&password=SecretPassword123',
+      method: 'POST',
+      headers: [
+        { key: 'Content-Type', value: 'application/json', enabled: true },
+      ],
+      params: [
+        { key: 'userId', value: 'testuser', enabled: true },
+        { key: 'password', value: 'SecretPassword123', enabled: true },
+      ],
+      body: {
+        mode: 'raw',
+        raw: '{"autoLogin":true}',
+      },
+    },
+  });
+
+  assert.equal(result.success, true, result.error);
+  assert.equal(result.environment.extracted_pwd, 'SecretPassword123');
+  assert.equal(result.environment.has_user_param, 'yes');
+  assert.ok(result.mutatedRequest);
+  assert.ok(result.mutatedRequest.queryParams.some((q) => q.key === 'encryptedPassword' && q.value === 'cipher_hex_999'));
+  assert.ok(result.mutatedRequest.headers.some((h) => h.key === 'X-Auth-Token' && h.value === 'token-abc'));
+  assert.ok(result.mutatedRequest.url.includes('encryptedPassword=cipher_hex_999'));
+});
+
+test('Gate P0.3: CryptoJS AES, SHA256, and MD5 execution in pre-request script', async () => {
+  const result = await runScriptInQuickJS({
+    script: `
+      const plainPassword = pm.request.url.query.get("password");
+      const key = CryptoJS.enc.Utf8.parse("41927327183612631268126389127654");
+      const iv = CryptoJS.enc.Utf8.parse("KHGTDBCGEKSATGFV");
+
+      const encrypted = CryptoJS.AES.encrypt(
+        CryptoJS.enc.Utf8.parse(plainPassword),
+        key,
+        { iv: iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 }
+      );
+      const encryptedHex = encrypted.ciphertext.toString(CryptoJS.enc.Hex);
+      pm.request.url.query.upsert({ key: "encryptedPassword", value: encryptedHex });
+
+      const hash = CryptoJS.SHA256("test-payload").toString();
+      pm.environment.set("sha256_hash", hash);
+    `,
+    environment: {},
+    variables: {},
+    request: {
+      url: 'https://api.example.com/api/v1/login?userId=alfian&password=Admin123',
+      method: 'POST',
+      params: [
+        { key: 'userId', value: 'alfian', enabled: true },
+        { key: 'password', value: 'Admin123', enabled: true },
+      ],
+    },
+  });
+
+  assert.equal(result.success, true, result.error);
+  assert.ok(result.mutatedRequest);
+  assert.ok(result.mutatedRequest.queryParams.some((q) => q.key === 'encryptedPassword' && q.value === '4b4f02b6dfb678f85cd88823dc2d18d4'));
+  assert.equal(result.environment.sha256_hash, '6f06dd0e26608013eff30bb1e951cda7de3fdd9e78e907470e0dd5c0ed25e273');
 });
 
 test('Gate P0.3: pm.response failed assertion reports test failure', async () => {
@@ -190,7 +274,7 @@ test('Gate P0.3: Legacy postman API compatibility', async () => {
     response: { status: 201, statusText: 'Created' },
   });
 
-  assert.equal(result.success, true);
+  assert.equal(result.success, true, result.error);
   assert.equal(result.environment.legacy_key, 'legacy_val');
   assert.equal(result.variables.global_key, 'global_val');
 });
@@ -209,7 +293,7 @@ test('Gate P0.3: Console API compatibility (RequestEditor snippets)', async () =
     variables: {},
   });
 
-  assert.equal(result.success, true);
+  assert.equal(result.success, true, result.error);
   assert.equal(result.environment.token, 'secret-token-123');
 });
 
@@ -225,7 +309,7 @@ test('Gate P0.3: Prototype pollution protection', async () => {
     variables: {},
   });
 
-  assert.equal(result.success, true);
+  assert.equal(result.success, true, result.error);
   assert.equal(Object.prototype.malicious, undefined);
   assert.equal(Object.prototype.hasOwnProperty.call(result.environment, '__proto__'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(result.environment, 'constructor'), false);
@@ -245,7 +329,7 @@ test('Gate P0.3: Guest cannot tamper JSON.stringify or forge result envelope', a
     variables: {},
   });
 
-  assert.equal(result.success, true);
+  assert.equal(result.success, true, result.error);
   assert.equal(result.environment.clean, 'ok');
   assert.equal(result.environment.hacked, undefined);
 });
@@ -296,7 +380,7 @@ test('Gate P0.3: Isolation probes - zero host, storage, network, or IPC leakage'
     variables: {},
   });
 
-  assert.equal(result.success, true);
+  assert.equal(result.success, true, result.error);
   const leaks = JSON.parse(result.environment.leaks);
   for (const [key, value] of Object.entries(leaks)) {
     assert.equal(value, false, `Isolation breach detected for: ${key}`);
