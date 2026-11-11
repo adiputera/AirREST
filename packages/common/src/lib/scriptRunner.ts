@@ -1,5 +1,5 @@
 import { ApiResponse } from '../types/api';
-import { ScriptExecutor, ScriptInput } from '../types/platform';
+import { ScriptExecutor, ScriptInput, ScriptRequest, ScriptMutatedRequest } from '../types/platform';
 import { validateScriptInput, validateScriptOutput } from './scriptProtocol';
 
 let sandboxIframe: HTMLIFrameElement | null = null;
@@ -98,6 +98,7 @@ export interface ScriptExecutionResult {
   environment: Record<string, string>;
   variables: Record<string, string>;
   error?: string;
+  mutatedRequest?: ScriptMutatedRequest;
 }
 
 /**
@@ -107,7 +108,7 @@ export async function executePreRequestScript(
   script: string,
   environment: Record<string, string> = {},
   variables: Record<string, string> = {},
-  options?: { signal?: AbortSignal; timeoutMs?: number; scriptExecutor?: ScriptExecutor }
+  options?: { signal?: AbortSignal; timeoutMs?: number; scriptExecutor?: ScriptExecutor; request?: ScriptRequest }
 ): Promise<ScriptExecutionResult> {
   if (!script || !script.trim()) {
     return {
@@ -120,7 +121,7 @@ export async function executePreRequestScript(
   const executor = options?.scriptExecutor || injectedScriptExecutor;
   if (executor) {
     return executor.execute(
-      { script, environment, variables },
+      { script, request: options?.request, environment, variables },
       { signal: options?.signal, timeoutMs: options?.timeoutMs }
     );
   }
@@ -136,7 +137,7 @@ export async function executePostResponseScript(
   response: ApiResponse,
   environment: Record<string, string> = {},
   variables: Record<string, string> = {},
-  options?: { signal?: AbortSignal; timeoutMs?: number; scriptExecutor?: ScriptExecutor }
+  options?: { signal?: AbortSignal; timeoutMs?: number; scriptExecutor?: ScriptExecutor; request?: ScriptRequest }
 ): Promise<ScriptExecutionResult> {
   if (!script || !script.trim()) {
     return {
@@ -151,6 +152,7 @@ export async function executePostResponseScript(
     return executor.execute(
       {
         script,
+        request: options?.request,
         environment,
         variables,
         response: {
@@ -173,7 +175,7 @@ export async function runScriptInSandbox(
   response: ApiResponse | undefined,
   environment: Record<string, string>,
   variables: Record<string, string>,
-  options?: { signal?: AbortSignal; timeoutMs?: number }
+  options?: { signal?: AbortSignal; timeoutMs?: number; request?: ScriptRequest }
 ): Promise<ScriptExecutionResult> {
   if (options?.signal?.aborted) {
     return {
@@ -186,6 +188,7 @@ export async function runScriptInSandbox(
 
   const scriptInput: ScriptInput = {
     script,
+    request: options?.request,
     response: response ? {
       status: response.status,
       statusText: response.statusText,
@@ -289,7 +292,8 @@ export async function runScriptInSandbox(
         {
           id,
           script,
-          response,
+          request: scriptInput.request,
+          response: scriptInput.response,
           environment,
           variables,
         },

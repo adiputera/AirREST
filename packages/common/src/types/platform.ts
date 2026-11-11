@@ -36,8 +36,28 @@ export interface PlatformCapabilities {
 export type ScriptResponse = Pick<ApiResponse,
   'status' | 'statusText' | 'headers' | 'data' | 'timeMs'>;
 
+export interface ScriptRequest {
+  url: string;
+  method?: string;
+  headers?: Record<string, string> | Array<{ key: string; value: string; enabled?: boolean }>;
+  params?: Array<{ key: string; value: string; enabled?: boolean }>;
+  body?: {
+    mode?: string;
+    raw?: string;
+    urlencoded?: Array<{ key: string; value: string; enabled?: boolean }>;
+    formdata?: Array<{ key: string; value: string; enabled?: boolean }>;
+  };
+}
+
+export interface ScriptMutatedRequest {
+  url?: string;
+  queryParams?: Array<{ key: string; value: string }>;
+  headers?: Array<{ key: string; value: string }>;
+}
+
 export interface ScriptInput {
   script: string;
+  request?: ScriptRequest;
   response?: ScriptResponse;
   environment: Record<string, string>;
   variables: Record<string, string>;
@@ -48,6 +68,7 @@ export interface ScriptResult {
   environment: Record<string, string>;
   variables: Record<string, string>;
   error?: string;
+  mutatedRequest?: ScriptMutatedRequest;
 }
 
 export interface ScriptExecutor {

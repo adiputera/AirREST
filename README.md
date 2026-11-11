@@ -8,7 +8,7 @@
 
 [![GitHub Repository](https://img.shields.io/badge/GitHub-adiputera%2FAirREST-181717?logo=github)](https://github.com/adiputera/AirREST)
 [![Chrome Web Store](https://img.shields.io/badge/Chrome%20Web%20Store-Install-4285F4?logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/airrest-rest-client/kpajbolnoepgalhoinilfdfpcmgbdlld)
-[![Version](https://img.shields.io/badge/Version-1.3.8-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.3.9-blue.svg)](CHANGELOG.md)
 [![Manifest V3](https://img.shields.io/badge/Chrome%20Extension-Manifest%20V3-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)
 [![Tauri v2](https://img.shields.io/badge/Tauri-v2-24C8D8?logo=tauri&logoColor=white)](https://v2.tauri.app/)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
@@ -246,14 +246,37 @@ pm.test("Response contains valid user details", function () {
 });
 ```
 
-##### Example 3: Dynamic Headers or Nonce (Pre-Request Script)
+##### Example 3: Inspect & Mutate In-Flight Request (Pre-Request Script)
 ```javascript
-// Generate request tracking ID and timestamp before dispatch
-const reqId = "req_" + Math.random().toString(36).substring(2, 9);
-const now = new Date().toISOString();
+// Read incoming query parameters or headers
+const password = pm.request.url.query.get("password");
 
-pm.variables.set("clientRequestId", reqId);
-pm.environment.set("lastRequestTimestamp", now);
+// Dynamically inject or upsert query parameters or headers
+pm.request.url.query.upsert({ key: "encryptedPassword", value: "cipher_hex_value" });
+pm.request.headers.upsert({ key: "X-Trace-Id", value: "trace_" + Date.now() });
+
+// Or store into environment variables
+pm.environment.set("lastRequestTimestamp", new Date().toISOString());
+```
+
+##### Example 4: AES / SHA256 Cryptography with Built-in CryptoJS (Pre-Request Script)
+```javascript
+// Extract plain password and encrypt with AES CBC
+const plainPassword = pm.request.url.query.get("password");
+const key = CryptoJS.enc.Utf8.parse("41927327183612631268126389127654");
+const iv = CryptoJS.enc.Utf8.parse("KHGTDBCGEKSATGFV");
+
+const encrypted = CryptoJS.AES.encrypt(
+  CryptoJS.enc.Utf8.parse(plainPassword),
+  key,
+  { iv: iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 }
+);
+
+// Inject encrypted password hex into query parameters
+pm.request.url.query.upsert({
+  key: "encryptedPassword",
+  value: encrypted.ciphertext.toString(CryptoJS.enc.Hex)
+});
 ```
 
 #### 🎨 Scripting UI & Developer Experience

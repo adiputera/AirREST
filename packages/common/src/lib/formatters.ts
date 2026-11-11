@@ -178,30 +178,288 @@ export function sanitizeRelaxedJson(raw?: string | null): string {
   return clean;
 }
 
+type JsonLikeTokenKind = 'open-object' | 'close-object' | 'open-array' | 'close-array' | 'colon' | 'comma' | 'atom' | 'line-comment' | 'block-comment';
+
+interface JsonLikeToken {
+  kind: JsonLikeTokenKind;
+  text: string;
+  /** Whether a line break separated this token from the previous token in the source. */
+  newlineBefore?: boolean;
+}
+
+function tokenizeJsonLike(input: string): { tokens: JsonLikeToken[]; error?: string } {
+  const tokens: JsonLikeToken[] = [];
+  let sawNewline = false;
+  const push = (kind: JsonLikeTokenKind, text: string) => {
+    tokens.push({ kind, text, newlineBefore: sawNewline });
+    sawNewline = false;
+  };
+
+  for (let index = 0; index < input.length;) {
+    const char = input[index];
+    const next = input[index + 1];
+
+    if (/\s/.test(char)) {
+      if (char === '\n' || char === '\r') sawNewline = true;
+      index++;
+      continue;
+    }
+
+    if (char === '/' && next === '/') {
+      const start = index;
+      index += 2;
+      while (index < input.length && input[index] !== '\n' && input[index] !== '\r') index++;
+      push('line-comment', input.slice(start, index));
+      continue;
+    }
+
+    if (char === '/' && next === '*') {
+      const start = index;
+      const end = input.indexOf('*/', index + 2);
+      if (end === -1) return { tokens, error: 'Unterminated block comment' };
+      index = end + 2;
+      push('block-comment', input.slice(start, index));
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      const start = index;
+      const quote = char;
+      index++;
+      let escaped = false;
+      let closed = false;
+      while (index < input.length) {
+        const current = input[index++];
+        if (escaped) {
+          escaped = false;
+        } else if (current === '\\') {
+          escaped = true;
+        } else if (current === quote) {
+          closed = true;
+          break;
+        }
+      }
+      if (!closed) return { tokens, error: 'Unterminated string literal' };
+      push('atom', input.slice(start, index));
+      continue;
+    }
+
+    if (char === '{' && next === '{') {
+      const start = index;
+      const end = input.indexOf('}}', index + 2);
+      if (end === -1) return { tokens, error: 'Unterminated template variable' };
+      index = end + 2;
+      push('atom', input.slice(start, index));
+      continue;
+    }
+
+    const punctuation: Record<string, JsonLikeTokenKind> = {
+      '{': 'open-object',
+      '}': 'close-object',
+      '[': 'open-array',
+      ']': 'close-array',
+      ':': 'colon',
+      ',': 'comma',
+    };
+    const kind = punctuation[char];
+    if (kind) {
+      push(kind, char);
+      index++;
+      continue;
+    }
+
+    const start = index;
+    while (
+      index < input.length &&
+      !/\s/.test(input[index]) &&
+      !'{}[],:'.includes(input[index]) &&
+      !(input[index] === '/' && (input[index + 1] === '/' || input[index + 1] === '*'))
+    ) {
+      index++;
+    }
+    if (start === index) return { tokens, error: `Unexpected character "${char}"` };
+    push('atom', input.slice(start, index));
+  }
+
+  return { tokens };
+}
+
+function validateJsonLikeTokens(tokens: JsonLikeToken[]): string | undefined {
+  let index = 0;
+  const skipComments = () => {
+    while (tokens[index]?.kind === 'line-comment' || tokens[index]?.kind === 'block-comment') index++;
+  };
+  const parseValue = (): string | undefined => {
+    skipComments();
+    const token = tokens[index];
+    if (!token) return 'Expected a value';
+    if (token.kind === 'atom') {
+      index++;
+      return undefined;
+    }
+    if (token.kind === 'open-object') return parseObject();
+    if (token.kind === 'open-array') return parseArray();
+    return `Expected a value, found "${token.text}"`;
+  };
+  const parseObject = (): string | undefined => {
+    index++;
+    skipComments();
+    if (tokens[index]?.kind === 'close-object') {
+      index++;
+      return undefined;
+    }
+    while (true) {
+      skipComments();
+      const key = tokens[index];
+      if (!key || key.kind !== 'atom') return 'Expected an object property name';
+      index++;
+      skipComments();
+      if (tokens[index]?.kind !== 'colon') return 'Expected ":" after an object property name';
+      index++;
+      const valueError = parseValue();
+      if (valueError) return valueError;
+      skipComments();
+      const separator = tokens[index];
+      if (separator?.kind === 'close-object') {
+        index++;
+        return undefined;
+      }
+      if (separator?.kind !== 'comma') return 'Expected "," or "}" after an object property';
+      index++;
+      skipComments();
+      if (tokens[index]?.kind === 'close-object') {
+        index++;
+        return undefined;
+      }
+    }
+  };
+  const parseArray = (): string | undefined => {
+    index++;
+    skipComments();
+    if (tokens[index]?.kind === 'close-array') {
+      index++;
+      return undefined;
+    }
+    while (true) {
+      const valueError = parseValue();
+      if (valueError) return valueError;
+      skipComments();
+      const separator = tokens[index];
+      if (separator?.kind === 'close-array') {
+        index++;
+        return undefined;
+      }
+      if (separator?.kind !== 'comma') return 'Expected "," or "]" after an array value';
+      index++;
+      skipComments();
+      if (tokens[index]?.kind === 'close-array') {
+        index++;
+        return undefined;
+      }
+    }
+  };
+
+  const error = parseValue();
+  if (error) return error;
+  skipComments();
+  return tokens[index] ? `Unexpected token "${tokens[index].text}"` : undefined;
+}
+
+function formatJsonLikeTokens(tokens: JsonLikeToken[]): string {
+  let output = '';
+  let indentation = 0;
+  let atLineStart = true;
+
+  const write = (text: string) => {
+    if (atLineStart) {
+      output += '  '.repeat(indentation);
+      atLineStart = false;
+    }
+    output += text;
+  };
+  const newline = () => {
+    output = output.replace(/[ \t]+$/, '');
+    if (!output.endsWith('\n')) output += '\n';
+    atLineStart = true;
+  };
+  const nextToken = (start: number) => tokens.slice(start + 1).find((token) => token.kind !== 'line-comment' && token.kind !== 'block-comment');
+  const isSameLineComment = (token?: JsonLikeToken) =>
+    !!token && (token.kind === 'line-comment' || token.kind === 'block-comment') && !token.newlineBefore;
+
+  tokens.forEach((token, index) => {
+    if (token.kind === 'open-object' || token.kind === 'open-array') {
+      write(token.text);
+      // A container is empty only when its closing token follows immediately; comments inside
+      // count as content so indentation stays balanced with the matching close token.
+      const following = tokens[index + 1];
+      if (following && following.kind !== (token.kind === 'open-object' ? 'close-object' : 'close-array')) {
+        indentation++;
+        // Keep a comment written on the same source line as the opening bracket on that line.
+        if (!isSameLineComment(following)) newline();
+      }
+      return;
+    }
+
+    if (token.kind === 'close-object' || token.kind === 'close-array') {
+      const previous = tokens[index - 1];
+      const wasEmpty = previous?.kind === (token.kind === 'close-object' ? 'open-object' : 'open-array');
+      if (!wasEmpty) {
+        if (!atLineStart) newline();
+        indentation = Math.max(0, indentation - 1);
+      }
+      write(token.text);
+      return;
+    }
+
+    if (token.kind === 'comma') {
+      write(token.text);
+      // Keep trailing comments (`"a": 1, // note`) attached to the property they describe.
+      if (!isSameLineComment(tokens[index + 1])) newline();
+      return;
+    }
+
+    if (token.kind === 'colon') {
+      write(': ');
+      return;
+    }
+
+    if (token.kind === 'line-comment') {
+      if (!atLineStart && !output.endsWith(' ')) write(' ');
+      write(token.text);
+      newline();
+      return;
+    }
+
+    if (token.kind === 'block-comment') {
+      if (!atLineStart && !output.endsWith(' ')) write(' ');
+      write(token.text);
+      const next = nextToken(index);
+      if (next?.kind === 'atom' || next?.kind === 'open-object' || next?.kind === 'open-array') newline();
+      return;
+    }
+
+    write(token.text);
+  });
+
+  return output.trim();
+}
+
 /**
- * Beautifies and indents JSON strings with 2-space indentation.
- * Automatically recovers from common relaxed syntax issues (single quotes,
- * unquoted keys, trailing commas, comments, Python booleans).
+ * Beautifies JSON and supported relaxed JSON without reserializing values.
+ * Comments, templates, number spelling, strings, and property ordering remain intact.
  */
 export function beautifyJson(jsonStr?: string | null): { formatted: string; error?: string } {
-  const trimmed = typeof jsonStr === 'string' ? jsonStr.trim() : '';
+  const original = typeof jsonStr === 'string' ? jsonStr : '';
+  const trimmed = original.trim();
   if (!trimmed) return { formatted: '' };
 
-  try {
-    const parsed = JSON.parse(trimmed);
-    return { formatted: JSON.stringify(parsed, null, 2) };
-  } catch (err: unknown) {
-    try {
-      const sanitized = sanitizeRelaxedJson(trimmed);
-      const parsed = JSON.parse(sanitized);
-      return { formatted: JSON.stringify(parsed, null, 2) };
-    } catch {
-      return {
-        formatted: trimmed,
-        error: err instanceof Error ? err.message : 'Invalid JSON format',
-      };
-    }
-  }
+  const tokenized = tokenizeJsonLike(trimmed);
+  if (tokenized.error) return { formatted: original, error: tokenized.error };
+
+  const validationError = validateJsonLikeTokens(tokenized.tokens);
+  if (validationError) return { formatted: original, error: validationError };
+
+  return { formatted: formatJsonLikeTokens(tokenized.tokens) };
 }
 
 /**

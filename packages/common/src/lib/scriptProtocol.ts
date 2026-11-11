@@ -1,5 +1,5 @@
-import { ScriptInput, ScriptResult } from '../types/platform';
-export type { ScriptInput, ScriptResult };
+import { ScriptInput, ScriptResult, ScriptRequest, ScriptMutatedRequest } from '../types/platform';
+export type { ScriptInput, ScriptResult, ScriptRequest, ScriptMutatedRequest };
 
 export const SCRIPT_LIMITS = {
   MAX_SCRIPT_BYTES: 256 * 1024, // 256 KiB
@@ -133,6 +133,18 @@ export function validateScriptInput(input: ScriptInput): { valid: boolean; error
     }
   }
 
+  if (input.request !== undefined) {
+    if (!input.request || typeof input.request !== 'object' || Array.isArray(input.request)) {
+      return { valid: false, error: 'Input request must be an object map.' };
+    }
+    if (typeof input.request.url !== 'string') {
+      return { valid: false, error: 'Input request.url must be a string.' };
+    }
+    if (getUtf8ByteLength(input.request.url) > 65536) {
+      return { valid: false, error: 'Input request.url exceeded maximum allowed length.' };
+    }
+  }
+
   return { valid: true };
 }
 
@@ -259,9 +271,36 @@ export function validateScriptOutput(rawResult: unknown, initialInput?: ScriptIn
     };
   }
 
+  let sanitizedMutatedRequest: ScriptMutatedRequest | undefined;
+  if (record.mutatedRequest && typeof record.mutatedRequest === 'object' && !Array.isArray(record.mutatedRequest)) {
+    const mut = record.mutatedRequest as Record<string, unknown>;
+    const queryParams: Array<{ key: string; value: string }> = [];
+    if (Array.isArray(mut.queryParams)) {
+      for (const q of mut.queryParams) {
+        if (q && typeof q === 'object' && typeof q.key === 'string' && typeof q.value === 'string' && !isForbiddenKey(q.key)) {
+          queryParams.push({ key: q.key, value: q.value });
+        }
+      }
+    }
+    const headers: Array<{ key: string; value: string }> = [];
+    if (Array.isArray(mut.headers)) {
+      for (const h of mut.headers) {
+        if (h && typeof h === 'object' && typeof h.key === 'string' && typeof h.value === 'string' && !isForbiddenKey(h.key)) {
+          headers.push({ key: h.key, value: h.value });
+        }
+      }
+    }
+    sanitizedMutatedRequest = {
+      url: typeof mut.url === 'string' ? mut.url : undefined,
+      queryParams,
+      headers,
+    };
+  }
+
   return {
     success: true,
     environment: sanitizedEnv,
     variables: sanitizedVars,
+    ...(sanitizedMutatedRequest ? { mutatedRequest: sanitizedMutatedRequest } : {}),
   };
 }

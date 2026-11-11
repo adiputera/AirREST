@@ -1,6 +1,6 @@
 {
   "name": "@airrest/common",
-  "version": "1.3.8",
+  "version": "1.3.9",
   "private": true,
   "type": "module",
   "exports": {
@@ -14,6 +14,7 @@
     "./storage": "./src/lib/storage.ts",
     "./cloud": "./src/lib/cloudApi.ts",
     "./protocol": "./src/lib/scriptProtocol.ts",
+    "./crypto": "./src/lib/cryptoJsSource.ts",
     "./styles.css": "./src/styles.css"
   },
   "scripts": {
@@ -32,9 +33,11 @@
     "@codemirror/state": "^6.7.6",
     "@codemirror/view": "^6.43.15",
     "@lezer/highlight": "^1.2.5",
+    "crypto-js": "^4.2.0",
     "lucide-react": "^1.52.0"
   },
   "devDependencies": {
+    "@types/crypto-js": "^4.2.2",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "react": "19.3.0",

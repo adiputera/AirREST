@@ -2462,6 +2462,100 @@ test('T-SAVE-CONFLICT-DETECTION: Method and Name duplicate guard allows distinct
   assert.equal(replacedItem?.request?.url, 'https://api.example.com/token/replaced', 'Replaced item has updated payload');
 });
 
+test('T-P1-SAVE-TARGETING: saving an inactive source tab does not mutate the active tab, and an open replacement target is rejected', async () => {
+  const { runtimeModule } = await setupRuntimeModules();
+  const runtime = runtimeModule.createAirrestRuntime({ adapter: { id: 'test-adapter', dispose: () => {} } });
+  const requestA = {
+    id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'active request', method: 'GET', url: 'https://example.com/a',
+    params: [], headers: [], auth: { type: 'none' }, bodyType: 'none', rawType: 'text', bodyContent: '', createdAt: 1, updatedAt: 1,
+  };
+  const requestB = {
+    ...requestA, id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', name: 'inactive request', url: 'https://example.com/b',
+  };
+  const replacementTarget = {
+    ...requestA, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'replacement target', url: 'https://example.com/c',
+  };
+  runtime.store.setState({
+    workspaceMode: 'offline',
+    tabs: [{ ...requestA }, { ...requestB }, { ...replacementTarget }],
+    activeTabId: requestA.id,
+    collections: [{
+      id: 'collection-1', name: 'Collection', createdAt: 1, updatedAt: 1,
+      items: [
+        { id: requestB.id, name: requestB.name, type: 'request', request: { ...requestB } },
+        { id: replacementTarget.id, name: replacementTarget.name, type: 'request', request: { ...replacementTarget } },
+      ],
+    }],
+  });
+
+  const saved = runtime.store.getState().saveRequestToCollection(
+    'collection-1', null, { ...requestB, name: 'inactive request updated' }, requestB.id,
+  );
+  assert.equal(saved.success, true);
+  const afterInactiveSave = runtime.store.getState();
+  assert.equal(afterInactiveSave.activeTabId, requestA.id, 'saving B must keep A active');
+  assert.equal(afterInactiveSave.tabs.find((tab) => tab.id === requestA.id)?.name, requestA.name, 'saving B must not rename A');
+  assert.equal(afterInactiveSave.tabs.find((tab) => tab.id === requestB.id)?.name, 'inactive request updated');
+
+  const rejected = afterInactiveSave.saveRequestToCollection(
+    'collection-1', null, { ...requestB, id: replacementTarget.id, name: replacementTarget.name }, requestB.id,
+  );
+  assert.equal(rejected.success, false);
+  assert.match(rejected.error || '', /already open/i);
+  assert.equal(runtime.store.getState().collections[0].items.find((item) => item.id === replacementTarget.id)?.request?.url, replacementTarget.url);
+  runtime.dispose();
+});
+
+test('T-P1-CLOUD-SAVE-ORDERING: a late acknowledgement cannot mark a newer failed save as synced', async () => {
+  const { runtimeModule } = await setupRuntimeModules();
+  const pendingImports = [];
+  const adapter = {
+    id: 'test-adapter',
+    dispose: () => {},
+    cloudTransport: {
+      fetch: async (url, init) => {
+        if (String(url).includes('/api/v1/sync/import-batch')) {
+          return new Promise((resolve, reject) => pendingImports.push({ resolve, reject, init }));
+        }
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      },
+    },
+  };
+  const runtime = runtimeModule.createAirrestRuntime({ adapter });
+  const request = {
+    id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', name: 'queued save', method: 'POST', url: 'https://example.com/save',
+    params: [], headers: [], auth: { type: 'none' }, bodyType: 'json', rawType: 'json', bodyContent: '{"revision": 0}', createdAt: 1, updatedAt: 1,
+  };
+  runtime.store.setState({
+    workspaceMode: 'cloud',
+    cloudConfig: {
+      apiUrl: 'https://cloud.example.com', token: 'token', refreshToken: 'refresh',
+      user: { id: 'user-1', role: 'admin' },
+      activeScope: { id: 'scope-1', type: 'workspace', role: 'admin', permissions: ['collection:write'] },
+    },
+    tabs: [{ ...request }], activeTabId: request.id,
+    collections: [{
+      id: 'collection-1', name: 'Collection', createdAt: 1, updatedAt: 1,
+      items: [{ id: request.id, name: request.name, type: 'request', request: { ...request } }],
+    }],
+  });
+  const store = runtime.store.getState();
+  assert.equal(store.saveRequestToCollection('collection-1', null, { ...request, bodyContent: '{"revision": 1}' }, request.id).success, true);
+  assert.equal(store.saveRequestToCollection('collection-1', null, { ...request, bodyContent: '{"revision": 2}' }, request.id).success, true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(pendingImports.length, 1, 'only the first save may be in flight');
+  pendingImports[0].resolve(new Response(JSON.stringify({ data: { success: true } }), { status: 200 }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(pendingImports.length, 2, 'the later save must run after the first acknowledgement');
+  assert.equal(runtime.store.getState().collections[0]._syncStatus, 'pending', 'the stale acknowledgement must not mark the newer save as synced');
+  pendingImports[1].reject(new Error('network unavailable'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const collection = runtime.store.getState().collections[0];
+  assert.equal(collection._syncStatus, 'pending');
+  assert.equal(collection.items[0].request?.bodyContent, '{"revision": 2}');
+  runtime.dispose();
+});
+
 test('T-TAB-ISOLATION: Requests with identical names/methods/urls from different collections open in separate tabs and do not overwrite', async () => {
   const { runtimeModule } = await setupRuntimeModules();
   const adapter = {

@@ -111,6 +111,7 @@ export const TabBar: React.FC = () => {
 
     const isDirty = isRequestModified(targetTab, collections);
     if (isDirty) {
+      setActiveTabId(tabId);
       setUnsavedConfirmTab(targetTab);
     } else {
       closeTab(tabId);
@@ -158,9 +159,10 @@ export const TabBar: React.FC = () => {
       );
 
       if (!hasCollisionWithAnother) {
-        saveRequestToCollection(savedInfo.collection.id, savedInfo.folderId, tabToSave);
+        const result = saveRequestToCollection(savedInfo.collection.id, savedInfo.folderId, tabToSave, tabToSave.id);
+        if (!result.success) return;
         setUnsavedConfirmTab(null);
-        closeTab(tabToSave.id);
+        closeTab(result.savedRequestId || tabToSave.id);
         return;
       }
     }
@@ -475,9 +477,9 @@ export const TabBar: React.FC = () => {
             setIsSaveModalOpen(false);
             setTargetSaveTab(null);
           }}
-          onSaved={() => {
+          onSaved={(result) => {
             if (targetSaveTab) {
-              closeTab(targetSaveTab.id);
+              closeTab(result.savedRequestId || targetSaveTab.id);
               setTargetSaveTab(null);
             }
           }}

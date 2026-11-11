@@ -226,6 +226,8 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+
       const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
       const modifier = isMac ? e.metaKey : e.ctrlKey;
       if (!modifier) return;
@@ -1592,6 +1594,8 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
                     format="json"
                     bodyContent={currentTab.bodyContent}
                     onBodyContentChange={setBodyContent}
+                    onUndo={undoActiveRequest}
+                    onRedo={redoActiveRequest}
                   />
                 ) : currentTab.bodyType === 'xml' || (currentTab.bodyType === 'raw' && currentTab.rawType === 'xml') ? (
                   <PayloadBuilder
@@ -1599,6 +1603,8 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
                     format="xml"
                     bodyContent={currentTab.bodyContent}
                     onBodyContentChange={setBodyContent}
+                    onUndo={undoActiveRequest}
+                    onRedo={redoActiveRequest}
                   />
                 ) : currentTab.bodyType !== 'none' ? (
                   <div className="flex-1 min-h-0 flex flex-col space-y-1">
