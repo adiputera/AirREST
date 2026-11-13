@@ -30,13 +30,14 @@ import {
 } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
 import { HttpMethod, BodyType, RawType, KeyValuePair } from '../types/api';
-import { KeyValueEditor } from './KeyValueEditor';
+import { KeyValueEditor, ReadonlyKeyValueRow } from './KeyValueEditor';
 import { METHOD_COLORS } from './MethodBadge';
 import { SaveToCollectionModal } from './SaveToCollectionModal';
 import { useBackHandler } from '../lib/backNavigation';
 import { generateCurlCommand } from '../lib/curl';
 import { VariableInput } from './VariableInput';
 import { interpolateVariables } from '../lib/fetcher';
+import { analyzeHeadersForEditor, interpolateStaticVariables } from '../lib/authHeaders';
 import { beautifyXml, beautifyGraphQL, beautifyJson } from '../lib/formatters';
 import {
   isRequestModified,
@@ -396,6 +397,51 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
           : (v.initialValue ?? v.value ?? '');
         envVarsMap[v.key.trim()] = effVal;
       }
+    });
+  }
+
+  const headersAnalysis = analyzeHeadersForEditor(
+    Array.isArray(currentTab?.headers) ? currentTab.headers : [],
+    currentTab?.auth,
+    (input) => interpolateStaticVariables(input, envVarsMap),
+    {
+      method: currentTab?.method,
+      bodyType: currentTab?.bodyType,
+      rawType: currentTab?.rawType,
+      bodyBinaryFile: currentTab?.bodyBinaryFile,
+    }
+  );
+
+  const derivedReadonlyRows: ReadonlyKeyValueRow[] = [];
+  if (headersAnalysis.authPreview) {
+    derivedReadonlyRows.push({
+      id: `${headersAnalysis.authPreview.id}:${currentTab?.id || 'no-tab'}:${headersAnalysis.authPreview.authType}`,
+      key: headersAnalysis.authPreview.key,
+      value: headersAnalysis.authPreview.value,
+      valueType: headersAnalysis.authPreview.valueType,
+      badgeText: 'From Auth',
+      actionLabel: 'Edit in Auth',
+      actionTitle: 'Open Auth tab to modify this header',
+      onActionClick: () => handleTabClick('auth'),
+    });
+  }
+  if (headersAnalysis.bodyContentTypePreview) {
+    const bodyPreview = headersAnalysis.bodyContentTypePreview;
+    const overriddenByLabel =
+      bodyPreview.overriddenBy === 'auth' ? 'Auth header' : 'manual Content-Type header';
+    derivedReadonlyRows.push({
+      id: `${bodyPreview.id}:${currentTab?.id || 'no-tab'}:${currentTab?.bodyType || 'none'}:${bodyPreview.value}`,
+      key: bodyPreview.key,
+      value: bodyPreview.value,
+      valueType: 'text',
+      badgeText: bodyPreview.isOverridden ? 'From Body (Overridden)' : 'From Body',
+      actionLabel: 'Edit in Body',
+      actionTitle: 'Open Body tab to modify this Content-Type',
+      onActionClick: () => handleTabClick('body'),
+      isOverridden: bodyPreview.isOverridden,
+      overriddenTitle: bodyPreview.isOverridden
+        ? `Overridden by your active ${overriddenByLabel}`
+        : undefined,
     });
   }
 
@@ -841,9 +887,9 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
             >
               <Code2 className="h-3.5 w-3.5" />
               <span>Headers</span>
-              {(Array.isArray(currentTab?.headers) ? currentTab.headers : []).filter((h) => h && h.enabled && h.key?.trim()).length > 0 && (
+              {headersAnalysis.effectiveCount > 0 && (
                 <span className="rounded-full bg-sky-500/10 text-sky-600 dark:text-sky-400 border border-sky-500/20 px-1.5 text-[10px]">
-                  {(Array.isArray(currentTab?.headers) ? currentTab.headers : []).filter((h) => h && h.enabled && h.key?.trim()).length}
+                  {headersAnalysis.effectiveCount}
                 </span>
               )}
             </button>
@@ -1024,6 +1070,8 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
                 onRemove={removeHeader}
                 keyPlaceholder="Header name (e.g. Authorization)"
                 valuePlaceholder="Header value or {{token}}"
+                readonlyRows={derivedReadonlyRows}
+                rowWarnings={headersAnalysis.warningsById}
               />
             )}
 
@@ -1061,6 +1109,9 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
                       <span>Bearer Token</span>
                     </label>
                     <VariableInput
+                      key={`${currentTab?.id || 'no-tab'}:auth:bearer`}
+                      type="password"
+                      maskResetKey={currentTab?.id || 'no-tab'}
                       value={currentTab?.auth?.bearerToken || ''}
                       onChange={(bearerToken) => updateAuth({ bearerToken })}
                       placeholder="Bearer token or {{token}}..."
@@ -1083,7 +1134,9 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
                     <div className="space-y-1.5">
                       <label className="text-xs font-medium text-tx-secondary">Password</label>
                       <VariableInput
+                        key={`${currentTab?.id || 'no-tab'}:auth:basic-password`}
                         type="password"
+                        maskResetKey={currentTab?.id || 'no-tab'}
                         value={currentTab?.auth?.basicPassword || ''}
                         onChange={(basicPassword) => updateAuth({ basicPassword })}
                         placeholder="Password or {{password}}"
@@ -1107,6 +1160,9 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
                       <div className="space-y-1.5">
                         <label className="text-xs font-medium text-tx-secondary">Key Value</label>
                         <VariableInput
+                          key={`${currentTab?.id || 'no-tab'}:auth:apikey-value`}
+                          type="password"
+                          maskResetKey={currentTab?.id || 'no-tab'}
                           value={currentTab?.auth?.apiKeyValue || ''}
                           onChange={(apiKeyValue) => updateAuth({ apiKeyValue })}
                           placeholder="e.g. secret_value or {{apiKey}}"

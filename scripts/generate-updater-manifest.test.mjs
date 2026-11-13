@@ -29,6 +29,8 @@ test('combines all desktop platforms and preserves installer aliases and exact s
   assert.match(manifest.platforms['windows-x86_64-msi'].url, /v1\.3\.6\/AirREST_1\.3\.6_x64_en-US\.msi$/);
   assert.equal(manifest.pub_date, metadata.pubDate);
   assert.equal(manifest.notes, metadata.notes);
+  assert.equal(manifest.release_tag, metadata.tag);
+  assert.equal(manifest.release_url, 'https://github.com/example/airrest/releases/tag/v1.3.6');
 });
 
 test('rejects missing binaries or signatures for every required target', () => {
@@ -52,11 +54,13 @@ test('rejects corrupt signatures, missing platform coverage and invalid metadata
   assert.throws(() => build({ bundles: selectUpdaterAssets(assets, version).slice(1) }), /Missing updater target/);
   assert.throws(() => build({ version: 'invalid' }), /Invalid updater version/);
   assert.throws(() => build({ pubDate: 'invalid' }), /Invalid release date/);
+  assert.throws(() => build({ repo: 'invalid?repo' }), /Invalid release repository or tag/);
 });
 
 test('encodes manual release tags and uses tagged download URLs for draft releases', () => {
   const manifest = build({ tag: 'preview/test' });
   assert.match(manifest.platforms['darwin-aarch64'].url, /download\/preview%2Ftest\//);
+  assert.equal(manifest.release_url, 'https://github.com/example/airrest/releases/tag/preview%2Ftest');
 });
 
 test('GitHub adapter paginates assets and downloads signatures before returning a complete manifest', async () => {

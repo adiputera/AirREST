@@ -19,6 +19,7 @@ export {
 } from './store/useApiStore';
 export * from './store/storeContext';
 export * from './lib/fetcher';
+export * from './lib/authHeaders';
 export * from './lib/storage';
 export * from './lib/cloudApi';
 export * from './lib/postman';

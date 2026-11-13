@@ -2,6 +2,16 @@ import React, { useEffect, useState, useRef } from 'react';
 import { check, type Update, type DownloadEvent } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { openUrl } from '@tauri-apps/plugin-opener';
+import {
+  dismissInstalledUpdate,
+  readInstalledUpdate,
+  readReleaseUrl,
+  reconcileInstalledUpdate,
+  rememberPendingUpdate,
+  type DesktopUpdateRelease,
+  type UpdateStorage,
+} from '../desktopUpdateState';
 
 export type UpdateState =
   | 'idle'
@@ -31,6 +41,8 @@ export interface UpdaterControllerDeps {
   onStateChange: (state: UpdateState) => void;
   onVersionChange: (version: string) => void;
   onProgressChange: (percent: number) => void;
+  onReleaseChange?: (release: { version: string; releaseUrl: string | null }) => void;
+  onInstallStarting?: (release: DesktopUpdateRelease) => boolean | void;
 }
 
 /**
@@ -45,6 +57,15 @@ export function createUpdaterController(deps: UpdaterControllerDeps) {
   let isInstalledOnDisk = false;
   let isInstalling = false;
   let isDisposed = false;
+  let isInstallationRecorded = false;
+  let updateRelease: { version: string; releaseUrl: string | null } | null = null;
+
+  const rememberInstallation = () => {
+    if (!isInstallationRecorded && updateRelease?.releaseUrl) {
+      const persisted = deps.onInstallStarting?.({ version: updateRelease.version, releaseUrl: updateRelease.releaseUrl });
+      isInstallationRecorded = persisted !== false;
+    }
+  };
 
   const trackProgress = () => {
     let downloaded = 0;
@@ -79,6 +100,8 @@ export function createUpdaterController(deps: UpdaterControllerDeps) {
 
         currentUpdate = update;
         deps.onVersionChange(update.version);
+        updateRelease = { version: update.version, releaseUrl: readReleaseUrl(update.rawJson) };
+        deps.onReleaseChange?.(updateRelease);
         deps.onStateChange('downloading');
 
         await update.download(trackProgress());
@@ -90,6 +113,7 @@ export function createUpdaterController(deps: UpdaterControllerDeps) {
         if (deps.platform === 'macos') {
           // On macOS, atomic bundle replacement in /Applications is silent and non-disruptive.
           try {
+            rememberInstallation();
             await update.install();
             isInstalledOnDisk = true;
           } catch (err) {
@@ -115,6 +139,7 @@ export function createUpdaterController(deps: UpdaterControllerDeps) {
       deps.onStateChange('installing');
 
       try {
+        rememberInstallation();
         if (deps.platform === 'windows') {
           // On Windows, install({ restartAfterInstall: true }) launches passive installer & restarts
           await currentUpdate.install({ restartAfterInstall: true });
@@ -126,8 +151,10 @@ export function createUpdaterController(deps: UpdaterControllerDeps) {
           await deps.relaunchApp();
         } else {
           // On Linux (.AppImage / .deb / .rpm), install then relaunch
-          await currentUpdate.install();
-          isInstalledOnDisk = true;
+          if (!isInstalledOnDisk) {
+            await currentUpdate.install();
+            isInstalledOnDisk = true;
+          }
           await deps.relaunchApp();
         }
       } catch (err) {
@@ -144,6 +171,7 @@ export function createUpdaterController(deps: UpdaterControllerDeps) {
       isReady = false;
 
       try {
+        rememberInstallation();
         if (deps.platform === 'windows') {
           // Install on close WITHOUT relaunching the app after the user explicitly closed it
           await currentUpdate.install({ restartAfterInstall: false });
@@ -171,10 +199,27 @@ export function createUpdaterController(deps: UpdaterControllerDeps) {
   };
 }
 
+function browserStorage(): UpdateStorage | null {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function readStartupUpdate(): DesktopUpdateRelease | null {
+  const storage = browserStorage();
+  if (!storage || typeof __AIRREST_VERSION__ === 'undefined') return null;
+  return reconcileInstalledUpdate(__AIRREST_VERSION__, storage) ?? readInstalledUpdate(__AIRREST_VERSION__, storage);
+}
+
 export const DesktopUpdateBanner: React.FC = () => {
   const [state, setState] = useState<UpdateState>('idle');
   const [version, setVersion] = useState<string>('');
   const [progress, setProgress] = useState<number>(0);
+  const [releaseUrl, setReleaseUrl] = useState<string | null>(null);
+  const [installedUpdate, setInstalledUpdate] = useState<DesktopUpdateRelease | null>(readStartupUpdate);
+  const [message, setMessage] = useState<string | null>(null);
   const controllerRef = useRef<ReturnType<typeof createUpdaterController> | null>(null);
 
   useEffect(() => {
@@ -197,6 +242,13 @@ export const DesktopUpdateBanner: React.FC = () => {
       },
       onProgressChange: (p) => {
         if (isMounted) setProgress(p);
+      },
+      onReleaseChange: (release) => {
+        if (isMounted) setReleaseUrl(release.releaseUrl);
+      },
+      onInstallStarting: (release) => {
+        const storage = browserStorage();
+        return storage ? rememberPendingUpdate(release, storage) : false;
       },
     });
     controllerRef.current = controller;
@@ -235,9 +287,29 @@ export const DesktopUpdateBanner: React.FC = () => {
     setState('dismissed');
   };
 
-  if (state !== 'downloading' && state !== 'ready' && state !== 'installing') {
+  const handleDismissInstalledUpdate = () => {
+    const storage = browserStorage();
+    if (storage && installedUpdate) dismissInstalledUpdate(installedUpdate.version, storage);
+    setInstalledUpdate(null);
+  };
+
+  const handleViewChangelog = async (url: string) => {
+    try {
+      await openUrl(url);
+    } catch {
+      setMessage('Could not open the GitHub Release page. Please try again.');
+    }
+  };
+
+  const isUpdateInProgress = state === 'downloading' || state === 'ready' ||
+    state === 'installing' || state === 'error';
+  if (!isUpdateInProgress && !installedUpdate) {
     return null;
   }
+
+  const shownVersion = isUpdateInProgress ? version : installedUpdate?.version ?? '';
+  const shownReleaseUrl = isUpdateInProgress ? releaseUrl : installedUpdate?.releaseUrl ?? null;
+  const heading = installedUpdate && !isUpdateInProgress ? 'AirREST Updated' : 'AirREST Update';
 
   return (
     <aside
@@ -255,10 +327,10 @@ export const DesktopUpdateBanner: React.FC = () => {
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between">
             <h4 className="text-xs font-semibold uppercase tracking-wider text-sky-400">
-              AirREST Update
+              {heading}
             </h4>
             <span className="text-[10px] font-mono text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded">
-              v{version}
+              v{shownVersion}
             </span>
           </div>
 
@@ -289,6 +361,15 @@ export const DesktopUpdateBanner: React.FC = () => {
                 >
                   Restart Now
                 </button>
+                {shownReleaseUrl && (
+                  <button
+                    type="button"
+                    onClick={() => void handleViewChangelog(shownReleaseUrl)}
+                    className="px-2 py-1.5 text-xs font-medium text-sky-300 hover:text-sky-200"
+                  >
+                    View changelog
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={handleDismiss}
@@ -305,6 +386,54 @@ export const DesktopUpdateBanner: React.FC = () => {
               Installing update and restarting application...
             </p>
           )}
+
+          {state === 'error' && (
+            <div className="mt-1.5">
+              <p className="text-xs text-amber-200">Could not apply the update. You can retry when ready.</p>
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleRestart}
+                  className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-sky-500 active:scale-95 transition-all"
+                >
+                  Retry restart
+                </button>
+                {shownReleaseUrl && (
+                  <button
+                    type="button"
+                    onClick={() => void handleViewChangelog(shownReleaseUrl)}
+                    className="px-2 py-1.5 text-xs font-medium text-sky-300 hover:text-sky-200"
+                  >
+                    View changelog
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {installedUpdate && !isUpdateInProgress && (
+            <div className="mt-1.5">
+              <p className="text-xs text-slate-300">Your update is installed and ready to use.</p>
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleViewChangelog(installedUpdate.releaseUrl)}
+                  className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-sky-500 active:scale-95 transition-all"
+                >
+                  View changelog
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDismissInstalledUpdate}
+                  className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700 active:scale-95 transition-all"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
+
+          {message && <p className="mt-2 text-xs text-amber-200">{message}</p>}
         </div>
       </div>
     </aside>

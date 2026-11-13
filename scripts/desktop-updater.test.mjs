@@ -30,6 +30,11 @@ function loadDesktopUpdateModule() {
         if (id === 'react/jsx-runtime') {
           return { jsx: () => null, jsxs: () => null };
         }
+        if (id === '../desktopUpdateState') {
+          return {
+            readReleaseUrl: (rawJson) => typeof rawJson?.release_url === 'string' ? rawJson.release_url : null,
+          };
+        }
         return {};
       },
       console,
@@ -55,6 +60,7 @@ function createMockUpdate(version = '0.1.2') {
     update: {
       available: true,
       version,
+      rawJson: { release_url: `https://github.com/example/airrest/releases/tag/v${version}` },
       async download(onEvent) {
         calls.download += 1;
         if (onEvent) {
@@ -191,7 +197,30 @@ test('T-UPDATER-4: Linux flow defers install() until Restart or Window Close to 
   assert.equal(relaunched, 1);
 });
 
-test('T-UPDATER-5: Re-entrancy guard prevents duplicate install() and dispose() releases uninstalled resource', async () => {
+test('T-UPDATER-5: Linux retry relaunches a staged update without attempting a second install', async () => {
+  const { calls, update } = createMockUpdate('0.1.2');
+  let relaunchAttempts = 0;
+  const controller = createUpdaterController({
+    platform: 'linux',
+    checkUpdate: async () => update,
+    relaunchApp: async () => {
+      relaunchAttempts += 1;
+      if (relaunchAttempts === 1) throw new Error('temporary relaunch failure');
+    },
+    onStateChange: () => {},
+    onVersionChange: () => {},
+    onProgressChange: () => {},
+  });
+
+  await controller.start();
+  await controller.applyAndRestart();
+  await controller.applyAndRestart();
+
+  assert.equal(calls.install.length, 1, 'retry must reuse the update already installed on disk');
+  assert.equal(relaunchAttempts, 2, 'retry must attempt relaunch again');
+});
+
+test('T-UPDATER-6: Re-entrancy guard prevents duplicate install() and dispose() releases uninstalled resource', async () => {
   const { calls, update } = createMockUpdate('0.1.2');
   const controller = createUpdaterController({
     platform: 'windows',
@@ -221,7 +250,7 @@ test('T-UPDATER-5: Re-entrancy guard prevents duplicate install() and dispose() 
   assert.equal(calls2.close, 1, 'Disposing before install must release Rust Update resource');
 });
 
-test('T-UPDATER-6: Tauri config, capabilities, and GitHub workflow contracts are synchronized', () => {
+test('T-UPDATER-7: Tauri config, capabilities, and GitHub workflow contracts are synchronized', () => {
   const rootDir = path.resolve(new URL('..', import.meta.url).pathname);
   const tauriConf = JSON.parse(
     fs.readFileSync(path.join(rootDir, 'apps/native/src-tauri/tauri.conf.json'), 'utf8'),
@@ -264,7 +293,7 @@ test('T-UPDATER-6: Tauri config, capabilities, and GitHub workflow contracts are
   assert.ok(workflow.includes('node scripts/generate-updater-manifest.mjs'));
 });
 
-test('T-UPDATER-7: Desktop update banner preserves compact floating toast layout without viewport height stretch', () => {
+test('T-UPDATER-8: Desktop update banner preserves compact floating toast layout without viewport height stretch', () => {
   const rootDir = path.resolve(new URL('..', import.meta.url).pathname);
   const bannerSrc = fs.readFileSync(
     path.join(rootDir, 'apps/native/src/components/DesktopUpdateBanner.tsx'),
@@ -280,8 +309,33 @@ test('T-UPDATER-7: Desktop update banner preserves compact floating toast layout
   assert.ok(bannerSrc.includes('role="status"'));
   assert.ok(bannerSrc.includes('!h-auto'));
   assert.ok(bannerSrc.includes('!flex-none'));
-
+  assert.ok(bannerSrc.includes('AirREST Updated'));
+  assert.ok(bannerSrc.includes('View changelog'));
+  assert.ok(bannerSrc.includes('openUrl'));
   // Root CSS selector must never stretch fixed overlays or toasts
   assert.ok(indexCss.includes('#root > div:not(.fixed)'));
   assert.ok(!indexCss.includes('#root > div {'));
+});
+
+test('T-UPDATER-9: release metadata is exposed and saved once before an install can replace the app', async () => {
+  const { update } = createMockUpdate('1.4.0');
+  const releases = [];
+  const installs = [];
+  const controller = createUpdaterController({
+    platform: 'macos',
+    checkUpdate: async () => update,
+    relaunchApp: async () => {},
+    onStateChange: () => {},
+    onVersionChange: () => {},
+    onProgressChange: () => {},
+    onReleaseChange: release => releases.push(release),
+    onInstallStarting: release => installs.push(release),
+  });
+
+  await controller.start();
+  await controller.applyAndRestart();
+
+  const expected = [{ version: '1.4.0', releaseUrl: 'https://github.com/example/airrest/releases/tag/v1.4.0' }];
+  assert.equal(JSON.stringify(releases), JSON.stringify(expected));
+  assert.equal(JSON.stringify(installs), JSON.stringify(expected));
 });

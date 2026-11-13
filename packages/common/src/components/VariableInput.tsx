@@ -21,6 +21,9 @@ export interface VariableInputProps {
   inputClassName?: string;
   type?: 'text' | 'password';
   disabled?: boolean;
+  readOnly?: boolean;
+  ariaDescribedBy?: string;
+  maskResetKey?: string | number;
   onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
   showPreview?: boolean;
   size?: 'sm' | 'md' | 'lg';
@@ -107,6 +110,9 @@ export const VariableInput: React.FC<VariableInputProps> = ({
   inputClassName = '',
   type = 'text',
   disabled = false,
+  readOnly = false,
+  ariaDescribedBy,
+  maskResetKey,
   onKeyDown,
   showPreview = false,
   size = 'md',
@@ -117,6 +123,10 @@ export const VariableInput: React.FC<VariableInputProps> = ({
 
   const [showPassword, setShowPassword] = useState(false);
   const [hoveredVar, setHoveredVar] = useState<HoveredVariableInfo | null>(null);
+
+  useEffect(() => {
+    setShowPassword(false);
+  }, [type, maskResetKey]);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const mirrorRef = useRef<HTMLDivElement>(null);
@@ -260,8 +270,9 @@ export const VariableInput: React.FC<VariableInputProps> = ({
   return (
     <div className={`relative w-full ${className}`}>
       <div
-        className={`relative flex w-full items-center overflow-hidden rounded-md border border-line bg-card/90 transition focus-within:border-sky-500 focus-within:ring-1 focus-within:ring-sky-500 ${disabled ? 'opacity-60 cursor-not-allowed' : ''
-          }`}
+        className={`relative flex w-full items-center overflow-hidden rounded-md border border-line transition focus-within:border-sky-500 focus-within:ring-1 focus-within:ring-sky-500 ${
+          readOnly ? 'bg-element/60' : 'bg-card/90'
+        } ${disabled ? 'opacity-60 cursor-not-allowed' : ''}`}
       >
         {/* Syntax Highlighting Mirror Layer */}
         {!isPasswordMasked && safeValue.length > 0 && (
@@ -303,7 +314,13 @@ export const VariableInput: React.FC<VariableInputProps> = ({
           type={isPasswordMasked ? 'password' : 'text'}
           value={safeValue}
           disabled={disabled}
-          onChange={(e) => onChange(e.target.value)}
+          readOnly={readOnly}
+          aria-readonly={readOnly || undefined}
+          aria-describedby={ariaDescribedBy}
+          onChange={(e) => {
+            if (readOnly) return;
+            onChange(e.target.value);
+          }}
           onMouseMove={handleMouseMove}
           onMouseLeave={handleMouseLeave}
           onScroll={() => {
@@ -319,7 +336,9 @@ export const VariableInput: React.FC<VariableInputProps> = ({
           onClick={syncScroll}
           onSelect={syncScroll}
           placeholder={placeholder}
-          className={`w-full bg-transparent font-mono text-xs leading-5 focus:outline-none placeholder-tx-muted caret-sky-400 ${sizeClasses} ${!isPasswordMasked && value.length > 0
+          className={`w-full bg-transparent font-mono text-xs leading-5 focus:outline-none placeholder-tx-muted ${
+            readOnly ? 'caret-transparent cursor-text' : 'caret-sky-400'
+          } ${sizeClasses} ${!isPasswordMasked && value.length > 0
               ? 'text-transparent selection:bg-sky-500/30 selection:text-transparent'
               : 'text-tx-primary'
             } ${inputClassName}`}
@@ -331,6 +350,7 @@ export const VariableInput: React.FC<VariableInputProps> = ({
             type="button"
             onClick={() => setShowPassword(!showPassword)}
             className="mr-2.5 text-tx-muted hover:text-tx-primary transition shrink-0"
+            aria-label={showPassword ? 'Hide value' : 'Show value'}
             title={showPassword ? 'Hide password' : 'Show password & highlight variables'}
           >
             {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}

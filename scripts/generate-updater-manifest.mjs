@@ -37,6 +37,7 @@ export function buildUpdaterManifest({ version, notes, pubDate, repo, tag, bundl
     throw new Error('Invalid updater version');
   }
   if (!Number.isFinite(Date.parse(pubDate))) throw new Error('Invalid release date');
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !tag) throw new Error('Invalid release repository or tag');
   const platforms = {};
   for (const bundle of bundles) {
     const signature = signatures[bundle.signature.name]?.trim();
@@ -55,7 +56,14 @@ export function buildUpdaterManifest({ version, notes, pubDate, repo, tag, bundl
   for (const target of ['darwin-aarch64', 'darwin-x86_64', 'linux-x86_64', 'windows-x86_64']) {
     if (!platforms[target]) throw new Error(`Missing updater target: ${target}`);
   }
-  return { version, notes, pub_date: pubDate, platforms };
+  return {
+    version,
+    notes,
+    pub_date: pubDate,
+    release_tag: tag,
+    release_url: `https://github.com/${repo}/releases/tag/${encodeURIComponent(tag)}`,
+    platforms,
+  };
 }
 
 export async function generateUpdaterManifest({ repo, tag, version, token, fetchImpl = fetch }) {

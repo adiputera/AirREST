@@ -102,14 +102,17 @@ test('urlParams: substitutePathVariables', () => {
 
 test('fetcher & curl: prepareRequest and generateCurlCommand with path variables', () => {
   const urlParams = loadModule('../packages/common/src/lib/urlParams.ts');
+  const authHeaders = loadModule('../packages/common/src/lib/authHeaders.ts');
   const fetcher = loadModule('../packages/common/src/lib/fetcher.ts', {
     './urlParams': urlParams,
+    './authHeaders': authHeaders,
     '../types/api': {},
     '../types/platform': {},
     './blobManager': { createTrackedBlobUrl: () => '' },
   });
   const curl = loadModule('../packages/common/src/lib/curl.ts', {
     './urlParams': urlParams,
+    './authHeaders': authHeaders,
     './fetcher': fetcher,
     '../types/api': {},
   });
