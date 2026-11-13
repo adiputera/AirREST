@@ -1,5 +1,6 @@
 import { ApiRequest, ApiResponse, NetworkErrorCategory } from '../types/api';
 import { PlatformAdapter, TestRequestOptions } from '../types/platform';
+import { resolveBodyContentTypeHeader, resolveEffectiveAuthHeader, resolveManualHeaders } from './authHeaders';
 import { createTrackedBlobUrl } from './blobManager';
 import { substitutePathVariables } from './urlParams';
 
@@ -134,34 +135,38 @@ export function prepareRequest(
     // Retain URL as is if parsing fails
   }
 
-  // Construct headers
+  // Construct headers and enforce Auth + managed Body Content-Type precedence (case-insensitive)
+  const resolveVar = (input: string) => interpolateVariables(input, variables);
+  const effectiveAuth = resolveEffectiveAuthHeader(request.auth, resolveVar);
+  const bodyContentType = resolveBodyContentTypeHeader(request);
+  const resolvedManualHeaders = resolveManualHeaders(
+    request.headers || [],
+    [
+      effectiveAuth?.normalizedKey ?? null,
+      bodyContentType?.isManagedByRuntime ? 'content-type' : null,
+    ],
+    resolveVar
+  );
+
   const headers: Record<string, string> = {};
-  for (const h of (request.headers || [])) {
-    if (h && h.enabled && String(h.key || '').trim() !== '') {
-      const headerKey = interpolateVariables(String(h.key).trim(), variables);
-      const headerVal = interpolateVariables(String(h.value ?? ''), variables);
-      headers[headerKey] = headerVal;
-    }
+  for (const h of resolvedManualHeaders) {
+    headers[h.key] = h.value;
   }
 
-  // Add Auth headers or query params if configured
-  if (request.auth?.type === 'bearer' && request.auth?.bearerToken) {
-    const token = interpolateVariables(request.auth.bearerToken.trim(), variables);
-    headers['Authorization'] = `Bearer ${token}`;
-  } else if (request.auth?.type === 'basic' && (request.auth?.basicUsername || request.auth?.basicPassword)) {
-    const user = interpolateVariables(request.auth?.basicUsername || '', variables);
-    const pass = interpolateVariables(request.auth?.basicPassword || '', variables);
-    let credentials = '';
-    try {
-      credentials = btoa(unescape(encodeURIComponent(`${user}:${pass}`)));
-    } catch {
-      credentials = btoa(`${user}:${pass}`);
-    }
-    headers['Authorization'] = `Basic ${credentials}`;
-  } else if (request.auth?.type === 'apikey' && request.auth?.apiKeyKey && request.auth?.apiKeyValue) {
-    const key = interpolateVariables(request.auth.apiKeyKey.trim(), variables);
+  if (effectiveAuth) {
+    headers[effectiveAuth.key] = effectiveAuth.value;
+  }
+
+  // Add API Key to query params if configured
+  if (
+    request.auth?.type === 'apikey' &&
+    request.auth?.apiKeyIn === 'query' &&
+    request.auth?.apiKeyKey?.trim() &&
+    request.auth?.apiKeyValue?.trim()
+  ) {
+    const key = interpolateVariables(request.auth.apiKeyKey.trim(), variables).trim();
     const val = interpolateVariables(request.auth.apiKeyValue.trim(), variables);
-    if (request.auth?.apiKeyIn === 'query') {
+    if (key) {
       try {
         const parsedUrl = new URL(rawUrl);
         parsedUrl.searchParams.set(key, val);
@@ -169,21 +174,20 @@ export function prepareRequest(
       } catch {
         // ignore URL parse errors
       }
-    } else {
-      headers[key] = val;
     }
   }
 
   let bodyPayload: BodyInit | undefined = undefined;
+  const hasContentTypeHeader = Object.keys(headers).some((k) => k.toLowerCase() === 'content-type');
 
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     if (request.bodyType === 'json' || (request.bodyType === 'raw' && request.rawType === 'json')) {
-      if (!headers['Content-Type'] && !headers['content-type']) {
+      if (!hasContentTypeHeader) {
         headers['Content-Type'] = 'application/json';
       }
       bodyPayload = interpolateVariables(request.bodyContent || '', variables);
     } else if (request.bodyType === 'graphql') {
-      if (!headers['Content-Type'] && !headers['content-type']) {
+      if (!hasContentTypeHeader) {
         headers['Content-Type'] = 'application/json';
       }
       const rawQuery = interpolateVariables(request.graphqlQuery || request.bodyContent || '', variables);
@@ -204,22 +208,22 @@ export function prepareRequest(
       }
       bodyPayload = JSON.stringify(gqlBody);
     } else if (request.bodyType === 'xml' || (request.bodyType === 'raw' && request.rawType === 'xml')) {
-      if (!headers['Content-Type'] && !headers['content-type']) {
+      if (!hasContentTypeHeader) {
         headers['Content-Type'] = 'application/xml';
       }
       bodyPayload = interpolateVariables(request.bodyContent || '', variables);
     } else if (request.bodyType === 'raw' && request.rawType === 'html') {
-      if (!headers['Content-Type'] && !headers['content-type']) {
+      if (!hasContentTypeHeader) {
         headers['Content-Type'] = 'text/html';
       }
       bodyPayload = interpolateVariables(request.bodyContent || '', variables);
     } else if (request.bodyType === 'raw') {
-      if (!headers['Content-Type'] && !headers['content-type']) {
+      if (!hasContentTypeHeader) {
         headers['Content-Type'] = 'text/plain';
       }
       bodyPayload = interpolateVariables(request.bodyContent || '', variables);
     } else if (request.bodyType === 'x-www-form-urlencoded') {
-      if (!headers['Content-Type'] && !headers['content-type']) {
+      if (!hasContentTypeHeader) {
         headers['Content-Type'] = 'application/x-www-form-urlencoded';
       }
       const activeItems = (request.bodyUrlEncoded || []).filter(
@@ -260,8 +264,11 @@ export function prepareRequest(
       }
 
       bodyPayload = formData;
-      delete headers['Content-Type'];
-      delete headers['content-type'];
+      for (const existingKey of Object.keys(headers)) {
+        if (existingKey.toLowerCase() === 'content-type') {
+          delete headers[existingKey];
+        }
+      }
     } else if (request.bodyType === 'binary') {
       if (!(request.bodyBinaryFile?.file instanceof Blob)) {
         throw new Error(`Binary attachment “${request.bodyBinaryFile?.name || 'unnamed file'}” must be selected again.`);
@@ -272,7 +279,7 @@ export function prepareRequest(
         );
       }
       bodyPayload = request.bodyBinaryFile.file;
-      if (!headers['Content-Type'] && !headers['content-type']) {
+      if (!hasContentTypeHeader) {
         headers['Content-Type'] = request.bodyBinaryFile.type || 'application/octet-stream';
       }
     }

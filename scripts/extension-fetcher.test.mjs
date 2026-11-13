@@ -18,6 +18,19 @@ function loadUrlParams() {
 }
 const urlParams = loadUrlParams();
 
+function loadAuthHeaders() {
+  const source = fs.readFileSync(new URL('../packages/common/src/lib/authHeaders.ts', import.meta.url), 'utf8');
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const exports = {};
+  vm.runInNewContext(compiled, { exports, btoa, encodeURIComponent, unescape }, {
+    filename: 'packages/common/src/lib/authHeaders.ts',
+  });
+  return exports;
+}
+const authHeaders = loadAuthHeaders();
+
 function loadFetcher(fetchImpl, hostPermissionResult = null) {
   const source = fs.readFileSync(new URL('../packages/common/src/lib/fetcher.ts', import.meta.url), 'utf8');
   const compiled = ts.transpileModule(source, {
@@ -27,6 +40,9 @@ function loadFetcher(fetchImpl, hostPermissionResult = null) {
   vm.runInNewContext(compiled, {
     exports,
     require: (id) => {
+      if (id.includes('authHeaders')) {
+        return authHeaders;
+      }
       if (id.includes('blobManager')) {
         return {
           createTrackedBlobUrl: (blob, track) => (track ? track('blob:test') : 'blob:test'),
@@ -301,4 +317,57 @@ test('T-EXT-ERR: executeApiRequest with chromeAdapter classifies Chromium net::E
   assert.equal(res.netErrorCategory, 'ssl');
   assert.equal(res.netErrorCode, 'net::ERR_CERT_AUTHORITY_INVALID');
   assert.equal(res.failureKind, 'transport');
+});
+
+test('prepareRequest and executeApiRequest enforce Auth header precedence regardless of manual casing', async () => {
+  const dispatchedHeaders = [];
+  const adapter = {
+    id: 'mock-transport',
+    hasHostPermission: async () => true,
+    requestHostPermission: async () => true,
+    transport: {
+      fetch: async (_url, init) => {
+        dispatchedHeaders.push(new Headers(init.headers));
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+      classifyError: async (err) => ({ category: 'other', detail: String(err) }),
+    },
+    dispose: () => {},
+  };
+
+  const { prepareRequest, executeApiRequest } = loadFetcher(async () => new Response());
+  const baseReq = {
+    ...binaryRequest(),
+    method: 'GET',
+    url: 'https://example.com/headers',
+    bodyType: 'none',
+    auth: { type: 'bearer', bearerToken: 'auth-test' },
+  };
+
+  for (const key of ['Authorization', 'authorization', 'AUTHORIZATION', ' Authorization ', '{{headerName}}']) {
+    const req = {
+      ...baseReq,
+      headers: [
+        { id: 'h-dup', key, value: 'Bearer manual-test', enabled: true },
+        { id: 'h-keep', key: 'X-Trace', value: 'keep-me', enabled: true },
+      ],
+    };
+    const vars = { headerName: 'authorization' };
+    const { finalHeaders } = prepareRequest(req, vars);
+    const normalized = new Headers(finalHeaders);
+    assert.equal(normalized.get('authorization'), 'Bearer auth-test');
+    assert.equal(normalized.get('x-trace'), 'keep-me');
+    assert.equal(Object.keys(finalHeaders).length, 2);
+
+    await executeApiRequest(req, vars, undefined, adapter);
+  }
+
+  assert.equal(dispatchedHeaders.length, 5);
+  for (const h of dispatchedHeaders) {
+    assert.equal(h.get('authorization'), 'Bearer auth-test');
+    assert.equal(h.get('x-trace'), 'keep-me');
+  }
 });

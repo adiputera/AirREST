@@ -9,7 +9,18 @@ import ts from 'typescript';
 // within a Node test environment using local HTTP test servers. Native Tauri IPC and WebView capabilities
 // are tracked separately under native integration tests.
 
+function loadProductionAuthHeaders() {
+  const src = fs.readFileSync(new URL('../packages/common/src/lib/authHeaders.ts', import.meta.url), 'utf8');
+  const compiled = ts.transpileModule(src, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const exports = {};
+  vm.runInNewContext(compiled, { exports, btoa, encodeURIComponent, unescape }, { filename: 'authHeaders.ts' });
+  return exports;
+}
+
 function loadProductionFetcher() {
+  const authHeaders = loadProductionAuthHeaders();
   const fetcherSrc = fs.readFileSync(new URL('../packages/common/src/lib/fetcher.ts', import.meta.url), 'utf8');
   const compiled = ts.transpileModule(fetcherSrc, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -19,7 +30,7 @@ function loadProductionFetcher() {
     compiled,
     {
       exports,
-      require: () => ({}),
+      require: (id) => (id.includes('authHeaders') ? authHeaders : {}),
       console,
       setTimeout,
       clearTimeout,
@@ -35,6 +46,7 @@ function loadProductionFetcher() {
   );
 
   return {
+    prepareRequest: exports.prepareRequest,
     readResponseBody: exports.readResponseBody,
     ResponseTooLargeError: exports.ResponseTooLargeError,
   };
@@ -801,6 +813,7 @@ test('D3 (P2): Multi-runtime isolation with production runtime and store instanc
         return { createProductPolicy: (edition) => ({ edition, workspace: { cloud: edition !== 'offline' } }), validateProductPolicy: (policy) => policy };
       }
       if (id.includes('storage')) return { appStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} }, onStorageCommit: () => () => {} };
+      if (id.includes('authHeaders')) return runModule('../packages/common/src/lib/authHeaders.ts', sandbox);
       if (id.includes('fetcher')) return runModule('../packages/common/src/lib/fetcher.ts', sandbox);
       if (id.includes('blobManager')) return runModule('../packages/common/src/lib/blobManager.ts', sandbox);
       if (id.includes('postman')) return runModule('../packages/common/src/lib/postman.ts', sandbox);
@@ -1003,7 +1016,8 @@ test('V1 (P1): Cross-origin refresh isolation - separate origins do not join or 
         if (id.includes('cloudSyncCollections')) return runModule('../packages/common/src/workspace/cloudSyncCollections.ts');
         if (id.includes('cloudCollectionSync')) return runModule('../packages/common/src/workspace/cloudCollectionSync.ts');
         if (id.includes('storage')) return { appStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} }, onStorageCommit: () => () => {} };
-        if (id.includes('fetcher')) return runModule('../packages/common/src/lib/fetcher.ts');
+        if (id.includes('authHeaders')) return runModule('../packages/common/src/lib/authHeaders.ts');
+      if (id.includes('fetcher')) return runModule('../packages/common/src/lib/fetcher.ts');
         if (id.includes('blobManager')) return runModule('../packages/common/src/lib/blobManager.ts');
         if (id.includes('postman')) return runModule('../packages/common/src/lib/postman.ts');
         if (id.includes('scriptRunner')) return runModule('../packages/common/src/lib/scriptRunner.ts');
@@ -1131,6 +1145,7 @@ test('V2 (P2): Retried 401 after silent token rotation evicts the rotated token 
       if (id.includes('cloudSyncCollections')) return runModule('../packages/common/src/workspace/cloudSyncCollections.ts');
       if (id.includes('cloudCollectionSync')) return runModule('../packages/common/src/workspace/cloudCollectionSync.ts');
       if (id.includes('storage')) return { appStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} }, onStorageCommit: () => () => {} };
+      if (id.includes('authHeaders')) return runModule('../packages/common/src/lib/authHeaders.ts');
       if (id.includes('fetcher')) return runModule('../packages/common/src/lib/fetcher.ts');
       if (id.includes('blobManager')) return runModule('../packages/common/src/lib/blobManager.ts');
       if (id.includes('postman')) return runModule('../packages/common/src/lib/postman.ts');
@@ -1311,6 +1326,7 @@ test('V5 (P2): runtime.dispose() aborts in-flight request signals and prevents l
       if (id.includes('cloudSyncCollections')) return runModule('../packages/common/src/workspace/cloudSyncCollections.ts');
       if (id.includes('cloudCollectionSync')) return runModule('../packages/common/src/workspace/cloudCollectionSync.ts');
       if (id.includes('storage')) return { appStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} }, onStorageCommit: () => () => {} };
+      if (id.includes('authHeaders')) return runModule('../packages/common/src/lib/authHeaders.ts');
       if (id.includes('fetcher')) return runModule('../packages/common/src/lib/fetcher.ts');
       if (id.includes('blobManager')) return runModule('../packages/common/src/lib/blobManager.ts');
       if (id.includes('postman')) return runModule('../packages/common/src/lib/postman.ts');
@@ -1440,6 +1456,7 @@ test('R2 (P2): debounced environment cloud sync pending in transport is aborted 
       if (id.includes('cloudSyncCollections')) return runModule('../packages/common/src/workspace/cloudSyncCollections.ts');
       if (id.includes('cloudCollectionSync')) return runModule('../packages/common/src/workspace/cloudCollectionSync.ts');
       if (id.includes('storage')) return { appStorage: memoryStorage, onStorageCommit: () => () => {} };
+      if (id.includes('authHeaders')) return runModule('../packages/common/src/lib/authHeaders.ts');
       if (id.includes('fetcher')) return runModule('../packages/common/src/lib/fetcher.ts');
       if (id.includes('blobManager')) return runModule('../packages/common/src/lib/blobManager.ts');
       if (id.includes('postman')) return runModule('../packages/common/src/lib/postman.ts');
@@ -1578,6 +1595,7 @@ export async function setupRuntimeModules(customStorage = null) {
       if (id.includes('cloudSyncCollections')) return runModule('../packages/common/src/workspace/cloudSyncCollections.ts');
       if (id.includes('cloudCollectionSync')) return runModule('../packages/common/src/workspace/cloudCollectionSync.ts');
       if (id.includes('storage')) return { appStorage: memoryStorage, onStorageCommit: () => () => {} };
+      if (id.includes('authHeaders')) return runModule('../packages/common/src/lib/authHeaders.ts');
       if (id.includes('fetcher')) return runModule('../packages/common/src/lib/fetcher.ts');
       if (id.includes('blobManager')) return runModule('../packages/common/src/lib/blobManager.ts');
       if (id.includes('postman')) return runModule('../packages/common/src/lib/postman.ts');
@@ -2831,6 +2849,7 @@ test('native HTTP propagates cancellation and invalid-header errors before IPC',
 
 test('T-NAT-LIFECYCLE: tauriAdapter.dispose aborts active workers, dialogFilters converts MIME, and outbound body limits enforced', async () => {
   // 1. Verify outbound attachment limits in fetcher
+  const authHeadersExports = loadProductionAuthHeaders();
   const fetcherSrc = fs.readFileSync(new URL('../packages/common/src/lib/fetcher.ts', import.meta.url), 'utf8');
   const compiledFetcher = ts.transpileModule(fetcherSrc, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -2838,7 +2857,7 @@ test('T-NAT-LIFECYCLE: tauriAdapter.dispose aborts active workers, dialogFilters
   const fetcherExports = {};
   vm.runInNewContext(compiledFetcher, {
     exports: fetcherExports,
-    require: () => ({}),
+    require: (id) => (id.includes('authHeaders') ? authHeadersExports : {}),
     console,
     Blob,
     FormData,
@@ -2899,6 +2918,65 @@ test('T-NAT-LIFECYCLE: tauriAdapter.dispose aborts active workers, dialogFilters
   exports.tauriAdapter.dispose();
   assert.equal(executorDisposed, true);
   assert.equal(exports.tauriAdapter.platformId, 'android');
+});
+
+test('T-NAT-AUTH-HEADERS: nativeRequestHeaders preserves single Auth value when manual authorization has different casing', async () => {
+  const { prepareRequest } = loadProductionFetcher();
+  const capturedCalls = [];
+  const adapterSrc = fs.readFileSync(new URL('../apps/native/src/adapters/tauriAdapter.ts', import.meta.url), 'utf8')
+    .replaceAll('import.meta.url', '"file:///adapter.ts"');
+  const compiled = ts.transpileModule(adapterSrc, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const exports = {};
+  vm.runInNewContext(compiled, {
+    exports,
+    require: (id) => {
+      if (id === '@tauri-apps/plugin-http') {
+        return {
+          fetch: async (url, options) => {
+            capturedCalls.push({ url, headers: options.headers });
+            return new Response('ok', { status: 200 });
+          },
+        };
+      }
+      return {};
+    },
+    __AIRREST_ANDROID__: false,
+    console,
+    Headers,
+    AbortSignal,
+    AbortController,
+  });
+
+  const prepared = prepareRequest({
+    id: 'nat-auth-1',
+    name: 'Native Auth Test',
+    method: 'GET',
+    url: 'https://example.com/headers',
+    params: [],
+    headers: [
+      { id: 'h1', key: 'authorization', value: 'Bearer manual-test', enabled: true },
+      { id: 'h2', key: 'AUTHORIZATION', value: 'Bearer manual-2', enabled: true },
+      { id: 'h3', key: 'X-Custom', value: 'ok', enabled: true },
+    ],
+    auth: { type: 'bearer', bearerToken: 'auth-test' },
+    bodyType: 'none',
+    bodyContent: '',
+    createdAt: 1,
+    updatedAt: 1,
+  });
+
+  await exports.tauriTestTransport.fetch(prepared.finalUrl, {
+    method: 'GET',
+    headers: prepared.finalHeaders,
+  });
+
+  assert.equal(capturedCalls.length, 1);
+  const sentHeaders = capturedCalls[0].headers;
+  assert.ok(sentHeaders instanceof Headers);
+  assert.equal(sentHeaders.get('authorization'), 'Bearer auth-test');
+  assert.equal(sentHeaders.get('x-custom'), 'ok');
 });
 
 test('T-EXT-SCOPE: fetchScopes preserves workspaceMode, activeScope, and scopesCache when fetchUserTeams throws transient network error', async () => {

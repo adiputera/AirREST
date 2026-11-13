@@ -1,9 +1,11 @@
 # Chrome Web Store Listings — AirREST
 
-> Last Updated: 2026-11-11
+> Last Updated: 2026-11-13
 > Store URL: https://chromewebstore.google.com/detail/airrest-rest-client/kpajbolnoepgalhoinilfdfpcmgbdlld
 
 > Chrome Web Store release notes describe browser-extension changes only. Do not include backend, Hub, or desktop release notes here.
+
+> 1.3.10: Configured Authorization headers (Bearer, Basic, Header API Key, and inherited Auth) and Body-derived Content-Type headers now appear as read-only "From Auth" and "From Body" rows inside the Headers tab with quick navigation shortcuts ("Edit in Auth" / "Edit in Body") and per-request revealable credential masking across Bearer, Basic, and API Key values. Manual headers matching the active Auth header, or manual Content-Type headers when using multipart form-data, display an interactive warning icon whose tap/hover/focus tooltip explains which tab manages the effective header across live requests and exported cURL snippets, while custom manual Content-Type overrides remain allowed for JSON, XML, raw, GraphQL, x-www-form-urlencoded, and binary payloads.
 
 > 1.3.9: Saving an inactive request tab now preserves the active tab and updates the intended collection item. Closing a tab with unsaved changes immediately activates it so its contents are visible during confirmation. Cloud saves for one collection are ordered so a late result cannot show a newer failed save as synced. Request-body undo and redo now run once per shortcut, JSON comments toggle with Ctrl/Cmd+/, and Beautify preserves comments and literal payload text, keeping trailing comments next to their property. Script sandbox now supports the pm.request object for inspecting and mutating in-flight request URLs, query parameters, and headers, and embeds built-in CryptoJS support for AES, SHA, and MD5 cryptography in pre-request and test scripts.
 

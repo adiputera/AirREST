@@ -8,7 +8,7 @@
 
 [![GitHub Repository](https://img.shields.io/badge/GitHub-adiputera%2FAirREST-181717?logo=github)](https://github.com/adiputera/AirREST)
 [![Chrome Web Store](https://img.shields.io/badge/Chrome%20Web%20Store-Install-4285F4?logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/airrest-rest-client/kpajbolnoepgalhoinilfdfpcmgbdlld)
-[![Version](https://img.shields.io/badge/Version-1.3.9-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.3.10-blue.svg)](CHANGELOG.md)
 [![Manifest V3](https://img.shields.io/badge/Chrome%20Extension-Manifest%20V3-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)
 [![Tauri v2](https://img.shields.io/badge/Tauri-v2-24C8D8?logo=tauri&logoColor=white)](https://v2.tauri.app/)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
@@ -132,6 +132,7 @@ AirREST is a complete API testing studio that runs directly inside Google Chrome
   - **API Key**: Configurable key/value pairs passed via Headers or Query Parameters.
   - **OAuth 2.0**: Extracts bearer tokens from imported Postman configurations.
 - **Inheritance Hierarchy**: Cascades authentication configurations from collections down to nested folders and requests, with per-request override and `noauth` options.
+- **Read-Only Headers Preview & Override Warnings**: Active Auth-generated headers appear in the **Headers** tab as read-only `From Auth` rows (with `Edit in Auth` quick-navigation and revealable masking across Bearer, Basic, and API Key credentials scoped per request), while Body-derived `Content-Type` headers appear as unmasked read-only `From Body` rows (with `Edit in Body`). Manual headers matching the active Auth header, or manual `Content-Type` headers when paired with `form-data` payloads, trigger an amber warning tooltip indicating precedence across Send, desktop HTTP execution, and cURL export, while manual `Content-Type` overrides remain permitted for `json`, `graphql`, `xml`, `raw`, `x-www-form-urlencoded`, and `binary` bodies.
 
 ### 6. 💻 cURL Integration
 - **Copy as cURL**: Generates shell-ready cURL commands with resolved variables, query parameters, headers, and request bodies.

@@ -1,4 +1,5 @@
 import { ApiRequest, HttpMethod, KeyValuePair, AuthConfig, FormDataItem, BinaryFileData, RawType } from '../types/api';
+import { resolveBodyContentTypeHeader, resolveEffectiveAuthHeader, resolveManualHeaders } from './authHeaders';
 import { interpolateVariables } from './fetcher';
 import { substitutePathVariables } from './urlParams';
 
@@ -392,48 +393,56 @@ export function generateCurlCommand(
   }
 
   // If API Key is configured in query parameters, attach it
-  if (request.auth?.type === 'apikey' && request.auth?.apiKeyIn === 'query' && request.auth?.apiKeyKey && request.auth?.apiKeyValue) {
-    const k = interpolateVariables(request.auth.apiKeyKey.trim(), variables);
+  if (
+    request.auth?.type === 'apikey' &&
+    request.auth?.apiKeyIn === 'query' &&
+    request.auth?.apiKeyKey?.trim() &&
+    request.auth?.apiKeyValue?.trim()
+  ) {
+    const k = interpolateVariables(request.auth.apiKeyKey.trim(), variables).trim();
     const v = interpolateVariables(request.auth.apiKeyValue.trim(), variables);
-    try {
-      const parsedUrl = new URL(url);
-      parsedUrl.searchParams.set(k, v);
-      url = parsedUrl.toString();
-    } catch {
-      url += (url.includes('?') ? '&' : '?') + `${encodeURIComponent(k)}=${encodeURIComponent(v)}`;
+    if (k) {
+      try {
+        const parsedUrl = new URL(url);
+        parsedUrl.searchParams.set(k, v);
+        url = parsedUrl.toString();
+      } catch {
+        url += (url.includes('?') ? '&' : '?') + `${encodeURIComponent(k)}=${encodeURIComponent(v)}`;
+      }
     }
   }
 
   const parts: string[] = [`curl -X ${request.method} "${url}"`];
 
-  // Headers
-  let hasContentType = false;
-  for (const h of (request.headers || [])) {
-    if (h && h.enabled && h.key?.trim()) {
-      const key = interpolateVariables(h.key.trim(), variables);
-      const val = interpolateVariables(h.value || '', variables);
-      if (key.toLowerCase() === 'content-type') hasContentType = true;
-      parts.push(`-H "${key}: ${val}"`);
-    }
+  // Headers (excluding manual headers overridden by active Auth or runtime-managed form-data Content-Type)
+  const resolveVar = (input: string) => interpolateVariables(input, variables);
+  const effectiveAuth = resolveEffectiveAuthHeader(request.auth, resolveVar);
+  const bodyContentType = resolveBodyContentTypeHeader(request);
+  const resolvedManualHeaders = resolveManualHeaders(
+    request.headers || [],
+    [
+      effectiveAuth?.normalizedKey ?? null,
+      bodyContentType?.isManagedByRuntime ? 'content-type' : null,
+    ],
+    resolveVar
+  );
+
+  let hasContentType = effectiveAuth?.normalizedKey === 'content-type';
+  for (const h of resolvedManualHeaders) {
+    if (h.key.toLowerCase() === 'content-type') hasContentType = true;
+    parts.push(`-H "${h.key}: ${h.value}"`);
   }
 
-  if (!hasContentType && request.bodyType === 'graphql') {
-    parts.push(`-H "Content-Type: application/json"`);
+  if (bodyContentType && !bodyContentType.isManagedByRuntime && !hasContentType) {
+    parts.push(`-H "Content-Type: ${bodyContentType.value}"`);
   }
 
   // Auth
-  if (request.auth?.type === 'bearer' && request.auth?.bearerToken) {
-    const token = interpolateVariables(request.auth.bearerToken.trim(), variables);
-    parts.push(`-H "Authorization: Bearer ${token}"`);
-  } else if (request.auth?.type === 'basic') {
-    const u = interpolateVariables(request.auth?.basicUsername || '', variables);
-    const p = interpolateVariables(request.auth?.basicPassword || '', variables);
-    parts.push(`-u "${u}:${p}"`);
-  } else if (request.auth?.type === 'apikey' && request.auth?.apiKeyKey && request.auth?.apiKeyValue) {
-    const k = interpolateVariables(request.auth.apiKeyKey.trim(), variables);
-    const v = interpolateVariables(request.auth.apiKeyValue.trim(), variables);
-    if (request.auth?.apiKeyIn !== 'query') {
-      parts.push(`-H "${k}: ${v}"`);
+  if (effectiveAuth) {
+    if (effectiveAuth.authType === 'basic' && effectiveAuth.basicCredentials) {
+      parts.push(`-u "${effectiveAuth.basicCredentials.username}:${effectiveAuth.basicCredentials.password}"`);
+    } else {
+      parts.push(`-H "${effectiveAuth.key}: ${effectiveAuth.value}"`);
     }
   }
 
