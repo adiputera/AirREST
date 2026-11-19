@@ -44,8 +44,8 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
   const cloudConfig = activeStore((state) => state.cloudConfig);
   const recoverableCount = activeStore((state) => (state.cloudCacheArchives?.unclaimed?.length || 0) +
     (state.cloudCacheArchives?.unsupportedVersions?.length || 0));
-  const setCloudConfig = activeStore((state) => state.setCloudConfig);
   const setWorkspaceMode = activeStore((state) => state.setWorkspaceMode);
+  const setCloudConfig = activeStore((state) => state.setCloudConfig);
   const setActiveScope = activeStore((state) => state.setActiveScope);
   const pullCloudDelta = activeStore((state) => state.pullCloudDelta);
   const importLocalToCloud = activeStore((state) => state.importLocalToCloud);
@@ -232,15 +232,18 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
         role: verifiedUser.role || jwtRole || 'reader',
       };
 
-      setCloudConfig({
+      const sessionUpdate = {
         apiUrl: cleanUrl,
-        sessionKind: providerSession ? 'provider' : undefined,
+        sessionKind: providerSession ? ('provider' as const) : undefined,
         token,
         refreshToken: refresh_token,
         tokenExpiresAt: expires_at,
         user: effectiveUser,
         activeScope: initialScope,
-      });
+      };
+      const saveSession = activeStore.getState().setCloudSession;
+      if (saveSession) await saveSession(sessionUpdate);
+      else setCloudConfig(sessionUpdate);
 
       const generation = activeStore.getState().getCloudSessionGeneration();
       loginSession.current = { generation, userId: effectiveUser.id, apiUrl: cleanUrl };

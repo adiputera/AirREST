@@ -12,6 +12,7 @@ export type {
   TestTransport,
   TransportInit,
 } from '../types';
+export type { NativeCredentialRecord, NativeCredentialScope, NativeCredentialStorage } from '../types/credentials';
 export { categorizeNetworkError, getChromiumNetworkError } from '../lib/fetcher';
 export { hasHostPermission, requestHostPermission } from '../lib/hostPermissions';
 export { resetSandboxIframe, runScriptInSandbox } from '../lib/scriptRunner';

@@ -31,6 +31,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const cloudConfig = useApiStore((state) => state.cloudConfig);
+  const setCloudSession = useApiStore((state) => state.setCloudSession);
   const setCloudConfig = useApiStore((state) => state.setCloudConfig);
 
   // Reset form when modal opens or closes
@@ -106,12 +107,14 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
       );
 
       if (store.getState().getCloudSessionGeneration() !== sessionGeneration) return;
-      setCloudConfig({
+      const sessionUpdate = {
         user: session.user,
         token: session.token,
         refreshToken: session.refresh_token,
         tokenExpiresAt: session.expires_at,
-      });
+      };
+      if (setCloudSession) await setCloudSession(sessionUpdate);
+      else setCloudConfig(sessionUpdate);
 
       setCurrentPassword('');
       setNewPassword('');

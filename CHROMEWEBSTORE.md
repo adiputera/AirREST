@@ -1,9 +1,13 @@
 # Chrome Web Store Listings — AirREST
 
-> Last Updated: 2026-11-13
+> Last Updated: 2026-11-19
 > Store URL: https://chromewebstore.google.com/detail/airrest-rest-client/kpajbolnoepgalhoinilfdfpcmgbdlld
 
 > Chrome Web Store release notes describe browser-extension changes only. Do not include backend, Hub, or desktop release notes here.
+
+> 1.3.11: Internal shared credential-storage changes preserve the extension's existing browser-managed sign-in persistence and do not add permissions or alter its user-facing authentication flow.
+> Open request tabs now remember the last selected Params, Headers, Auth, Body, Pre-request, or Tests section while the extension remains open, including after Save As assigns a new request ID.
+> When many request tabs are open, selecting a request now reveals its tab; the tab strip supports horizontal scrolling and shows interactive left/right counts for tabs outside the viewport. On compact screens, those controls use short `N+` labels to preserve room for the active tab. Overflow controls recover in StrictMode, preserve a visible active tab through resizing without overriding manual scrolling, and accept vertical mouse-wheel input without passive-listener errors.
 
 > 1.3.10: Configured Authorization headers (Bearer, Basic, Header API Key, and inherited Auth) and Body-derived Content-Type headers now appear as read-only "From Auth" and "From Body" rows inside the Headers tab with quick navigation shortcuts ("Edit in Auth" / "Edit in Body") and per-request revealable credential masking across Bearer, Basic, and API Key values. Manual headers matching the active Auth header, or manual Content-Type headers when using multipart form-data, display an interactive warning icon whose tap/hover/focus tooltip explains which tab manages the effective header across live requests and exported cURL snippets, while custom manual Content-Type overrides remain allowed for JSON, XML, raw, GraphQL, x-www-form-urlencoded, and binary payloads.
 

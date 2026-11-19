@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.11] - 2026-11-17
+
+### Added
+- **Native Credential Vaults**: Desktop cloud credentials are now stored in the operating system credential vault (Windows Credential Manager, macOS Keychain, or the Linux secret service). Android encrypts the credential record with an AES-GCM key held in Android Keystore before persisting it in private app storage.
+
+### Changed
+- **Native Session Migration**: Native applications migrate a legacy persisted cloud session into protected storage after successful vault access, then redact its access token, refresh token, and expiry from both persisted state copies. The migration can be retried safely after an interruption. Browser-extension persistence remains unchanged.
+
+### Fixed
+- **Request Tab Overflow Navigation**: Opening or selecting a request now reveals its tab in an overflowing tab strip. The strip scrolls horizontally, keeps the new-request control reachable, and shows interactive left/right counts for tabs outside the viewport. On compact screens those controls use short `N+` labels so the active tab remains visible. Overflow measurement recovers in StrictMode, preserves a visible active tab through resizing without overriding manual scrolling, and handles vertical mouse-wheel input without passive-listener errors.
+- **Request Editor Navigation**: Each open request now remembers its last selected Params, Headers, Auth, Body, Pre-request, or Tests section for the current application session, including when Save As assigns the request a new ID.
+- **Credential Storage Failures**: Sign-in, token refresh, and sign-out (across both the User Menu and Scope Switcher, as well as 401/revoked-scope eviction) now use unified vault-deletion and retryable error handling instead of silently persisting or leaving behind session credentials.
+- **Native Credential Recovery**: Desktop and Android now share the same vault command contract; Android lets Keystore create the required encryption IV. Native startup waits for coordinated vault recovery while preserving verified active workspace scopes and pending cached work, evicts rotated credentials on a final 401 even while vault writes are pending, retains the two-copy cleanup journal across token rotation, account switches, and sign-out until both persistence copies are clean, serializes startup migration with all other vault mutations, and ensures a delayed provider sign-out cannot remove another account's credential.
+
 ## [1.3.10] - 2026-11-13
 
 ### Added

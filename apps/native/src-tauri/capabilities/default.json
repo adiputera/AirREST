@@ -5,6 +5,9 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "native-credential:allow-read",
+    "native-credential:allow-write",
+    "native-credential:allow-remove",
     "opener:default",
     {
       "identifier": "http:default",

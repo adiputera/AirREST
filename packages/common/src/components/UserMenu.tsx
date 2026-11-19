@@ -33,7 +33,8 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onOpenLogin }) => {
   const menuRef = useRef<HTMLDivElement>(null);
 
   const cloudConfig = useApiStore((state) => state.cloudConfig);
-  const logoutCloud = useApiStore((state) => state.logoutCloud);
+  const syncStatus = useApiStore((state) => state.syncStatus);
+  const syncError = useApiStore((state) => state.syncError);
 
   const user = cloudConfig.user;
   useEffect(() => {
@@ -219,6 +220,14 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onOpenLogin }) => {
             </div>
 
             {/* Menu Items */}
+            {syncStatus === 'error' && syncError && (
+              <div
+                role="alert"
+                className="mb-1.5 rounded-xl border border-rose-500/30 bg-rose-500/10 px-2.5 py-2 text-[11px] leading-snug text-rose-600 dark:text-rose-300"
+              >
+                {syncError}
+              </div>
+            )}
             <div className="space-y-0.5">
               {authProvider.capabilities.editableProfile && (
                 <button
@@ -307,23 +316,46 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onOpenLogin }) => {
           setIsSignOutConfirmOpen(false);
           if (signingOut.current) return;
           signingOut.current = true;
-          const generation = store.getState().getCloudSessionGeneration();
-          const config = store.getState().cloudConfig;
-          void (async () => {
+          const runSignOut = async () => {
+            const signOutCloud = store.getState().signOutCloud;
+            if (signOutCloud) {
+              await signOutCloud({ authProvider });
+              return;
+            }
+            const generation = store.getState().getCloudSessionGeneration();
+            const config = store.getState().cloudConfig;
+            const credentialScope = config.apiUrl?.trim() && config.user?.id?.trim()
+              ? { apiUrl: config.apiUrl.trim(), userId: config.user.id.trim() }
+              : undefined;
             try {
               await authProvider.signOut?.({
-                apiUrl: config.apiUrl,
+                apiUrl: config.apiUrl || '',
                 user: config.user,
                 accessToken: config.token,
                 refreshToken: config.refreshToken,
               });
             } catch (error) {
               console.warn('Provider sign-out failed:', error);
-            } finally {
-              if (store.getState().getCloudSessionGeneration() === generation) logoutCloud();
-              signingOut.current = false;
             }
-          })();
+            try {
+              if (store.getState().getCloudSessionGeneration() !== generation || store.getState().cloudConfig !== config) return;
+              const clearCloudCredentials = store.getState().clearCloudCredentials;
+              if (clearCloudCredentials) await clearCloudCredentials(credentialScope || undefined);
+              if (store.getState().getCloudSessionGeneration() === generation && store.getState().cloudConfig === config) {
+                store.getState().logoutCloud();
+              }
+            } catch (error) {
+              console.warn('Sign-out could not clear protected credentials:', error);
+              if (store.getState().getCloudSessionGeneration() === generation) {
+                store.setState({ syncStatus: 'error', syncError: 'Sign-out could not clear protected credentials. Please try again.' });
+              }
+            }
+          };
+          void runSignOut()
+            .catch((error) => console.warn('Unexpected sign-out failure:', error))
+            .finally(() => {
+              signingOut.current = false;
+            });
         }}
         title="Sign Out"
         message="Sign out of your account? Cloud credentials will be cleared. Cached data and unsynced changes remain on this device; some older data may require recovery."

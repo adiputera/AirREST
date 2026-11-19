@@ -317,3 +317,272 @@ test('offline profile retains local data across restart and never invokes cloud 
   assert.equal(cloudCalls, 0);
   second.dispose();
 });
+
+test('native vault restart preserves the verified active scope and pending cached work, and clears identity if vault record is missing', async (t) => {
+  const { load } = loadProductionModules();
+  const { createAirrestRuntime } = load(path.join(root, 'runtime.ts'));
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  const records = new Map();
+  const vault = {
+    records,
+    read: async (scope) => records.get(JSON.stringify(scope)) || null,
+    write: async (scope, record) => { records.set(JSON.stringify(scope), record); },
+    remove: async (scope) => { records.delete(JSON.stringify(scope)); },
+  };
+  let saved = null;
+  const storage = { getItem: async () => saved, setItem: async (_k, v) => { saved = v; }, removeItem: async () => { saved = null; } };
+  const policyFetch = async () => new Response(JSON.stringify({
+    data: { revision: 1, flags: { 'collection.move': true, 'collection.delete': true, 'collection.export': true } },
+  }));
+  const session = { apiUrl: 'https://api.example.com', user: { id: 'a' }, token: 'dummy-access-a', refreshToken: 'dummy-refresh-a' };
+  const scope = { type: 'workspace', id: 'workspace-a', name: 'Workspace A', role: 'owner' };
+
+  const first = createAirrestRuntime({ adapter: { credentialStorage: vault, dispose() {}, cloudTransport: { fetch: policyFetch } }, storage });
+  await first.credentialReady;
+  await first.store.getState().setCloudSession({ ...session, activeScope: scope });
+  first.store.setState({ workspaceMode: 'cloud', collections: [{ id: 'pending', name: 'Pending work', items: [], _syncStatus: 'pending' }] });
+  await settle();
+  assert.equal(JSON.parse(saved).state.cloudConfig.token, undefined);
+  first.dispose();
+
+  const second = createAirrestRuntime({ adapter: { credentialStorage: vault, dispose() {}, cloudTransport: { fetch: policyFetch } }, storage });
+  await second.credentialReady;
+  assert.equal(second.store.getState().cloudConfig.token, session.token);
+  assert.equal(second.store.getState().cloudCacheArchives.unclaimed.length, 0);
+  assert.equal(second.store.getState().cloudConfig.activeScope?.id, scope.id);
+  assert.equal(second.store.getState().collections[0]?.id, 'pending');
+  second.dispose();
+
+  // If the OS vault record is missing on restart, public identity is cleared without losing the owner's archive.
+  records.clear();
+  const third = createAirrestRuntime({ adapter: { credentialStorage: vault, dispose() {}, cloudTransport: { fetch: policyFetch } }, storage });
+  t.after(() => third.dispose());
+  await third.credentialReady;
+  assert.equal(third.store.getState().cloudConfig.token, undefined);
+  assert.equal(third.store.getState().cloudConfig.user, undefined);
+  assert.equal(third.store.getState().cloudConfig.activeScope, undefined);
+  assert.equal(third.store.getState().cloudCacheArchives.unclaimed.length, 0);
+  const ownerKey = Object.keys(third.store.getState().cloudCacheArchives.owners)[0];
+  assert.ok(ownerKey, 'Owner cache archive must be preserved for re-authentication');
+});
+
+test('final 401 during a delayed vault refresh evicts the rotated session and preserves unrelated replacement sessions', async (t) => {
+  const { load } = loadProductionModules();
+  const { createAirrestRuntime } = load(path.join(root, 'runtime.ts'));
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
+  const records = new Map();
+  const vault = {
+    records,
+    read: async (scope) => records.get(JSON.stringify(scope)) || null,
+    write: async (scope, record) => { records.set(JSON.stringify(scope), record); },
+    remove: async (scope) => { records.delete(JSON.stringify(scope)); },
+  };
+  let saved = null;
+  const storage = { getItem: async () => saved, setItem: async (_k, v) => { saved = v; }, removeItem: async () => { saved = null; } };
+  const policyFetch = async () => new Response(JSON.stringify({
+    data: { revision: 1, flags: { 'collection.move': true, 'collection.delete': true, 'collection.export': true } },
+  }));
+  const session = { apiUrl: 'https://api.example.com', user: { id: 'a' }, token: 'dummy-access-a', refreshToken: 'dummy-refresh-a' };
+
+  const runtime = createAirrestRuntime({ adapter: { credentialStorage: vault, dispose() {}, cloudTransport: { fetch: policyFetch } }, storage });
+  t.after(() => runtime.dispose());
+  await runtime.credentialReady;
+  await runtime.store.getState().setCloudSession(session);
+  await settle();
+
+  const gate = deferred();
+  let delayed = false;
+  const baseWrite = vault.write;
+  vault.write = async (scope, record) => {
+    delayed = true;
+    await gate.promise;
+    await baseWrite(scope, record);
+  };
+  runtime.cloudClient.setTransport({
+    fetch: async (url) => {
+      if (url.includes('feature-policy')) return policyFetch();
+      if (url.includes('/auth/refresh')) {
+        return new Response(JSON.stringify({
+          data: { token: 'dummy-rotated', refresh_token: 'dummy-rotated-refresh', expires_at: '2030-01-01T00:00:00Z' },
+        }));
+      }
+      return new Response('Unauthorized', { status: 401 });
+    },
+  });
+
+  await assert.rejects(
+    runtime.cloudClient.fetchWithAuth('/api/v1/workspaces', {
+      apiUrl: session.apiUrl,
+      token: session.token,
+      refreshToken: session.refreshToken,
+    }),
+    /Session changed/,
+  );
+  assert.equal(delayed, true);
+  assert.equal(runtime.store.getState().cloudConfig.token, undefined);
+
+  gate.resolve();
+  await settle();
+  await settle();
+  assert.equal(runtime.store.getState().cloudConfig.token, undefined);
+  assert.equal(records.size, 0);
+
+  // Unrelated replacement session must not be evicted by a late failure from a superseded session.
+  vault.write = baseWrite;
+  await runtime.store.getState().setCloudSession({
+    apiUrl: 'https://api.example.com',
+    user: { id: 'b' },
+    token: 'dummy-access-b',
+    refreshToken: 'dummy-refresh-b',
+  });
+  const staleResponse = await runtime.cloudClient.fetchWithAuth('/api/v1/workspaces', {
+    apiUrl: session.apiUrl,
+    token: 'dummy-rotated',
+  });
+  assert.equal(staleResponse.status, 401);
+  assert.equal(runtime.store.getState().cloudConfig.token, 'dummy-access-b');
+  assert.equal(records.size, 1);
+});
+
+test('cloud-only revoked scope eviction clears protected vault credentials', async (t) => {
+  const { load } = loadProductionModules();
+  const { createAirrestRuntime } = load(path.join(root, 'runtime.ts'));
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  const records = new Map();
+  const vault = {
+    records,
+    read: async (scope) => records.get(JSON.stringify(scope)) || null,
+    write: async (scope, record) => { records.set(JSON.stringify(scope), record); },
+    remove: async (scope) => { records.delete(JSON.stringify(scope)); },
+  };
+  let saved = null;
+  const storage = { getItem: async () => saved, setItem: async (_k, v) => { saved = v; }, removeItem: async () => { saved = null; } };
+  const fetch = async (url) => {
+    const target = new URL(url);
+    if (target.pathname.endsWith('/feature-policy')) {
+      return new Response(JSON.stringify({ data: { revision: 1, flags: { 'collection.move': true, 'collection.delete': true, 'collection.export': true } } }));
+    }
+    return new Response(JSON.stringify({ data: [] }), { status: 200 });
+  };
+  const runtime = createAirrestRuntime({
+    edition: 'cloud',
+    adapter: { credentialStorage: vault, dispose() {}, cloudTransport: { fetch } },
+    storage,
+  });
+  t.after(() => runtime.dispose());
+  await runtime.credentialReady;
+  await runtime.store.getState().setCloudSession({
+    apiUrl: 'https://api.example.com',
+    user: { id: 'a' },
+    token: 'dummy-access-a',
+    refreshToken: 'dummy-refresh-a',
+    activeScope: { type: 'project', id: 'revoked-proj', teamId: 'team-1', name: 'Revoked', role: 'contributor' },
+  });
+  assert.equal(records.size, 1);
+  await runtime.store.getState().fetchScopes(true);
+  await settle();
+  assert.equal(runtime.store.getState().cloudConfig.token, undefined);
+  assert.equal(records.size, 0);
+});
+
+test('startup migration shares vault mutation ordering with logout, account switch, and disposal', async (t) => {
+  const { load } = loadProductionModules();
+  const { createAirrestRuntime } = load(path.join(root, 'runtime.ts'));
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
+  const policyFetch = async () => new Response(JSON.stringify({
+    data: { revision: 1, flags: { 'collection.move': true, 'collection.delete': true, 'collection.export': true } },
+  }));
+  const sessionA = { apiUrl: 'https://api.example.com', user: { id: 'a' }, token: 'dummy-access-a', refreshToken: 'dummy-refresh-a' };
+  const sessionB = { apiUrl: 'https://api.example.com', user: { id: 'b' }, token: 'dummy-access-b', refreshToken: 'dummy-refresh-b' };
+
+  const seedLegacy = () => {
+    let saved = null;
+    const storage = { getItem: async () => saved, setItem: async (_k, v) => { saved = v; }, removeItem: async () => { saved = null; } };
+    const old = createAirrestRuntime({ adapter: { dispose() {}, cloudTransport: { fetch: policyFetch } }, storage });
+    return old.credentialReady.then(async () => {
+      await settle();
+      old.store.getState().setCloudConfig(sessionA);
+      await settle();
+      old.dispose();
+      return storage;
+    });
+  };
+
+  // 1. Concurrent logout orders deletion after started migration write and never reinstates session.
+  const storage1 = await seedLegacy();
+  const records1 = new Map();
+  const gate1 = deferred();
+  const started1 = deferred();
+  const vault1 = {
+    records: records1,
+    read: async (scope) => records1.get(JSON.stringify(scope)) || null,
+    write: async (scope, record) => { started1.resolve(); await gate1.promise; records1.set(JSON.stringify(scope), record); },
+    remove: async (scope) => { records1.delete(JSON.stringify(scope)); },
+  };
+  const next1 = createAirrestRuntime({ adapter: { credentialStorage: vault1, dispose() {}, cloudTransport: { fetch: policyFetch } }, storage: storage1 });
+  t.after(() => next1.dispose());
+  await started1.promise;
+  const removeTask = next1.store.getState().clearCloudCredentials();
+  next1.store.getState().logoutCloud();
+  gate1.resolve();
+  await removeTask;
+  await next1.credentialReady;
+  assert.equal(next1.store.getState().cloudConfig.token, undefined);
+  assert.equal(records1.size, 0);
+
+  // 2. Concurrent account switch while startup migration write is delayed does not inject A's token into B.
+  const storage2 = await seedLegacy();
+  const records2 = new Map();
+  const gate2 = deferred();
+  const started2 = deferred();
+  let firstWrite = true;
+  const vault2 = {
+    records: records2,
+    read: async (scope) => records2.get(JSON.stringify(scope)) || null,
+    write: async (scope, record) => {
+      if (firstWrite) {
+        firstWrite = false;
+        started2.resolve();
+        await gate2.promise;
+      }
+      records2.set(JSON.stringify(scope), record);
+    },
+    remove: async (scope) => { records2.delete(JSON.stringify(scope)); },
+  };
+  const next2 = createAirrestRuntime({ adapter: { credentialStorage: vault2, dispose() {}, cloudTransport: { fetch: policyFetch } }, storage: storage2 });
+  t.after(() => next2.dispose());
+  await started2.promise;
+  const switchTask = next2.store.getState().setCloudSession(sessionB);
+  gate2.resolve();
+  await switchTask;
+  await next2.credentialReady;
+  assert.equal(next2.store.getState().cloudConfig.user?.id, 'b');
+  assert.equal(next2.store.getState().cloudConfig.token, sessionB.token);
+
+  // 3. Concurrent disposal while startup migration write is delayed never writes back or mutates disposed store.
+  const storage3 = await seedLegacy();
+  const records3 = new Map();
+  const gate3 = deferred();
+  const started3 = deferred();
+  let readAfterWrite = 0;
+  const vault3 = {
+    records: records3,
+    read: async (scope) => {
+      if (!firstWrite) readAfterWrite++;
+      return records3.get(JSON.stringify(scope)) || null;
+    },
+    write: async (scope, record) => { started3.resolve(); await gate3.promise; records3.set(JSON.stringify(scope), record); },
+    remove: async (scope) => { records3.delete(JSON.stringify(scope)); },
+  };
+  firstWrite = true;
+  const origWrite3 = vault3.write;
+  vault3.write = async (scope, record) => { firstWrite = false; await origWrite3(scope, record); };
+  const next3 = createAirrestRuntime({ adapter: { credentialStorage: vault3, dispose() {}, cloudTransport: { fetch: policyFetch } }, storage: storage3 });
+  await started3.promise;
+  next3.dispose();
+  gate3.resolve();
+  await next3.credentialReady;
+  assert.equal(readAfterWrite, 0);
+});

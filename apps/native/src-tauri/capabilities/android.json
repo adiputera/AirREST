@@ -9,6 +9,9 @@
     "android-update:allow-status",
     "android-update:allow-start",
     "android-update:allow-cancel",
-    "android-update:allow-install"
+    "android-update:allow-install",
+    "native-credential:allow-read",
+    "native-credential:allow-write",
+    "native-credential:allow-remove"
   ]
 }

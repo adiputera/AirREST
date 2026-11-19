@@ -4,9 +4,14 @@ fn main() {
         println!("cargo:rustc-link-arg-cdylib=-Wl,-z,max-page-size=16384");
         println!("cargo:rustc-link-arg-cdylib=-Wl,-z,common-page-size=16384");
     }
-    let attributes = tauri_build::Attributes::new().plugin(
-        "android-update",
-        tauri_build::InlinedPlugin::new().commands(&["status", "start", "cancel", "install"]),
-    );
+    let attributes = tauri_build::Attributes::new()
+        .plugin(
+            "android-update",
+            tauri_build::InlinedPlugin::new().commands(&["status", "start", "cancel", "install"]),
+        )
+        .plugin(
+            "native-credential",
+            tauri_build::InlinedPlugin::new().commands(&["read", "write", "remove"]),
+        );
     tauri_build::try_build(attributes).expect("failed to build AirREST application metadata");
 }

@@ -97,6 +97,16 @@ function notifyStorageCommit(key: string, envelope: StorageEnvelope) {
   storageChannel?.postMessage({ key, revision: envelope.revision, writerId: envelope.writerId, deleted: envelope.deleted === true });
 }
 
+function createEnvelope(previous: StorageEnvelope | null, data: string): StorageEnvelope {
+  return {
+    version: STORAGE_ENVELOPE_VERSION,
+    timestamp: Date.now(),
+    revision: (previous?.revision || 0) + 1,
+    writerId,
+    data,
+  };
+}
+
 /**
  * Opens or retrieves the cached IndexedDB database connection.
  */
@@ -228,6 +238,24 @@ export async function idbDel(key: string): Promise<void> {
 }
 
 /**
+ * Commits a value to both persistence copies. This is used only when removing
+ * legacy plaintext credentials: accepting one successful copy would let the
+ * other copy restore the secret after a later restart.
+ */
+export async function setItemInAllPersistenceCopies(name: string, value: string): Promise<void> {
+  await withStorageLock(name, async () => {
+    const existingIdb = await idbGet(name);
+    const existingLocal = getLocalItem(name);
+    const envelope = createEnvelope(latestEnvelope([existingIdb, existingLocal]), value);
+    const serialized = JSON.stringify(envelope);
+
+    await idbSet(name, serialized);
+    setLocalItem(name, serialized);
+    notifyStorageCommit(name, envelope);
+  });
+}
+
+/**
  * StateStorage adapter for Zustand Persist backed by IndexedDB with localStorage fallback.
  */
 export const appStorage: StateStorage = {
@@ -250,13 +278,7 @@ export const appStorage: StateStorage = {
       // A fallback-only commit can still advance the revision from localStorage.
     }
     const previous = latestEnvelope([existingIdb, getLocalItem(name)]);
-    const envelope: StorageEnvelope = {
-      version: STORAGE_ENVELOPE_VERSION,
-      timestamp: Date.now(),
-      revision: (previous?.revision || 0) + 1,
-      writerId,
-      data: value,
-    };
+    const envelope = createEnvelope(previous, value);
     const serialized = JSON.stringify(envelope);
     let committed = false;
     try {
