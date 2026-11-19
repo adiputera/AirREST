@@ -27,6 +27,19 @@ import type { AuthProvider } from './auth/types';
 import { isCloudSessionActive } from './workspace/cloudSession';
 import { validateApplicationDistributionConfig, type ApplicationDistributionConfig } from './distributionConfig';
 
+function getNativeCredentialScope(config: { apiUrl?: string; user?: { id?: string } }) {
+  const apiUrl = config.apiUrl?.trim();
+  const userId = config.user?.id?.trim();
+  return apiUrl && userId ? { apiUrl, userId } : null;
+}
+
+function sameNativeCredentialScope(
+  left: { apiUrl: string; userId: string } | null | undefined,
+  right: { apiUrl: string; userId: string } | null | undefined,
+): boolean {
+  return Boolean(left && right && left.apiUrl === right.apiUrl && left.userId === right.userId);
+}
+
 export interface AirrestRuntimeConfig {
   adapter: PlatformAdapter;
   /** @deprecated Prefer productPolicy so every runtime dependency shares one policy. */
@@ -52,6 +65,7 @@ export interface AirrestRuntime {
   cloudClient: CloudClient;
   assets: Record<string, string>;
   store: ApiStore;
+  credentialReady: Promise<void>;
   dispose: () => void;
 }
 
@@ -91,6 +105,7 @@ export function createAirrestRuntime(config: AirrestRuntimeConfig): AirrestRunti
   const store = config.store || createApiStore({
     storage: config.storage,
     adapter: config.adapter,
+    credentialStorage: adapter.credentialStorage,
     productPolicy,
     cloudClient,
   });
@@ -110,6 +125,7 @@ export function createAirrestRuntime(config: AirrestRuntimeConfig): AirrestRunti
   let unregAuthEvicted: (() => void) | null = null;
   let unregCloudClientTokenRefresh: (() => void) | null = null;
   let unregCloudClientAuthEvicted: (() => void) | null = null;
+  let unregCredentialHydration: (() => void) | null = null;
   let isDisposed = false;
   let evictionTimer: ReturnType<typeof setTimeout> | undefined;
   let observedSessionGeneration = store.getState().getCloudSessionGeneration?.();
@@ -128,26 +144,119 @@ export function createAirrestRuntime(config: AirrestRuntimeConfig): AirrestRunti
     updateProviderSession(state);
   });
 
+  const restoreNativeCredentials = async () => {
+    const credentialStorage = adapter.credentialStorage;
+    if (!credentialStorage || isDisposed || !productPolicy.workspace.cloud) return;
+    if (store.getState().recoverNativeCredentials) {
+      await store.getState().recoverNativeCredentials({ isCancelled: () => isDisposed });
+      return;
+    }
+    const current = store.getState().cloudConfig;
+    const scope = getNativeCredentialScope(current);
+    if (!scope || current.sessionKind === 'provider') return;
+    const initialGeneration = store.getState().getCloudSessionGeneration();
+    const isCurrentRestore = () =>
+      !isDisposed &&
+      store.getState().getCloudSessionGeneration() === initialGeneration &&
+      sameNativeCredentialScope(getNativeCredentialScope(store.getState().cloudConfig), scope);
+    const vaulted = await credentialStorage.read(scope);
+    if (!isCurrentRestore() || !vaulted) return;
+    store.getState().setCloudConfig({
+      token: vaulted.accessToken,
+      refreshToken: vaulted.refreshToken,
+      tokenExpiresAt: vaulted.expiresAt,
+    });
+  };
+
+  const credentialReady = new Promise<void>((resolve) => {
+    const completeRestore = () => {
+      void restoreNativeCredentials()
+        .catch((error: unknown) => {
+          if (!isDisposed) {
+            store.setState({ syncError: 'Protected credential storage is unavailable. Please sign in again.' });
+          }
+          console.warn('Could not restore protected credentials:', error);
+        })
+        .finally(resolve);
+    };
+    if (!adapter.credentialStorage || !productPolicy.workspace.cloud) {
+      resolve();
+    } else if (store.persist.hasHydrated()) {
+      completeRestore();
+    } else {
+      unregCredentialHydration = store.persist.onFinishHydration(completeRestore);
+    }
+  });
+
   if (productPolicy.workspace.cloud) {
+    const pendingTokenRotations = new Set<{
+      generation: number;
+      token: string;
+      scope: { apiUrl: string; userId: string } | null;
+    }>();
+
     const updateSessionTokens = (newTokens: {
       token: string;
       refreshToken: string;
       expiresAt?: string;
       previousRefreshToken?: string;
     }) => {
-      if (store.getState().cloudConfig.refreshToken !== newTokens.previousRefreshToken) return;
-      store.getState().setCloudConfig({
+      const state = store.getState();
+      if (state.cloudConfig.refreshToken !== newTokens.previousRefreshToken) return;
+      const generation = state.getCloudSessionGeneration();
+      const scope = getNativeCredentialScope(state.cloudConfig);
+      const pending = { generation, token: newTokens.token, scope };
+      pendingTokenRotations.add(pending);
+      const update = {
         token: newTokens.token,
         refreshToken: newTokens.refreshToken,
         tokenExpiresAt: newTokens.expiresAt,
-      });
+      };
+      const save = state.setCloudSession
+        ? state.setCloudSession(update)
+        : Promise.resolve(state.setCloudConfig(update));
+      void save
+        .catch((error: unknown) => {
+          if (!isDisposed && store.getState().getCloudSessionGeneration() === generation) {
+            store.setState({ syncError: 'Could not save the refreshed session securely. Please sign in again.' });
+          }
+          console.warn('Could not save refreshed credentials:', error);
+        })
+        .finally(() => {
+          pendingTokenRotations.delete(pending);
+        });
     };
 
     const evictSession = (reason: string, failedToken?: string) => {
       const state = store.getState();
+      const generation = state.getCloudSessionGeneration();
+      for (const entry of pendingTokenRotations) {
+        if (entry.generation !== generation) {
+          pendingTokenRotations.delete(entry);
+        }
+      }
+      const matchedPending = failedToken
+        ? [...pendingTokenRotations].find((entry) => entry.generation === generation && entry.token === failedToken)
+        : undefined;
       const providerFailure = !failedToken && state.cloudConfig.sessionKind === 'provider' && isCloudSessionActive(state.cloudConfig);
-      if (providerFailure || (state.cloudConfig.token && (!failedToken || state.cloudConfig.token === failedToken))) {
-        state.logoutCloud();
+      const matchesActiveToken = Boolean(state.cloudConfig.token && (!failedToken || state.cloudConfig.token === failedToken));
+      if (providerFailure || matchesActiveToken || Boolean(matchedPending)) {
+        const scope = getNativeCredentialScope(state.cloudConfig) || matchedPending?.scope || null;
+        for (const entry of pendingTokenRotations) {
+          if (entry.generation === generation) {
+            pendingTokenRotations.delete(entry);
+          }
+        }
+        if (state.evictCloudSession) {
+          state.evictCloudSession(scope || undefined);
+        } else {
+          if (state.clearCloudCredentials) {
+            void state.clearCloudCredentials(scope || undefined).catch((error: unknown) => {
+              console.warn('Could not remove expired credentials:', error);
+            });
+          }
+          state.logoutCloud();
+        }
         const loggedOutConfig = store.getState().cloudConfig;
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new CustomEvent('airrest:auth-required', { detail: { store } }));
@@ -180,6 +289,8 @@ export function createAirrestRuntime(config: AirrestRuntimeConfig): AirrestRunti
     if (isDisposed) return;
     isDisposed = true;
     unregSessionObserver?.();
+    unregCredentialHydration?.();
+    unregCredentialHydration = null;
     if (evictionTimer !== undefined) {
       clearTimeout(evictionTimer);
       evictionTimer = undefined;
@@ -241,6 +352,7 @@ export function createAirrestRuntime(config: AirrestRuntimeConfig): AirrestRunti
     cloudClient,
     assets,
     store,
+    credentialReady,
     dispose,
   };
 }

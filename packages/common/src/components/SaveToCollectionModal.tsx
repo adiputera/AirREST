@@ -20,6 +20,7 @@ interface SaveToCollectionModalProps {
   onClose: () => void;
   request: ApiRequest;
   isSaveAs?: boolean;
+  onSaveCommitted?: (result: SaveRequestToCollectionResult) => void;
   onSaved?: (result: SaveRequestToCollectionResult) => void;
 }
 
@@ -47,6 +48,7 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
   onClose,
   request,
   isSaveAs = false,
+  onSaveCommitted,
   onSaved,
 }) => {
   const collections = useApiStore((state) => state.collections);
@@ -218,6 +220,7 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
       return;
     }
 
+    onSaveCommitted?.(result);
     setIsSaved(true);
     setSavedActionText('Saved!');
     setTimeout(() => {
@@ -249,6 +252,7 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
       return;
     }
 
+    onSaveCommitted?.(result);
     setIsSaved(true);
     setSavedActionText('Saved copy!');
     setTimeout(() => {
@@ -283,6 +287,7 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
       return;
     }
 
+    onSaveCommitted?.(result);
     setIsSaved(true);
     setSavedActionText('Replaced!');
     setTimeout(() => {

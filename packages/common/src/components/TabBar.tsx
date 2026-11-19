@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { Plus, X, Layers, ArrowRight, Trash2, Copy, MoreVertical, AlertTriangle, Bookmark } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
 import { MethodBadge } from './MethodBadge';
@@ -9,6 +9,13 @@ import { useBackHandler } from '../lib/backNavigation';
 import { hasScopePermission, canModifyCollection } from '../lib/jwt';
 import { SaveToCollectionModal } from './SaveToCollectionModal';
 import { ApiRequest } from '../types/api';
+import {
+  getCompactTabOverflowLabel,
+  getTabOverflowCounts,
+  getTabRevealScrollLeft,
+  isTabFullyVisible,
+  type TabOverflowCounts,
+} from './tabBarOverflow';
 
 interface ContextMenuPosition {
   x: number;
@@ -20,6 +27,7 @@ export const TabBar: React.FC = () => {
   const tabs = useApiStore((state) => state.tabs);
   const collections = useApiStore((state) => state.collections);
   const activeTabId = useApiStore((state) => state.activeTabId);
+  const tabRevealRevision = useApiStore((state) => state.tabRevealRevision);
   const setActiveTabId = useApiStore((state) => state.setActiveTabId);
   const createTab = useApiStore((state) => state.createTab);
   const closeTab = useApiStore((state) => state.closeTab);
@@ -35,11 +43,201 @@ export const TabBar: React.FC = () => {
   const [unsavedConfirmTab, setUnsavedConfirmTab] = useState<ApiRequest | null>(null);
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
   const [targetSaveTab, setTargetSaveTab] = useState<ApiRequest | null>(null);
+  const [tabOverflow, setTabOverflow] = useState<TabOverflowCounts>({ left: 0, right: 0 });
 
   useBackHandler(Boolean(contextMenu), () => setContextMenu(null), 15);
   useBackHandler(Boolean(unsavedConfirmTab), () => setUnsavedConfirmTab(null), 30);
 
   const menuRef = useRef<HTMLDivElement>(null);
+  const tabBarRef = useRef<HTMLDivElement>(null);
+  const tabViewportRef = useRef<HTMLDivElement>(null);
+  const tabTrackRef = useRef<HTMLDivElement>(null);
+  const tabElementRefs = useRef(new Map<string, HTMLDivElement>());
+  const tabIdsRef = useRef<string[]>([]);
+  const overflowFrameRef = useRef<number | null>(null);
+  const resizeFrameRef = useRef<number | null>(null);
+  const activeTabIdRef = useRef(activeTabId);
+  const activeTabWasVisibleRef = useRef(true);
+  const tabOverflowRef = useRef<TabOverflowCounts>(tabOverflow);
+  const pendingRevealRef = useRef(false);
+  const revealPassCountRef = useRef(0);
+  const safeTabs = tabs || [];
+  tabIdsRef.current = safeTabs.map((tab) => tab.id);
+  activeTabIdRef.current = activeTabId;
+  tabOverflowRef.current = tabOverflow;
+  const tabIds = safeTabs.map((tab) => tab.id).join('|');
+
+  const captureActiveTabVisibility = useCallback(() => {
+    const viewport = tabViewportRef.current;
+    const activeTab = tabElementRefs.current.get(activeTabIdRef.current);
+    if (!viewport || !activeTab) return;
+
+    const viewportBounds = viewport.getBoundingClientRect();
+    const tabBounds = activeTab.getBoundingClientRect();
+    activeTabWasVisibleRef.current = isTabFullyVisible(
+      { left: viewportBounds.left, right: viewportBounds.right },
+      { left: tabBounds.left, right: tabBounds.right },
+    );
+  }, []);
+
+  const measureTabOverflow = useCallback((): boolean => {
+    const viewport = tabViewportRef.current;
+    if (!viewport) return false;
+
+    const viewportBounds = viewport.getBoundingClientRect();
+    const tabBounds = tabIdsRef.current
+      .map((tabId) => tabElementRefs.current.get(tabId)?.getBoundingClientRect())
+      .filter((bounds): bounds is DOMRect => Boolean(bounds))
+      .map(({ left, right }) => ({ left, right }));
+    const nextOverflow = getTabOverflowCounts(
+      { left: viewportBounds.left, right: viewportBounds.right },
+      tabBounds,
+    );
+
+    const current = tabOverflowRef.current;
+    const changed = current.left !== nextOverflow.left || current.right !== nextOverflow.right;
+    if (changed) {
+      setTabOverflow(nextOverflow);
+    }
+    captureActiveTabVisibility();
+    return changed;
+  }, [captureActiveTabVisibility]);
+
+  const scheduleTabOverflowMeasure = useCallback(() => {
+    if (overflowFrameRef.current !== null) return;
+    overflowFrameRef.current = window.requestAnimationFrame(() => {
+      overflowFrameRef.current = null;
+      measureTabOverflow();
+    });
+  }, [measureTabOverflow]);
+
+  const revealActiveTab = useCallback(() => {
+    const viewport = tabViewportRef.current;
+    const activeTab = tabElementRefs.current.get(activeTabIdRef.current);
+    if (!viewport || !activeTab) return;
+
+    const viewportBounds = viewport.getBoundingClientRect();
+    const tabBounds = activeTab.getBoundingClientRect();
+    const nextScrollLeft = getTabRevealScrollLeft(
+      { left: viewportBounds.left, right: viewportBounds.right },
+      { left: tabBounds.left, right: tabBounds.right },
+      viewport.scrollLeft,
+    );
+
+    if (nextScrollLeft !== viewport.scrollLeft) {
+      viewport.scrollTo({ left: nextScrollLeft, behavior: 'auto' });
+    }
+    activeTabWasVisibleRef.current = true;
+  }, []);
+
+  const scheduleActiveTabRevealOnResize = useCallback(() => {
+    if (resizeFrameRef.current !== null) return;
+    const shouldRevealActiveTab = activeTabWasVisibleRef.current || pendingRevealRef.current;
+    resizeFrameRef.current = window.requestAnimationFrame(() => {
+      resizeFrameRef.current = null;
+      if (shouldRevealActiveTab) {
+        pendingRevealRef.current = true;
+        revealPassCountRef.current = 0;
+        revealActiveTab();
+      }
+      const changed = measureTabOverflow();
+      if (!changed) {
+        pendingRevealRef.current = false;
+      }
+    });
+  }, [measureTabOverflow, revealActiveTab]);
+
+  const handleTabViewportScroll = useCallback(() => {
+    captureActiveTabVisibility();
+    scheduleTabOverflowMeasure();
+    if (contextMenu) setContextMenu(null);
+  }, [captureActiveTabVisibility, contextMenu, scheduleTabOverflowMeasure]);
+
+  const handleTabWheel = useCallback((event: WheelEvent) => {
+    const viewport = tabViewportRef.current;
+    if (!viewport || event.ctrlKey || event.metaKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY) || event.deltaY === 0) return;
+
+    const multiplier = event.deltaMode === 1
+      ? 16
+      : event.deltaMode === 2
+        ? viewport.clientWidth
+        : 1;
+    const scrollDelta = event.deltaY * multiplier;
+    const maxScrollLeft = viewport.scrollWidth - viewport.clientWidth;
+    const canScroll = scrollDelta < 0
+      ? viewport.scrollLeft > 0
+      : viewport.scrollLeft < maxScrollLeft - 1;
+    if (!canScroll) return;
+
+    pendingRevealRef.current = false;
+    event.preventDefault();
+    viewport.scrollBy({ left: scrollDelta, behavior: 'auto' });
+  }, []);
+
+  useEffect(() => {
+    const bar = tabBarRef.current;
+    const viewport = tabViewportRef.current;
+    const track = tabTrackRef.current;
+    if (!bar || !viewport || !track || typeof ResizeObserver === 'undefined') return;
+
+    const observer = new ResizeObserver((entries) => {
+      const shouldRevealOnResize = entries.some(
+        (entry) => entry.target === bar || entry.target === track,
+      );
+      if (shouldRevealOnResize) {
+        scheduleActiveTabRevealOnResize();
+      } else {
+        scheduleTabOverflowMeasure();
+      }
+    });
+    observer.observe(bar);
+    observer.observe(track);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, [scheduleActiveTabRevealOnResize, scheduleTabOverflowMeasure]);
+
+  useEffect(() => {
+    const viewport = tabViewportRef.current;
+    if (!viewport) return;
+
+    viewport.addEventListener('wheel', handleTabWheel, { passive: false });
+    return () => viewport.removeEventListener('wheel', handleTabWheel);
+  }, [handleTabWheel]);
+
+  useEffect(() => () => {
+    if (overflowFrameRef.current !== null) {
+      window.cancelAnimationFrame(overflowFrameRef.current);
+      overflowFrameRef.current = null;
+    }
+    if (resizeFrameRef.current !== null) {
+      window.cancelAnimationFrame(resizeFrameRef.current);
+      resizeFrameRef.current = null;
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    pendingRevealRef.current = true;
+    revealPassCountRef.current = 0;
+    revealActiveTab();
+    const changed = measureTabOverflow();
+    if (!changed) {
+      pendingRevealRef.current = false;
+    }
+  }, [activeTabId, tabRevealRevision, tabIds, revealActiveTab, measureTabOverflow]);
+
+  useLayoutEffect(() => {
+    if (!pendingRevealRef.current) return;
+    if (revealPassCountRef.current >= 6) {
+      pendingRevealRef.current = false;
+      return;
+    }
+    revealPassCountRef.current += 1;
+    revealActiveTab();
+    const changed = measureTabOverflow();
+    if (!changed) {
+      pendingRevealRef.current = false;
+    }
+  }, [tabOverflow.left, tabOverflow.right, revealActiveTab, measureTabOverflow]);
 
   // Close context menu on click outside or Escape key
   useEffect(() => {
@@ -173,20 +371,48 @@ export const TabBar: React.FC = () => {
     setIsSaveModalOpen(true);
   };
 
-  const safeTabs = tabs || [];
   const activeContextTabIndex = contextMenu?.tabId
     ? safeTabs.findIndex((t) => t.id === contextMenu.tabId)
     : -1;
   const isOnlyTab = safeTabs.length <= 1;
   const isLastTab = activeContextTabIndex === safeTabs.length - 1;
 
+  const scrollTabsByPage = (direction: -1 | 1) => {
+    const viewport = tabViewportRef.current;
+    if (!viewport) return;
+    pendingRevealRef.current = false;
+    viewport.scrollBy({
+      left: viewport.clientWidth * 0.75 * direction,
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    });
+  };
+
   return (
     <>
-      <div
-        onContextMenu={handleBarContextMenu}
-        className="flex h-8 w-full items-center border-b border-line bg-surface px-2 overflow-x-auto scrollbar-none"
-      >
-        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+      <div ref={tabBarRef} onContextMenu={handleBarContextMenu} className="flex h-8 w-full items-center gap-1 border-b border-line bg-surface px-2">
+        {tabOverflow.left > 0 && (
+          <button
+            type="button"
+            onClick={() => scrollTabsByPage(-1)}
+            className="w-7 shrink-0 rounded px-0 py-1 text-center text-[10px] font-medium text-tx-muted hover:bg-hover hover:text-tx-primary sm:w-auto sm:px-1.5"
+            aria-label={`Show ${tabOverflow.left} more request tab${tabOverflow.left === 1 ? '' : 's'} to the left`}
+            title={`${tabOverflow.left} more tab${tabOverflow.left === 1 ? '' : 's'} to the left`}
+          >
+            <>
+              <span className="sm:hidden">‹ {getCompactTabOverflowLabel(tabOverflow.left)}</span>
+              <span className="hidden sm:inline">‹ … {tabOverflow.left} more</span>
+            </>
+          </button>
+        )}
+
+        <div
+          ref={tabViewportRef}
+          onScroll={handleTabViewportScroll}
+          tabIndex={0}
+          aria-label="Open request tabs"
+          className="min-w-0 flex-1 overflow-x-auto scrollbar-none"
+        >
+          <div ref={tabTrackRef} className="flex w-max min-w-full items-center gap-1.5">
           {safeTabs.filter(Boolean).map((tab) => {
             const isActive = tab.id === activeTabId;
             const displayName = tab.name || tab.url || 'Untitled Request';
@@ -202,10 +428,14 @@ export const TabBar: React.FC = () => {
             return (
               <div
                 key={tab.id}
+                ref={(element) => {
+                  if (element) tabElementRefs.current.set(tab.id, element);
+                  else tabElementRefs.current.delete(tab.id);
+                }}
                 onClick={() => setActiveTabId(tab.id)}
                 onContextMenu={(e) => handleTabContextMenu(e, tab.id)}
                 onAuxClick={(e) => handleTabAuxClick(e, tab.id)}
-                className={`group flex items-center gap-1.5 max-w-[205px] cursor-pointer rounded-t-md border-t-2 px-2.5 py-1 text-xs font-medium transition-all select-none ${isActive
+                className={`group flex shrink-0 items-center gap-1.5 max-w-[205px] cursor-pointer rounded-t-md border-t-2 px-2.5 py-1 text-xs font-medium transition-all select-none ${isActive
                     ? 'border-sky-500 bg-card text-tx-primary shadow-xs'
                     : 'border-transparent bg-element/50 text-tx-muted hover:bg-hover hover:text-tx-primary'
                   }`}
@@ -261,14 +491,31 @@ export const TabBar: React.FC = () => {
             );
           })}
 
-          <button
-            onClick={() => createTab()}
-            className="flex h-6 w-6 items-center justify-center rounded-md text-tx-muted hover:bg-hover hover:text-tx-primary transition"
-            title="Create New Request Tab"
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </button>
+          </div>
         </div>
+
+        {tabOverflow.right > 0 && (
+          <button
+            type="button"
+            onClick={() => scrollTabsByPage(1)}
+            className="w-7 shrink-0 rounded px-0 py-1 text-center text-[10px] font-medium text-tx-muted hover:bg-hover hover:text-tx-primary sm:w-auto sm:px-1.5"
+            aria-label={`Show ${tabOverflow.right} more request tab${tabOverflow.right === 1 ? '' : 's'} to the right`}
+            title={`${tabOverflow.right} more tab${tabOverflow.right === 1 ? '' : 's'} to the right`}
+          >
+            <>
+              <span className="sm:hidden">{getCompactTabOverflowLabel(tabOverflow.right)} ›</span>
+              <span className="hidden sm:inline">… {tabOverflow.right} more ›</span>
+            </>
+          </button>
+        )}
+
+        <button
+          onClick={() => createTab()}
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-tx-muted hover:bg-hover hover:text-tx-primary transition"
+          title="Create New Request Tab"
+        >
+          <Plus className="h-3.5 w-3.5" />
+        </button>
       </div>
 
       {/* Right-click Context Menu */}

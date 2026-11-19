@@ -23,6 +23,13 @@ function loadStore({ executePreRequestScript, executeApiRequest, cloudApi = {}, 
   const noop = () => {};
   const modules = {
     'storage': { appStorage },
+    'nativeCredentials': {
+      getNativeCredentialScope: (config) => {
+        const apiUrl = config.apiUrl?.trim();
+        const userId = config.user?.id?.trim();
+        return apiUrl && userId ? { apiUrl, userId } : null;
+      },
+    },
     'blobManager': { revokeBlobUrl: noop, revokeBlobUrls: noop },
     'fetcher': { executeApiRequest },
     'scriptRunner': { executePreRequestScript, executePostResponseScript: async () => ({ success: true, environment: {}, variables: {} }) },
@@ -966,6 +973,7 @@ function loadExtensionRuntime(domEnv = {}) {
           };
         }
         if (id.includes('scriptRunner')) return runnerExports;
+        if (id.includes('nativeCredentials')) return { getNativeCredentialScope: () => null };
         if (id.includes('cloudSession')) return { isCloudSessionActive: (config) => Boolean(config.token || (config.sessionKind === 'provider' && config.user?.id)) };
         if (id.includes('fetcher')) return { setDefaultPlatformAdapter: () => {}, getDefaultPlatformAdapter: () => null };
         if (id.includes('distributionConfig')) return { validateApplicationDistributionConfig: (config) => config };

@@ -47,6 +47,13 @@ import {
 import { handleCodeEditorKeyDown } from '../lib/editorHelper';
 import { canModifyCollection, hasScopePermission } from '../lib/jwt';
 import { PayloadBuilder } from './payload';
+import {
+  getRequestEditorSection,
+  migrateRequestEditorSection,
+  pruneRequestEditorSections,
+  setRequestEditorSection,
+  type RequestEditorSection,
+} from './requestEditorSectionState';
 
 function formatFileSize(bytes: number): string {
   if (!bytes || bytes <= 0) return '0 B';
@@ -99,7 +106,8 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
   const canUndoActiveRequest = useApiStore((state) => state.canUndoActiveRequest);
   const canRedoActiveRequest = useApiStore((state) => state.canRedoActiveRequest);
 
-  const [activeTab, setActiveTab] = useState<'params' | 'headers' | 'auth' | 'body' | 'prerequest' | 'tests'>('params');
+  const [sectionsByRequestId, setSectionsByRequestId] = useState<Record<string, RequestEditorSection>>({});
+  const activeTab = getRequestEditorSection(sectionsByRequestId, activeTabId);
   const [isConfigCollapsed, setIsConfigCollapsed] = useState(() => {
     try {
       return localStorage.getItem('airrest:request_config_collapsed') === 'true';
@@ -125,7 +133,7 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
   }, []);
 
   const handleTabClick = useCallback(
-    (tab: 'params' | 'headers' | 'auth' | 'body' | 'prerequest' | 'tests') => {
+    (tab: RequestEditorSection) => {
       if (activeTab === tab && !isConfigCollapsed) {
         setIsConfigCollapsed(true);
         try {
@@ -134,7 +142,7 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
           // ignore
         }
       } else {
-        setActiveTab(tab);
+        setSectionsByRequestId((sections) => setRequestEditorSection(sections, activeTabId, tab));
         setIsConfigCollapsed(false);
         try {
           localStorage.setItem('airrest:request_config_collapsed', 'false');
@@ -143,7 +151,7 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
         }
       }
     },
-    [activeTab, isConfigCollapsed]
+    [activeTab, activeTabId, isConfigCollapsed]
   );
   const [jsonFormatError, setJsonFormatError] = useState<string | null>(null);
   const [xmlFormatError, setXmlFormatError] = useState<string | null>(null);
@@ -169,6 +177,10 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
 
   const currentTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
   const isDirty = currentTab ? isRequestModified(currentTab, collections) : false;
+
+  useEffect(() => {
+    setSectionsByRequestId((sections) => pruneRequestEditorSections(sections, tabs.map((tab) => tab.id)));
+  }, [tabs]);
 
   const workspaceMode = useApiStore((state) => state.workspaceMode);
   const cloudConfig = useApiStore((state) => state.cloudConfig);
@@ -1838,6 +1850,14 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
         }}
         request={currentTab}
         isSaveAs={isSaveAsMode}
+        onSaveCommitted={(result) => {
+          const sourceRequestId = result.sourceTabId;
+          const savedRequestId = result.savedRequestId;
+          if (!sourceRequestId || !savedRequestId) return;
+          setSectionsByRequestId((sections) => (
+            migrateRequestEditorSection(sections, sourceRequestId, savedRequestId)
+          ));
+        }}
       />
     </>
   );

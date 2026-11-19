@@ -33,11 +33,13 @@ if (__AIRREST_ANDROID__) {
   }).catch((error) => console.error('Unable to register Android Back handler:', error));
 }
 
-ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
-  <React.StrictMode>
-    <AirrestProvider runtime={runtime}>
-      {__AIRREST_ANDROID__ ? <AndroidUpdateBanner repo={androidReleaseRepository} /> : <DesktopUpdateBanner />}
-      <App />
-    </AirrestProvider>
-  </React.StrictMode>,
-);
+void runtime.credentialReady.finally(() => {
+  ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
+    <React.StrictMode>
+      <AirrestProvider runtime={runtime}>
+        {__AIRREST_ANDROID__ ? <AndroidUpdateBanner repo={androidReleaseRepository} /> : <DesktopUpdateBanner />}
+        <App />
+      </AirrestProvider>
+    </React.StrictMode>,
+  );
+});

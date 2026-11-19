@@ -3,7 +3,7 @@ import { persist, createJSONStorage, StateStorage } from 'zustand/middleware';
 import { useContext } from 'react';
 import { StoreContext, ApiStore } from './storeContext';
 export type { ApiStore } from './storeContext';
-import { appStorage } from '../lib/storage';
+import { appStorage, setItemInAllPersistenceCopies } from '../lib/storage';
 import {
   ApiRequest,
   RequestTab,
@@ -36,6 +36,7 @@ import {
 import { applyTheme } from '../lib/theme';
 import { executeApiRequest } from '../lib/fetcher';
 import type { PlatformAdapter, ScriptRequest } from '../types/platform';
+import type { NativeCredentialState, NativeCredentialStorage, NativeCredentialScope } from '../types/credentials';
 import { revokeBlobUrl, revokeBlobUrls } from '../lib/blobManager';
 import {
   importPostmanCollection,
@@ -101,6 +102,19 @@ import {
 import { importCloudCacheRecoveryBackup } from '../workspace/cloudCacheRecovery';
 
 const FEATURE_POLICY_TTL_MS = 30 * 60 * 1000;
+
+function getNativeCredentialScope(config: Pick<CloudConfig, 'apiUrl' | 'user'>): NativeCredentialScope | null {
+  const apiUrl = config.apiUrl?.trim();
+  const userId = config.user?.id?.trim();
+  return apiUrl && userId ? { apiUrl, userId } : null;
+}
+
+function sameNativeCredentialScope(
+  left: NativeCredentialScope | null | undefined,
+  right: NativeCredentialScope | null | undefined,
+): boolean {
+  return Boolean(left && right && left.apiUrl === right.apiUrl && left.userId === right.userId);
+}
 
 function generateId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -345,6 +359,7 @@ export interface ApiStoreState {
   activeTabId: string;
   activeResponse: ApiResponse | null;
   tabResponses: Record<string, ApiResponse>;
+  tabRevealRevision: number;
   isLoading: boolean;
   collections: Collection[];
   history: HistoryItem[];
@@ -490,6 +505,10 @@ export interface ApiStoreState {
   workspaceMode: WorkspaceMode;
   hasConfiguredMode: boolean;
   cloudConfig: CloudConfig;
+  /** Public identity and migration state for credentials held by the native vault. */
+  nativeCredentialState?: NativeCredentialState;
+  /** Durable cleanup journal retained across rotations, account switches, and sign-out until both copies redact legacy secrets. */
+  nativeCredentialCleanupPending?: boolean;
   featurePolicy: FeaturePolicy | null;
   featurePolicyStatus: FeaturePolicyStatus;
   featurePolicyFetchedAt: number | null;
@@ -506,6 +525,30 @@ export interface ApiStoreState {
   setWorkspaceMode: (mode: WorkspaceMode) => void;
   setHasConfiguredMode: (configured: boolean) => void;
   setCloudConfig: (config: Partial<CloudConfig>) => void;
+  /** Writes password-provider credentials to the platform vault before updating session state. */
+  setCloudSession: (config: Partial<CloudConfig>) => Promise<void>;
+  /** Removes the current password-provider credential from the platform vault. */
+  clearCloudCredentials: (scope?: NativeCredentialScope) => Promise<void>;
+  setNativeCredentialState: (state?: NativeCredentialState) => void;
+  /** Persists the current redacted native state to both legacy persistence copies. */
+  persistNativeCredentialState: () => Promise<void>;
+  /** Retries physical-copy redaction and clears the cleanup journal only after both copies succeed. */
+  completePendingCredentialCleanup: () => Promise<boolean>;
+  /** Coordinates startup vault restoration and legacy migration with all other vault mutations. */
+  recoverNativeCredentials: (options?: { isCancelled?: () => boolean }) => Promise<void>;
+  /** Signs out through provider sign-out and vault deletion, keeping the session retryable if deletion fails. */
+  signOutCloud: (options?: {
+    authProvider?: {
+      signOut?: (request: {
+        apiUrl: string;
+        user?: CloudConfig['user'];
+        accessToken?: string;
+        refreshToken?: string;
+      }) => Promise<void>;
+    };
+  }) => Promise<{ success: boolean; error?: string }>;
+  /** Removes any vaulted credential for an evicted or scope-revoked session and clears active cloud state. */
+  evictCloudSession: (scope?: NativeCredentialScope) => void;
   getCloudSessionGeneration: () => number;
   getCloudCacheRecoveryCount: () => number;
   getCloudCacheRecoveryBackup: () => string;
@@ -553,6 +596,7 @@ function preserveCurrentValues(remote: Environment, local: Environment): Environ
 export interface CreateApiStoreOptions {
   storage?: StateStorage;
   adapter?: PlatformAdapter;
+  credentialStorage?: NativeCredentialStorage;
   productPolicy?: ProductPolicy;
   cloudClient?: CloudClient;
 }
@@ -567,6 +611,8 @@ export function createApiStore(
 
   const customStorage = options.storage || appStorage;
   const boundAdapter = options.adapter || adapterParam;
+  const credentialStorage = options.credentialStorage || boundAdapter?.credentialStorage;
+  const persistCloudCredentials = credentialStorage === undefined;
   const productPolicy = options.productPolicy !== undefined ? validateProductPolicy(options.productPolicy) : defaultProductPolicy;
   const isOfflineOnly = !productPolicy.workspace.cloud;
   const allowsOfflineWorkspace = productPolicy.workspace.offline !== false;
@@ -599,6 +645,22 @@ export function createApiStore(
   const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
   let isStoreDisposed = false;
   let cloudSessionGeneration = 0;
+  let nativeCredentialOperation = 0;
+  let nativeCredentialQueue: Promise<void> = Promise.resolve();
+  let cleanupInFlight: Promise<boolean> | null = null;
+  let signOutInFlight: Promise<{ success: boolean; error?: string }> | null = null;
+
+  function enqueueNativeCredentialOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const task = nativeCredentialQueue.then(operation, operation);
+    nativeCredentialQueue = task.then(() => undefined, () => undefined);
+    return task;
+  }
+
+  const nativeCredentialRecordMatches = (
+    expected: { accessToken: string; refreshToken?: string; expiresAt?: string },
+    actual: { accessToken: string; refreshToken?: string; expiresAt?: string } | null,
+  ) => Boolean(actual && actual.accessToken === expected.accessToken &&
+    actual.refreshToken === expected.refreshToken && actual.expiresAt === expected.expiresAt);
 
   interface TabUndoEntry {
     past: ApiRequest[];
@@ -913,7 +975,8 @@ export function createApiStore(
     }, 1200);
   }
 
-  const store = create<ApiStoreState>()(
+  let store!: ApiStore;
+  store = create<ApiStoreState>()(
   persist(
     (rawSet, get) => {
       const set: typeof rawSet = ((fnOrState: any, replace?: any) => {
@@ -925,6 +988,7 @@ export function createApiStore(
       activeTabId: defaultRequest.id,
       activeResponse: null,
       tabResponses: {},
+      tabRevealRevision: 0,
       isLoading: false,
       collections: [],
       history: [],
@@ -959,6 +1023,7 @@ export function createApiStore(
       cloudConfig: {
         apiUrl: 'http://localhost:8080',
       },
+      nativeCredentialState: undefined,
       featurePolicy: null,
       featurePolicyStatus: 'idle',
       featurePolicyFetchedAt: null,
@@ -1133,10 +1198,17 @@ export function createApiStore(
             };
           }
         }
-        if (sessionChanged) invalidateAsyncOperations({ session: true });
+        if (sessionChanged) {
+          nativeCredentialOperation += 1;
+          invalidateAsyncOperations({ session: true });
+        }
+        const nextNativeScope = getNativeCredentialScope(nextConfig);
+        const retainsNativeCredentialState = nextConfig.sessionKind !== 'provider' &&
+          sameNativeCredentialScope(before.nativeCredentialState?.scope, nextNativeScope);
         set((state) => ({
           ...cacheTransition,
           cloudConfig: { ...state.cloudConfig, ...normalizedUpdates },
+          ...(sessionChanged && !retainsNativeCredentialState ? { nativeCredentialState: undefined } : {}),
           ...(sessionChanged
             ? { featurePolicy: null, featurePolicyStatus: 'idle' as FeaturePolicyStatus, featurePolicyFetchedAt: null }
             : {}),
@@ -1144,6 +1216,299 @@ export function createApiStore(
         if (!isOfflineOnly && isCloudSessionActive(get().cloudConfig)) {
           void get().refreshFeaturePolicy(sessionChanged);
         }
+      },
+      setCloudSession: async (updates) => {
+        if (isOfflineOnly) return;
+        const current = get().cloudConfig;
+        const next = { ...current, ...updates };
+        const isProviderSession = next.sessionKind === 'provider';
+        if (credentialStorage && !isProviderSession && next.token) {
+          const scope = getNativeCredentialScope(next);
+          if (!scope) throw new Error('Cannot save cloud credentials without a server and signed-in account.');
+          const record = {
+            accessToken: next.token,
+            ...(next.refreshToken ? { refreshToken: next.refreshToken } : {}),
+            ...(next.tokenExpiresAt ? { expiresAt: next.tokenExpiresAt } : {}),
+          };
+          const operation = ++nativeCredentialOperation;
+          await enqueueNativeCredentialOperation(async () => {
+            if (operation !== nativeCredentialOperation || isStoreDisposed) return;
+            await credentialStorage.write(scope, record);
+            if (operation !== nativeCredentialOperation || isStoreDisposed) return;
+            const confirmed = await credentialStorage.read(scope);
+            if (!nativeCredentialRecordMatches(record, confirmed)) {
+              throw new Error('Protected credential storage did not confirm the saved session.');
+            }
+            if (operation !== nativeCredentialOperation || isStoreDisposed) return;
+            const cleanupPending = Boolean(
+              get().nativeCredentialCleanupPending || get().nativeCredentialState?.phase === 'cleanup-pending',
+            );
+            get().setNativeCredentialState({
+              version: 1,
+              scope,
+              phase: cleanupPending ? 'cleanup-pending' : 'ready',
+            });
+            get().setCloudConfig(updates);
+            if (cleanupPending) {
+              void get().completePendingCredentialCleanup().catch(() => undefined);
+            }
+          });
+          return;
+        }
+        get().setCloudConfig(updates);
+      },
+      clearCloudCredentials: async (requestedScope) => {
+        const scope = requestedScope || getNativeCredentialScope(get().cloudConfig);
+        if (!credentialStorage || !scope) return;
+        nativeCredentialOperation += 1;
+        await enqueueNativeCredentialOperation(async () => {
+          await credentialStorage.remove(scope);
+        });
+      },
+      setNativeCredentialState: (nativeCredentialState) => set({ nativeCredentialState }),
+      persistNativeCredentialState: async () => {
+        const options = store.persist.getOptions();
+        const partialize = options.partialize;
+        const persistedState = partialize ? partialize(get()) : get();
+        const serialized = JSON.stringify({ state: persistedState, version: options.version ?? 0 });
+        const name = options.name;
+        if (!name) throw new Error('Application storage has no persistence key.');
+        if (customStorage === appStorage) {
+          await setItemInAllPersistenceCopies(name, serialized);
+        } else {
+          await customStorage.setItem(name, serialized);
+        }
+      },
+      completePendingCredentialCleanup: async () => {
+        if (!credentialStorage || isStoreDisposed) return false;
+        if (cleanupInFlight) return cleanupInFlight;
+        const task = (async () => {
+          const current = get();
+          if (current.nativeCredentialState?.phase === 'legacy-pending') return false;
+          if (!current.nativeCredentialCleanupPending && current.nativeCredentialState?.phase !== 'cleanup-pending') {
+            return true;
+          }
+          if (!current.nativeCredentialCleanupPending) {
+            set({ nativeCredentialCleanupPending: true });
+          }
+          await get().persistNativeCredentialState();
+          if (isStoreDisposed) return false;
+          if (get().nativeCredentialState?.phase === 'legacy-pending') return false;
+          set((state) => ({
+            nativeCredentialCleanupPending: false,
+            ...(state.nativeCredentialState?.phase === 'cleanup-pending'
+              ? { nativeCredentialState: { ...state.nativeCredentialState, phase: 'ready' } }
+              : {}),
+          }));
+          return true;
+        })().finally(() => {
+          cleanupInFlight = null;
+        });
+        cleanupInFlight = task;
+        return task;
+      },
+      recoverNativeCredentials: async (options) => {
+        const isCancelled = () => isStoreDisposed || Boolean(options?.isCancelled?.());
+        if (!credentialStorage || isCancelled() || isOfflineOnly) return;
+
+        const initialConfig = get().cloudConfig;
+        const scope = getNativeCredentialScope(initialConfig);
+        if (!scope || initialConfig.sessionKind === 'provider') {
+          if (
+            (get().nativeCredentialCleanupPending || get().nativeCredentialState?.phase === 'cleanup-pending') &&
+            get().nativeCredentialState?.phase !== 'legacy-pending'
+          ) {
+            await get().completePendingCredentialCleanup();
+          }
+          return;
+        }
+
+        const initialGeneration = cloudSessionGeneration;
+        const initialNativeState = get().nativeCredentialState;
+        const operation = ++nativeCredentialOperation;
+        const hasCurrentScope = () =>
+          !isCancelled() &&
+          sameNativeCredentialScope(getNativeCredentialScope(get().cloudConfig), scope) &&
+          sameNativeCredentialScope(get().nativeCredentialState?.scope, scope);
+        const isCurrentRestore = () =>
+          operation === nativeCredentialOperation &&
+          cloudSessionGeneration === initialGeneration &&
+          hasCurrentScope();
+
+        const applyRestoredTokens = (record: {
+          accessToken: string;
+          refreshToken?: string;
+          expiresAt?: string;
+        }) => {
+          const before = get();
+          const currentConfig = before.cloudConfig;
+          if (!sameNativeCredentialScope(getNativeCredentialScope(currentConfig), scope) || currentConfig.sessionKind === 'provider') {
+            return;
+          }
+          const nextConfig: CloudConfig = {
+            ...currentConfig,
+            token: record.accessToken,
+            refreshToken: record.refreshToken,
+            tokenExpiresAt: record.expiresAt,
+          };
+          const nextOwner = isCloudSessionActive(nextConfig) ? cloudCacheOwnerKey(nextConfig, normalizeCloudApiUrl) : null;
+          const preservesVerifiedOwner = Boolean(
+            nextOwner &&
+            before.cloudCacheOwner === nextOwner &&
+            sameNativeCredentialScope(before.nativeCredentialState?.scope, scope),
+          );
+          if (!preservesVerifiedOwner) {
+            get().setCloudConfig({
+              token: record.accessToken,
+              refreshToken: record.refreshToken,
+              tokenExpiresAt: record.expiresAt,
+            });
+            return;
+          }
+          if (!currentConfig.token) {
+            invalidateAsyncOperations({ session: true });
+          }
+          set((state) => ({
+            cloudConfig: {
+              ...state.cloudConfig,
+              token: record.accessToken,
+              refreshToken: record.refreshToken,
+              tokenExpiresAt: record.expiresAt,
+            },
+            featurePolicy: null,
+            featurePolicyStatus: 'idle' as FeaturePolicyStatus,
+            featurePolicyFetchedAt: null,
+          }));
+          if (isCloudSessionActive(get().cloudConfig)) {
+            void get().refreshFeaturePolicy(true);
+          }
+        };
+
+        const restoreRecord = async (record: {
+          accessToken: string;
+          refreshToken?: string;
+          expiresAt?: string;
+        }) => {
+          if (!isCurrentRestore()) return;
+          const requiresCleanup =
+            initialNativeState?.phase === 'legacy-pending' ||
+            initialNativeState?.phase === 'cleanup-pending' ||
+            Boolean(get().nativeCredentialCleanupPending);
+          if (requiresCleanup) {
+            set({
+              nativeCredentialCleanupPending: true,
+              nativeCredentialState: { version: 1, scope, phase: 'cleanup-pending' },
+            });
+          }
+          applyRestoredTokens(record);
+          if (!requiresCleanup) return;
+          if (!hasCurrentScope() || operation !== nativeCredentialOperation || get().cloudConfig.token !== record.accessToken) {
+            return;
+          }
+          await get().completePendingCredentialCleanup();
+        };
+
+        await enqueueNativeCredentialOperation(async () => {
+          if (!isCurrentRestore()) return;
+          let vaulted: { accessToken: string; refreshToken?: string; expiresAt?: string } | null;
+          try {
+            vaulted = await credentialStorage.read(scope);
+          } catch (error) {
+            if (
+              (get().nativeCredentialCleanupPending || get().nativeCredentialState?.phase === 'cleanup-pending') &&
+              get().nativeCredentialState?.phase !== 'legacy-pending' &&
+              !get().cloudConfig.token
+            ) {
+              await get().completePendingCredentialCleanup().catch(() => false);
+            }
+            throw error;
+          }
+          if (!isCurrentRestore()) return;
+
+          if (vaulted) {
+            await restoreRecord(vaulted);
+            return;
+          }
+
+          const latestCurrent = get().cloudConfig;
+          if (!latestCurrent.token) {
+            if (
+              (get().nativeCredentialCleanupPending || get().nativeCredentialState?.phase === 'cleanup-pending') &&
+              get().nativeCredentialState?.phase !== 'legacy-pending'
+            ) {
+              await get().completePendingCredentialCleanup().catch(() => false);
+            }
+            if (!isCurrentRestore()) return;
+            get().logoutCloud();
+            return;
+          }
+
+          const legacyRecord = {
+            accessToken: latestCurrent.token,
+            ...(latestCurrent.refreshToken ? { refreshToken: latestCurrent.refreshToken } : {}),
+            ...(latestCurrent.tokenExpiresAt ? { expiresAt: latestCurrent.tokenExpiresAt } : {}),
+          };
+          await credentialStorage.write(scope, legacyRecord);
+          if (!isCurrentRestore()) return;
+          const confirmed = await credentialStorage.read(scope);
+          if (!isCurrentRestore()) return;
+          if (!nativeCredentialRecordMatches(legacyRecord, confirmed)) {
+            throw new Error('Protected credential storage did not confirm the migrated session.');
+          }
+          await restoreRecord(legacyRecord);
+        });
+      },
+      signOutCloud: async (options) => {
+        if (signOutInFlight) return signOutInFlight;
+        const task = (async () => {
+          const generation = get().getCloudSessionGeneration();
+          const config = get().cloudConfig;
+          const credentialScope = getNativeCredentialScope(config);
+          try {
+            await options?.authProvider?.signOut?.({
+              apiUrl: config.apiUrl || '',
+              user: config.user,
+              accessToken: config.token,
+              refreshToken: config.refreshToken,
+            });
+          } catch (error) {
+            console.warn('Provider sign-out failed:', error);
+          }
+          if (isStoreDisposed || get().getCloudSessionGeneration() !== generation || get().cloudConfig !== config) {
+            return { success: false };
+          }
+          if (credentialScope && config.sessionKind !== 'provider') {
+            try {
+              await get().clearCloudCredentials(credentialScope);
+            } catch (error) {
+              console.warn('Sign-out could not clear protected credentials:', error);
+              const message = 'Sign-out could not clear protected credentials. Please try again.';
+              if (!isStoreDisposed && get().getCloudSessionGeneration() === generation) {
+                set({ syncStatus: 'error', syncError: message });
+              }
+              return { success: false, error: message };
+            }
+          }
+          if (isStoreDisposed || get().getCloudSessionGeneration() !== generation || get().cloudConfig !== config) {
+            return { success: false };
+          }
+          get().logoutCloud();
+          return { success: true };
+        })().finally(() => {
+          signOutInFlight = null;
+        });
+        signOutInFlight = task;
+        return task;
+      },
+      evictCloudSession: (requestedScope) => {
+        const currentConfig = get().cloudConfig;
+        const scope = requestedScope || getNativeCredentialScope(currentConfig);
+        if (scope && currentConfig.sessionKind !== 'provider') {
+          void get().clearCloudCredentials(scope).catch((error: unknown) => {
+            console.warn('Could not remove expired credentials:', error);
+          });
+        }
+        get().logoutCloud();
       },
       getCloudSessionGeneration: () => cloudSessionGeneration,
       getCloudCacheRecoveryCount: () => {
@@ -1359,6 +1724,7 @@ export function createApiStore(
         }
       },
       logoutCloud: () => {
+        nativeCredentialOperation += 1;
         invalidateAsyncOperations({ session: true });
         set({ isSwitchingWorkspace: true });
         const { offlineScopeCache, activeOfflineWorkspaceId } = get();
@@ -1406,6 +1772,10 @@ export function createApiStore(
         });
         revokeBlobUrls(toRevokeLogout);
 
+        const preserveCleanupPending = Boolean(
+          currentState.nativeCredentialCleanupPending || currentState.nativeCredentialState?.phase === 'cleanup-pending',
+        );
+
         set((state) => ({
           workspaceMode: allowsOfflineWorkspace ? 'offline' : 'cloud',
           collections: restoredResources.collections,
@@ -1424,6 +1794,8 @@ export function createApiStore(
           cloudConfig: {
             apiUrl: state.cloudConfig.apiUrl || 'http://localhost:8080',
           },
+          nativeCredentialState: undefined,
+          nativeCredentialCleanupPending: preserveCleanupPending ? true : undefined,
           featurePolicy: null,
           featurePolicyStatus: 'idle',
           featurePolicyFetchedAt: null,
@@ -1431,6 +1803,10 @@ export function createApiStore(
           syncError: null,
           lastSyncedAt: null,
         }));
+
+        if (preserveCleanupPending && credentialStorage) {
+          void get().completePendingCredentialCleanup().catch(() => undefined);
+        }
 
         safeSetTimeout(() => {
           set({ isSwitchingWorkspace: false });
@@ -1876,7 +2252,7 @@ export function createApiStore(
               } else if (allowsOfflineWorkspace) {
                 get().switchOfflineWorkspace(get().activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID);
               } else {
-                get().logoutCloud();
+                get().evictCloudSession();
               }
               set({
                 syncError: `Access to "${currentScope.name}" was revoked. Switched to ${
@@ -1960,7 +2336,7 @@ export function createApiStore(
             } else if (allowsOfflineWorkspace) {
               get().switchOfflineWorkspace(get().activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID);
             } else {
-              get().logoutCloud();
+              get().evictCloudSession();
             }
             set({
               syncError: `Access to "${currentScope.name}" was revoked. Switched to ${
@@ -2014,7 +2390,7 @@ export function createApiStore(
               } else if (allowsOfflineWorkspace) {
                 get().switchOfflineWorkspace(get().activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID);
               } else {
-                get().logoutCloud();
+                get().evictCloudSession();
               }
               set({
                 syncError: `Removed from team. Switched to ${
@@ -2814,6 +3190,7 @@ export function createApiStore(
         set((state) => ({
           activeTabId,
           activeResponse: state.tabResponses?.[activeTabId] || null,
+          tabRevealRevision: state.tabRevealRevision + 1,
           canUndoActiveRequest: (tabUndoHistory[activeTabId]?.past?.length ?? 0) > 0,
           canRedoActiveRequest: (tabUndoHistory[activeTabId]?.future?.length ?? 0) > 0,
         }));
@@ -5759,6 +6136,7 @@ export function createApiStore(
               activeTabId: existingTab.id,
               activeResponse: restoredResponse,
               tabResponses: nextTabResponses,
+              tabRevealRevision: state.tabRevealRevision + 1,
               canUndoActiveRequest: (tabUndoHistory[existingTab.id]?.past?.length ?? 0) > 0,
               canRedoActiveRequest: (tabUndoHistory[existingTab.id]?.future?.length ?? 0) > 0,
             };
@@ -5778,6 +6156,7 @@ export function createApiStore(
             activeTabId: newTab.id,
             activeResponse: initialResponse || null,
             tabResponses: nextTabResponses,
+            tabRevealRevision: state.tabRevealRevision + 1,
             canUndoActiveRequest: false,
             canRedoActiveRequest: false,
           };
@@ -5865,6 +6244,9 @@ export function createApiStore(
       storage: createJSONStorage(() => customStorage),
       partialize: (state) => {
         const providerSession = state.cloudConfig.sessionKind === 'provider';
+        const nativeScope = getNativeCredentialScope(state.cloudConfig);
+        const preserveLegacyCredentials = state.nativeCredentialState?.phase === 'legacy-pending' &&
+          sameNativeCredentialScope(state.nativeCredentialState.scope, nativeScope);
         const hideProviderView = providerSession && state.workspaceMode === 'cloud';
         const providerOwner = cloudCacheOwnerKey(state.cloudConfig, normalizeCloudApiUrl);
         const archives = providerSession
@@ -5925,7 +6307,16 @@ export function createApiStore(
           hasConfiguredMode: isOfflineOnly || !allowsOfflineWorkspace ? true : state.hasConfiguredMode,
           cloudConfig: providerSession
             ? { apiUrl: state.cloudConfig.apiUrl, hubUrl: state.cloudConfig.hubUrl }
-            : state.cloudConfig,
+            : persistCloudCredentials || preserveLegacyCredentials
+              ? state.cloudConfig
+              : {
+                ...state.cloudConfig,
+                token: undefined,
+                refreshToken: undefined,
+                tokenExpiresAt: undefined,
+              },
+          nativeCredentialState: state.nativeCredentialState,
+          nativeCredentialCleanupPending: state.nativeCredentialCleanupPending ? true : undefined,
           theme: state.theme ?? 'system',
         };
       },
@@ -5951,6 +6342,31 @@ export function createApiStore(
         state.scopeCache = normalizePersistedWorkspaceScopeCache(state.scopeCache, cacheNormalizers);
         state.cloudCacheArchives = normalizeCloudCacheArchives(state.cloudCacheArchives, cacheNormalizers);
 
+        const legacyScope = credentialStorage ? getNativeCredentialScope(state.cloudConfig) : null;
+        if (credentialStorage && state.nativeCredentialState?.phase === 'cleanup-pending') {
+          state.nativeCredentialCleanupPending = true;
+        }
+        if (credentialStorage && !state.nativeCredentialState && legacyScope) {
+          state.nativeCredentialState = {
+            version: 1,
+            scope: legacyScope,
+            phase: state.cloudConfig.token
+              ? 'legacy-pending'
+              : state.nativeCredentialCleanupPending
+                ? 'cleanup-pending'
+                : 'ready',
+          };
+        } else if (
+          credentialStorage &&
+          state.nativeCredentialCleanupPending &&
+          state.nativeCredentialState?.phase === 'ready'
+        ) {
+          state.nativeCredentialState = {
+            ...state.nativeCredentialState,
+            phase: 'cleanup-pending',
+          };
+        }
+
         // Older or externally written storage may contain a provider-session
         // marker. Treat it as unverified and retain its data only as an archive.
         if (state.cloudConfig?.sessionKind === 'provider') {
@@ -5975,7 +6391,10 @@ export function createApiStore(
           state.scopeCache = {};
           state.scopesCache = undefined;
         } else {
-          const owner = isCloudSessionActive(state.cloudConfig)
+          const nativeScope = getNativeCredentialScope(state.cloudConfig);
+          const nativeIdentityIsCurrent = credentialStorage &&
+            sameNativeCredentialScope(state.nativeCredentialState?.scope, nativeScope);
+          const owner = (isCloudSessionActive(state.cloudConfig) || nativeIdentityIsCurrent)
             ? cloudCacheOwnerKey(state.cloudConfig, normalizeCloudApiUrl) : null;
           const hasUnownedData = Object.keys(state.scopeCache || {}).length > 0 || Boolean(state.scopesCache) ||
             (state.workspaceMode === 'cloud' && Boolean(state.cloudConfig.activeScope?.id ||

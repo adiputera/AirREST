@@ -11,6 +11,7 @@ import {
   FileOptions,
 } from '@airrest/common/platform';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
+import { invoke } from '@tauri-apps/api/core';
 import { save as tauriSave, open as tauriOpen } from '@tauri-apps/plugin-dialog';
 import {
   writeFile as tauriWriteFile,
@@ -24,6 +25,11 @@ import type {
 } from '@airrest/common/protocol';
 import { SCRIPT_LIMITS, validateScriptInput } from '@airrest/common/protocol';
 import { runQuickJsGuest } from '../scripts/quickjsRunner';
+import {
+  parseNativeCredential,
+  serializeNativeCredential,
+} from '@airrest/common/native-credentials';
+import type { NativeCredentialStorage } from '@airrest/common/platform';
 
 export const MAX_IMPORT_FILE_BYTES = 16 * 1024 * 1024; // 16 MiB
 
@@ -165,6 +171,30 @@ export const tauriCloudTransport: CloudTransport = {
       connectTimeout: 15000,
       maxRedirections: 0,
     });
+  },
+};
+
+interface AndroidCredentialReadResult {
+  value: string | null;
+}
+
+function credentialScopeKey(scope: { apiUrl: string; userId: string }): string {
+  return JSON.stringify([scope.apiUrl, scope.userId]);
+}
+
+const tauriCredentialStorage: NativeCredentialStorage = {
+  read: async (scope) => {
+    const key = credentialScopeKey(scope);
+    const raw = (await invoke<AndroidCredentialReadResult>('plugin:native-credential|read', { scope: key })).value;
+    return raw === null ? null : parseNativeCredential(raw);
+  },
+  write: async (scope, record) => {
+    const payload = { scope: credentialScopeKey(scope), value: serializeNativeCredential(record) };
+    await invoke('plugin:native-credential|write', payload);
+  },
+  remove: async (scope) => {
+    const payload = { scope: credentialScopeKey(scope) };
+    await invoke('plugin:native-credential|remove', payload);
   },
 };
 
@@ -391,6 +421,7 @@ export const tauriAdapter: PlatformAdapter = {
   },
   transport: tauriTestTransport,
   cloudTransport: tauriCloudTransport,
+  credentialStorage: tauriCredentialStorage,
   scriptExecutor: tauriScriptExecutor,
   saveFile: async (filename: string, content: string | Uint8Array, options?: FileOptions) => {
     const selectedPath = await tauriSave({

@@ -23,10 +23,11 @@ import {
   X,
 } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
+import { useStoreContext } from '../store/storeContext';
 import { isCloudSessionActive } from '../workspace/cloudSession';
 import { ActiveScope, OfflineWorkspace, CloudWorkspace, CloudProject } from '../types/api';
 import { getRoleFromJwt } from '../lib/jwt';
-import { useProductPolicy } from '../context';
+import { useAuthProvider, useProductPolicy } from '../context';
 import { ConfirmModal } from './ConfirmModal';
 
 function formatTimeAgo(timestamp: number): string {
@@ -50,6 +51,9 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
   onOpenCloudAuth,
 }) => {
   const productPolicy = useProductPolicy();
+  const authProvider = useAuthProvider();
+  const store = useStoreContext() || useApiStore;
+  const signingOut = useRef(false);
   const isOfflineOnly = !productPolicy.workspace.cloud;
   const [isOpen, setIsOpen] = useState(false);
   useBackHandler(isOpen, () => setIsOpen(false), 15);
@@ -1074,11 +1078,29 @@ export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
 
             {/* Footer Controls */}
             {!isOfflineOnly && isCloudSessionActive(cloudConfig) && (
-              <div className="mt-2 border-t border-line pt-1.5">
+              <div className="mt-2 border-t border-line pt-1.5 space-y-1.5">
+                {syncStatus === 'error' && syncError && (
+                  <div
+                    role="alert"
+                    className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-2.5 py-1.5 text-[11px] leading-snug text-rose-600 dark:text-rose-300"
+                  >
+                    {syncError}
+                  </div>
+                )}
                 <button
                   onClick={() => {
                     setIsOpen(false);
-                    logoutCloud();
+                    if (signingOut.current) return;
+                    signingOut.current = true;
+                    const signOutCloud = store.getState().signOutCloud;
+                    const task = signOutCloud
+                      ? signOutCloud({ authProvider })
+                      : Promise.resolve(logoutCloud());
+                    void task
+                      .catch((error) => console.warn('Unexpected sign-out failure:', error))
+                      .finally(() => {
+                        signingOut.current = false;
+                      });
                   }}
                   className="w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 transition"
                 >

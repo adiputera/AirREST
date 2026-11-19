@@ -7,7 +7,7 @@ import ts from 'typescript';
 
 const require = createRequire(import.meta.url);
 
-function loadStore({ executeApiRequest = async () => ({ status: 200, statusText: 'OK', data: '{"ok":true}', timeMs: 50, sizeBytes: 10, headers: {} }), cloudClient, storage, productPolicy } = {}) {
+function loadStore({ executeApiRequest = async () => ({ status: 200, statusText: 'OK', data: '{"ok":true}', timeMs: 50, sizeBytes: 10, headers: {} }), cloudClient, storage, productPolicy, credentialStorage } = {}) {
   const source = fs
     .readFileSync(new URL('../packages/common/src/store/useApiStore.ts', import.meta.url), 'utf8')
     .replaceAll('import.meta.env', '({})');
@@ -23,6 +23,13 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
   const noop = () => {};
   const modules = {
     'storage': { appStorage },
+    'nativeCredentials': {
+      getNativeCredentialScope: (config) => {
+        const apiUrl = config.apiUrl?.trim();
+        const userId = config.user?.id?.trim();
+        return apiUrl && userId ? { apiUrl, userId } : null;
+      },
+    },
     'blobManager': { revokeBlobUrl: noop, revokeBlobUrls: noop },
     'fetcher': { executeApiRequest },
     'scriptRunner': {
@@ -292,10 +299,56 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
     TextDecoder,
   }, { filename: 'packages/common/src/store/useApiStore.ts' });
 
-  return cloudClient || productPolicy
-    ? exports.createApiStore({ storage: appStorage, cloudClient, productPolicy: productPolicy || { edition: 'full', workspace: { cloud: true, offline: true } } })
+  return cloudClient || productPolicy || credentialStorage
+    ? exports.createApiStore({ storage: appStorage, cloudClient, credentialStorage, productPolicy: productPolicy || { edition: 'full', workspace: { cloud: true, offline: true } } })
     : exports.useApiStore;
 }
+
+test('native vault saves a verified session before state changes and rejects a failed save', async () => {
+  const writes = [];
+  const records = new Map();
+  const store = loadStore({
+    cloudClient: { fetchFeaturePolicy: async () => ({ revision: 1, flags: {} }) },
+    credentialStorage: {
+      write: async (scope, record) => {
+        writes.push({ scope, record });
+        records.set(JSON.stringify(scope), record);
+      },
+      read: async (scope) => records.get(JSON.stringify(scope)) || null,
+      remove: async () => {},
+    },
+  });
+
+  await store.getState().setCloudSession({
+    apiUrl: 'https://api.example',
+    user: { id: 'user-a' },
+    token: 'access-token',
+    refreshToken: 'refresh-token',
+  });
+  assert.equal(JSON.stringify(writes), JSON.stringify([{
+    scope: { apiUrl: 'https://api.example', userId: 'user-a' },
+    record: { accessToken: 'access-token', refreshToken: 'refresh-token' },
+  }]));
+  assert.equal(store.getState().cloudConfig.token, 'access-token');
+
+  const failingStore = loadStore({
+    cloudClient: { fetchFeaturePolicy: async () => ({ revision: 1, flags: {} }) },
+    credentialStorage: {
+      write: async () => { throw new Error('vault unavailable'); },
+      read: async () => null,
+      remove: async () => {},
+    },
+  });
+  await assert.rejects(
+    failingStore.getState().setCloudSession({
+      apiUrl: 'https://api.example', user: { id: 'user-a' }, token: 'access-token',
+    }),
+    /vault unavailable/,
+  );
+  assert.equal(failingStore.getState().cloudConfig.token, undefined);
+  store.dispose();
+  failingStore.dispose();
+});
 
 test('cloud-only product rejects offline workspace commands and clears the live view on logout', async () => {
   const productPolicy = { edition: 'cloud', workspace: { cloud: true, offline: false } };
@@ -950,6 +1003,22 @@ test('T-SEMI-PERSIST-1: Response is cached per-tab and restored when switching t
   // Active response must be restored to Tab 2's response!
   assert.equal(store.getState().activeResponse?.status, 201);
   assert.equal(store.getState().activeResponse?.data, '{"product":"item-1"}');
+});
+
+test('explicit request selection increments the runtime-only tab reveal revision', () => {
+  const store = loadStore();
+  const request = store.getState().tabs[0];
+  const initialRevision = store.getState().tabRevealRevision;
+
+  store.getState().setActiveTabId(request.id);
+  assert.equal(store.getState().tabRevealRevision, initialRevision + 1);
+
+  store.getState().openRequestInTab(request);
+  assert.equal(store.getState().activeTabId, request.id);
+  assert.equal(store.getState().tabRevealRevision, initialRevision + 2);
+
+  const persisted = store.persist.getOptions().partialize(store.getState());
+  assert.equal(persisted.tabRevealRevision, undefined);
 });
 
 test('T-SEMI-PERSIST-2: Closing a tab purges its in-memory response and activates adjacent tab response', async () => {

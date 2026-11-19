@@ -1,4 +1,5 @@
 import type { ApiResponse, NetworkErrorCategory } from './api';
+import type { NativeCredentialStorage } from './credentials';
 
 export type TransportInit = Pick<RequestInit, 'method' | 'headers' | 'body'> & {
   signal: AbortSignal;
@@ -85,6 +86,8 @@ export interface PlatformAdapter {
   capabilities: PlatformCapabilities;
   transport: TestTransport;
   cloudTransport: CloudTransport;
+  /** Undefined on platforms that deliberately retain browser-managed credential storage. */
+  credentialStorage?: NativeCredentialStorage;
   scriptExecutor: ScriptExecutor;
   saveFile(
     filename: string,
