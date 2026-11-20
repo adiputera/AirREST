@@ -234,6 +234,7 @@ func NewWithOptions(ctx context.Context, options Options) (*App, error) {
 				r.Post("/", collectionHandler.CreateItem)
 				r.Get("/{id}", collectionHandler.GetItem)
 				r.Put("/{id}", collectionHandler.UpdateItem)
+				r.Post("/{id}/move", collectionHandler.MoveItem)
 				r.Delete("/{id}", collectionHandler.DeleteItem)
 			})
 

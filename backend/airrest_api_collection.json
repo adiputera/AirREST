@@ -1330,6 +1330,36 @@
               ]
             }
           }
+        },
+        {
+          "name": "Move Request or Folder",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source_collection_id\": \"{{collectionId}}\",\n  \"target_collection_id\": \"{{targetCollectionId}}\",\n  \"target_parent_id\": null\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/items/{{itemId}}/move",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "items",
+                "{{itemId}}",
+                "move"
+              ]
+            },
+            "description": "Moves an item and folder descendants atomically within the same workspace or project. Requires collection:write and min_role access to both collections. Preserves content and IDs; increments item and source/target collection versions and timestamps. source_collection_id is the location precondition (409 on a changed location); no base_version field. An identical cross-collection retry at the same destination succeeds. Clients must finish pending saves before moving. Import-batch retains copy semantics and must not be used for moves."
+          }
         }
       ]
     },
@@ -2052,6 +2082,10 @@
     },
     {
       "key": "memberUserId",
+      "value": ""
+    },
+    {
+      "key": "targetCollectionId",
       "value": ""
     }
   ]

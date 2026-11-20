@@ -612,3 +612,23 @@ npx @openapitools/openapi-generator-cli generate \
   -g rust-axum \
   -o backend-rust
 ```
+
+### Atomic request/folder move (1.3.12)
+
+`POST /api/v1/items/{id}/move` moves an existing item within the same workspace or project. The authenticated user requires `collection:write` and must meet `min_role` on **both** collections. This is item authoring, not the `collection:move` permission for moving collection containers between scopes.
+
+```json
+{
+  "source_collection_id": "11111111-1111-4111-8111-111111111111",
+  "target_collection_id": "22222222-2222-4222-8222-222222222222",
+  "target_parent_id": null
+}
+```
+
+Both collection IDs are required nonzero UUID strings. `target_parent_id` is an optional UUID string or null; omitted/null selects the target root. The parent must be an active folder in the destination; cycles and cross-scope moves are rejected. Requests and all folder descendants retain their IDs and payloads. The root is appended to the destination siblings; child ordering is preserved. Item versions and both collection versions/timestamps advance in one transaction so subsequent cloud pulls see the change.
+
+The source collection is the location precondition; this endpoint does not accept `base_version`. A changed source location or collection access snapshot returns `409 CONFLICT`. Repeating an identical cross-collection move already at the requested destination returns success. Other responses: `200` standard success envelope with `data.message = "item moved successfully"`; `400 BAD_REQUEST` for malformed/invalid destinations; `401 UNAUTHORIZED`; `403 FORBIDDEN` for denied access; `404 NOT_FOUND` for missing/deleted items or collections; `500 SERVER_ERROR` for transaction failure. Global body limits and admission/deadline handling can return `413`/`503`.
+
+The frontend waits for both collections' queued saves, blocks further saves in those collections while moving, and commits its local tree only after server success. Open tab IDs, response caches, unsaved edits, and undo history stay unchanged. Failed or cancelled moves retain the local source tree and report an error. A workspace sync in progress must finish before a move starts. Before sending a move, both local collection snapshots persist `_needsMoveReconciliation`. Success or a definite 400/403/404 rejection clears it. A lost reply, cancellation, conflict, or server failure leaves it set: saves/import uploads are blocked and the cache is considered stale until cloud detail refresh reconciles the location, even after restart or a failed detail fetch. This marker is local metadata and is never sent in API/Postman payloads. Repeating the same cross-collection move is idempotent.
+
+**Do not implement moves using `/sync/import-batch`.** Import intentionally creates a fresh ID when an incoming item ID belongs to another collection and does not delete omitted source items. Import semantics remain unchanged. Deploy a backend supporting the move endpoint before using cloud moves from client 1.3.12; older backends return an error without a local move or an import fallback.

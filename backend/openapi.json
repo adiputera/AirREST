@@ -3332,6 +3332,112 @@
           }
         }
       }
+    },
+    "/api/v1/items/{id}/move": {
+      "post": {
+        "tags": [
+          "Collection Items"
+        ],
+        "summary": "Move a request or folder without changing IDs",
+        "description": "Moves an item and folder descendants atomically within the same workspace or project. Requires collection:write and min_role access to both collections. Preserves content and IDs; increments item and source/target collection versions and timestamps. source_collection_id is the location precondition (409 on a changed location); no base_version field. An identical cross-collection retry at the same destination succeeds. Clients must finish pending saves before moving. Import-batch retains copy semantics and must not be used for moves.",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveItemRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Item moved successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid UUID, missing collection ID, destination folder, cycle, or different scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Write access or collection min_role requirement failed on either side.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Item or collection missing or deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Item location or authorized collection scope/min_role changed; refresh before retrying.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Move transaction failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -5416,6 +5522,31 @@
             "type": "string",
             "format": "password",
             "example": "BrandNewSecurePassword123!"
+          }
+        }
+      },
+      "MoveItemRequest": {
+        "type": "object",
+        "required": [
+          "source_collection_id",
+          "target_collection_id"
+        ],
+        "properties": {
+          "source_collection_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "target_collection_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "target_parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Folder in the destination collection; omitted or null selects the root."
           }
         }
       }

@@ -3040,3 +3040,131 @@ test('T-EXT-SCOPE: fetchScopes preserves workspaceMode, activeScope, and scopesC
 
   runtime.dispose();
 });
+
+for (const failMove of [false, true]) {
+  test(`cloud request move preserves identity after save/edit/save (failure=${failMove})`, async () => {
+    const { runtimeModule } = await setupRuntimeModules();
+    const calls = [];
+    let finishSave;
+    const runtime = runtimeModule.createAirrestRuntime({ adapter: {
+      id: 'move-regression', dispose() {},
+      cloudTransport: { fetch: async (url, init) => {
+        const body = JSON.parse(init.body);
+        calls.push({ url: String(url), body });
+        if (calls.length === 1) await new Promise((resolve) => { finishSave = resolve; });
+        return new Response(JSON.stringify(failMove && String(url).endsWith('/move')
+          ? { success: false, error: { code: 'FORBIDDEN', message: 'Target is read-only' } }
+          : { success: true, data: { message: 'ok' } }), {
+          status: failMove && String(url).endsWith('/move') ? 403 : 200,
+        });
+      } },
+    } });
+    try {
+      const request = { ...runtime.store.getState().tabs[0], id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', name: 'Move regression' };
+      const response = { status: 200, data: 'retained response' };
+      runtime.store.setState({
+        workspaceMode: 'cloud',
+        cloudConfig: { apiUrl: 'https://cloud.example.com', token: 'token', user: { id: 'user', role: 'admin' }, activeScope: { id: 'scope', type: 'workspace', role: 'admin' } },
+        collections: [{ id: 'source', name: 'Source', items: [] }, { id: 'target', name: 'Target', items: [] }],
+        tabs: [request], activeTabId: request.id, tabResponses: { [request.id]: response }, activeResponse: response,
+      });
+      assert.equal(runtime.store.getState().saveRequestToCollection('source', null, request, request.id).success, true);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      runtime.store.getState().updateActiveRequest({ bodyContent: 'edited and saved' });
+      assert.equal(runtime.store.getState().saveActiveRequest().success, true);
+      const move = runtime.store.getState().moveRequest('source', request.id, 'target', null);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.equal(calls.length, 1, 'move must wait for earlier saves');
+      runtime.store.getState().updateActiveRequest({ bodyContent: 'unsaved edit during move' });
+      assert.equal(runtime.store.getState().saveRequestToCollection('source', null, runtime.store.getState().tabs[0], request.id).success, false, 'save cannot upload a stale source snapshot during move');
+      finishSave();
+      const result = await move;
+      assert.equal(result.success, !failMove);
+      assert.equal(calls.length, 3);
+      assert.ok(calls[2].url.endsWith(`/api/v1/items/${request.id}/move`));
+      assert.deepEqual(calls[2].body, { source_collection_id: 'source', target_collection_id: 'target', target_parent_id: null });
+      const state = runtime.store.getState();
+      assert.equal(state.tabs.length, 1);
+      assert.equal(state.activeTabId, request.id);
+      assert.equal(state.tabs[0].bodyContent, 'unsaved edit during move');
+      assert.equal(state.activeResponse, response);
+      assert.equal(state.collections.flatMap((c) => c.items).length, 1);
+      assert.equal(state.collections.find((c) => c.id === (failMove ? 'source' : 'target')).items[0].request.id, request.id);
+      assert.equal(state.saveActiveRequest().success, true);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.equal(calls[3].body.collections[0].id, failMove ? 'source' : 'target');
+      assert.equal(calls[3].body.collections[0].items[0].id, request.id);
+    } finally {
+      finishSave?.();
+      runtime.dispose();
+    }
+  });
+}
+
+test('local moves reject missing folders and preserve active tabs across nested folder moves', async () => {
+  const { runtimeModule } = await setupRuntimeModules();
+  const runtime = runtimeModule.createAirrestRuntime({ adapter: { id: 'local-move', dispose() {} } });
+  try {
+    const request = { ...runtime.store.getState().tabs[0], name: 'Local move' };
+    runtime.store.setState({ workspaceMode: 'offline', tabs: [request], activeTabId: request.id, collections: [
+      { id: 'source', name: 'Source', items: [{ id: 'folder', type: 'folder', name: 'Folder', items: [{ id: request.id, type: 'request', name: request.name, request }] }] },
+      { id: 'target', name: 'Target', items: [] },
+    ] });
+    const before = JSON.stringify(runtime.store.getState().collections);
+    assert.equal((await runtime.store.getState().moveRequest('source', request.id, 'target', 'missing')).success, false);
+    assert.equal(JSON.stringify(runtime.store.getState().collections), before);
+    assert.equal((await runtime.store.getState().moveFolder('source', 'folder', 'target', null)).success, true);
+    assert.equal(runtime.store.getState().saveActiveRequest().success, true);
+    const state = runtime.store.getState();
+    assert.equal(state.collections[0].items.length, 0);
+    assert.equal(state.collections[1].items[0].items[0].id, request.id);
+    assert.equal(state.tabs[0].id, request.id);
+    assert.equal(state.activeTabId, request.id);
+  } finally { runtime.dispose(); }
+});
+
+test('failed pending save prevents cloud move and releases the save lock', async () => {
+  const { runtimeModule } = await setupRuntimeModules();
+  let calls = 0;
+  const runtime = runtimeModule.createAirrestRuntime({ adapter: {
+    id: 'failed-save-before-move', dispose() {},
+    cloudTransport: { fetch: async () => { calls++; throw new Error('test save offline'); } },
+  } });
+  try {
+    const request = runtime.store.getState().tabs[0];
+    runtime.store.setState({
+      workspaceMode: 'cloud',
+      cloudConfig: { apiUrl: 'https://cloud.example.com', token: 'token', activeScope: { type: 'workspace', id: 'scope' } },
+      collections: [{ id: 'source', name: 'Source', items: [] }, { id: 'target', name: 'Target', items: [] }],
+    });
+    runtime.store.getState().saveRequestToCollection('source', null, request, request.id);
+    const result = await runtime.store.getState().moveRequest('source', request.id, 'target', null);
+    assert.equal(result.success, false);
+    assert.match(result.error, /pending changes/);
+    assert.equal(calls, 1, 'the move endpoint must not run after a failed save');
+    assert.equal(runtime.store.getState().collections[0].items[0].id, request.id);
+    assert.equal(runtime.store.getState().saveActiveRequest().success, true, 'failure releases the lock for retry');
+  } finally { runtime.dispose(); }
+});
+
+test('an uncertain cloud move blocks stale saves until the server tree is refreshed', async () => {
+  const { runtimeModule } = await setupRuntimeModules();
+  const runtime = runtimeModule.createAirrestRuntime({ adapter: {
+    id: 'uncertain-move', dispose() {}, cloudTransport: { fetch: async () => { throw new Error('reply lost'); } },
+  } });
+  try {
+    const request = runtime.store.getState().tabs[0];
+    runtime.store.setState({ workspaceMode: 'cloud',
+      cloudConfig: { apiUrl: 'https://cloud.example.com', token: 'token', activeScope: { id: 'scope', type: 'workspace' } },
+      collections: [
+        { id: 'source', name: 'Source', _syncStatus: 'synced', items: [{ id: request.id, type: 'request', request }] },
+        { id: 'target', name: 'Target', _syncStatus: 'synced', items: [] },
+      ],
+    });
+    const result = await runtime.store.getState().moveRequest('source', request.id, 'target', null);
+    assert.equal(result.success, false);
+    assert.ok(runtime.store.getState().collections.every((col) => col._needsMoveReconciliation));
+    assert.equal(runtime.store.getState().saveActiveRequest().success, false);
+    assert.match((await runtime.store.getState().moveRequest('source', request.id, 'target', null)).error, /confirm the previous move/);
+  } finally { runtime.dispose(); }
+});

@@ -121,6 +121,8 @@ export interface Collection {
   minRole?: ProjectRole;
   /** Local cache state; never included in cloud or Postman payloads. */
   isPartial?: boolean;
+  /** Persisted until server details resolve an interrupted cloud move; never upload this snapshot. */
+  _needsMoveReconciliation?: boolean;
   _syncStatus?: 'synced' | 'pending' | 'error';
   createdAt: number;
   updatedAt: number;

@@ -312,8 +312,9 @@ test('Static contract: useApiStore exports moveFolder with RBAC and cloud sync',
   assert.match(content, /targetFolderId && targetFolderId === folderId/);
   assert.match(content, /isDescendantOf\(\[folderToMove\],\s*folderId,\s*targetFolderId\)/);
 
-  // Must synchronize via batchImportToScope when in cloud mode
-  assert.match(content, /batchImportToScope\([\s\S]*?cloudConfig\.apiUrl[\s\S]*?colsToSync/);
+  // Moves use the atomic endpoint after draining outstanding saves.
+  assert.match(content, /return commitItemMove\(\(folderToMove as CollectionItem\)\.id/);
+  assert.match(content, /await moveScopeItem\(cloudConfig\.apiUrl/);
 });
 
 test('Static contract: MoveFolderModal component contract and UI safeguards', () => {
