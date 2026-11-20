@@ -12,6 +12,7 @@ export interface CloudCollectionMetadata {
 }
 
 export function isPendingCloudCollection(collection: Collection): boolean {
+  if (collection._needsMoveReconciliation) return false;
   return collection._syncStatus === 'pending' ||
     (collection._origin === 'cloud' && typeof collection.version !== 'number');
 }
@@ -20,7 +21,7 @@ export function reuseUnchangedCloudCollection(
   existing: Collection | undefined,
   metadata: CloudCollectionMetadata,
 ): Collection | null {
-  if (!existing || existing.isPartial) return null;
+  if (!existing || existing.isPartial || existing._needsMoveReconciliation) return null;
   const serverUpdatedAt = new Date(metadata.updated_at || 0).getTime();
   const unchanged = (typeof metadata.version === 'number' && existing.version === metadata.version) ||
     (serverUpdatedAt > 0 && existing.updatedAt === serverUpdatedAt);
@@ -52,6 +53,7 @@ export function createPartialCloudCollection(
     updatedAt: existing?.updatedAt || 0,
     _origin: 'cloud',
     isPartial: true,
+    ...(existing?._needsMoveReconciliation ? { _needsMoveReconciliation: true } : {}),
     _syncStatus: 'synced',
   };
 }

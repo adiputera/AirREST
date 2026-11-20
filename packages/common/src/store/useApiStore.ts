@@ -54,6 +54,7 @@ import {
   updateScopeCollectionPermission as legacyUpdateScopeCollectionPermission,
   deleteScopeItem as legacyDeleteScopeItem,
   moveScopeCollection as legacyMoveScopeCollection,
+  moveScopeItem as legacyMoveScopeItem,
   reorderCollectionItems as legacyReorderCollectionItems,
   fetchUserWorkspaces,
   createCloudWorkspace as legacyCreateCloudWorkspace,
@@ -631,6 +632,7 @@ export function createApiStore(
   const updateScopeCollectionPermission = options.cloudClient?.updateScopeCollectionPermission ?? legacyUpdateScopeCollectionPermission;
   const deleteScopeItem = options.cloudClient?.deleteScopeItem ?? legacyDeleteScopeItem;
   const moveScopeCollection = options.cloudClient?.moveScopeCollection ?? legacyMoveScopeCollection;
+  const moveScopeItem = options.cloudClient?.moveScopeItem ?? legacyMoveScopeItem;
   const reorderCollectionItems = options.cloudClient?.reorderCollectionItems ?? legacyReorderCollectionItems;
   const createCloudWorkspace = options.cloudClient?.createCloudWorkspace ?? legacyCreateCloudWorkspace;
   const updateCloudWorkspace = options.cloudClient?.updateCloudWorkspace ?? legacyUpdateCloudWorkspace;
@@ -641,6 +643,7 @@ export function createApiStore(
   const envSyncQueued: Record<string, boolean> = {};
   const collectionSaveSyncRevisions = new Map<string, number>();
   const collectionSaveSyncQueues = new Map<string, Promise<void>>();
+  const movingCollections = new Map<string, symbol>();
   let collectionSaveSyncGeneration = 0;
   const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
   let isStoreDisposed = false;
@@ -860,6 +863,7 @@ export function createApiStore(
   }
 
   function invalidateAsyncOperations({ session = false }: { session?: boolean } = {}) {
+    movingCollections.clear();
     collectionSaveSyncGeneration += 1;
     asyncOperations.invalidate({ session });
     if (session) {
@@ -973,6 +977,65 @@ export function createApiStore(
 
       await executeSync();
     }, 1200);
+  }
+
+  async function commitItemMove(
+    itemId: string,
+    sourceCollectionId: string,
+    targetCollectionId: string,
+    targetParentId: string | null,
+    commit: () => void,
+  ): Promise<{ success: boolean; error?: string }> {
+    const { workspaceMode, cloudConfig } = store.getState();
+    if (workspaceMode !== 'cloud') {
+      commit();
+      return { success: true };
+    }
+    const scope = cloudConfig.activeScope;
+    if (isOfflineOnly || !isCloudSessionActive(cloudConfig) || !scope) {
+      return { success: false, error: 'Sign in before moving cloud items.' };
+    }
+    if (activePullOperation && isAsyncOperationCurrent(activePullOperation)) {
+      return { success: false, error: 'Wait for workspace sync to finish before moving items.' };
+    }
+    const ids = [...new Set([sourceCollectionId, targetCollectionId])];
+    if (store.getState().collections.some((col) => ids.includes(col.id) && col._needsMoveReconciliation)) {
+      return { success: false, error: 'Sync the workspace to confirm the previous move before moving items again.' };
+    }
+    if (ids.some((id) => movingCollections.has(id))) {
+      return { success: false, error: 'A move is already in progress for this collection.' };
+    }
+    const lock = Symbol('item move');
+    ids.forEach((id) => movingCollections.set(id, lock));
+    const operation = beginAsyncOperation();
+    try {
+      await Promise.all(ids.map((id) => collectionSaveSyncQueues.get(`${scope.type}:${scope.id}:${id}`)));
+      if (!isAsyncOperationCurrent(operation)) return { success: false, error: 'Operation cancelled.' };
+      if (store.getState().collections.some((col) => ids.includes(col.id) && col._syncStatus === 'pending')) {
+        return { success: false, error: 'Sync pending changes in both collections before moving this item.' };
+      }
+      // Persist before sending: after a lost reply or restart, these old trees must
+      // be fetched from the server before any import can recreate moved items.
+      store.setState((state) => ({ collections: state.collections.map((col) => ids.includes(col.id) ? { ...col, _needsMoveReconciliation: true } : col) }));
+      await moveScopeItem(cloudConfig.apiUrl, cloudConfig.token, itemId, sourceCollectionId, targetCollectionId, targetParentId, cloudConfig.refreshToken, operation.controller.signal);
+      if (!isAsyncOperationCurrent(operation)) return { success: false, error: 'Operation cancelled.' };
+      commit();
+      store.setState((state) => ({ collections: state.collections.map((col) => ids.includes(col.id) ? { ...col, _needsMoveReconciliation: undefined } : col) }));
+      return { success: true };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to move item to the target collection.';
+      if (isAsyncOperationCurrent(operation)) {
+        const rejected = error instanceof CloudApiError && [400, 403, 404].includes(error.status);
+        store.setState((state) => ({
+          syncStatus: 'error', syncError: message,
+          collections: rejected ? state.collections.map((col) => ids.includes(col.id) ? { ...col, _needsMoveReconciliation: undefined } : col) : state.collections,
+        }));
+      }
+      return { success: false, error: message };
+    } finally {
+      completeAsyncOperation(operation);
+      ids.forEach((id) => { if (movingCollections.get(id) === lock) movingCollections.delete(id); });
+    }
   }
 
   let store!: ApiStore;
@@ -1814,7 +1877,7 @@ export function createApiStore(
       },
       setSyncStatus: (syncStatus, syncError = null) => set({ syncStatus, syncError }),
       pullCloudDelta: async () => {
-        if (isOfflineOnly) return;
+        if (isOfflineOnly || movingCollections.size > 0) return;
         const { workspaceMode, cloudConfig } = get();
         if (workspaceMode !== 'cloud' || !isCloudSessionActive(cloudConfig) || !cloudConfig.activeScope) {
           return;
@@ -5001,9 +5064,15 @@ export function createApiStore(
 
       saveRequestToCollection: (collectionId, folderId, request, sourceTabId) => {
         const { workspaceMode, cloudConfig, collections, tabs } = get();
+        if (movingCollections.has(collectionId)) {
+          return { success: false, cloudStatus: 'not-applicable', error: 'Wait for the collection move to finish before saving.' };
+        }
         const collection = collections.find((candidate) => candidate.id === collectionId);
         if (!collection) {
           return { success: false, cloudStatus: 'not-applicable', error: 'The target collection no longer exists.' };
+        }
+        if (collection._needsMoveReconciliation) {
+          return { success: false, cloudStatus: 'not-applicable', error: 'Sync the workspace to confirm the previous move before saving.' };
         }
         if (!canModifyCollection(collection.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
           return { success: false, cloudStatus: 'not-applicable', error: `Collection "${collection.name}" is read-only.` };
@@ -5574,6 +5643,7 @@ export function createApiStore(
         }
 
         // 2. Insert item into target collection
+        let targetFolderFound = !targetFolderId;
         const insertItem = (items: CollectionItem[]): CollectionItem[] => {
           if (!targetFolderId) {
             return [...items, itemToMove!];
@@ -5581,6 +5651,7 @@ export function createApiStore(
           return items.map((it) => {
             if (it.type === 'folder') {
               if (it.id === targetFolderId) {
+                targetFolderFound = true;
                 return {
                   ...it,
                   items: [...(it.items || []), itemToMove!],
@@ -5595,78 +5666,48 @@ export function createApiStore(
           });
         };
 
-        set((state) => {
-          let newCollections: Collection[];
+        const updatedTargetItems = insertItem(sourceCollectionId === targetCollectionId ? updatedSourceItems : targetCol.items);
+        if (!targetFolderFound) return { success: false, error: 'Target folder not found in target collection' };
 
-          if (sourceCollectionId === targetCollectionId) {
-            // Move within the same collection
-            const updatedItemsWithInsert = insertItem(updatedSourceItems);
-            newCollections = state.collections.map((col) => {
-              if (col.id !== sourceCollectionId) return col;
-              return {
-                ...col,
-                items: updatedItemsWithInsert,
-                updatedAt: Date.now(),
-              };
-            });
-          } else {
-            // Move across different collections
-            newCollections = state.collections.map((col) => {
-              if (col.id === sourceCollectionId) {
+        return commitItemMove((itemToMove as CollectionItem).id, sourceCollectionId, targetCollectionId, targetFolderId, () => {
+          set((state) => {
+            let newCollections: Collection[];
+
+            if (sourceCollectionId === targetCollectionId) {
+              // Move within the same collection
+              const updatedItemsWithInsert = updatedTargetItems;
+              newCollections = state.collections.map((col) => {
+                if (col.id !== sourceCollectionId) return col;
                 return {
                   ...col,
-                  items: updatedSourceItems,
+                  items: updatedItemsWithInsert,
                   updatedAt: Date.now(),
                 };
-              }
-              if (col.id === targetCollectionId) {
-                return {
-                  ...col,
-                  items: insertItem(col.items),
-                  updatedAt: Date.now(),
-                };
-              }
-              return col;
-            });
-          }
-
-          return { collections: newCollections };
-        });
-
-        // 3. Sync to Cloud if active
-        const currentCols = get().collections;
-        if (!isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && cloudConfig.activeScope) {
-          const colsToSync = currentCols.filter(
-            (c) => c.id === sourceCollectionId || c.id === targetCollectionId
-          );
-          if (colsToSync.length > 0) {
-            const operation = beginAsyncOperation();
-            batchImportToScope(
-              cloudConfig.apiUrl,
-              cloudConfig.token,
-              cloudConfig.activeScope,
-              colsToSync,
-              cloudConfig.refreshToken,
-              operation.controller.signal
-            )
-              .then(() => {
-                if (!isAsyncOperationCurrent(operation)) return;
-                if (get().syncStatus === 'error') {
-                  set({ syncStatus: 'idle', syncError: null });
-                }
-              })
-              .catch((err) => {
-                if (!isAsyncOperationCurrent(operation)) return;
-                console.error('Failed to sync moved request to cloud:', err);
-                set({ syncStatus: 'error', syncError: err.message || 'Failed to sync moved request to cloud' });
-              })
-              .finally(() => {
-                completeAsyncOperation(operation);
               });
-          }
-        }
+            } else {
+              // Move across different collections
+              newCollections = state.collections.map((col) => {
+                if (col.id === sourceCollectionId) {
+                  return {
+                    ...col,
+                    items: updatedSourceItems,
+                    updatedAt: Date.now(),
+                  };
+                }
+                if (col.id === targetCollectionId) {
+                  return {
+                    ...col,
+                    items: updatedTargetItems,
+                    updatedAt: Date.now(),
+                  };
+                }
+                return col;
+              });
+            }
 
-        return { success: true };
+            return { collections: newCollections };
+          });
+        });
       },
 
       moveFolder: async (sourceCollectionId, folderId, targetCollectionId, targetFolderId) => {
@@ -5763,75 +5804,42 @@ export function createApiStore(
           return { success: false, error: 'Target folder not found in target collection' };
         }
 
-        set((state) => {
-          let newCollections: Collection[];
+        return commitItemMove((folderToMove as CollectionItem).id, sourceCollectionId, targetCollectionId, targetFolderId, () => {
+          set((state) => {
+            let newCollections: Collection[];
 
-          if (sourceCollectionId === targetCollectionId) {
-            newCollections = state.collections.map((col) => {
-              if (col.id !== sourceCollectionId) return col;
-              return {
-                ...col,
-                items: updatedTargetItems!,
-                updatedAt: Date.now(),
-              };
-            });
-          } else {
-            newCollections = state.collections.map((col) => {
-              if (col.id === sourceCollectionId) {
-                return {
-                  ...col,
-                  items: updatedSourceItems,
-                  updatedAt: Date.now(),
-                };
-              }
-              if (col.id === targetCollectionId) {
+            if (sourceCollectionId === targetCollectionId) {
+              newCollections = state.collections.map((col) => {
+                if (col.id !== sourceCollectionId) return col;
                 return {
                   ...col,
                   items: updatedTargetItems!,
                   updatedAt: Date.now(),
                 };
-              }
-              return col;
-            });
-          }
-
-          return { collections: newCollections };
-        });
-
-        // 3. Sync to Cloud if active
-        const currentCols = get().collections;
-        if (!isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && cloudConfig.activeScope) {
-          const colsToSync = currentCols.filter(
-            (c) => c.id === sourceCollectionId || c.id === targetCollectionId
-          );
-          if (colsToSync.length > 0) {
-            const operation = beginAsyncOperation();
-            batchImportToScope(
-              cloudConfig.apiUrl,
-              cloudConfig.token,
-              cloudConfig.activeScope,
-              colsToSync,
-              cloudConfig.refreshToken,
-              operation.controller.signal
-            )
-              .then(() => {
-                if (!isAsyncOperationCurrent(operation)) return;
-                if (get().syncStatus === 'error') {
-                  set({ syncStatus: 'idle', syncError: null });
-                }
-              })
-              .catch((err) => {
-                if (!isAsyncOperationCurrent(operation)) return;
-                console.error('Failed to sync moved folder to cloud:', err);
-                set({ syncStatus: 'error', syncError: err.message || 'Failed to sync moved folder to cloud' });
-              })
-              .finally(() => {
-                completeAsyncOperation(operation);
               });
-          }
-        }
+            } else {
+              newCollections = state.collections.map((col) => {
+                if (col.id === sourceCollectionId) {
+                  return {
+                    ...col,
+                    items: updatedSourceItems,
+                    updatedAt: Date.now(),
+                  };
+                }
+                if (col.id === targetCollectionId) {
+                  return {
+                    ...col,
+                    items: updatedTargetItems!,
+                    updatedAt: Date.now(),
+                  };
+                }
+                return col;
+              });
+            }
 
-        return { success: true };
+            return { collections: newCollections };
+          });
+        });
       },
 
       reorderItem: async (collectionId, activeId, targetId, position) => {

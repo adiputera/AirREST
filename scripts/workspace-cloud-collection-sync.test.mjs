@@ -78,3 +78,25 @@ test('cloud collection sync reuses unchanged data, retries incomplete details, a
   assert.equal(result.collections[1].isPartial, true);
   assert.equal(result.collections[2].id, 'pending');
 });
+
+test('interrupted moves are pulled before upload, even without a collection version', async () => {
+  const { pushPendingCloudCollections, pullCloudCollections } = loadCloudCollectionSync();
+  const uncertain = { ...pendingCollection, _needsMoveReconciliation: true };
+  const pushed = await pushPendingCloudCollections({
+    collections: [uncertain], upload: async () => assert.fail('stale pre-move tree must never be imported'),
+    isCurrent: () => true, isAborted: () => false, onUploaded: () => assert.fail('not uploaded'),
+  });
+  assert.equal(pushed.status, 'completed');
+  const input = {
+    currentCollections: [uncertain], fetchMetadata: async () => [{ id: uncertain.id, name: 'Server', version: 2 }],
+    fetchDetail: async () => { throw new Error('offline'); },
+    buildCollection: (detail) => detail, isCurrent: () => true,
+  };
+  const failedPull = await pullCloudCollections(input);
+  assert.equal(failedPull.collections[0]._needsMoveReconciliation, true, 'failed detail fetch must preserve the marker');
+  const recovered = await pullCloudCollections({ ...input, currentCollections: failedPull.collections,
+    fetchDetail: async () => ({ ...pendingCollection, items: [], version: 2, _syncStatus: 'synced' }),
+  });
+  assert.equal(recovered.collections[0]._needsMoveReconciliation, undefined);
+  assert.equal(recovered.collections[0].version, 2);
+});

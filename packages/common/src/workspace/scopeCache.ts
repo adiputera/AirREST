@@ -24,12 +24,12 @@ export function resolveCachedScopeTabs<TTab extends { id: string }>(
 
 export function isScopeCacheFresh(
   entry: (Pick<CachedScopeTabs<unknown>, 'lastSyncedAt'> & {
-    collections?: Array<Pick<Collection, '_syncStatus' | '_origin' | 'version'>>;
+    collections?: Array<Pick<Collection, '_syncStatus' | '_origin' | 'version' | '_needsMoveReconciliation'>>;
   }) | undefined,
   ttlMs: number,
   now = Date.now(),
 ): boolean {
-  const hasPending = entry?.collections?.some((collection) => collection._syncStatus === 'pending' ||
+  const hasPending = entry?.collections?.some((collection) => collection._needsMoveReconciliation || collection._syncStatus === 'pending' ||
     (collection._origin === 'cloud' && typeof collection.version !== 'number'));
   return Boolean(entry?.lastSyncedAt && now - entry.lastSyncedAt < ttlMs && !hasPending);
 }

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.12] - 2026-11-20
+
+### Fixed
+- **Auth Variable Privacy**: Variable names and resolved values beneath Bearer Token, Basic Auth password, and API Key value inputs now remain hidden until Show is clicked. Hide also dismisses variable tooltips.
+- **Cloud Request and Folder Moves**: Moving between collections now uses an atomic backend operation that preserves item IDs, rather than importing copies. Moves wait for queued saves, retain open tabs, unsaved edits, responses, and undo history, and leave the local tree unchanged on failure. Invalid target folders are rejected before modifying local data. Saving a moved request updates the existing item. Interrupted moves retain a local refresh marker so stale collection snapshots cannot recreate requests during retry or restart.
+
+### Added
+- **Atomic Item Move API**: `POST /api/v1/items/{id}/move` moves requests and folder descendants within one scope with write access checks on both collections. Client 1.3.12 cloud moves require the updated backend; import-copy behavior is unchanged.
+
 ## [1.3.11] - 2026-11-17
 
 ### Added

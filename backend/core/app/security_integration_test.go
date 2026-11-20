@@ -248,6 +248,107 @@ func TestSecurityIntegration(t *testing.T) {
 	restricted := createCollection("Restricted", domain.ProjectRoleAdmin)
 	open := createCollection("Open", domain.ProjectRoleReader)
 
+	t.Run("batch import retains copy semantics across collections", func(t *testing.T) {
+		source := createCollection("Import source", domain.ProjectRoleReader)
+		target := createCollection("Import target", domain.ProjectRoleReader)
+		item := service.ImportItemRequest{ID: uuid.NewString(), Name: "Import copy", Type: "request"}
+		for _, col := range []*domain.Collection{source, target, target} {
+			if err := syncService.ImportBatch(ctx, contributor, nil, &projectID, []service.ImportCollectionRequest{{ID: col.ID.String(), Name: col.Name, Items: []service.ImportItemRequest{item}}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var count int
+		if err := a.Pool.QueryRow(ctx, "SELECT count(*) FROM collection_items WHERE collection_id=ANY($1) AND deleted_at IS NULL", []uuid.UUID{source.ID, target.ID}).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 3 {
+			t.Fatalf("import should copy foreign IDs; expected 3, got %d", count)
+		}
+	})
+
+	t.Run("item move keeps IDs across save edit save move and reload", func(t *testing.T) {
+		source := createCollection("Move source", domain.ProjectRoleReader)
+		target := createCollection("Move target", domain.ProjectRoleReader)
+		itemID, folderID, nestedID := uuid.New(), uuid.New(), uuid.New()
+		name, method, body := "Move regression", "POST", "first save"
+		payload := service.ImportItemRequest{ID: itemID.String(), Name: name, Type: "request", Method: &method, BodyContent: &body}
+		importItem := func(colID uuid.UUID) {
+			t.Helper()
+			if err := syncService.ImportBatch(ctx, contributor, nil, &projectID, []service.ImportCollectionRequest{{ID: colID.String(), Name: "Move collection", Items: []service.ImportItemRequest{payload}}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		importItem(source.ID)
+		body = "edited save"
+		importItem(source.ID)
+		moveBody := map[string]any{"source_collection_id": source.ID, "target_collection_id": target.ID, "target_parent_id": nil}
+		moveURL := "/api/v1/items/" + itemID.String() + "/move"
+		assertStatus(request("POST", moveURL, contributorTokens.AccessToken, moveBody), 200)
+		assertStatus(request("POST", moveURL, contributorTokens.AccessToken, moveBody), 200) // retry is idempotent
+		body = "saved after move"
+		importItem(target.ID)
+		importItem(target.ID)
+		var count int
+		if err := a.Pool.QueryRow(ctx, "SELECT count(*) FROM collection_items WHERE name=$1 AND collection_id=ANY($2) AND deleted_at IS NULL", name, []uuid.UUID{source.ID, target.ID}).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("expected one request after repeated saves, got %d", count)
+		}
+		moved, err := collections.GetItem(ctx, contributor, itemID)
+		if err != nil || moved.CollectionID != target.ID || moved.BodyContent == nil || *moved.BodyContent != body {
+			t.Fatalf("identity/content lost: %+v %v", moved, err)
+		}
+		for _, col := range []*domain.Collection{source, target} {
+			var version int64
+			if err := a.Pool.QueryRow(ctx, "SELECT version FROM collections WHERE id=$1", col.ID).Scan(&version); err != nil || version <= 1 {
+				t.Fatalf("collection delta not advanced: %d %v", version, err)
+			}
+		}
+		// Both sides require write access, and invalid destinations leave the item in place.
+		moveBody["source_collection_id"] = target.ID
+		moveBody["target_collection_id"] = restricted.ID
+		assertStatus(request("POST", moveURL, contributorTokens.AccessToken, moveBody), 403)
+		moveBody["source_collection_id"] = restricted.ID
+		moveBody["target_collection_id"] = target.ID
+		assertStatus(request("POST", moveURL, contributorTokens.AccessToken, moveBody), 403)
+		moveBody["source_collection_id"] = target.ID
+		moveBody["target_collection_id"] = source.ID
+		moveBody["target_parent_id"] = uuid.New()
+		assertStatus(request("POST", moveURL, contributorTokens.AccessToken, moveBody), 400)
+		moveBody["target_parent_id"] = nil
+		private := &domain.Collection{ID: uuid.New(), Name: "Other scope", WorkspaceID: &workspaceID}
+		if err := collections.CreateCollection(ctx, contributor, private); err != nil {
+			t.Fatal(err)
+		}
+		moveBody["target_collection_id"] = private.ID
+		assertStatus(request("POST", moveURL, contributorTokens.AccessToken, moveBody), 400)
+		moveBody["source_collection_id"] = source.ID
+		moveBody["target_collection_id"] = private.ID
+		assertStatus(request("POST", moveURL, contributorTokens.AccessToken, moveBody), 400)
+		// Folder moves preserve all descendant IDs and cannot create cycles.
+		for _, item := range []*domain.CollectionItem{
+			{ID: folderID, CollectionID: source.ID, Type: domain.ItemTypeFolder, Name: "Folder"},
+			{ID: nestedID, CollectionID: source.ID, ParentID: &folderID, Type: domain.ItemTypeFolder, Name: "Nested"},
+		} {
+			if err := collections.CreateItem(ctx, contributor, item); err != nil {
+				t.Fatal(err)
+			}
+		}
+		folderURL := "/api/v1/items/" + folderID.String() + "/move"
+		moveBody = map[string]any{"source_collection_id": source.ID, "target_collection_id": source.ID, "target_parent_id": nestedID}
+		assertStatus(request("POST", folderURL, contributorTokens.AccessToken, moveBody), 400)
+		moveBody["target_collection_id"] = target.ID
+		moveBody["target_parent_id"] = nil
+		assertStatus(request("POST", folderURL, contributorTokens.AccessToken, moveBody), 200)
+		child, err := collections.GetItem(ctx, contributor, nestedID)
+		if err != nil || child.CollectionID != target.ID || child.ParentID == nil || *child.ParentID != folderID {
+			t.Fatalf("descendant changed: %+v %v", child, err)
+		}
+		assertStatus(request("POST", moveURL, "", moveBody), 401)
+		assertStatus(request("POST", moveURL, contributorTokens.AccessToken, map[string]any{}), 400)
+	})
+
 	t.Run("imports enforce restriction and rollback preceding writes", func(t *testing.T) {
 		newID := uuid.New()
 		batch := []service.ImportCollectionRequest{{ID: newID.String(), Name: "Must roll back"}, {ID: restricted.ID.String(), Name: "Attempted overwrite", Items: []service.ImportItemRequest{{ID: uuid.NewString(), Name: "Injected", Type: "request"}}}}

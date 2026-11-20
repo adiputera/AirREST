@@ -126,6 +126,7 @@ export const VariableInput: React.FC<VariableInputProps> = ({
 
   useEffect(() => {
     setShowPassword(false);
+    setHoveredVar(null);
   }, [type, maskResetKey]);
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -348,7 +349,10 @@ export const VariableInput: React.FC<VariableInputProps> = ({
         {type === 'password' && (
           <button
             type="button"
-            onClick={() => setShowPassword(!showPassword)}
+            onClick={() => {
+              setShowPassword(!showPassword);
+              setHoveredVar(null);
+            }}
             className="mr-2.5 text-tx-muted hover:text-tx-primary transition shrink-0"
             aria-label={showPassword ? 'Hide value' : 'Show value'}
             title={showPassword ? 'Hide password' : 'Show password & highlight variables'}
@@ -359,7 +363,7 @@ export const VariableInput: React.FC<VariableInputProps> = ({
       </div>
 
       {/* Hover Popup Tooltip */}
-      {hoveredVar &&
+      {!isPasswordMasked && hoveredVar &&
         typeof document !== 'undefined' &&
         createPortal(
           <div
@@ -438,7 +442,7 @@ export const VariableInput: React.FC<VariableInputProps> = ({
         )}
 
       {/* Resolved Variables Chip Preview */}
-      {showPreview && uniqueVars.length > 0 && (
+      {showPreview && !isPasswordMasked && uniqueVars.length > 0 && (
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5 px-0.5">
           <span className="text-[10px] font-medium text-tx-muted">Variables:</span>
           {uniqueVars.map((v, i) => (

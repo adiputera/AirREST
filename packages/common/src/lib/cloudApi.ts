@@ -838,6 +838,9 @@ export async function batchImportToScope(
   signal?: AbortSignal,
   client = defaultCloudClientState,
 ) {
+  if (collections.some((collection) => collection._needsMoveReconciliation)) {
+    throw new Error('Refresh collections to confirm the previous move before uploading changes.');
+  }
   if (collections.length > 100) throw new Error('Select at most 100 collections per import.');
   let itemCount = 0;
   const checkItems = (items: Collection['items'] | undefined, depth: number): void => {
@@ -918,6 +921,26 @@ export interface ReorderItemPayload {
   id: string;
   parent_id: string | null;
   sort_order: number;
+}
+
+export async function moveScopeItem(
+  apiUrl: string,
+  token: string | undefined,
+  itemId: string,
+  sourceCollectionId: string,
+  targetCollectionId: string,
+  targetParentId: string | null,
+  refreshToken?: string,
+  signal?: AbortSignal,
+  client = defaultCloudClientState,
+) {
+  const res = await fetchWithAuth(`/api/v1/items/${itemId}/move`, {
+    method: 'POST', apiUrl, token, refreshToken, signal,
+    body: JSON.stringify({ source_collection_id: sourceCollectionId, target_collection_id: targetCollectionId, target_parent_id: targetParentId }),
+  }, client);
+  const json = await safeJson(res);
+  if (!res.ok) throw new CloudApiError(extractError(json, 'Failed to move item', res.status), res.status, extractErrorCode(json));
+  return unwrapData<{ message: string }>(json);
 }
 
 export async function reorderCollectionItems(
@@ -1293,6 +1316,8 @@ export function createCloudClient(config: CloudClientConfig = {}) {
       batchImportToScope(apiUrl, token, scope, collections, refreshToken, signal, state),
     moveScopeCollection: (apiUrl: string, token: string | undefined, collectionId: string, targetScope: ActiveScope, refreshToken?: string, signal?: AbortSignal) =>
       moveScopeCollection(apiUrl, token, collectionId, targetScope, refreshToken, signal, state),
+    moveScopeItem: (apiUrl: string, token: string | undefined, itemId: string, sourceCollectionId: string, targetCollectionId: string, targetParentId: string | null, refreshToken?: string, signal?: AbortSignal) =>
+      moveScopeItem(apiUrl, token, itemId, sourceCollectionId, targetCollectionId, targetParentId, refreshToken, signal, state),
     reorderCollectionItems: (apiUrl: string, token: string | undefined, collectionId: string, items: ReorderItemPayload[], refreshToken?: string, signal?: AbortSignal) =>
       reorderCollectionItems(apiUrl, token, collectionId, items, refreshToken, signal, state),
     createScopeEnvironment: (apiUrl: string, token: string | undefined, scope: ActiveScope, env: { name: string; variables: any[]; min_role?: string }, refreshToken?: string, signal?: AbortSignal) =>
