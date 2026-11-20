@@ -330,11 +330,11 @@ export const App: React.FC = () => {
               {tabs && tabs.length > 0 ? (
                 <div
                   ref={studioContainerRef}
-                  className={`relative flex flex-1 flex-col ${isDesktop ? 'overflow-hidden' : 'overflow-y-auto'}`}
+                  className="relative flex flex-1 flex-col overflow-hidden"
                 >
                   {/* Top Pane: Request (URL Bar, Params, Headers, Auth, Body, Scripts) */}
                   <div
-                    className={`flex flex-col shrink-0 min-h-0 ${isDesktop && !isRequestCollapsed ? 'overflow-y-auto' : ''}`}
+                    className={`flex flex-col min-h-0 ${isDesktop ? 'shrink-0' : 'flex-1'} ${isDesktop && !isRequestCollapsed ? 'overflow-y-auto' : ''}`}
                     style={{
                       height: isDesktop
                         ? isRequestCollapsed
@@ -343,7 +343,10 @@ export const App: React.FC = () => {
                         : undefined,
                     }}
                   >
-                    <RequestEditor onCollapseChange={setIsRequestCollapsed} />
+                    <RequestEditor
+                      onCollapseChange={setIsRequestCollapsed}
+                      mobileScrollContent={!isDesktop ? <ResponseViewer /> : undefined}
+                    />
                   </div>
 
                   {/* Global Studio Split-Pane Resizer (Desktop only, visible when request pane is expanded) */}
@@ -383,10 +386,12 @@ export const App: React.FC = () => {
                     </div>
                   )}
 
-                  {/* Bottom Pane: Response (Status, Headers, Body) */}
-                  <div className={`flex flex-1 min-h-0 flex-col ${isDesktop ? 'overflow-hidden' : ''}`}>
-                    <ResponseViewer />
-                  </div>
+                  {/* Bottom Pane: Response (Desktop only; mobile renders inside RequestEditor's scroll region below URL bar) */}
+                  {isDesktop && (
+                    <div className="flex min-w-0 flex-1 min-h-0 flex-col overflow-hidden">
+                      <ResponseViewer />
+                    </div>
+                  )}
                 </div>
               ) : (
                 <EmptyStudioView onCreateTab={() => createTab()} />

@@ -16,6 +16,12 @@ import {
   isTabFullyVisible,
   type TabOverflowCounts,
 } from './tabBarOverflow';
+import {
+  buildTabClosePlan,
+  collectRemainingTabIdsToDiscard,
+  resolveNextDirtyTab,
+  type TabCloseScope,
+} from './tabBarClosePlan';
 
 interface ContextMenuPosition {
   x: number;
@@ -41,12 +47,27 @@ export const TabBar: React.FC = () => {
 
   const [contextMenu, setContextMenu] = useState<ContextMenuPosition | null>(null);
   const [unsavedConfirmTab, setUnsavedConfirmTab] = useState<ApiRequest | null>(null);
+  const [closeBatchTotal, setCloseBatchTotal] = useState(0);
+  const [closeBatchRemainingCount, setCloseBatchRemainingCount] = useState(0);
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
   const [targetSaveTab, setTargetSaveTab] = useState<ApiRequest | null>(null);
   const [tabOverflow, setTabOverflow] = useState<TabOverflowCounts>({ left: 0, right: 0 });
+  const pendingCloseTabIdsRef = useRef<string[]>([]);
+  const saveModalCompletedRef = useRef(false);
+
+  const clearPendingCloseQueue = useCallback(() => {
+    pendingCloseTabIdsRef.current = [];
+    setCloseBatchTotal(0);
+    setCloseBatchRemainingCount(0);
+  }, []);
+
+  const handleCancelClose = useCallback(() => {
+    clearPendingCloseQueue();
+    setUnsavedConfirmTab(null);
+  }, [clearPendingCloseQueue]);
 
   useBackHandler(Boolean(contextMenu), () => setContextMenu(null), 15);
-  useBackHandler(Boolean(unsavedConfirmTab), () => setUnsavedConfirmTab(null), 30);
+  useBackHandler(Boolean(unsavedConfirmTab), handleCancelClose, 30);
 
   const menuRef = useRef<HTMLDivElement>(null);
   const tabBarRef = useRef<HTMLDivElement>(null);
@@ -61,11 +82,12 @@ export const TabBar: React.FC = () => {
   const tabOverflowRef = useRef<TabOverflowCounts>(tabOverflow);
   const pendingRevealRef = useRef(false);
   const revealPassCountRef = useRef(0);
-  const safeTabs = tabs || [];
-  tabIdsRef.current = safeTabs.map((tab) => tab.id);
+  const visibleTabs = (tabs || []).filter(Boolean);
+  const hasTabs = visibleTabs.length > 0;
+  tabIdsRef.current = visibleTabs.map((tab) => tab.id);
   activeTabIdRef.current = activeTabId;
   tabOverflowRef.current = tabOverflow;
-  const tabIds = safeTabs.map((tab) => tab.id).join('|');
+  const tabIds = visibleTabs.map((tab) => tab.id).join('|');
 
   const captureActiveTabVisibility = useCallback(() => {
     const viewport = tabViewportRef.current;
@@ -276,13 +298,13 @@ export const TabBar: React.FC = () => {
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        setUnsavedConfirmTab(null);
+        handleCancelClose();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [unsavedConfirmTab]);
+  }, [unsavedConfirmTab, handleCancelClose]);
 
   const handleTabContextMenu = (e: React.MouseEvent, tabId: string) => {
     e.preventDefault();
@@ -303,17 +325,68 @@ export const TabBar: React.FC = () => {
     setContextMenu({ x, y });
   };
 
-  const handleRequestCloseTab = (tabId: string) => {
-    const targetTab = (tabs || []).find((t) => t.id === tabId);
-    if (!targetTab) return;
+  const advanceCloseQueue = useCallback(() => {
+    const storeState = useApiStore.getState();
+    const latestTabs = (storeState.tabs || []).filter(Boolean);
+    const latestCollections = storeState.collections || [];
+    const { nextTab, remainingTabIds, cleanTabIdsToClose } = resolveNextDirtyTab(
+      pendingCloseTabIdsRef.current,
+      latestTabs,
+      (tab) => isRequestModified(tab, latestCollections),
+    );
 
-    const isDirty = isRequestModified(targetTab, collections);
-    if (isDirty) {
-      setActiveTabId(tabId);
-      setUnsavedConfirmTab(targetTab);
-    } else {
-      closeTab(tabId);
+    for (const cleanId of cleanTabIdsToClose) {
+      closeTab(cleanId);
     }
+
+    if (nextTab) {
+      pendingCloseTabIdsRef.current = remainingTabIds;
+      setCloseBatchRemainingCount(remainingTabIds.length);
+      setActiveTabId(nextTab.id);
+      setUnsavedConfirmTab(nextTab);
+    } else {
+      clearPendingCloseQueue();
+      setUnsavedConfirmTab(null);
+    }
+  }, [clearPendingCloseQueue, closeTab, setActiveTabId]);
+
+  const handleRequestCloseScope = (scope: TabCloseScope) => {
+    const plan = buildTabClosePlan(
+      visibleTabs,
+      scope,
+      (tab) => isRequestModified(tab, collections),
+    );
+    if (plan.targetTabs.length === 0) return;
+
+    if (plan.dirtyTabs.length === 0) {
+      clearPendingCloseQueue();
+      if (scope.type === 'all') {
+        closeAllTabs();
+      } else if (scope.type === 'others') {
+        closeOtherTabs(scope.keepTabId);
+      } else if (scope.type === 'right') {
+        closeTabsToRight(scope.pivotTabId);
+      } else {
+        closeTab(scope.tabId);
+      }
+      return;
+    }
+
+    for (const cleanId of plan.cleanTabIds) {
+      closeTab(cleanId);
+    }
+
+    const [firstDirtyTab, ...remainingDirtyTabs] = plan.dirtyTabs;
+    const remainingIds = remainingDirtyTabs.map((tab) => tab.id);
+    pendingCloseTabIdsRef.current = remainingIds;
+    setCloseBatchTotal(plan.dirtyTabs.length > 1 ? plan.dirtyTabs.length : 0);
+    setCloseBatchRemainingCount(remainingIds.length);
+    setActiveTabId(firstDirtyTab.id);
+    setUnsavedConfirmTab(firstDirtyTab);
+  };
+
+  const handleRequestCloseTab = (tabId: string) => {
+    handleRequestCloseScope({ type: 'single', tabId });
   };
 
   const handleTabAuxClick = (e: React.MouseEvent, tabId: string) => {
@@ -330,10 +403,22 @@ export const TabBar: React.FC = () => {
     const id = unsavedConfirmTab.id;
     setUnsavedConfirmTab(null);
     closeTab(id);
+    advanceCloseQueue();
   };
 
-  const handleCancelClose = () => {
+  const handleConfirmDiscardAll = () => {
+    if (!unsavedConfirmTab) return;
+    const latestTabs = (useApiStore.getState().tabs || []).filter(Boolean);
+    const idsToClose = collectRemainingTabIdsToDiscard(
+      unsavedConfirmTab.id,
+      pendingCloseTabIdsRef.current,
+      latestTabs,
+    );
+    clearPendingCloseQueue();
     setUnsavedConfirmTab(null);
+    for (const id of idsToClose) {
+      closeTab(id);
+    }
   };
 
   const handleConfirmSave = () => {
@@ -361,21 +446,23 @@ export const TabBar: React.FC = () => {
         if (!result.success) return;
         setUnsavedConfirmTab(null);
         closeTab(result.savedRequestId || tabToSave.id);
+        advanceCloseQueue();
         return;
       }
     }
 
     // Opens SaveToCollectionModal for choosing collection / resolving collision / save-as
+    saveModalCompletedRef.current = false;
     setTargetSaveTab(tabToSave);
     setUnsavedConfirmTab(null);
     setIsSaveModalOpen(true);
   };
 
   const activeContextTabIndex = contextMenu?.tabId
-    ? safeTabs.findIndex((t) => t.id === contextMenu.tabId)
+    ? visibleTabs.findIndex((t) => t.id === contextMenu.tabId)
     : -1;
-  const isOnlyTab = safeTabs.length <= 1;
-  const isLastTab = activeContextTabIndex === safeTabs.length - 1;
+  const isOnlyTab = visibleTabs.length <= 1;
+  const isLastTab = activeContextTabIndex === visibleTabs.length - 1;
 
   const scrollTabsByPage = (direction: -1 | 1) => {
     const viewport = tabViewportRef.current;
@@ -389,8 +476,8 @@ export const TabBar: React.FC = () => {
 
   return (
     <>
-      <div ref={tabBarRef} onContextMenu={handleBarContextMenu} className="flex h-8 w-full items-center gap-1 border-b border-line bg-surface px-2">
-        {tabOverflow.left > 0 && (
+      <div ref={tabBarRef} onContextMenu={handleBarContextMenu} className="flex h-8 shrink-0 w-full items-center gap-1 border-b border-line bg-surface px-2">
+        {hasTabs && tabOverflow.left > 0 && (
           <button
             type="button"
             onClick={() => scrollTabsByPage(-1)}
@@ -408,12 +495,12 @@ export const TabBar: React.FC = () => {
         <div
           ref={tabViewportRef}
           onScroll={handleTabViewportScroll}
-          tabIndex={0}
+          tabIndex={hasTabs ? 0 : undefined}
           aria-label="Open request tabs"
-          className="min-w-0 flex-1 overflow-x-auto scrollbar-none"
+          className={hasTabs ? 'min-w-0 overflow-x-auto scrollbar-none' : 'hidden'}
         >
-          <div ref={tabTrackRef} className="flex w-max min-w-full items-center gap-1.5">
-          {safeTabs.filter(Boolean).map((tab) => {
+          <div ref={tabTrackRef} className="flex w-max items-center gap-1.5">
+          {visibleTabs.map((tab) => {
             const isActive = tab.id === activeTabId;
             const displayName = tab.name || tab.url || 'Untitled Request';
             const isDirty = isRequestModified(tab, collections);
@@ -494,7 +581,7 @@ export const TabBar: React.FC = () => {
           </div>
         </div>
 
-        {tabOverflow.right > 0 && (
+        {hasTabs && tabOverflow.right > 0 && (
           <button
             type="button"
             onClick={() => scrollTabsByPage(1)}
@@ -510,9 +597,11 @@ export const TabBar: React.FC = () => {
         )}
 
         <button
+          type="button"
           onClick={() => createTab()}
           className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-tx-muted hover:bg-hover hover:text-tx-primary transition"
           title="Create New Request Tab"
+          aria-label="Create New Request Tab"
         >
           <Plus className="h-3.5 w-3.5" />
         </button>
@@ -545,8 +634,9 @@ export const TabBar: React.FC = () => {
                 type="button"
                 disabled={isOnlyTab}
                 onClick={() => {
-                  closeOtherTabs(contextMenu.tabId!);
+                  const id = contextMenu.tabId!;
                   setContextMenu(null);
+                  handleRequestCloseScope({ type: 'others', keepTabId: id });
                 }}
                 className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition disabled:opacity-35 disabled:cursor-not-allowed text-left"
               >
@@ -558,8 +648,9 @@ export const TabBar: React.FC = () => {
                 type="button"
                 disabled={isLastTab}
                 onClick={() => {
-                  closeTabsToRight(contextMenu.tabId!);
+                  const id = contextMenu.tabId!;
                   setContextMenu(null);
+                  handleRequestCloseScope({ type: 'right', pivotTabId: id });
                 }}
                 className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition disabled:opacity-35 disabled:cursor-not-allowed text-left"
               >
@@ -570,8 +661,8 @@ export const TabBar: React.FC = () => {
               <button
                 type="button"
                 onClick={() => {
-                  closeAllTabs();
                   setContextMenu(null);
+                  handleRequestCloseScope({ type: 'all' });
                 }}
                 className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 hover:text-rose-700 dark:hover:text-rose-300 transition text-left"
               >
@@ -622,8 +713,8 @@ export const TabBar: React.FC = () => {
               <button
                 type="button"
                 onClick={() => {
-                  closeAllTabs();
                   setContextMenu(null);
+                  handleRequestCloseScope({ type: 'all' });
                 }}
                 className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 hover:text-rose-700 dark:hover:text-rose-300 transition text-left"
               >
@@ -643,15 +734,25 @@ export const TabBar: React.FC = () => {
           }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150 select-none"
         >
-          <div className="w-full max-w-md rounded-2xl border border-line bg-surface p-6 shadow-2xl animate-in zoom-in-95 duration-150">
+          <div
+            key={unsavedConfirmTab.id}
+            className="w-full max-w-md rounded-2xl border border-line bg-surface p-6 shadow-2xl animate-in zoom-in-95 duration-150"
+          >
             <div className="flex items-start gap-3.5">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-500/20 bg-amber-500/10 text-amber-500 dark:text-amber-400">
                 <AlertTriangle className="h-5 w-5" />
               </div>
 
               <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-base font-bold text-tx-primary">Unsaved Changes</h3>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <h3 className="text-base font-bold text-tx-primary">Unsaved Changes</h3>
+                    {closeBatchTotal > 1 && (
+                      <span className="inline-flex items-center rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400">
+                        {Math.min(closeBatchTotal, Math.max(1, closeBatchTotal - closeBatchRemainingCount))} of {closeBatchTotal}
+                      </span>
+                    )}
+                  </div>
                   <button
                     type="button"
                     onClick={handleCancelClose}
@@ -683,8 +784,8 @@ export const TabBar: React.FC = () => {
               </div>
             </div>
 
-            {/* 3 Action Buttons: Cancel, Close Tab, Save */}
-            <div className="mt-6 flex flex-wrap items-center justify-end gap-2.5 pt-2 border-t border-line">
+            {/* Action Buttons: Cancel, Discard All (for multi-tab batch), Close Tab, Save */}
+            <div className="mt-6 flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-line">
               <button
                 type="button"
                 onClick={handleCancelClose}
@@ -692,6 +793,17 @@ export const TabBar: React.FC = () => {
               >
                 Cancel
               </button>
+
+              {closeBatchRemainingCount > 0 && (
+                <button
+                  type="button"
+                  onClick={handleConfirmDiscardAll}
+                  className="rounded-xl border border-rose-500/40 bg-rose-500/15 px-3.5 py-2 text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-500/25 transition cursor-pointer"
+                  title={`Close all ${closeBatchRemainingCount + 1} remaining unsaved tabs without saving`}
+                >
+                  Discard All ({closeBatchRemainingCount + 1})
+                </button>
+              )}
 
               <button
                 type="button"
@@ -723,11 +835,18 @@ export const TabBar: React.FC = () => {
           onClose={() => {
             setIsSaveModalOpen(false);
             setTargetSaveTab(null);
+            if (saveModalCompletedRef.current) {
+              saveModalCompletedRef.current = false;
+            } else {
+              clearPendingCloseQueue();
+            }
           }}
           onSaved={(result) => {
             if (targetSaveTab) {
+              saveModalCompletedRef.current = true;
               closeTab(result.savedRequestId || targetSaveTab.id);
               setTargetSaveTab(null);
+              advanceCloseQueue();
             }
           }}
           request={targetSaveTab}

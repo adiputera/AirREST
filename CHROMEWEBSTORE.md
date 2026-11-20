@@ -7,6 +7,11 @@
 
 > 1.3.12: Cloud request and folder moves preserve IDs so subsequent saves do not create duplicates. Moves wait for pending saves, retain open tabs and edits, and report failures without changing the local tree. Invalid target folders are rejected. Cloud moves require an updated AirREST backend.
 > Variable names and resolved values beneath Bearer Token, Basic Auth password, and API Key value inputs stay hidden until Show is clicked. Hide also dismisses variable tooltips.
+> Workspaces now open with collections and folders collapsed except for the path to the active saved request. Switching requests opens only the selected request's collection and ancestor folders. Manual expansion choices are preserved during edits and background refreshes when that path is unchanged.
+> The new-request `+` button in the tab bar now stays beside the rightmost open tab when tabs fit, pins to the right edge when the tab strip overflows, and sits on the left edge when no tabs are open.
+> Response downloads now preserve the original response bytes in memory across binary, Office Open XML, legacy-encoded, BOM-bearing, 0-byte, and mislabeled payloads, without depending on Content-Type accuracy or preview decoding. Downloads also support RFC 6266/5987 Content-Disposition filenames with path sanitization, accurate MIME-to-extension fallbacks, 60-second object-URL cleanup, expanded-modal error visibility, HEAD requests with large Content-Length headers, and bounded in-memory raw-body lifecycle cleanup.
+> Close All Tabs, Close Other Tabs, and Close Tabs to the Right now check every targeted tab for unsaved changes, closing unmodified tabs immediately and prompting sequentially (`1 of N`) for each modified tab so edits can be saved, discarded individually, discarded all at once (`Discard All`), or kept without accidental data loss.
+> Fixed the response viewer and mobile studio scroll layout: on mobile/narrow viewports, the request action bar, URL bar, and `Resolved` preview stay pinned beneath the tab strip while request sections and the response pane scroll below them (keeping the icon above "Ready to Test APIs" and quick-start endpoint cards visible), and on desktop the response body editor fills the remaining split-pane height to avoid nested double scrollbars.
 
 > 1.3.11: Internal shared credential-storage changes preserve the extension's existing browser-managed sign-in persistence and do not add permissions or alter its user-facing authentication flow.
 > Open request tabs now remember the last selected Params, Headers, Auth, Body, Pre-request, or Tests section while the extension remains open, including after Save As assigns a new request ID.
@@ -130,6 +135,24 @@ English
 ---
 
 # 2. Offline Edition (100% Offline & Local-Only)
+
+### Release Notes
+
+> 1.3.12: Variable names and resolved values beneath Bearer Token, Basic Auth password, and API Key value inputs stay hidden until Show is clicked. Hide also dismisses variable tooltips.
+> Workspaces now open with collections and folders collapsed except for the path to the active saved request. Switching requests opens only the selected request's collection and ancestor folders. Manual expansion choices are preserved during edits when that path is unchanged.
+> The new-request `+` button in the tab bar now stays beside the rightmost open tab when tabs fit, pins to the right edge when the tab strip overflows, and sits on the left edge when no tabs are open.
+> Response downloads now preserve the original response bytes in memory across binary, Office Open XML, legacy-encoded, BOM-bearing, 0-byte, and mislabeled payloads, without depending on Content-Type accuracy or preview decoding. Downloads also support RFC 6266/5987 Content-Disposition filenames with path sanitization, accurate MIME-to-extension fallbacks, 60-second object-URL cleanup, expanded-modal error visibility, HEAD requests with large Content-Length headers, and bounded in-memory raw-body lifecycle cleanup.
+> Close All Tabs, Close Other Tabs, and Close Tabs to the Right now check every targeted tab for unsaved changes, closing unmodified tabs immediately and prompting sequentially (`1 of N`) for each modified tab so edits can be saved, discarded individually, discarded all at once (`Discard All`), or kept without accidental data loss.
+> Fixed the response viewer and mobile studio scroll layout: on mobile/narrow viewports, the request action bar, URL bar, and `Resolved` preview stay pinned beneath the tab strip while request sections and the response pane scroll below them (keeping the icon above "Ready to Test APIs" and quick-start endpoint cards visible), and on desktop the response body editor fills the remaining split-pane height to avoid nested double scrollbars.
+
+> 1.3.11: Open request tabs now remember the last selected Params, Headers, Auth, Body, Pre-request, or Tests section while the extension remains open, including after Save As assigns a new request ID.
+> When many request tabs are open, selecting a request now reveals its tab; the tab strip supports horizontal scrolling and shows interactive left/right counts for tabs outside the viewport. On compact screens, those controls use short `N+` labels to preserve room for the active tab. Overflow controls recover in StrictMode, preserve a visible active tab through resizing without overriding manual scrolling, and accept vertical mouse-wheel input without passive-listener errors.
+
+> 1.3.10: Configured Authorization headers (Bearer, Basic, Header API Key, and inherited Auth) and Body-derived Content-Type headers now appear as read-only "From Auth" and "From Body" rows inside the Headers tab with quick navigation shortcuts ("Edit in Auth" / "Edit in Body") and per-request revealable credential masking across Bearer, Basic, and API Key values. Manual headers matching the active Auth header, or manual Content-Type headers when using multipart form-data, display an interactive warning icon whose tap/hover/focus tooltip explains which tab manages the effective header across live requests and exported cURL snippets, while custom manual Content-Type overrides remain allowed for JSON, XML, raw, GraphQL, x-www-form-urlencoded, and binary payloads.
+
+> 1.3.9: Saving an inactive request tab now preserves the active tab and updates the intended collection item. Closing a tab with unsaved changes immediately activates it so its contents are visible during confirmation. Request-body undo and redo now run once per shortcut, JSON comments toggle with Ctrl/Cmd+/, and Beautify preserves comments and literal payload text, keeping trailing comments next to their property. Script sandbox now supports the pm.request object for inspecting and mutating in-flight request URLs, query parameters, and headers, and embeds built-in CryptoJS support for AES, SHA, and MD5 cryptography in pre-request and test scripts.
+
+> 1.3.8: Refactored shared product capabilities, workspace cache/lifecycle helpers, and runtime policy validation so Offline Edition enforces local-only workspace boundaries and isolates local storage without external cloud requests or accounts.
 
 ### Store Listing
 

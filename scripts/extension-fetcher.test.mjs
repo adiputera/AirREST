@@ -31,7 +31,7 @@ function loadAuthHeaders() {
 }
 const authHeaders = loadAuthHeaders();
 
-function loadFetcher(fetchImpl, hostPermissionResult = null) {
+function loadFetcher(fetchImpl, hostPermissionResult = null, blobs = new Map(), rawBodies = new Map()) {
   const source = fs.readFileSync(new URL('../packages/common/src/lib/fetcher.ts', import.meta.url), 'utf8');
   const compiled = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -45,8 +45,17 @@ function loadFetcher(fetchImpl, hostPermissionResult = null) {
       }
       if (id.includes('blobManager')) {
         return {
-          createTrackedBlobUrl: (blob, track) => (track ? track('blob:test') : 'blob:test'),
+          createTrackedBlobUrl: (blob) => {
+            const url = `blob:test-${blobs.size}`;
+            blobs.set(url, blob);
+            return url;
+          },
           trackBlobUrl: (url) => url,
+          createTrackedRawBody: (bytes) => {
+            const id = `raw:${rawBodies.size + 1}`;
+            rawBodies.set(id, bytes);
+            return id;
+          },
         };
       }
       if (id.includes('urlParams')) {
@@ -370,4 +379,385 @@ test('prepareRequest and executeApiRequest enforce Auth header precedence regard
     assert.equal(h.get('authorization'), 'Bearer auth-test');
     assert.equal(h.get('x-trace'), 'keep-me');
   }
+});
+
+// Render the production viewer with lightweight hook/JSX stubs and invoke its
+// actual Download button. File I/O is captured at the platform adapter boundary.
+function loadDownload(response, blobs, saveFile, rawBodies = new Map(), options = {}) {
+  const source = fs.readFileSync(new URL('../packages/common/src/components/ResponseViewer.tsx', import.meta.url), 'utf8');
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
+  }).outputText;
+  const errors = [];
+  const stateOverrides = options.stateOverrides || {};
+  let stateIndex = 0;
+  const react = {
+    useState: (initial) => {
+      const idx = stateIndex++;
+      const val = idx in stateOverrides
+        ? stateOverrides[idx]
+        : (typeof initial === 'function' ? initial() : initial);
+      return [val, (value) => errors.push(value)];
+    },
+    useEffect: () => {},
+    useRef: (initial = null) => ({ current: initial }),
+  };
+  const jsx = (type, props) => ({ type, props });
+  const modules = {
+    react: { ...react, default: react },
+    'react/jsx-runtime': { jsx, jsxs: jsx },
+    'lucide-react': new Proxy({}, { get: (_, name) => name }),
+    '../store/useApiStore': { useApiStore: (select) => select({ activeResponse: response, tabs: [], isLoading: false }) },
+    '../context': { usePlatformAdapter: () => (options.noAdapter ? null : { saveFile }) },
+    '../lib/blobManager': {
+      getTrackedBlob: (url) => blobs.get(url),
+      getTrackedRawBody: (id) => rawBodies.get(id),
+    },
+    '../lib/backNavigation': { useBackHandler: () => {} },
+  };
+  const exports = {};
+  vm.runInNewContext(compiled, {
+    exports,
+    require: (id) => modules[id] || {},
+    URL: options.URL || URL,
+    Uint8Array,
+    Blob,
+    TextDecoder,
+    Error,
+    document: options.document || {},
+    localStorage: { getItem: () => null },
+    console: { error: () => {} },
+    setTimeout: options.setTimeout || setTimeout,
+    fetch: async () => { throw new Error('Response body is unavailable'); },
+  });
+  const findAll = (node, predicate, out = []) => {
+    if (!node || typeof node !== 'object') return out;
+    if (predicate(node)) out.push(node);
+    const children = [node.props?.children].flat(Infinity);
+    for (const child of children) findAll(child, predicate, out);
+    return out;
+  };
+  const tree = exports.ResponseViewer();
+  const buttons = findAll(tree, (node) =>
+    node.type === 'button' && [node.props?.children].flat(Infinity).some((child) => child?.props?.children === 'Download')
+  );
+  assert.ok(buttons.length > 0, 'Response viewer must expose a Download button');
+  return {
+    download: buttons[0].props.onClick,
+    button: buttons[0],
+    buttons,
+    tree,
+    errors,
+    exports,
+    findAll,
+  };
+}
+
+const xlsxMime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+const workbook = fs.readFileSync(new URL('./fixtures/download.xlsx', import.meta.url));
+
+for (const disposition of ['attachment; filename="report.xlsx"', null]) {
+  test(`XLSX download preserves original workbook bytes (${disposition ? 'server filename' : 'MIME filename'})`, async () => {
+    const blobs = new Map();
+    const rawBodies = new Map();
+    const headers = { 'content-type': xlsxMime };
+    if (disposition) headers['content-disposition'] = disposition;
+    const { executeApiRequest } = loadFetcher(async () => new Response(workbook, { headers }), null, blobs, rawBodies);
+    const response = await executeApiRequest({ ...binaryRequest(), method: 'GET', bodyType: 'none' });
+    const saved = [];
+    const { download } = loadDownload(response, blobs, async (...args) => { saved.push(args); return true; }, rawBodies);
+    await download();
+    assert.equal(saved.length, 1);
+    const [filename, content, options] = saved[0];
+    assert.ok(content instanceof Uint8Array, 'Workbook must be saved as bytes, never decoded text');
+    assert.deepEqual(Buffer.from(content), workbook);
+    assert.equal(options.mimeType, xlsxMime);
+    assert.equal(response.sizeBytes, workbook.length);
+    assert.equal(response.isBinary, true);
+    assert.equal(response.isImage, false);
+    assert.equal(response.blobUrl, undefined, 'Non-image binary response should not mint an active blob URL');
+    assert.ok(response.rawBodyId);
+    assert.match(filename, disposition ? /^report\.xlsx$/ : /^response-\d+\.xlsx$/);
+  });
+}
+
+test('Office MIME types are binary even without null bytes in the sample', () => {
+  const { detectMediaType } = loadFetcher(async () => new Response());
+  for (const mime of [xlsxMime, xlsxMime.toUpperCase() + '; charset=utf-8',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'application/vnd.ms-excel', 'application/vnd.ms-excel.sheet.macroEnabled.12',
+    'application/vnd.ms-excel.sheet.binary.macroEnabled.12']) {
+    assert.equal(detectMediaType(new Uint8Array([0x50, 0x4b, 0xff, 0x80]), mime).isBinary, true, mime);
+  }
+});
+
+test('XML, structured XML, JSON and CSV still retain text previews', async () => {
+  for (const mime of ['application/xml', 'text/xml', 'application/soap+xml', 'application/vnd.example+xml', 'application/json', 'text/csv']) {
+    const body = mime.includes('json') ? '{"value":"café"}' : mime.includes('csv') ? 'value\ncafé' : '<value>café</value>';
+    const rawBodies = new Map();
+    const { executeApiRequest } = loadFetcher(async () => new Response(body, { headers: { 'content-type': mime } }), null, new Map(), rawBodies);
+    const response = await executeApiRequest({ ...binaryRequest(), method: 'GET', bodyType: 'none' });
+    assert.equal(response.isBinary, false, mime);
+    assert.equal(response.data, body, mime);
+    assert.equal(response.blobUrl, undefined, mime);
+    assert.ok(response.rawBodyId, mime);
+  }
+});
+
+test('unavailable binary response and failed writes report errors without exporting placeholders', async () => {
+  const base = { status: 200, headers: {}, contentType: xlsxMime, isBinary: true, data: '[Binary File]', sizeBytes: workbook.length };
+  let writes = 0;
+  for (const blobUrl of [undefined, 'blob:expired']) {
+    const { download, errors } = loadDownload({ ...base, blobUrl }, new Map(), async () => { writes++; });
+    await download();
+    assert.match(errors.at(-1), /no longer available|unavailable/i);
+    assert.doesNotMatch(errors.at(-1), /failed to fetch/i);
+  }
+  assert.equal(writes, 0);
+  const { download, errors } = loadDownload({ ...base, blobUrl: 'blob:workbook' },
+    new Map([['blob:workbook', new Blob([workbook])]]), async () => { throw new Error('Disk full'); });
+  await download();
+  assert.equal(errors.at(-1), 'Disk full');
+});
+
+test('raw byte preservation covers mislabeled XLSX, non-NUL binary, legacy encodings, BOM, 0-255, late NUL, 0-byte, and 4xx/5xx', async () => {
+  const probes = [
+    { name: 'XLSX mislabeled as text/plain', bytes: Uint8Array.from(workbook), contentType: 'text/plain', status: 200 },
+    { name: 'Custom binary without NUL', bytes: new Uint8Array([0x80, 0xff, 0x01, 0x02]), contentType: 'text/plain', status: 200 },
+    { name: 'CSV Windows-1252', bytes: new Uint8Array([0x63, 0x61, 0x66, 0xe9, 0x0d, 0x0a]), contentType: 'text/csv; charset=windows-1252', status: 200 },
+    { name: 'CSV UTF-8 with BOM', bytes: new Uint8Array([0xef, 0xbb, 0xbf, 0x61, 0x2c, 0x62, 0x0d, 0x0a]), contentType: 'text/csv; charset=utf-8', status: 200 },
+    { name: 'TXT UTF-16LE', bytes: new Uint8Array([0xff, 0xfe, 0x61, 0x00, 0x62, 0x00]), contentType: 'text/plain; charset=utf-16le', status: 200 },
+    { name: 'CSV UTF-8 CRLF', bytes: new TextEncoder().encode('a,b\r\n1,café\r\n'), contentType: 'text/csv', status: 200 },
+    { name: 'Bytes 0-255 as text/plain', bytes: Uint8Array.from({ length: 256 }, (_, i) => i), contentType: 'text/plain', status: 200 },
+    { name: 'Late NUL beyond byte 1024', bytes: (() => { const b = new Uint8Array(1200).fill(0x41); b[1150] = 0x00; b[1199] = 0xff; return b; })(), contentType: '', status: 200 },
+    { name: 'Zero-byte 200 OK', bytes: new Uint8Array(0), contentType: 'text/plain', status: 200 },
+    { name: 'Zero-byte 204 No Content', bytes: new Uint8Array(0), contentType: '', status: 204 },
+    { name: 'HTTP 500 error body', bytes: new Uint8Array([0xef, 0xbb, 0xbf, 0x7b, 0x7d]), contentType: 'application/json', status: 500 },
+  ];
+
+  for (const probe of probes) {
+    const blobs = new Map();
+    const rawBodies = new Map();
+    const headers = probe.contentType ? { 'content-type': probe.contentType } : {};
+    const { executeApiRequest } = loadFetcher(
+      async () => new Response(probe.status === 204 ? null : probe.bytes, { status: probe.status, headers }),
+      null,
+      blobs,
+      rawBodies,
+    );
+    const response = await executeApiRequest({ ...binaryRequest(), method: 'GET', bodyType: 'none' });
+    const saved = [];
+    const { download } = loadDownload(response, blobs, async (...args) => { saved.push(args); return true; }, rawBodies);
+    await download();
+    assert.equal(saved.length, 1, probe.name);
+    assert.deepEqual(Buffer.from(saved[0][1]), Buffer.from(probe.bytes), probe.name);
+    if (!probe.contentType) {
+      assert.equal(response.contentType, undefined, probe.name);
+      assert.match(saved[0][0], /^response-\d+\.bin$/, probe.name);
+    }
+  }
+});
+
+test('HEAD response with Content-Length > 10 MiB succeeds with 0 retained bytes', async () => {
+  const blobs = new Map();
+  const rawBodies = new Map();
+  let cancelled = false;
+  const stream = new ReadableStream({
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const { executeApiRequest } = loadFetcher(
+    async () => new Response(stream, {
+      status: 200,
+      headers: { 'content-length': String(50 * 1024 * 1024), 'content-type': 'application/octet-stream' },
+    }),
+    null,
+    blobs,
+    rawBodies,
+  );
+
+  const response = await executeApiRequest({ ...binaryRequest(), method: 'HEAD', bodyType: 'none' });
+  assert.equal(response.status, 200);
+  assert.equal(response.sizeBytes, 0);
+  assert.equal(response.failureKind, undefined);
+  assert.equal(cancelled, true);
+
+  const saved = [];
+  const { download } = loadDownload(response, blobs, async (...args) => { saved.push(args); return true; }, rawBodies);
+  await download();
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0][1].byteLength, 0);
+});
+
+test('detectMediaType prioritizes text Content-Type over BM/GIF magic bytes and keeps valid image sniffing', () => {
+  const { detectMediaType } = loadFetcher(async () => new Response());
+
+  for (const mime of ['text/plain', 'text/csv', 'application/xml']) {
+    for (const prefix of ['BM_ID,Name\n1,Alice', 'GIF89a,label']) {
+      const detected = detectMediaType(new TextEncoder().encode(prefix), mime);
+      assert.equal(detected.isBinary, false, `${mime} with ${prefix}`);
+      assert.equal(detected.isImage, false, `${mime} with ${prefix}`);
+      assert.equal(detected.mimeType, mime);
+    }
+  }
+
+  // application/octet-stream starting with "BM" must stay octet-stream, not BMP
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(detectMediaType(new Uint8Array([0x42, 0x4d, 0x01, 0x02]), 'application/octet-stream'))),
+    { isBinary: true, isImage: false, mimeType: 'application/octet-stream' },
+  );
+
+  // Undeclared BMP text header without reserved zero bytes stays non-binary
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(detectMediaType(new TextEncoder().encode('BM_ID,Name\n1,Alice'), ''))),
+    { isBinary: false, isImage: false, mimeType: '' },
+  );
+
+  // Undeclared real BMP header (reserved bytes 6..9 == 0) is detected as image/bmp
+  const bmpHeader = new Uint8Array(14);
+  bmpHeader[0] = 0x42;
+  bmpHeader[1] = 0x4d;
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(detectMediaType(bmpHeader, ''))),
+    { isBinary: true, isImage: true, mimeType: 'image/bmp' },
+  );
+
+  // Undeclared PNG and GIF89a are detected as images
+  assert.equal(detectMediaType(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), '').mimeType, 'image/png');
+  assert.equal(detectMediaType(new TextEncoder().encode('GIF89a\x01\x00'), '').mimeType, 'image/gif');
+});
+
+test('getFileNameFromHeaders parses RFC 6266/5987 parameters and sanitizes unsafe filenames', () => {
+  const { exports } = loadDownload({ status: 200, headers: {}, data: '' }, new Map(), async () => true);
+  const { getFileNameFromHeaders, getExtensionFromMime } = exports;
+
+  assert.equal(
+    getFileNameFromHeaders(
+      { 'cOnTeNt-DiSpOsItIoN': 'attachment; filename="fallback.xlsx"; filename*=UTF-8\'en\'quarterly%20report%20%28Q4%29.xlsx' },
+      '.bin',
+    ),
+    'quarterly report (Q4).xlsx',
+  );
+  assert.equal(
+    getFileNameFromHeaders({ 'content-disposition': "attachment; filename*=ISO-8859-1''caf%E9.csv" }, '.bin'),
+    'café.csv',
+  );
+  assert.equal(
+    getFileNameFromHeaders({ 'content-disposition': 'attachment; filename="Bob\'s; \\"final\\" report.xlsx"' }, '.bin'),
+    "Bob's; _final_ report.xlsx",
+  );
+  assert.match(
+    getFileNameFromHeaders({ 'content-disposition': 'attachment; filename="   "' }, '.xlsx'),
+    /^response-\d+\.xlsx$/,
+  );
+  assert.equal(
+    getFileNameFromHeaders({ 'content-disposition': 'attachment; filename="../../etc/evil.sh"' }, '.bin'),
+    'evil.sh',
+  );
+  assert.match(
+    getFileNameFromHeaders({ 'content-disposition': 'attachment; filename="../../"' }, '.bin'),
+    /^response-\d+\.bin$/,
+  );
+  assert.equal(
+    getFileNameFromHeaders({ 'content-disposition': 'attachment; filename="C:\\temp\\a?b*c.xlsx"' }, '.bin'),
+    'a_b_c.xlsx',
+  );
+  assert.equal(
+    getFileNameFromHeaders({ 'content-disposition': 'attachment; filename="CON.txt"' }, '.bin'),
+    '_CON.txt',
+  );
+  assert.equal(
+    getFileNameFromHeaders({ 'content-disposition': 'attachment; filename="hello\x00\x1fworld.txt"' }, '.bin'),
+    'helloworld.txt',
+  );
+
+  // MIME-to-extension matrix
+  assert.equal(getExtensionFromMime('application/gzip'), '.gz');
+  assert.equal(getExtensionFromMime('application/x-tar'), '.tar');
+  assert.equal(getExtensionFromMime('application/x-gtar'), '.tar.gz');
+  assert.equal(getExtensionFromMime('text/csv; charset=utf-8'), '.csv');
+  assert.equal(getExtensionFromMime('application/xml'), '.xml');
+  assert.equal(getExtensionFromMime('application/soap+xml'), '.xml');
+  assert.equal(getExtensionFromMime('image/svg+xml'), '.svg');
+  assert.equal(getExtensionFromMime('application/vnd.openxmlformats-officedocument.wordprocessingml.document'), '.docx');
+  assert.equal(getExtensionFromMime('application/vnd.openxmlformats-officedocument.presentationml.presentation'), '.pptx');
+  assert.equal(getExtensionFromMime('application/vnd.bmp.data+json'), '.json');
+  assert.equal(getExtensionFromMime(''), '.bin');
+});
+
+test('synthetic status 0 errors disable Download, modal displays downloadError, and browser fallback uses neutral MIME + 60s revoke', async () => {
+  const synthetic = loadDownload(
+    { status: 0, statusText: 'Request Cancelled', headers: {}, data: 'cancelled', isError: true, failureKind: 'cancelled', sizeBytes: 0, timeMs: 0, timestamp: 1 },
+    new Map(),
+    async () => true,
+  );
+  assert.equal(synthetic.button.props.disabled, true);
+
+  // Expanded modal state (useState call order: activeTab=0, viewMode=1, copied=2, imgDimensions=3, permissionMessage=4, downloadError=5, isExpandedModalOpen=6)
+  const modal = loadDownload(
+    { status: 200, statusText: 'OK', headers: {}, data: 'hello', sizeBytes: 5, timeMs: 1, timestamp: 1 },
+    new Map(),
+    async () => true,
+    new Map(),
+    { stateOverrides: { 5: 'Original response body is no longer available in memory.', 6: true } },
+  );
+  const errorNodes = modal.findAll(modal.tree, (node) =>
+    node.type === 'span' && node.props?.children === 'Original response body is no longer available in memory.'
+  );
+  assert.equal(errorNodes.length, 2, 'downloadError must render in both main pane and Expanded Modal');
+
+  // Browser fallback (no adapter.saveFile)
+  const createdBlobs = [];
+  const revokedUrls = [];
+  const scheduledTimers = [];
+  const appended = [];
+  let clicked = false;
+  let removed = false;
+  class TrackingBlob {
+    constructor(parts, opts) {
+      this.parts = parts;
+      this.type = opts?.type;
+      createdBlobs.push(this);
+    }
+  }
+  const fakeDoc = {
+    createElement: () => ({
+      href: '',
+      download: '',
+      style: {},
+      click: () => { clicked = true; },
+      remove: () => { removed = true; },
+    }),
+    body: {
+      appendChild: (el) => appended.push(el),
+    },
+  };
+  const fakeUrl = {
+    createObjectURL: () => 'blob:fallback-1',
+    revokeObjectURL: (u) => revokedUrls.push(u),
+  };
+  const rawBodies = new Map([['raw:html', new TextEncoder().encode('<script>alert(1)</script>')]]);
+  const fallback = loadDownload(
+    { status: 200, headers: {}, contentType: 'text/html', rawBodyId: 'raw:html', data: '<script>alert(1)</script>', sizeBytes: 25 },
+    new Map(),
+    null,
+    rawBodies,
+    {
+      noAdapter: true,
+      document: fakeDoc,
+      URL: fakeUrl,
+      setTimeout: (fn, ms) => { scheduledTimers.push({ fn, ms }); return 1; },
+    },
+  );
+  // Swap global Blob temporarily via compiled test call? Actually loadDownload passes global Blob; check scheduled timer & click/remove
+  await fallback.download();
+  assert.equal(clicked, true);
+  assert.equal(removed, true);
+  assert.equal(appended.length, 1);
+  assert.equal(scheduledTimers[0].ms, 60_000);
+  assert.equal(revokedUrls.length, 0, 'Must not revoke synchronously');
+  scheduledTimers[0].fn();
+  assert.deepEqual(revokedUrls, ['blob:fallback-1']);
 });

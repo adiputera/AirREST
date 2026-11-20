@@ -74,14 +74,17 @@ export const chromeAdapter: PlatformAdapter = {
   scriptExecutor: chromeScriptExecutor,
   saveFile: async (filename, content, options) => {
     const blob = content instanceof Uint8Array
-      ? new Blob([content as unknown as BlobPart], { type: options?.mimeType || 'application/octet-stream' })
+      ? new Blob([content as unknown as BlobPart], { type: 'application/octet-stream' })
       : new Blob([content], { type: options?.mimeType || 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = filename;
+    if (a.style) a.style.display = 'none';
+    document.body?.appendChild?.(a);
     a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    a.remove?.();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
     return true;
   },
   openFile: async (options) => {

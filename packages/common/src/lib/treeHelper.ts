@@ -1,5 +1,31 @@
-import { CollectionItem } from '../types/api';
+import { Collection, CollectionItem } from '../types/api';
 import { ReorderItemPayload } from './cloudApi';
+
+/** Collection and ancestor folder IDs needed to reveal a saved request. */
+export function findRequestAncestorIds(collections: Collection[], requestId: string): string[] {
+  if (!requestId) return [];
+
+  const findFolders = (items: CollectionItem[], depth = 0): string[] | null => {
+    if (depth > 64) return null;
+    for (const item of items) {
+      if (item.type === 'request' && item.request &&
+          (item.id === requestId || item.request.id === requestId)) {
+        return [];
+      }
+      if (item.type === 'folder') {
+        const ancestors = findFolders(item.items || [], depth + 1);
+        if (ancestors !== null) return [item.id, ...ancestors];
+      }
+    }
+    return null;
+  };
+
+  for (const collection of collections) {
+    const folders = findFolders(collection.items || []);
+    if (folders !== null) return [collection.id, ...folders];
+  }
+  return [];
+}
 
 function cloneItemsPreservingAttachments(items: CollectionItem[]): CollectionItem[] {
   return items.map((item) => ({

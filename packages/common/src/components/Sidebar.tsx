@@ -39,7 +39,7 @@ import { CollectionPermissionModal } from './CollectionPermissionModal';
 import { MoveRequestModal } from './MoveRequestModal';
 import { MoveFolderModal } from './MoveFolderModal';
 import { ImportModal } from './ImportModal';
-import { isDescendantOf } from '../lib/treeHelper';
+import { findRequestAncestorIds, isDescendantOf } from '../lib/treeHelper';
 import { canModifyCollection, hasScopePermission } from '../lib/jwt';
 
 import { ScopeSwitcher } from './ScopeSwitcher';
@@ -915,6 +915,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
   const setSidebarTab = useApiStore((state) => state.setSidebarTab);
   const collections = useApiStore((state) => state.collections);
   const history = useApiStore((state) => state.history);
+  const activeTabId = useApiStore((state) => state.activeTabId);
+  const activeOfflineWorkspaceId = useApiStore((state) => state.activeOfflineWorkspaceId);
   const deleteCollection = useApiStore((state) => state.deleteCollection);
   const renameCollection = useApiStore((state) => state.renameCollection);
   const createCollection = useApiStore((state) => state.createCollection);
@@ -960,6 +962,21 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
   const [showClearHistoryConfirm, setShowClearHistoryConfirm] = useState(false);
   const [collapsedCollections, setCollapsedCollections] = useState<Record<string, boolean>>({});
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({});
+  const lastRevealedPath = useRef<string | null>(null);
+  const workspaceKey = JSON.stringify(workspaceMode === 'offline'
+    ? [workspaceMode, activeOfflineWorkspaceId]
+    : [workspaceMode, cloudConfig.apiUrl, cloudConfig.user?.id,
+      cloudConfig.activeScope?.type, cloudConfig.activeScope?.id]);
+
+  useEffect(() => {
+    const [collectionId, ...folderIds] = findRequestAncestorIds(collections, activeTabId);
+    const pathKey = JSON.stringify([workspaceKey, activeTabId, collectionId, folderIds]);
+    // Edits and background sync must preserve manual expansion when the path is unchanged.
+    if (lastRevealedPath.current === pathKey) return;
+    lastRevealedPath.current = pathKey;
+    setCollapsedCollections(collectionId ? { [collectionId]: false } : {});
+    setOpenFolders(Object.fromEntries(folderIds.map((id) => [id, true])));
+  }, [collections, activeTabId, workspaceKey]);
 
   // Desktop Sidebar drag-to-resize (persisted in localStorage)
   const [isDesktop, setIsDesktop] = useState<boolean>(() =>
@@ -1180,7 +1197,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
   };
 
   const toggleCollectionCollapse = (col: Collection) => {
-    const isCurrentlyCollapsed = !trimmedQuery && !!collapsedCollections[col.id];
+    const isCurrentlyCollapsed = !trimmedQuery && collapsedCollections[col.id] !== false;
     if (!isCurrentlyCollapsed) {
       // Currently open -> collapsing!
       // Reset all folders in this collection so next time it expands 1 level only
@@ -1521,7 +1538,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
             ) : (
               <div className="space-y-2">
                 {filteredCollections.map((col) => {
-                  const isCollapsed = !trimmedQuery && !!collapsedCollections[col.id];
+                  const isCollapsed = !trimmedQuery && collapsedCollections[col.id] !== false;
                   const canEditCol = !col.isPartial && canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role);
 
                   return (

@@ -65,9 +65,10 @@ function formatFileSize(bytes: number): string {
 
 export interface RequestEditorProps {
   onCollapseChange?: (collapsed: boolean) => void;
+  mobileScrollContent?: React.ReactNode;
 }
 
-export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }) => {
+export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, mobileScrollContent }) => {
   const tabs = useApiStore((state) => state.tabs);
   const activeTabId = useApiStore((state) => state.activeTabId);
   const updateActiveRequest = useApiStore((state) => state.updateActiveRequest);
@@ -536,8 +537,10 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
 
   return (
     <>
-      <div className={`flex flex-col flex-1 min-h-full border-b border-line bg-surface px-3.5 pt-2 ${isConfigCollapsed ? 'pb-0' : 'pb-1.5'}`}>
-        {/* Request Name and Actions Bar */}
+      <div className={`flex flex-col flex-1 min-h-full border-b border-line bg-surface max-md:h-full max-md:min-h-0 max-md:border-b-0 md:px-3.5 md:pt-2 ${isConfigCollapsed ? 'md:pb-0' : 'md:pb-1.5'}`}>
+        {/* Pinned Request Top Bar (fixed above mobile scroll container so scroll starts strictly below URL + Resolved bar) */}
+        <div className="min-w-0 shrink-0 max-md:border-b max-md:border-line max-md:bg-surface max-md:px-3.5 max-md:pt-2 max-md:pb-1.5">
+          {/* Request Name and Actions Bar */}
         {currentTab.deletedFromCollection && !savedRequestInfo && (
           <div role="status" className="mb-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
             This request or its collection was deleted during sync. Your open copy is still here. Use Save to choose a collection and save it as a new request.
@@ -866,7 +869,12 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
             </span>
           </div>
         )}
+        </div>
 
+        {/* Scrollable Region Below URL Bar on Mobile (Request Config + Mobile Response) */}
+        <div className="flex min-w-0 flex-1 flex-col min-h-0 max-md:overflow-y-auto">
+        {/* Scrollable Request Configuration (Subtabs & Panels) */}
+        <div className={`flex min-w-0 flex-col max-md:shrink-0 max-md:border-b max-md:border-line max-md:bg-surface max-md:px-3.5 md:flex-1 md:min-h-0 ${isConfigCollapsed ? 'max-md:pb-0' : 'max-md:pb-1.5'}`}>
         {/* Configuration Subtabs */}
         <div className={`mt-1.5 flex items-center justify-between ${isConfigCollapsed ? '' : 'border-b'} border-line gap-2 text-xs font-medium text-tx-muted shrink-0`}>
           <div className="flex items-center gap-4 overflow-x-auto min-w-0">
@@ -1840,6 +1848,9 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange }
             )}
           </div>
         )}
+        </div>
+        {mobileScrollContent}
+        </div>
       </div>
 
       <SaveToCollectionModal
