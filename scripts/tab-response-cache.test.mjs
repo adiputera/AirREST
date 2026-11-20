@@ -1238,3 +1238,316 @@ test('T-EXT-TAB: switching tabs while sendRequest is in-flight does not overwrit
   assert.notEqual(store.getState().activeOfflineWorkspaceId, wsId);
   assert.equal(store.getState().offlineScopeCache?.[wsId], undefined, 'Deleted offline workspace must not remain in offlineScopeCache');
 });
+
+function loadStoreWithRealBlobManager({ executeApiRequest, productPolicy } = {}) {
+  const createdUrls = new Set();
+  const revokedUrls = [];
+  let blobSeq = 0;
+
+  const blobSource = fs.readFileSync(new URL('../packages/common/src/lib/blobManager.ts', import.meta.url), 'utf8');
+  const blobCompiled = ts.transpileModule(blobSource, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const blobManager = {};
+  vm.runInNewContext(blobCompiled, {
+    exports: blobManager,
+    URL: {
+      createObjectURL: () => {
+        const u = `blob:mem-${++blobSeq}`;
+        createdUrls.add(u);
+        return u;
+      },
+      revokeObjectURL: (u) => {
+        createdUrls.delete(u);
+        revokedUrls.push(u);
+      },
+    },
+    Set,
+    Map,
+    Uint8Array,
+  }, { filename: 'packages/common/src/lib/blobManager.ts' });
+
+  const source = fs
+    .readFileSync(new URL('../packages/common/src/store/useApiStore.ts', import.meta.url), 'utf8')
+    .replaceAll('import.meta.env', '({})');
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const exports = {};
+  const noop = () => {};
+  const appStorage = { getItem: async () => null, setItem: async () => {}, removeItem: async () => {} };
+  const modules = {
+    'storage': { appStorage },
+    'nativeCredentials': { getNativeCredentialScope: () => null },
+    'blobManager': blobManager,
+    'fetcher': { executeApiRequest },
+    'scriptRunner': {
+      executePreRequestScript: async () => ({ success: true, environment: {}, variables: {} }),
+      executePostResponseScript: async () => ({ success: true, environment: {}, variables: {} }),
+    },
+    'postman': { importPostmanCollection: noop, importPostmanEnvironment: noop, detectPostmanJsonType: noop },
+    'urlParams': { parseQueryParamsFromUrl: () => [], parsePathVariablesFromUrl: () => [], buildUrlWithParams: (u) => u },
+    'asyncOperationCoordinator': {
+      createAsyncOperationCoordinator: ({ isDisposed }) => {
+        let sessionGeneration = 0;
+        let scopeGeneration = 0;
+        const controllers = new Set();
+        return {
+          begin: () => {
+            const controller = new AbortController();
+            if (isDisposed()) controller.abort();
+            controllers.add(controller);
+            return { controller, sessionGeneration, scopeGeneration };
+          },
+          complete: (operation) => controllers.delete(operation.controller),
+          isCurrent: (operation) => !isDisposed() && !operation.controller.signal.aborted && operation.sessionGeneration === sessionGeneration && operation.scopeGeneration === scopeGeneration,
+          invalidate: ({ session = false } = {}) => {
+            if (session) sessionGeneration++;
+            scopeGeneration++;
+            for (const controller of controllers) controller.abort();
+            controllers.clear();
+          },
+        };
+      },
+    },
+    'scopeCache': {
+      getScopeCacheKey: (scope) => scope?.id ? `${scope.type}:${scope.id}` : 'default',
+      resolveCachedScopeTabs: (entry, createInitialTab) => {
+        const tabs = entry?.tabs?.length ? entry.tabs : [createInitialTab()];
+        return { tabs, activeTabId: entry?.activeTabId && tabs.some((t) => t.id === entry.activeTabId) ? entry.activeTabId : tabs[0].id };
+      },
+      isScopeCacheFresh: () => true,
+    },
+    'scopeSnapshot': {
+      snapshotWorkspaceResources: (r, lastSyncedAt) => ({ ...r, ...(lastSyncedAt !== undefined ? { lastSyncedAt } : {}) }),
+      createEmptyWorkspaceSnapshot: (createInitialTab) => {
+        const t = createInitialTab();
+        return { collections: [], environments: [], activeEnvironmentId: null, tabs: [t], activeTabId: t.id, history: [] };
+      },
+      restoreWorkspaceResources: (snapshot, createInitialTab) => {
+        const src = snapshot || (() => { const t = createInitialTab(); return { collections: [], environments: [], activeEnvironmentId: null, tabs: [t], activeTabId: t.id, history: [] }; })();
+        const tabs = src.tabs?.length ? src.tabs : [createInitialTab()];
+        return { collections: src.collections || [], environments: src.environments || [], activeEnvironmentId: src.activeEnvironmentId || null, tabs, activeTabId: src.activeTabId && tabs.some((t) => t.id === src.activeTabId) ? src.activeTabId : tabs[0].id, history: src.history || [] };
+      },
+    },
+    'cloudSession': {
+      isCloudSessionActive: (c) => Boolean(c.token || (c.sessionKind === 'provider' && c.user?.id)),
+      prepareCloudSessionUpdate: (current, requested, normalizeApiUrl) => ({
+        updates: { ...requested, ...(requested.apiUrl !== undefined ? { apiUrl: normalizeApiUrl(requested.apiUrl) } : {}) },
+        startsNewSession: Boolean(requested.user?.id && requested.user.id !== current.user?.id),
+      }),
+    },
+    'cloudScopeTransition': {
+      isActiveCloudScope: () => false,
+      prepareCloudScopeTransition: ({ targetScope, offlineScopeCache, scopeCache, createInitialTab }) => {
+        const t = createInitialTab();
+        return { isSameScope: false, offlineScopeCache, scopeCache, targetCache: undefined, targetResources: { collections: [], environments: [], activeEnvironmentId: null, tabs: [t], activeTabId: t.id, history: [] }, isFresh: true };
+      },
+    },
+    'workspaceModeTransition': {
+      prepareWorkspaceModeTransition: ({ currentWorkspaceMode, nextWorkspaceMode, activeCloudScope, activeOfflineWorkspaceId, fallbackOfflineWorkspaceId, offlineScopeCache, scopeCache, resources, lastSyncedAt, createInitialTab }) => {
+        const offline = { ...offlineScopeCache };
+        const cloud = { ...scopeCache };
+        if (nextWorkspaceMode === 'offline') {
+          if (activeCloudScope) cloud[`${activeCloudScope.type}:${activeCloudScope.id}`] = { ...resources, lastSyncedAt };
+          const targetCache = offline[activeOfflineWorkspaceId || fallbackOfflineWorkspaceId];
+          const tabs = targetCache?.tabs?.length ? targetCache.tabs : [createInitialTab()];
+          return { offlineScopeCache: offline, scopeCache: cloud, targetCache, targetResources: { collections: targetCache?.collections || [], environments: targetCache?.environments || [], activeEnvironmentId: targetCache?.activeEnvironmentId || null, tabs, activeTabId: tabs[0].id, history: targetCache?.history || [] }, isCloudCacheFresh: false };
+        }
+        if (currentWorkspaceMode === 'offline' && activeOfflineWorkspaceId) offline[activeOfflineWorkspaceId] = { ...resources };
+        const t = createInitialTab();
+        return { offlineScopeCache: offline, scopeCache: cloud, targetCache: undefined, targetResources: { collections: [], environments: [], activeEnvironmentId: null, tabs: [t], activeTabId: t.id, history: [] }, isCloudCacheFresh: false };
+      },
+    },
+    'persistence': {
+      preparePersistedWorkspaceCaches: ({ offlineScopeCache, scopeCache }) => ({ offlineScopeCache, scopeCache }),
+      normalizePersistedWorkspaceScopeCache: (cache) => cache || {},
+    },
+    'cloudSyncCollections': {},
+    'cloudCollectionSync': {},
+    'cloudApi': { normalizeCloudApiUrl: (u) => u, registerTokenRefreshCallback: noop, registerAuthEvictedCallback: noop, fetchUserWorkspaces: noop, fetchUserTeams: noop, fetchTeamProjects: noop, fetchScopeCollections: noop, fetchCollectionById: noop, fetchScopeEnvironments: noop },
+    'treeHelper': { reorderItemInTree: noop },
+    'cloudSyncTransformer': {},
+    'edition': { defaultProductPolicy: { workspace: { cloud: true, offline: true } } },
+    'jwt': { canModifyCollection: () => true, hasScopePermission: () => true },
+    'theme': { applyTheme: noop },
+    'storeContext': { StoreContext: {} },
+  };
+  const loadWorkspaceModule = (name) => {
+    const src = fs.readFileSync(new URL(`../packages/common/src/workspace/${name}.ts`, import.meta.url), 'utf8');
+    const out = ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+    const ex = {};
+    vm.runInNewContext(out, { exports: ex, require: (id) => modules[id.split('/').at(-1)] || {}, Object, JSON, URL });
+    return ex;
+  };
+  const policyExports = {};
+  vm.runInNewContext(ts.transpileModule(fs.readFileSync(new URL('../packages/common/src/productPolicy.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, { exports: policyExports });
+  modules.productPolicy = policyExports;
+  modules.requestDiff = {};
+  modules.cloudDeltaState = loadWorkspaceModule('cloudDeltaState');
+  modules.cloudCacheArchive = loadWorkspaceModule('cloudCacheArchive');
+  modules.cloudCacheRecovery = loadWorkspaceModule('cloudCacheRecovery');
+  modules.cloudWorkspaceSync = loadWorkspaceModule('cloudWorkspaceSync');
+  const cachePersistence = loadWorkspaceModule('persistence');
+  modules.persistence.serializeCloudCacheArchives = cachePersistence.serializeCloudCacheArchives;
+  modules.persistence.normalizeCloudCacheArchives = cachePersistence.normalizeCloudCacheArchives;
+
+  let uuid = 0;
+  vm.runInNewContext(compiled, {
+    exports,
+    require: (id) => {
+      for (const [k, m] of Object.entries(modules)) {
+        if (id === k || id.endsWith(`/${k}`) || id.endsWith(`@/lib/${k}`)) return m;
+      }
+      return require(id);
+    },
+    console,
+    crypto: { randomUUID: () => `uuid-${++uuid}` },
+    Date, JSON, Math, Promise, AbortController, setTimeout, clearTimeout, URL, URLSearchParams, TextEncoder, TextDecoder,
+  }, { filename: 'packages/common/src/store/useApiStore.ts' });
+
+  const store = exports.createApiStore({
+    storage: appStorage,
+    productPolicy: productPolicy || { edition: 'full', workspace: { cloud: true, offline: true } },
+  });
+  return { store, blobManager, createdUrls, revokedUrls };
+}
+
+test('rawBodyId & blobUrl lifecycle: closed-tab history, discarded requests, closeTabsToRight, workspace deletion, session switch, budget eviction, and dispose', async () => {
+  let resolveSlow;
+  let seq = 0;
+  let storeCtx;
+  storeCtx = loadStoreWithRealBlobManager({
+    executeApiRequest: async (req) => {
+      if (req.url.includes('/slow')) {
+        return new Promise((resolve) => { resolveSlow = resolve; });
+      }
+      const bytes = new Uint8Array([++seq, 1, 2, 3]);
+      const rawBodyId = storeCtx.blobManager.createTrackedRawBody(bytes);
+      const blobUrl = storeCtx.blobManager.createTrackedBlobUrl(new Blob([bytes]));
+      return {
+        status: 200,
+        statusText: 'OK',
+        data: `resp-${seq}`,
+        timeMs: 5,
+        sizeBytes: bytes.byteLength,
+        headers: {},
+        rawBodyId,
+        blobUrl,
+        isImage: true,
+        isBinary: true,
+        timestamp: Date.now(),
+      };
+    },
+  });
+  const { store, blobManager, createdUrls } = storeCtx;
+
+  // 1a. Closing an active in-flight tab aborts the operation and releases its handles if executeApiRequest still resolves
+  const tab1 = store.getState().activeTabId;
+  store.getState().createTab({ url: 'https://example.com/slow' });
+  const slowTab = store.getState().activeTabId;
+  const pendingSlowAbort = store.getState().sendRequest();
+  await new Promise((resolve) => setImmediate(resolve));
+  store.getState().closeTab(slowTab);
+  const abortedRawId = blobManager.createTrackedRawBody(new Uint8Array([9, 8, 7]));
+  const abortedBlobUrl = blobManager.createTrackedBlobUrl(new Blob([new Uint8Array([9, 8, 7])]));
+  resolveSlow({
+    status: 200, statusText: 'OK', data: 'aborted-done', timeMs: 10, sizeBytes: 3, headers: {},
+    rawBodyId: abortedRawId, blobUrl: abortedBlobUrl, isImage: true, isBinary: true, timestamp: Date.now(),
+  });
+  await pendingSlowAbort;
+  assert.equal(blobManager.hasTrackedRawBody(abortedRawId), false, 'Aborted closed-tab response must be released');
+  assert.equal(createdUrls.has(abortedBlobUrl), false, 'Aborted closed-tab blobUrl must be revoked');
+
+  // 1b. Completing request when tab is absent without aborting commits to history and must NOT revoke handles
+  store.getState().createTab({ url: 'https://example.com/slow' });
+  const nonAbortedTab = store.getState().activeTabId;
+  const pendingSlow = store.getState().sendRequest();
+  await new Promise((resolve) => setImmediate(resolve));
+  store.setState((s) => ({ tabs: s.tabs.filter((t) => t.id !== nonAbortedTab), activeTabId: tab1 }));
+  const closedRawId = blobManager.createTrackedRawBody(new Uint8Array([9, 8, 7]));
+  const closedBlobUrl = blobManager.createTrackedBlobUrl(new Blob([new Uint8Array([9, 8, 7])]));
+  resolveSlow({
+    status: 200, statusText: 'OK', data: 'slow-done', timeMs: 10, sizeBytes: 3, headers: {},
+    rawBodyId: closedRawId, blobUrl: closedBlobUrl, isImage: true, isBinary: true, timestamp: Date.now(),
+  });
+  await pendingSlow;
+  assert.equal(store.getState().history[0]?.response?.rawBodyId, closedRawId);
+  assert.equal(blobManager.hasTrackedRawBody(closedRawId), true, 'Closed-tab history entry must keep rawBodyId');
+  assert.equal(createdUrls.has(closedBlobUrl), true, 'Closed-tab history entry must keep blobUrl');
+
+  // 2. Discarded in-flight request after workspace switch must release its handles immediately
+  store.getState().setActiveTabId(tab1);
+  store.getState().updateActiveRequest({ url: 'https://example.com/slow' });
+  const pendingCancelled = store.getState().sendRequest();
+  await new Promise((resolve) => setImmediate(resolve));
+  const ws2 = store.getState().createOfflineWorkspace('WS2');
+  const staleRawId = blobManager.createTrackedRawBody(new Uint8Array([5, 5]));
+  const staleBlobUrl = blobManager.createTrackedBlobUrl(new Blob([new Uint8Array([5, 5])]));
+  resolveSlow({
+    status: 200, statusText: 'OK', data: 'stale', timeMs: 10, sizeBytes: 2, headers: {},
+    rawBodyId: staleRawId, blobUrl: staleBlobUrl, isImage: true, isBinary: true, timestamp: Date.now(),
+  });
+  await pendingCancelled;
+  assert.equal(blobManager.hasTrackedRawBody(staleRawId), false, 'Discarded response rawBodyId must be released');
+  assert.equal(createdUrls.has(staleBlobUrl), false, 'Discarded response blobUrl must be revoked');
+
+  // 3. closeTabsToRight must protect shared handles still held by remaining left tab
+  store.getState().clearHistory();
+  const leftTab = store.getState().activeTabId;
+  store.getState().updateActiveRequest({ url: 'https://example.com/shared' });
+  await store.getState().sendRequest();
+  const sharedRes = store.getState().tabResponses[leftTab];
+  store.getState().clearHistory(); // only tabs hold sharedRes now
+  store.getState().createTab({ url: 'https://example.com/right' });
+  const rightTab = store.getState().activeTabId;
+  store.setState((s) => ({ tabResponses: { ...s.tabResponses, [rightTab]: sharedRes } }));
+  store.getState().closeTabsToRight(leftTab);
+  assert.equal(blobManager.hasTrackedRawBody(sharedRes.rawBodyId), true, 'Left tab must keep shared rawBodyId');
+  assert.equal(createdUrls.has(sharedRes.blobUrl), true, 'Left tab must keep shared blobUrl');
+
+  // 4. Starting a re-send releases the previous unreferenced tab response, and cancelActiveRequest aborts cleanly
+  store.getState().updateActiveRequest({ url: 'https://example.com/slow' });
+  const pendingResend = store.getState().sendRequest();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(blobManager.hasTrackedRawBody(sharedRes.rawBodyId), false, 'Re-send must release unreferenced prior tab response');
+  store.getState().cancelActiveRequest();
+  const cancelledRawId = blobManager.createTrackedRawBody(new Uint8Array([7, 7]));
+  resolveSlow({
+    status: 200, statusText: 'OK', data: 'late', timeMs: 5, sizeBytes: 2, headers: {},
+    rawBodyId: cancelledRawId, timestamp: Date.now(),
+  });
+  await pendingResend;
+  assert.equal(blobManager.hasTrackedRawBody(cancelledRawId), false, 'Cancelled request must release late rawBodyId');
+
+  // 5. Deleting active offline workspace releases its live history & tab handles
+  store.getState().updateActiveRequest({ url: 'https://example.com/ws2' });
+  await store.getState().sendRequest();
+  const ws2Resp = store.getState().activeResponse;
+  assert.equal(blobManager.hasTrackedRawBody(ws2Resp.rawBodyId), true);
+  assert.equal(store.getState().deleteOfflineWorkspace(ws2).success, true);
+  assert.equal(blobManager.hasTrackedRawBody(ws2Resp.rawBodyId), false, 'Deleting active workspace must release live rawBodyId');
+  assert.equal(createdUrls.has(ws2Resp.blobUrl), false, 'Deleting active workspace must revoke live blobUrl');
+
+  // 6. Memory budget eviction keeps pinned open-tab body and evicts oldest unpinned entries
+  const pinnedId = blobManager.createTrackedRawBody(new Uint8Array(64));
+  const oldId = blobManager.createTrackedRawBody(new Uint8Array(64));
+  const newerId = blobManager.createTrackedRawBody(new Uint8Array(64));
+  const evicted = blobManager.evictRawBodiesToBudget([pinnedId, closedRawId], 131);
+  assert.deepEqual([...evicted], [oldId]);
+  assert.equal(blobManager.hasTrackedRawBody(pinnedId), true);
+  assert.equal(blobManager.hasTrackedRawBody(oldId), false);
+  assert.equal(blobManager.hasTrackedRawBody(newerId), true);
+
+  // 7. partialize and rehydration strip rawBodyId and blobUrl
+  const persisted = store.persist.getOptions().partialize({
+    ...store.getState(),
+    history: [{ id: 'h1', request: store.getState().tabs[0], response: { status: 200, data: 'x', rawBodyId: newerId, blobUrl: 'blob:x' }, timestamp: 1 }],
+  });
+  assert.equal(persisted.history[0].response.rawBodyId, undefined);
+  assert.equal(persisted.history[0].response.blobUrl, undefined);
+
+  // 8. dispose releases remaining handles owned by this store
+  store.dispose();
+  assert.equal(blobManager.hasTrackedRawBody(closedRawId), false);
+});

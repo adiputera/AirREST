@@ -96,6 +96,8 @@ export interface ApiResponse {
   isBinary?: boolean;
   isImage?: boolean;
   blobUrl?: string;
+  /** Opaque in-memory handle for retained raw response bytes (never persisted across reloads). */
+  rawBodyId?: string;
   requestUrl?: string;
   netErrorCode?: string;
   netErrorCategory?: NetworkErrorCategory;

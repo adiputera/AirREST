@@ -37,7 +37,13 @@ import { applyTheme } from '../lib/theme';
 import { executeApiRequest } from '../lib/fetcher';
 import type { PlatformAdapter, ScriptRequest } from '../types/platform';
 import type { NativeCredentialState, NativeCredentialStorage, NativeCredentialScope } from '../types/credentials';
-import { revokeBlobUrl, revokeBlobUrls } from '../lib/blobManager';
+import {
+  evictRawBodiesToBudget,
+  releaseRawBodies,
+  releaseRawBody,
+  revokeBlobUrl,
+  revokeBlobUrls,
+} from '../lib/blobManager';
 import {
   importPostmanCollection,
   importPostmanEnvironment,
@@ -315,7 +321,7 @@ function serializeHistoryAttachments(history: HistoryItem[]): HistoryItem[] {
   return history.map((entry) => ({
     ...entry,
     request: serializeRequestAttachments(entry.request),
-    response: entry.response ? { ...entry.response, blobUrl: undefined } : undefined,
+    response: entry.response ? { ...entry.response, blobUrl: undefined, rawBodyId: undefined } : undefined,
   }));
 }
 
@@ -323,7 +329,7 @@ function normalizeHistoryAttachments(history: HistoryItem[]): HistoryItem[] {
   return history.map((entry) => ({
     ...entry,
     request: normalizePersistedRequestAttachments(entry.request),
-    response: entry.response ? { ...entry.response, blobUrl: undefined } : undefined,
+    response: entry.response ? { ...entry.response, blobUrl: undefined, rawBodyId: undefined } : undefined,
   }));
 }
 
@@ -747,34 +753,80 @@ export function createApiStore(
   let activeRequestOperation: AsyncOperation | null = null;
   let activeRequestTabId: string | null = null;
 
+  function safeReleaseRawBody(id?: string): void {
+    if (typeof releaseRawBody === 'function') {
+      releaseRawBody(id);
+    }
+  }
+
+  function safeReleaseRawBodies(ids: Iterable<string | undefined>): void {
+    if (typeof releaseRawBodies === 'function') {
+      releaseRawBodies(ids);
+    }
+  }
+
+  function safeEvictRawBodiesToBudget(pinnedIds: Iterable<string>): void {
+    if (typeof evictRawBodiesToBudget === 'function') {
+      evictRawBodiesToBudget(pinnedIds);
+    }
+  }
+
+  function collectProtectedResponseHandles(
+    responses: Iterable<ApiResponse | null | undefined>,
+    histories: Array<Array<HistoryItem> | undefined>
+  ): { blobUrls: Set<string>; rawBodyIds: Set<string> } {
+    const blobUrls = new Set<string>();
+    const rawBodyIds = new Set<string>();
+    for (const res of responses) {
+      if (!res) continue;
+      if (res.blobUrl) blobUrls.add(res.blobUrl);
+      if (res.rawBodyId) rawBodyIds.add(res.rawBodyId);
+    }
+    for (const hist of histories) {
+      if (!hist) continue;
+      for (const item of hist) {
+        if (item.response?.blobUrl) blobUrls.add(item.response.blobUrl);
+        if (item.response?.rawBodyId) rawBodyIds.add(item.response.rawBodyId);
+      }
+    }
+    return { blobUrls, rawBodyIds };
+  }
+
+  function revokeUnreferencedResponses(
+    candidates: Iterable<ApiResponse | null | undefined>,
+    protectedResponses: Iterable<ApiResponse | null | undefined>,
+    protectedHistories: Array<Array<HistoryItem> | undefined>
+  ) {
+    const { blobUrls: protectedBlobs, rawBodyIds: protectedRawIds } = collectProtectedResponseHandles(
+      protectedResponses,
+      protectedHistories
+    );
+
+    const blobsToRevoke = new Set<string>();
+    const rawIdsToRelease = new Set<string>();
+    for (const res of candidates) {
+      if (!res) continue;
+      if (res.blobUrl && !protectedBlobs.has(res.blobUrl)) {
+        blobsToRevoke.add(res.blobUrl);
+      }
+      if (res.rawBodyId && !protectedRawIds.has(res.rawBodyId)) {
+        rawIdsToRelease.add(res.rawBodyId);
+      }
+    }
+    revokeBlobUrls(blobsToRevoke);
+    safeReleaseRawBodies(rawIdsToRelease);
+  }
+
   function revokeUnreferencedTabBlobs(
     prevTabResponses: Record<string, ApiResponse> | undefined,
     prevActiveResponse: ApiResponse | null | undefined,
     protectedHistories: Array<Array<HistoryItem> | undefined>
   ) {
-    const protectedUrls = new Set<string>();
-    for (const hist of protectedHistories) {
-      if (hist) {
-        for (const item of hist) {
-          if (item.response?.blobUrl) {
-            protectedUrls.add(item.response.blobUrl);
-          }
-        }
-      }
-    }
-
-    const toRevoke = new Set<string>();
-    if (prevActiveResponse?.blobUrl && !protectedUrls.has(prevActiveResponse.blobUrl)) {
-      toRevoke.add(prevActiveResponse.blobUrl);
-    }
-    if (prevTabResponses) {
-      for (const res of Object.values(prevTabResponses)) {
-        if (res?.blobUrl && !protectedUrls.has(res.blobUrl)) {
-          toRevoke.add(res.blobUrl);
-        }
-      }
-    }
-    revokeBlobUrls(toRevoke);
+    revokeUnreferencedResponses(
+      [prevActiveResponse, ...(prevTabResponses ? Object.values(prevTabResponses) : [])],
+      [],
+      protectedHistories
+    );
   }
 
   function beginAsyncOperation(): AsyncOperation {
@@ -1228,6 +1280,21 @@ export function createApiStore(
             normalizedUpdates.activeScope = undefined;
             nextConfig = { ...nextConfig, activeScope: undefined };
           }
+          const cloudCandidates: Array<ApiResponse | null | undefined> = [
+            ...(before.workspaceMode === 'cloud'
+              ? [before.activeResponse, ...Object.values(before.tabResponses || {}), ...before.history.map((h) => h.response)]
+              : []),
+            ...Object.values(before.scopeCache || {}).flatMap((entry) => (entry.history || []).map((h) => h.response)),
+          ];
+          const protectedResponses: Array<ApiResponse | null | undefined> = before.workspaceMode === 'offline'
+            ? [before.activeResponse, ...Object.values(before.tabResponses || {})]
+            : [];
+          const protectedHistories: Array<Array<HistoryItem> | undefined> = [
+            ...(before.workspaceMode === 'offline' ? [before.history] : []),
+            ...Object.values(before.offlineScopeCache || {}).map((e) => e.history),
+          ];
+          revokeUnreferencedResponses(cloudCandidates, protectedResponses, protectedHistories);
+
           const snapshot = captureCloudCache({
             config: currentConfig,
             workspaceMode: before.workspaceMode,
@@ -1812,28 +1879,18 @@ export function createApiStore(
             ? currentState.cloudCacheOwner : null,
           captured,
         );
-        const toRevokeLogout = new Set<string>();
-        if (currentState.activeResponse?.blobUrl) toRevokeLogout.add(currentState.activeResponse.blobUrl);
-        Object.values(currentState.tabResponses || {}).forEach((r) => {
-          if (r?.blobUrl) toRevokeLogout.add(r.blobUrl);
-        });
-        currentState.history.forEach((h) => {
-          if (h.response?.blobUrl) toRevokeLogout.add(h.response.blobUrl);
-        });
-        Object.values(currentState.scopeCache || {}).forEach((entry) => {
-          entry.history?.forEach((h) => {
-            if (h.response?.blobUrl) toRevokeLogout.add(h.response.blobUrl);
-          });
-        });
-        (localEntry.history || []).forEach((h) => {
-          if (h.response?.blobUrl) toRevokeLogout.delete(h.response.blobUrl);
-        });
-        Object.values(offlineScopeCache || {}).forEach((entry) => {
-          entry.history?.forEach((h) => {
-            if (h.response?.blobUrl) toRevokeLogout.delete(h.response.blobUrl);
-          });
-        });
-        revokeBlobUrls(toRevokeLogout);
+        const candidateResponses: Array<ApiResponse | null | undefined> = [
+          currentState.activeResponse,
+          ...Object.values(currentState.tabResponses || {}),
+          ...currentState.history.map((h) => h.response),
+          ...Object.values(currentState.scopeCache || {}).flatMap((entry) =>
+            (entry.history || []).map((h) => h.response)
+          ),
+        ];
+        revokeUnreferencedResponses(candidateResponses, [], [
+          localEntry.history,
+          ...Object.values(offlineScopeCache || {}).map((entry) => entry.history),
+        ]);
 
         const preserveCleanupPending = Boolean(
           currentState.nativeCredentialCleanupPending || currentState.nativeCredentialState?.phase === 'cleanup-pending',
@@ -2655,18 +2712,31 @@ export function createApiStore(
 
         const remainingWorkspaces = list.filter((w) => w.id !== id);
         const updatedOfflineCache = { ...(offlineScopeCache || {}) };
-        revokeBlobUrls((updatedOfflineCache[id]?.history || []).map((entry) => entry.response?.blobUrl));
+        const deletedCacheHistory = updatedOfflineCache[id]?.history || [];
         delete updatedOfflineCache[id];
+
+        const { workspaceMode, history: liveHistory, scopeCache: currentScopeCache } = get();
+        const deletingLiveOffline = activeOfflineWorkspaceId === id && workspaceMode === 'offline';
+        const candidateResponses: Array<ApiResponse | null | undefined> = [
+          ...deletedCacheHistory.map((entry) => entry.response),
+          ...(deletingLiveOffline ? liveHistory.map((entry) => entry.response) : []),
+          ...(activeOfflineWorkspaceId === id
+            ? [get().activeResponse, ...Object.values(get().tabResponses || {})]
+            : []),
+        ];
+        const protectedResponses: Array<ApiResponse | null | undefined> =
+          activeOfflineWorkspaceId !== id
+            ? [get().activeResponse, ...Object.values(get().tabResponses || {})]
+            : [];
+        const protectedHistories: Array<Array<HistoryItem> | undefined> = [
+          ...(deletingLiveOffline ? [] : [liveHistory]),
+          ...Object.values(updatedOfflineCache).map((e) => e.history),
+          ...Object.values(currentScopeCache || {}).map((e) => e.history),
+        ];
+        revokeUnreferencedResponses(candidateResponses, protectedResponses, protectedHistories);
 
         if (activeOfflineWorkspaceId === id) {
           const nextWs = remainingWorkspaces[0];
-          const currentTabResponses = get().tabResponses || {};
-          const currentActiveResp = get().activeResponse;
-          const toRevokeActive = [
-            currentActiveResp?.blobUrl,
-            ...Object.values(currentTabResponses).map((r) => r?.blobUrl),
-          ];
-          revokeBlobUrls(toRevokeActive);
 
           set({
             offlineWorkspaces: remainingWorkspaces,
@@ -3309,15 +3379,18 @@ export function createApiStore(
         set((state) => {
           const shouldResetLoading = aborted || (state.isLoading && state.activeTabId === id && !activeRequestOperation);
           const closedResponse = state.tabResponses?.[id];
-          if (closedResponse?.blobUrl) {
-            const isReferencedInHistory = state.history.some((h) => h.response?.blobUrl === closedResponse.blobUrl);
-            const isReferencedInOtherTab = Object.entries(state.tabResponses || {}).some(
-              ([tabId, res]) => tabId !== id && res?.blobUrl === closedResponse.blobUrl
-            );
-            if (!isReferencedInHistory && !isReferencedInOtherTab) {
-              revokeBlobUrl(closedResponse.blobUrl);
-            }
-          }
+          const remainingTabResponses = Object.entries(state.tabResponses || {})
+            .filter(([tabId]) => tabId !== id)
+            .map(([, res]) => res);
+          revokeUnreferencedResponses(
+            [closedResponse],
+            remainingTabResponses,
+            [
+              state.history,
+              ...Object.values(state.scopeCache || {}).map((e) => e.history),
+              ...Object.values(state.offlineScopeCache || {}).map((e) => e.history),
+            ]
+          );
 
           const nextTabResponses = { ...(state.tabResponses || {}) };
           delete nextTabResponses[id];
@@ -3386,14 +3459,18 @@ export function createApiStore(
             nextTabResponses[id] = state.tabResponses[id];
           }
 
-          Object.entries(state.tabResponses || {}).forEach(([tabId, res]) => {
-            if (tabId !== id && res?.blobUrl) {
-              const isReferencedInHistory = state.history.some((h) => h.response?.blobUrl === res.blobUrl);
-              if (!isReferencedInHistory && nextTabResponses[id]?.blobUrl !== res.blobUrl) {
-                revokeBlobUrl(res.blobUrl);
-              }
-            }
-          });
+          const removedResponses = Object.entries(state.tabResponses || {})
+            .filter(([tabId]) => tabId !== id)
+            .map(([, res]) => res);
+          revokeUnreferencedResponses(
+            removedResponses,
+            nextTabResponses[id] ? [nextTabResponses[id]] : [],
+            [
+              state.history,
+              ...Object.values(state.scopeCache || {}).map((e) => e.history),
+              ...Object.values(state.offlineScopeCache || {}).map((e) => e.history),
+            ]
+          );
 
           return {
             tabs: [targetTab],
@@ -3423,14 +3500,15 @@ export function createApiStore(
         }
 
         set((state) => {
-          Object.values(state.tabResponses || {}).forEach((res) => {
-            if (res?.blobUrl) {
-              const isReferencedInHistory = state.history.some((h) => h.response?.blobUrl === res.blobUrl);
-              if (!isReferencedInHistory) {
-                revokeBlobUrl(res.blobUrl);
-              }
-            }
-          });
+          revokeUnreferencedResponses(
+            [state.activeResponse, ...Object.values(state.tabResponses || {})],
+            [],
+            [
+              state.history,
+              ...Object.values(state.scopeCache || {}).map((e) => e.history),
+              ...Object.values(state.offlineScopeCache || {}).map((e) => e.history),
+            ]
+          );
 
           return {
             tabs: [],
@@ -3475,16 +3553,23 @@ export function createApiStore(
           const nextActiveId = wasActiveClosed ? id : state.activeTabId;
 
           const nextTabResponses: Record<string, ApiResponse> = {};
+          const closedResponses: ApiResponse[] = [];
           Object.entries(state.tabResponses || {}).forEach(([tabId, res]) => {
             if (remainingIds.has(tabId)) {
               nextTabResponses[tabId] = res;
-            } else if (res?.blobUrl) {
-              const isReferencedInHistory = state.history.some((h) => h.response?.blobUrl === res.blobUrl);
-              if (!isReferencedInHistory) {
-                revokeBlobUrl(res.blobUrl);
-              }
+            } else {
+              closedResponses.push(res);
             }
           });
+          revokeUnreferencedResponses(
+            closedResponses,
+            Object.values(nextTabResponses),
+            [
+              state.history,
+              ...Object.values(state.scopeCache || {}).map((e) => e.history),
+              ...Object.values(state.offlineScopeCache || {}).map((e) => e.history),
+            ]
+          );
 
           return {
             tabs: remainingTabs,
@@ -4179,6 +4264,21 @@ export function createApiStore(
         activeRequestOperation = operation;
         activeRequestTabId = activeReq.id;
         set((s) => {
+          const prevTabResponse = s.tabResponses?.[activeReq.id];
+          const prevActive = s.activeTabId === activeReq.id ? s.activeResponse : undefined;
+          const remainingTabResponses = Object.entries(s.tabResponses || {})
+            .filter(([tabId]) => tabId !== activeReq.id)
+            .map(([, res]) => res);
+          revokeUnreferencedResponses(
+            [prevTabResponse, prevActive],
+            remainingTabResponses,
+            [
+              s.history,
+              ...Object.values(s.scopeCache || {}).map((e) => e.history),
+              ...Object.values(s.offlineScopeCache || {}).map((e) => e.history),
+            ]
+          );
+
           const nextTabResponses = { ...(s.tabResponses || {}) };
           delete nextTabResponses[activeReq.id];
           return {
@@ -4345,7 +4445,11 @@ export function createApiStore(
             operation.controller.signal,
             boundAdapter
           );
-          if (!isAsyncOperationCurrent(operation)) return;
+          if (!isAsyncOperationCurrent(operation)) {
+            revokeBlobUrl(response.blobUrl);
+            safeReleaseRawBody(response.rawBodyId);
+            return;
+          }
 
           // 4. Execute Post-response script (tests, token extraction)
           let scriptError: string | undefined;
@@ -4361,7 +4465,11 @@ export function createApiStore(
               { signal: operation.controller.signal, scriptExecutor: boundAdapter?.scriptExecutor, request: scriptRequest }
             );
 
-            if (!isAsyncOperationCurrent(operation)) return;
+            if (!isAsyncOperationCurrent(operation)) {
+              revokeBlobUrl(response.blobUrl);
+              safeReleaseRawBody(response.rawBodyId);
+              return;
+            }
 
             if (postScriptResult.success && activeEnv) {
               set((s) => ({
@@ -4421,19 +4529,7 @@ export function createApiStore(
             const isCurrentTab = s.activeTabId === activeReq.id;
             const tabStillExists = s.tabs.some((t) => t.id === activeReq.id);
 
-            const openTabBlobUrls = new Set(
-              Object.values(s.tabResponses || {})
-                .map((r) => r?.blobUrl)
-                .filter((u): u is string => Boolean(u))
-            );
-            if (s.activeResponse?.blobUrl) openTabBlobUrls.add(s.activeResponse.blobUrl);
-
             const evictedHistory = s.history.slice(49);
-            const toRevoke = evictedHistory
-              .map((entry) => entry.response?.blobUrl)
-              .filter((url): url is string => Boolean(url && !openTabBlobUrls.has(url)));
-            revokeBlobUrls(toRevoke);
-
             const newHistory = [historyEntry, ...s.history].slice(0, 50);
             const updatedTabResponses = tabStillExists
               ? {
@@ -4442,9 +4538,27 @@ export function createApiStore(
                 }
               : (s.tabResponses || {});
 
-            if (!tabStillExists && finalResponse.blobUrl) {
-              revokeBlobUrl(finalResponse.blobUrl);
+            const nextActiveResponse = isCurrentTab ? finalResponse : s.activeResponse;
+            const protectedResponses = [
+              nextActiveResponse,
+              ...Object.values(updatedTabResponses),
+            ];
+            revokeUnreferencedResponses(
+              evictedHistory.map((entry) => entry.response),
+              protectedResponses,
+              [
+                newHistory,
+                ...Object.values(s.scopeCache || {}).map((e) => e.history),
+                ...Object.values(s.offlineScopeCache || {}).map((e) => e.history),
+              ]
+            );
+
+            const pinnedRawIds = new Set<string>();
+            for (const res of protectedResponses) {
+              if (res?.rawBodyId) pinnedRawIds.add(res.rawBodyId);
             }
+            if (finalResponse.rawBodyId) pinnedRawIds.add(finalResponse.rawBodyId);
+            safeEvictRawBodiesToBudget(pinnedRawIds);
 
             if (s.workspaceMode === 'offline') {
               return {
@@ -4524,6 +4638,20 @@ export function createApiStore(
         activeRequestOperation = null;
         activeRequestTabId = null;
         set((state) => {
+          const prevTabResponse = state.tabResponses?.[state.activeTabId];
+          const remainingTabResponses = Object.entries(state.tabResponses || {})
+            .filter(([tabId]) => tabId !== state.activeTabId)
+            .map(([, res]) => res);
+          revokeUnreferencedResponses(
+            [prevTabResponse, state.activeResponse],
+            remainingTabResponses,
+            [
+              state.history,
+              ...Object.values(state.scopeCache || {}).map((e) => e.history),
+              ...Object.values(state.offlineScopeCache || {}).map((e) => e.history),
+            ]
+          );
+
           const cancelledResponse: ApiResponse = {
             status: 0,
             statusText: 'Request Cancelled',
@@ -6173,17 +6301,20 @@ export function createApiStore(
 
       clearHistory: () => {
         set((s) => {
-          const activeTabBlobUrls = new Set(
-            Object.values(s.tabResponses || {})
-              .map((r) => r?.blobUrl)
-              .filter(Boolean)
+          const activeScopeKey = s.workspaceMode === 'cloud' && s.cloudConfig.activeScope
+            ? getScopeCacheKey(s.cloudConfig.activeScope)
+            : null;
+          const otherCloudHistories = Object.entries(s.scopeCache || {})
+            .filter(([key]) => key !== activeScopeKey)
+            .map(([, entry]) => entry.history);
+          const otherOfflineHistories = Object.entries(s.offlineScopeCache || {})
+            .filter(([key]) => !(s.workspaceMode === 'offline' && key === s.activeOfflineWorkspaceId))
+            .map(([, entry]) => entry.history);
+          revokeUnreferencedResponses(
+            s.history.map((entry) => entry.response),
+            [s.activeResponse, ...Object.values(s.tabResponses || {})],
+            [...otherCloudHistories, ...otherOfflineHistories]
           );
-          if (s.activeResponse?.blobUrl) {
-            activeTabBlobUrls.add(s.activeResponse.blobUrl);
-          }
-          revokeBlobUrls(s.history
-            .filter((entry) => !entry.response?.blobUrl || !activeTabBlobUrls.has(entry.response.blobUrl))
-            .map((entry) => entry.response?.blobUrl));
           if (s.workspaceMode === 'offline') {
             return { history: [] };
           }
@@ -6212,13 +6343,21 @@ export function createApiStore(
       deleteHistoryItem: (id) => {
         set((state) => {
           const deleted = state.history.find((item) => item.id === id);
-          const isReferencedInTabs = Object.values(state.tabResponses || {}).some(
-            (r) => r?.blobUrl === deleted?.response?.blobUrl
-          ) || state.activeResponse?.blobUrl === deleted?.response?.blobUrl;
-          if (!isReferencedInTabs) {
-            revokeBlobUrl(deleted?.response?.blobUrl);
-          }
           const newHistory = state.history.filter((h) => h.id !== id);
+          const activeScopeKey = state.workspaceMode === 'cloud' && state.cloudConfig.activeScope
+            ? getScopeCacheKey(state.cloudConfig.activeScope)
+            : null;
+          const otherCloudHistories = Object.entries(state.scopeCache || {})
+            .filter(([key]) => key !== activeScopeKey)
+            .map(([, entry]) => entry.history);
+          const otherOfflineHistories = Object.entries(state.offlineScopeCache || {})
+            .filter(([key]) => !(state.workspaceMode === 'offline' && key === state.activeOfflineWorkspaceId))
+            .map(([, entry]) => entry.history);
+          revokeUnreferencedResponses(
+            [deleted?.response],
+            [state.activeResponse, ...Object.values(state.tabResponses || {})],
+            [newHistory, ...otherCloudHistories, ...otherOfflineHistories]
+          );
           if (state.workspaceMode === 'offline') {
             return {
               history: newHistory,
@@ -6519,6 +6658,18 @@ export function createApiStore(
   }) as typeof store.setState;
 
   (store as ApiStore).dispose = () => {
+    const snapshot = store.getState();
+    const { blobUrls, rawBodyIds } = collectProtectedResponseHandles(
+      [snapshot.activeResponse, ...Object.values(snapshot.tabResponses || {})],
+      [
+        snapshot.history,
+        ...Object.values(snapshot.scopeCache || {}).map((e) => e.history),
+        ...Object.values(snapshot.offlineScopeCache || {}).map((e) => e.history),
+      ]
+    );
+    revokeBlobUrls(blobUrls);
+    safeReleaseRawBodies(rawBodyIds);
+
     isStoreDisposed = true;
     for (const key of Object.keys(undoTypingTimers)) {
       clearTimeout(undoTypingTimers[key]);

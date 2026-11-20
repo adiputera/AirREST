@@ -88,3 +88,16 @@ test('should connect the tab bar viewport to overflow counts and explicit select
   assert.match(source, /ref=\{tabBarRef\}/);
   assert.match(source, /useLayoutEffect/);
 });
+
+test('should anchor the new-tab button to the last tab, right edge on overflow, or left edge when empty', () => {
+  const source = fs.readFileSync(
+    new URL('../packages/common/src/components/TabBar.tsx', import.meta.url),
+    'utf8'
+  );
+
+  assert.doesNotMatch(source, /ref=\{tabViewportRef\}[^>]*flex-1/);
+  assert.match(source, /className=\{hasTabs \? 'min-w-0 overflow-x-auto scrollbar-none' : 'hidden'\}/);
+  assert.match(source, /ref=\{tabTrackRef\} className="flex w-max items-center gap-1\.5"/);
+  assert.match(source, /hasTabs && tabOverflow\.left > 0/);
+  assert.match(source, /hasTabs && tabOverflow\.right > 0/);
+});

@@ -29,28 +29,83 @@ import {
 import { useApiStore } from '../store/useApiStore';
 import { requestHostPermission } from '../lib/hostPermissions';
 import { usePlatformAdapter } from '../context';
-import { getTrackedBlob } from '../lib/blobManager';
+import { getTrackedBlob, getTrackedRawBody } from '../lib/blobManager';
 import { useBackHandler } from '../lib/backNavigation';
 import { CodeEditor, CodeEditorHandle } from './editor/CodeEditor';
 
-function getExtensionFromMime(mime: string): string {
-  const m = (mime || '').toLowerCase();
-  if (m.includes('webp')) return '.webp';
-  if (m.includes('png')) return '.png';
-  if (m.includes('jpeg') || m.includes('jpg')) return '.jpg';
-  if (m.includes('gif')) return '.gif';
-  if (m.includes('svg')) return '.svg';
-  if (m.includes('avif')) return '.avif';
-  if (m.includes('bmp')) return '.bmp';
-  if (m.includes('pdf')) return '.pdf';
-  if (m.includes('json')) return '.json';
-  if (m.includes('zip')) return '.zip';
-  if (m.includes('gzip') || m.includes('tar')) return '.tar.gz';
-  if (m.includes('audio/mpeg') || m.includes('mp3')) return '.mp3';
-  if (m.includes('audio/wav')) return '.wav';
-  if (m.includes('video/mp4')) return '.mp4';
-  if (m.includes('text/html') || m.includes('html')) return '.html';
-  if (m.includes('text/plain') || m.includes('plain')) return '.txt';
+const EXACT_MIME_EXTENSIONS: Record<string, string> = {
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+  'application/vnd.ms-excel': '.xls',
+  'application/vnd.ms-excel.sheet.macroenabled.12': '.xlsm',
+  'application/vnd.ms-excel.sheet.binary.macroenabled.12': '.xlsb',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+  'application/msword': '.doc',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx',
+  'application/vnd.ms-powerpoint': '.ppt',
+  'application/vnd.oasis.opendocument.text': '.odt',
+  'application/vnd.oasis.opendocument.spreadsheet': '.ods',
+  'application/vnd.oasis.opendocument.presentation': '.odp',
+  'application/pdf': '.pdf',
+  'text/csv': '.csv',
+  'application/csv': '.csv',
+  'text/tab-separated-values': '.tsv',
+  'application/json': '.json',
+  'text/json': '.json',
+  'application/xml': '.xml',
+  'text/xml': '.xml',
+  'text/html': '.html',
+  'application/xhtml+xml': '.html',
+  'text/css': '.css',
+  'application/javascript': '.js',
+  'text/javascript': '.js',
+  'application/ecmascript': '.js',
+  'text/ecmascript': '.js',
+  'text/markdown': '.md',
+  'text/plain': '.txt',
+  'application/yaml': '.yaml',
+  'text/yaml': '.yaml',
+  'application/x-yaml': '.yaml',
+  'image/svg+xml': '.svg',
+  'image/webp': '.webp',
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/jpg': '.jpg',
+  'image/gif': '.gif',
+  'image/avif': '.avif',
+  'image/bmp': '.bmp',
+  'image/x-ms-bmp': '.bmp',
+  'image/x-icon': '.ico',
+  'image/vnd.microsoft.icon': '.ico',
+  'image/tiff': '.tiff',
+  'application/zip': '.zip',
+  'application/x-zip-compressed': '.zip',
+  'application/gzip': '.gz',
+  'application/x-gzip': '.gz',
+  'application/x-tar': '.tar',
+  'application/tar': '.tar',
+  'application/x-gtar': '.tar.gz',
+  'application/x-7z-compressed': '.7z',
+  'application/vnd.rar': '.rar',
+  'application/x-rar-compressed': '.rar',
+  'application/wasm': '.wasm',
+  'application/octet-stream': '.bin',
+  'audio/mpeg': '.mp3',
+  'audio/mp3': '.mp3',
+  'audio/wav': '.wav',
+  'audio/x-wav': '.wav',
+  'audio/ogg': '.ogg',
+  'video/mp4': '.mp4',
+  'video/webm': '.webm',
+};
+
+export function getExtensionFromMime(mime: string): string {
+  const m = (mime || '').split(';')[0].trim().toLowerCase();
+  if (!m) return '.bin';
+  if (EXACT_MIME_EXTENSIONS[m]) return EXACT_MIME_EXTENSIONS[m];
+  if (m.endsWith('+json')) return '.json';
+  if (m.endsWith('+xml')) return '.xml';
+  if (m.endsWith('+zip')) return '.zip';
+  if (m.startsWith('text/')) return '.txt';
   return '.bin';
 }
 
@@ -62,13 +117,135 @@ export function safeDecodeURIComponent(value: string): string {
   }
 }
 
-export function getFileNameFromHeaders(headers: Record<string, string> = {}, defaultExt: string): string {
-  const disposition = headers['content-disposition'] || headers['Content-Disposition'];
-  if (disposition) {
-    const match = /filename\*?=['"]?(?:UTF-\d['"]*)?([^;\r\n"']*)['"]?/i.exec(disposition);
-    if (match && match[1]) {
-      return safeDecodeURIComponent(match[1].trim());
+function decodeRfc5987Value(charset: string, encoded: string): string {
+  const normalized = charset.trim().toLowerCase();
+  if (normalized === 'iso-8859-1' || normalized === 'latin1') {
+    const bytes: number[] = [];
+    for (let i = 0; i < encoded.length; i++) {
+      if (encoded[i] === '%' && i + 2 < encoded.length && /^[0-9a-fA-F]{2}$/.test(encoded.slice(i + 1, i + 3))) {
+        bytes.push(Number.parseInt(encoded.slice(i + 1, i + 3), 16));
+        i += 2;
+      } else {
+        bytes.push(encoded.charCodeAt(i) & 0xff);
+      }
     }
+    return new TextDecoder('latin1').decode(new Uint8Array(bytes));
+  }
+  return safeDecodeURIComponent(encoded);
+}
+
+function splitHeaderParams(headerValue: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  let escaped = false;
+  for (let i = 0; i < headerValue.length; i++) {
+    const ch = headerValue[i];
+    if (escaped) {
+      current += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\' && inQuotes) {
+      current += ch;
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+      current += ch;
+      continue;
+    }
+    if (ch === ';' && !inQuotes) {
+      parts.push(current);
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  if (current) parts.push(current);
+  return parts;
+}
+
+function unquoteHeaderParam(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('"')) {
+    let result = '';
+    for (let i = 1; i < trimmed.length; i++) {
+      const ch = trimmed[i];
+      if (ch === '\\' && i + 1 < trimmed.length && (trimmed[i + 1] === '"' || trimmed[i + 1] === '\\')) {
+        result += trimmed[i + 1];
+        i++;
+        continue;
+      }
+      if (ch === '"') break;
+      result += ch;
+    }
+    return result;
+  }
+  return trimmed;
+}
+
+export function sanitizeDownloadFilename(rawName: string): string {
+  const withoutControl = rawName.replace(/[\x00-\x1f\x7f]/g, '');
+  const segments = withoutControl.split(/[/\\]+/).filter(Boolean);
+  let base = segments.length > 0 ? segments[segments.length - 1] : '';
+  if (!base || base === '.' || base === '..') return '';
+
+  base = base.replace(/[<>:"/\\|?*]/g, '_').replace(/^[.\s]+|[.\s]+$/g, '');
+  if (!base || base === '.' || base === '..') return '';
+
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i.test(base)) {
+    base = `_${base}`;
+  }
+
+  if (base.length > 200) {
+    const extMatch = /(\.[a-z0-9]{1,16})$/i.exec(base);
+    if (extMatch) {
+      const ext = extMatch[1];
+      base = base.slice(0, 200 - ext.length) + ext;
+    } else {
+      base = base.slice(0, 200);
+    }
+  }
+
+  return base;
+}
+
+export function getFileNameFromHeaders(headers: Record<string, string> = {}, defaultExt: string): string {
+  const entry = Object.entries(headers || {}).find(
+    ([key]) => key.trim().toLowerCase() === 'content-disposition'
+  );
+  const disposition = entry?.[1];
+  if (disposition) {
+    let extFilename: string | null = null;
+    let plainFilename: string | null = null;
+
+    const params = splitHeaderParams(disposition).slice(1);
+    for (const part of params) {
+      const eqIdx = part.indexOf('=');
+      if (eqIdx === -1) continue;
+      const paramName = part.slice(0, eqIdx).trim().toLowerCase();
+      const rawVal = part.slice(eqIdx + 1).trim();
+
+      if (paramName === 'filename*' && extFilename === null) {
+        const unwrapped = rawVal.startsWith('"') ? unquoteHeaderParam(rawVal) : rawVal;
+        const rfc5987 = /^([^']*)'([^']*)'(.*)$/.exec(unwrapped);
+        const decoded = rfc5987
+          ? decodeRfc5987Value(rfc5987[1], rfc5987[3])
+          : safeDecodeURIComponent(unwrapped);
+        const sanitized = sanitizeDownloadFilename(decoded);
+        if (sanitized) extFilename = sanitized;
+      } else if (paramName === 'filename' && plainFilename === null) {
+        const unquoted = unquoteHeaderParam(rawVal);
+        const decoded = safeDecodeURIComponent(unquoted);
+        const sanitized = sanitizeDownloadFilename(decoded);
+        if (sanitized) plainFilename = sanitized;
+      }
+    }
+
+    if (extFilename) return extFilename;
+    if (plainFilename) return plainFilename;
   }
   return `response-${Date.now()}${defaultExt}`;
 }
@@ -128,6 +305,15 @@ export const ResponseViewer: React.FC = () => {
   const startResponseHeightRef = React.useRef(400);
   const responseEditorRef = React.useRef<CodeEditorHandle>(null);
   const modalResponseEditorRef = React.useRef<CodeEditorHandle>(null);
+  const latestResponseRef = React.useRef(activeResponse);
+  latestResponseRef.current = activeResponse;
+  const isDownloadingRef = React.useRef(false);
+
+  const isSyntheticError = Boolean(
+    activeResponse &&
+      activeResponse.status === 0 &&
+      (activeResponse.isError || activeResponse.failureKind || activeResponse.scriptErrorStage === 'pre-request')
+  );
 
   // Register back navigation handler for expanded response modal
   useBackHandler(isExpandedModalOpen, () => setIsExpandedModalOpen(false), 25);
@@ -227,65 +413,65 @@ export const ResponseViewer: React.FC = () => {
   };
 
   const handleDownload = async () => {
-    if (!activeResponse) return;
-    setDownloadError(null);
-
-    // If binary response has lost its blob body (e.g. after restart / storage rehydration),
-    // do not export placeholder string "[Binary File: ...]"
-    if (activeResponse.isBinary && !activeResponse.blobUrl) {
-      setDownloadError('Binary response body is no longer available in memory. Please re-run the request to download the original file.');
+    const targetResponse = activeResponse;
+    if (!targetResponse || isDownloadingRef.current) return;
+    if (
+      targetResponse.status === 0 &&
+      (targetResponse.isError || targetResponse.failureKind || targetResponse.scriptErrorStage === 'pre-request')
+    ) {
       return;
     }
+
+    setDownloadError(null);
+    isDownloadingRef.current = true;
 
     const adapter = runtimeAdapter;
 
     try {
-      const ext = getExtensionFromMime(activeResponse.contentType || '');
-      const filename = getFileNameFromHeaders(activeResponse.headers, ext);
-      if (activeResponse.blobUrl) {
-        // Resolve blob bytes directly from tracked registry before fetch fallback
-        let bytes: Uint8Array;
-        const tracked = getTrackedBlob(activeResponse.blobUrl);
+      let bytes = targetResponse.rawBodyId ? getTrackedRawBody?.(targetResponse.rawBodyId) : undefined;
+      if (!bytes && targetResponse.blobUrl) {
+        const tracked = getTrackedBlob?.(targetResponse.blobUrl);
         if (tracked) {
-          const buffer = await tracked.arrayBuffer();
-          bytes = new Uint8Array(buffer);
-        } else {
-          const blobRes = await fetch(activeResponse.blobUrl);
-          const arrayBuffer = await blobRes.arrayBuffer();
-          bytes = new Uint8Array(arrayBuffer);
+          bytes = new Uint8Array(await tracked.arrayBuffer());
         }
+      }
 
-        if (adapter?.saveFile) {
-          await adapter.saveFile(filename, bytes, { mimeType: activeResponse.contentType });
-          return;
+      if (!bytes) {
+        if (latestResponseRef.current === targetResponse) {
+          setDownloadError(
+            'Original response body is no longer available in memory. Please re-run the request to download the original file.'
+          );
         }
-
-        const a = document.createElement('a');
-        a.href = activeResponse.blobUrl;
-        a.download = filename;
-        a.click();
         return;
       }
 
-      if (!activeResponse.data) return;
+      const ext = getExtensionFromMime(targetResponse.contentType || '');
+      const filename = getFileNameFromHeaders(targetResponse.headers, ext);
 
       if (adapter?.saveFile) {
-        await adapter.saveFile(filename, activeResponse.data, { mimeType: activeResponse.contentType || 'text/plain' });
+        await adapter.saveFile(filename, bytes, { mimeType: targetResponse.contentType });
         return;
       }
 
-      const blob = new Blob([activeResponse.data], {
-        type: activeResponse.contentType || 'text/plain',
+      const blob = new Blob([bytes as unknown as BlobPart], {
+        type: 'application/octet-stream',
       });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = filename;
+      if (a.style) a.style.display = 'none';
+      document.body?.appendChild?.(a);
       a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      a.remove?.();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch (err: unknown) {
       console.error('Failed to download response:', err);
-      setDownloadError(err instanceof Error ? err.message : 'Failed to save file.');
+      if (latestResponseRef.current === targetResponse) {
+        setDownloadError(err instanceof Error ? err.message : 'Failed to save file.');
+      }
+    } finally {
+      isDownloadingRef.current = false;
     }
   };
 
@@ -380,9 +566,9 @@ export const ResponseViewer: React.FC = () => {
   const responseLanguage: 'json' | 'xml' | 'text' = isJson ? 'json' : isXml ? 'xml' : 'text';
 
   return (
-    <div className="flex flex-1 flex-col overflow-hidden bg-app">
+    <div className="flex min-w-0 flex-1 flex-col md:overflow-hidden bg-app">
       {/* Response Header Bar */}
-      <div className="flex min-h-12 flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2">
+      <div className="flex min-h-12 shrink-0 flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2">
         <div className="flex flex-wrap items-center gap-3 md:gap-4">
           <span className="text-xs font-bold uppercase tracking-wider text-tx-muted">Response</span>
 
@@ -441,9 +627,11 @@ export const ResponseViewer: React.FC = () => {
             )}
 
             <button
+              type="button"
               onClick={handleDownload}
-              className="flex items-center gap-1 rounded-lg border border-line bg-card px-2.5 py-1 text-xs text-tx-secondary hover:bg-hover hover:text-tx-primary transition"
-              title="Download response"
+              disabled={isSyntheticError}
+              className="flex items-center gap-1 rounded-lg border border-line bg-card px-2.5 py-1 text-xs text-tx-secondary hover:bg-hover hover:text-tx-primary transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-card disabled:hover:text-tx-secondary"
+              title={isSyntheticError ? 'No server response body to download' : 'Download response'}
             >
               <Download className="h-3.5 w-3.5 text-tx-muted" />
               <span>Download</span>
@@ -480,7 +668,7 @@ export const ResponseViewer: React.FC = () => {
 
       {/* Subtabs (Body vs Headers) when response exists */}
       {activeResponse && !isLoading && (
-        <div className="flex items-center justify-between border-b border-line px-4 py-2">
+        <div className="flex shrink-0 items-center justify-between border-b border-line px-4 py-2">
           <div className="flex gap-4 text-xs font-medium text-tx-muted">
             <button
               onClick={() => setActiveTab('body')}
@@ -576,9 +764,9 @@ export const ResponseViewer: React.FC = () => {
       )}
 
       {/* Main Response Content */}
-      <div className="flex-1 overflow-auto p-4">
+      <div className="flex min-w-0 flex-1 flex-col md:overflow-auto p-4">
         {activeResponse && !isLoading && activeResponse.updatedEnvVars && activeResponse.updatedEnvVars.length > 0 && (
-          <div className="mb-4 flex items-center gap-2.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-600 dark:text-emerald-300">
+          <div className="mb-4 flex shrink-0 items-center gap-2.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-600 dark:text-emerald-300">
             <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500 dark:text-emerald-400" />
             <div>
               <span className="font-semibold">Environment Variables Updated: </span>
@@ -590,7 +778,7 @@ export const ResponseViewer: React.FC = () => {
         )}
 
         {isLoading ? (
-          <div className="flex h-full flex-col items-center justify-center space-y-3">
+          <div className="my-auto flex shrink-0 flex-col items-center justify-center space-y-3 py-6 text-center">
             <div className="h-8 w-8 animate-spin rounded-full border-2 border-sky-500 border-t-transparent" />
             <p className="text-xs text-tx-muted font-mono animate-pulse">
               Dispatching request via Hybrid Engine...
@@ -598,8 +786,8 @@ export const ResponseViewer: React.FC = () => {
           </div>
         ) : !activeResponse ? (
           /* Empty State with Quick-Start Templates */
-          <div className="flex h-full flex-col items-center justify-center text-center max-w-md mx-auto py-12">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-tr from-sky-500/10 to-indigo-500/10 border border-sky-500/20 text-sky-500 dark:text-sky-400 shadow-xl">
+          <div className="my-auto mx-auto flex w-full max-w-md shrink-0 flex-col items-center py-6 md:py-12 text-center">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-tr from-sky-500/10 to-indigo-500/10 border border-sky-500/20 text-sky-500 dark:text-sky-400 shadow-xl">
               <Sparkles className="h-6 w-6" />
             </div>
             <h3 className="mt-4 text-sm font-semibold text-tx-primary">Ready to Test APIs</h3>
@@ -612,44 +800,44 @@ export const ResponseViewer: React.FC = () => {
                 onClick={() =>
                   loadSampleAndSend('https://jsonplaceholder.typicode.com/todos/1', 'GET')
                 }
-                className="flex w-full items-center justify-between rounded-xl border border-line bg-card p-3 text-left hover:border-sky-500/40 hover:bg-hover transition group"
+                className="flex w-full items-center justify-between gap-3 rounded-xl border border-line bg-card p-3 text-left hover:border-sky-500/40 hover:bg-hover transition group"
               >
-                <div className="flex items-center gap-2.5">
-                  <span className="font-mono text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded">
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <span className="shrink-0 font-mono text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded">
                     GET
                   </span>
-                  <div>
+                  <div className="min-w-0">
                     <div className="text-xs font-medium text-tx-primary">
                       JSONPlaceholder Todo
                     </div>
-                    <div className="text-[11px] font-mono text-tx-muted">
+                    <div className="text-[11px] font-mono text-tx-muted break-all">
                       https://jsonplaceholder.typicode.com/todos/1
                     </div>
                   </div>
                 </div>
-                <ExternalLink className="h-3.5 w-3.5 text-tx-muted group-hover:text-sky-500 transition" />
+                <ExternalLink className="h-3.5 w-3.5 shrink-0 text-tx-muted group-hover:text-sky-500 transition" />
               </button>
 
               <button
                 onClick={() =>
                   loadSampleAndSend('https://httpbin.org/get?user=tester&tag=api', 'GET')
                 }
-                className="flex w-full items-center justify-between rounded-xl border border-line bg-card p-3 text-left hover:border-sky-500/40 hover:bg-hover transition group"
+                className="flex w-full items-center justify-between gap-3 rounded-xl border border-line bg-card p-3 text-left hover:border-sky-500/40 hover:bg-hover transition group"
               >
-                <div className="flex items-center gap-2.5">
-                  <span className="font-mono text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded">
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <span className="shrink-0 font-mono text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded">
                     GET
                   </span>
-                  <div>
+                  <div className="min-w-0">
                     <div className="text-xs font-medium text-tx-primary">
                       HTTPBin Echo Query
                     </div>
-                    <div className="text-[11px] font-mono text-tx-muted">
+                    <div className="text-[11px] font-mono text-tx-muted break-all">
                       https://httpbin.org/get?user=tester&tag=api
                     </div>
                   </div>
                 </div>
-                <ExternalLink className="h-3.5 w-3.5 text-tx-muted group-hover:text-sky-500 transition" />
+                <ExternalLink className="h-3.5 w-3.5 shrink-0 text-tx-muted group-hover:text-sky-500 transition" />
               </button>
 
               <button
@@ -660,27 +848,27 @@ export const ResponseViewer: React.FC = () => {
                     JSON.stringify({ title: 'New Post', body: 'Tested with AirREST', userId: 1 }, null, 2)
                   )
                 }
-                className="flex w-full items-center justify-between rounded-xl border border-line bg-card p-3 text-left hover:border-sky-500/40 hover:bg-hover transition group"
+                className="flex w-full items-center justify-between gap-3 rounded-xl border border-line bg-card p-3 text-left hover:border-sky-500/40 hover:bg-hover transition group"
               >
-                <div className="flex items-center gap-2.5">
-                  <span className="font-mono text-[10px] font-bold text-sky-600 dark:text-sky-400 bg-sky-500/10 border border-sky-500/20 px-1.5 py-0.5 rounded">
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <span className="shrink-0 font-mono text-[10px] font-bold text-sky-600 dark:text-sky-400 bg-sky-500/10 border border-sky-500/20 px-1.5 py-0.5 rounded">
                     POST
                   </span>
-                  <div>
+                  <div className="min-w-0">
                     <div className="text-xs font-medium text-tx-primary">
                       Create Post Payload
                     </div>
-                    <div className="text-[11px] font-mono text-tx-muted">
+                    <div className="text-[11px] font-mono text-tx-muted break-all">
                       https://jsonplaceholder.typicode.com/posts
                     </div>
                   </div>
                 </div>
-                <ExternalLink className="h-3.5 w-3.5 text-tx-muted group-hover:text-sky-500 transition" />
+                <ExternalLink className="h-3.5 w-3.5 shrink-0 text-tx-muted group-hover:text-sky-500 transition" />
               </button>
             </div>
           </div>
         ) : activeTab === 'scripts' ? (
-          <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-xs text-rose-700 dark:text-rose-200 shadow-sm">
+          <div className="shrink-0 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-xs text-rose-700 dark:text-rose-200 shadow-sm">
             <div className="flex items-start gap-2.5">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-500 dark:text-rose-400" />
               <div className="min-w-0 space-y-2">
@@ -696,9 +884,15 @@ export const ResponseViewer: React.FC = () => {
             </div>
           </div>
         ) : activeTab === 'body' ? (
-          <div>
+          <div
+            className={
+              activeResponse.isImage || activeResponse.isBinary
+                ? 'shrink-0'
+                : 'flex flex-col max-md:shrink-0 md:min-h-0 md:flex-1'
+            }
+          >
             {activeResponse.isError && activeResponse.status === 0 && (
-              <div className="mb-4">
+              <div className="mb-4 shrink-0">
                 {activeResponse.failureKind ? (
                   <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs text-amber-800 dark:text-amber-100 shadow-sm">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1028,15 +1222,21 @@ export const ResponseViewer: React.FC = () => {
                 </button>
               </div>
             ) : (
-              <div className="space-y-1">
-                <CodeEditor
-                  ref={responseEditorRef}
-                  value={viewMode === 'pretty' ? prettyJson : activeResponse.data}
-                  readOnly={true}
-                  language={responseLanguage}
-                  height={responseHeight}
-                  className="w-full"
-                />
+              <div className="flex flex-col gap-1 md:min-h-0 md:flex-1">
+                <div
+                  style={{ '--response-editor-height': `${responseHeight}px` } as React.CSSProperties}
+                  className="flex flex-col max-md:h-[var(--response-editor-height)] md:min-h-0 md:flex-1"
+                >
+                  <CodeEditor
+                    ref={responseEditorRef}
+                    value={viewMode === 'pretty' ? prettyJson : activeResponse.data}
+                    readOnly={true}
+                    language={responseLanguage}
+                    height="100%"
+                    minHeight={140}
+                    className="min-h-0 flex-1 w-full"
+                  />
+                </div>
                 <div
                   onMouseDown={(e) => handleStartResponseResize(e.clientY)}
                   onTouchStart={handleTouchStartResponseResize}
@@ -1048,7 +1248,7 @@ export const ResponseViewer: React.FC = () => {
                       // ignore
                     }
                   }}
-                  className="flex items-center justify-center py-1 cursor-row-resize hover:bg-hover/60 rounded-md transition select-none group"
+                  className="flex md:hidden items-center justify-center py-1 cursor-row-resize hover:bg-hover/60 rounded-md transition select-none group"
                   title="Drag up/down to resize response height (Double-click to reset)"
                 >
                   <div className="flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-element/50 group-hover:bg-element border border-transparent group-hover:border-line transition">
@@ -1063,7 +1263,7 @@ export const ResponseViewer: React.FC = () => {
           </div>
         ) : (
           /* Response Headers Table */
-          <div className="overflow-hidden rounded-xl border border-line bg-surface">
+          <div className="shrink-0 overflow-x-auto rounded-xl border border-line bg-surface">
             <table className="w-full text-left text-xs font-mono">
               <thead className="border-b border-line bg-element text-tx-muted">
                 <tr>
@@ -1187,8 +1387,9 @@ export const ResponseViewer: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleDownload}
-                  className="flex items-center gap-1 rounded-lg border border-line bg-card px-2.5 py-1.5 text-xs text-tx-secondary hover:bg-hover hover:text-tx-primary transition cursor-pointer"
-                  title="Download response"
+                  disabled={isSyntheticError}
+                  className="flex items-center gap-1 rounded-lg border border-line bg-card px-2.5 py-1.5 text-xs text-tx-secondary hover:bg-hover hover:text-tx-primary transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-card disabled:hover:text-tx-secondary"
+                  title={isSyntheticError ? 'No server response body to download' : 'Download response'}
                 >
                   <Download className="h-3.5 w-3.5 text-tx-muted" />
                   <span>Download</span>
@@ -1208,6 +1409,21 @@ export const ResponseViewer: React.FC = () => {
 
             {/* Modal Body */}
             <div className="flex-1 min-h-0 p-5 overflow-auto bg-app">
+              {downloadError && (
+                <div className="mb-4 flex items-center justify-between rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-600 dark:text-rose-300">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="h-4 w-4 shrink-0 text-rose-500 dark:text-rose-400" />
+                    <span>{downloadError}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setDownloadError(null)}
+                    className="text-rose-500 dark:text-rose-400 hover:text-tx-primary transition"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
               {activeTab === 'body' ? (
                 activeResponse.isImage && activeResponse.blobUrl ? (
                   <div className="flex min-h-[400px] h-full items-center justify-center overflow-auto rounded-xl border border-line bg-card/60 p-6">

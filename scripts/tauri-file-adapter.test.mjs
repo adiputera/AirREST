@@ -129,3 +129,20 @@ test('T-NAT-FILE: openFile rejects oversized file exceeding 16 MiB limit before 
   assert.equal(calculateVersionCode('1.3.0'), 1003000);
 });
 
+test('zero-byte binary write and write failures propagate properly; Android SAF avoids text/plain coercion on non-txt filenames', async () => {
+  const uri = 'content://documents/document/export%3Aempty';
+  const { adapter, calls } = loadAdapter(true, uri);
+
+  assert.equal(await adapter.saveFile('empty.bin', new Uint8Array(0), { mimeType: undefined }), true);
+  assert.equal(calls[0][1].filters[0].extensions[0], 'application/octet-stream');
+  assert.equal(calls[1][0], 'write-bytes');
+  assert.equal(calls[1][2].byteLength, 0);
+
+  await adapter.saveFile('report.xlsx', new Uint8Array([0x50, 0x4b]), { mimeType: 'text/plain' });
+  assert.equal(
+    calls[2][1].filters[0].extensions[0],
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'Android SAF filter must use extension MIME rather than mislabeled text/plain',
+  );
+});
+

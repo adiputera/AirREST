@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import test from 'node:test';
 import vm from 'node:vm';
+import zlib from 'node:zlib';
 import ts from 'typescript';
 
 // NOTE: This test harness exercises production algorithms (readResponseBody, normalizeCloudApiUrl)
@@ -2797,6 +2798,9 @@ test('native HTTP suppresses implicit Origin at the plugin IPC boundary for Send
   const cargo = fs.readFileSync(new URL('../apps/native/src-tauri/Cargo.toml', import.meta.url), 'utf8');
   assert.match(cargo, /tauri-plugin-http\s*=\s*\{[^\n]*"unsafe-headers"/,
     'The Rust plugin needs unsafe-headers to remove the empty Origin before network I/O');
+  assert.match(cargo, /tauri-plugin-http\s*=\s*\{[^\n]*"gzip"/);
+  assert.match(cargo, /tauri-plugin-http\s*=\s*\{[^\n]*"deflate"/);
+  assert.match(cargo, /tauri-plugin-http\s*=\s*\{[^\n]*"brotli"/);
 
   for (const transport of [tauriTestTransport, tauriCloudTransport]) {
     for (const headers of [undefined, { Authorization: 'Bearer test-token' }, [['X-Test', 'value']], new Headers({ 'X-Test': 'value' })]) {
@@ -3167,4 +3171,98 @@ test('an uncertain cloud move blocks stale saves until the server tree is refres
     assert.equal(runtime.store.getState().saveActiveRequest().success, false);
     assert.match((await runtime.store.getState().moveRequest('source', request.id, 'target', null)).error, /confirm the previous move/);
   } finally { runtime.dispose(); }
+});
+
+test('readResponseBody handles HEAD with large Content-Length and distinguishes gzip/deflate/br Content-Encoding from downloadable .gz files', async () => {
+  const originalPayload = Buffer.from('AirREST compression parity payload ' + '0123456789abcdef'.repeat(32));
+  const gzippedFile = zlib.gzipSync(originalPayload);
+  const deflatedPayload = zlib.deflateSync(originalPayload);
+  const brotliPayload = zlib.brotliCompressSync(originalPayload);
+
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    if (url.pathname === '/large-head') {
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': String(50 * 1024 * 1024),
+      });
+      res.end();
+      return;
+    }
+    if (url.pathname === '/download.gz') {
+      // Downloadable .gz file WITHOUT Content-Encoding: gzip bytes must remain intact
+      res.writeHead(200, {
+        'Content-Type': 'application/gzip',
+        'Content-Disposition': 'attachment; filename="archive.gz"',
+        'Content-Length': String(gzippedFile.length),
+      });
+      res.end(gzippedFile);
+      return;
+    }
+    if (url.pathname === '/encoded-gzip') {
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Content-Encoding': 'gzip',
+      });
+      res.end(gzippedFile);
+      return;
+    }
+    if (url.pathname === '/encoded-deflate') {
+      res.writeHead(200, {
+        'Content-Type': 'text/plain',
+        'Content-Encoding': 'deflate',
+      });
+      res.end(deflatedPayload);
+      return;
+    }
+    if (url.pathname === '/encoded-br') {
+      res.writeHead(200, {
+        'Content-Type': 'text/plain',
+        'Content-Encoding': 'br',
+      });
+      res.end(brotliPayload);
+      return;
+    }
+    if (url.pathname === '/misconfigured-gz') {
+      // Both Content-Type: application/gzip and Content-Encoding: gzip -> HTTP transport decompresses
+      res.writeHead(200, {
+        'Content-Type': 'application/gzip',
+        'Content-Encoding': 'gzip',
+      });
+      res.end(gzippedFile);
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    // 1. HEAD request with Content-Length > 10 MiB must not throw ResponseTooLargeError
+    const headController = new AbortController();
+    const headRes = await fetch(`${baseUrl}/large-head`, { method: 'HEAD', signal: headController.signal });
+    const headBytes = await readResponseBody(headRes, headController, { method: 'HEAD' });
+    assert.equal(headBytes.byteLength, 0);
+
+    // 2. Downloadable .gz file retains exact .gz bytes (magic 1f 8b)
+    const gzFileController = new AbortController();
+    const gzFileRes = await fetch(`${baseUrl}/download.gz`, { signal: gzFileController.signal });
+    const gzFileBytes = await readResponseBody(gzFileRes, gzFileController);
+    assert.deepEqual(Buffer.from(gzFileBytes), gzippedFile);
+    assert.equal(gzFileBytes[0], 0x1f);
+    assert.equal(gzFileBytes[1], 0x8b);
+
+    // 3. Content-Encoding gzip, deflate, br decompress transparently at the transport boundary
+    for (const path of ['/encoded-gzip', '/encoded-deflate', '/encoded-br', '/misconfigured-gz']) {
+      const controller = new AbortController();
+      const res = await fetch(`${baseUrl}${path}`, { signal: controller.signal });
+      const bytes = await readResponseBody(res, controller);
+      assert.deepEqual(Buffer.from(bytes), originalPayload, path);
+    }
+  } finally {
+    await new Promise((cb) => server.close(cb));
+  }
 });

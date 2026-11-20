@@ -1,7 +1,7 @@
 import { ApiRequest, ApiResponse, NetworkErrorCategory } from '../types/api';
 import { PlatformAdapter, TestRequestOptions } from '../types/platform';
 import { resolveBodyContentTypeHeader, resolveEffectiveAuthHeader, resolveManualHeaders } from './authHeaders';
-import { createTrackedBlobUrl } from './blobManager';
+import { createTrackedBlobUrl, createTrackedRawBody } from './blobManager';
 import { substitutePathVariables } from './urlParams';
 
 export const RESPONSE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024; // 10 MiB
@@ -15,7 +15,27 @@ export class ResponseTooLargeError extends Error {
   }
 }
 
-export async function readResponseBody(response: Response, controller: AbortController): Promise<Uint8Array> {
+export async function readResponseBody(
+  response: Response,
+  controller: AbortController,
+  options?: { method?: string }
+): Promise<Uint8Array> {
+  const isBodyless =
+    options?.method?.toUpperCase() === 'HEAD' ||
+    response.status === 204 ||
+    response.status === 205 ||
+    response.status === 304;
+  if (isBodyless) {
+    if (response.body) {
+      try {
+        await response.body.cancel();
+      } catch {
+        // ignore cancellation failure on bodyless response
+      }
+    }
+    return new Uint8Array();
+  }
+
   const declaredSize = Number.parseInt(response.headers.get('content-length') || '', 10);
   if (Number.isFinite(declaredSize) && declaredSize > RESPONSE_SIZE_LIMIT_BYTES) {
     controller.abort();
@@ -302,14 +322,55 @@ export function detectMediaType(
     return { isBinary: true, isImage: true, mimeType: declared };
   }
 
-  if (buffer.length >= 4) {
+  const isKnownText =
+    declared.startsWith('text/') ||
+    declared.includes('json') ||
+    // Office Open XML documents are ZIP packages, not XML text.
+    declared === 'application/xml' ||
+    declared.endsWith('+xml') ||
+    declared.includes('javascript') ||
+    declared.includes('ecmascript') ||
+    declared.includes('x-www-form-urlencoded') ||
+    declared.includes('graphql');
+
+  if (isKnownText) {
+    return { isBinary: false, isImage: false, mimeType: declared };
+  }
+
+  const isKnownBinary =
+    declared === 'application/octet-stream' ||
+    declared === 'application/pdf' ||
+    declared === 'application/wasm' ||
+    declared === 'application/msword' ||
+    declared === 'application/vnd.ms-powerpoint' ||
+    declared === 'application/vnd.ms-excel' ||
+    declared.startsWith('application/vnd.ms-excel.') ||
+    declared.startsWith('application/vnd.ms-powerpoint.') ||
+    declared.startsWith('application/vnd.ms-word.') ||
+    declared.startsWith('application/vnd.openxmlformats-officedocument.') ||
+    declared === 'application/x-7z-compressed' ||
+    declared === 'application/vnd.rar' ||
+    declared === 'application/x-rar-compressed' ||
+    declared.includes('zip') ||
+    declared.includes('tar') ||
+    declared.includes('gzip') ||
+    declared.startsWith('audio/') ||
+    declared.startsWith('video/');
+
+  // Magic-byte image sniffing runs only when Content-Type is absent or generic octet-stream,
+  // preventing text/plain or text/csv payloads starting with "BM" or "GIF8" from turning into images.
+  if ((!declared || declared === 'application/octet-stream') && buffer.length >= 4) {
     if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
       return { isBinary: true, isImage: true, mimeType: 'image/png' };
     }
     if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
       return { isBinary: true, isImage: true, mimeType: 'image/jpeg' };
     }
-    if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x38) {
+    if (
+      buffer.length >= 6 &&
+      buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x38 &&
+      (buffer[4] === 0x37 || buffer[4] === 0x39) && buffer[5] === 0x61
+    ) {
       return { isBinary: true, isImage: true, mimeType: 'image/gif' };
     }
     if (
@@ -319,33 +380,18 @@ export function detectMediaType(
     ) {
       return { isBinary: true, isImage: true, mimeType: 'image/webp' };
     }
-    if (buffer[0] === 0x42 && buffer[1] === 0x4d) {
+    // 2-byte "BM" only qualifies when undeclared and the BMP header reserved bytes (6..9) are zero.
+    if (
+      !declared &&
+      buffer.length >= 14 &&
+      buffer[0] === 0x42 && buffer[1] === 0x4d &&
+      buffer[6] === 0x00 && buffer[7] === 0x00 && buffer[8] === 0x00 && buffer[9] === 0x00
+    ) {
       return { isBinary: true, isImage: true, mimeType: 'image/bmp' };
     }
   }
 
-  const isKnownText =
-    declared.startsWith('text/') ||
-    declared.includes('json') ||
-    declared.includes('xml') ||
-    declared.includes('javascript') ||
-    declared.includes('ecmascript') ||
-    declared.includes('x-www-form-urlencoded') ||
-    declared.includes('graphql');
-
-  if (isKnownText) {
-    return { isBinary: false, isImage: false, mimeType: declared || 'text/plain' };
-  }
-
-  if (
-    declared === 'application/octet-stream' ||
-    declared === 'application/pdf' ||
-    declared.includes('zip') ||
-    declared.includes('tar') ||
-    declared.includes('gzip') ||
-    declared.startsWith('audio/') ||
-    declared.startsWith('video/')
-  ) {
+  if (isKnownBinary) {
     return { isBinary: true, isImage: false, mimeType: declared || 'application/octet-stream' };
   }
 
@@ -362,7 +408,7 @@ export function detectMediaType(
     return { isBinary: true, isImage: false, mimeType: declared || 'application/octet-stream' };
   }
 
-  return { isBinary: false, isImage: false, mimeType: declared || 'text/plain' };
+  return { isBinary: false, isImage: false, mimeType: declared };
 }
 
 export function categorizeNetworkError(code?: string | null): NetworkErrorCategory {
@@ -563,19 +609,21 @@ export async function executeApiRequest(
     });
 
     const rawContentType = response.headers.get('content-type') || '';
-    const uint8 = await readResponseBody(response, controller);
+    const uint8 = await readResponseBody(response, controller, { method: request.method });
     const sizeBytes = uint8.byteLength;
 
     const { isBinary, isImage, mimeType } = detectMediaType(uint8, rawContentType);
+    const rawBodyId = typeof createTrackedRawBody === 'function' ? createTrackedRawBody(uint8) : undefined;
 
     let textData = '';
     let blobUrl: string | undefined = undefined;
 
-    if (isBinary) {
-      const blobBuffer = new ArrayBuffer(uint8.byteLength);
-      new Uint8Array(blobBuffer).set(uint8);
-      const blob = new Blob([blobBuffer], { type: mimeType });
+    if (isImage) {
+      const blob = new Blob([uint8 as unknown as BlobPart], { type: mimeType });
       blobUrl = createTrackedBlobUrl(blob);
+    }
+
+    if (isBinary) {
       if (mimeType === 'image/svg+xml') {
         const decoder = new TextDecoder('utf-8', { fatal: false });
         textData = decoder.decode(uint8);
@@ -596,10 +644,11 @@ export async function executeApiRequest(
       data: textData,
       isError: !response.ok,
       timestamp: Date.now(),
-      contentType: mimeType,
+      contentType: mimeType || undefined,
       isBinary,
       isImage,
       blobUrl,
+      rawBodyId,
       requestUrl: finalUrl,
     };
   } catch (err: unknown) {

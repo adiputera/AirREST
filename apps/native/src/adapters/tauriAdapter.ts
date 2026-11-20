@@ -205,6 +205,65 @@ interface ActiveWorkerRecord {
 
 const activeWorkerRecords = new Set<ActiveWorkerRecord>();
 
+const ANDROID_EXTENSION_TO_MIME: Record<string, string> = {
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsm': 'application/vnd.ms-excel.sheet.macroenabled.12',
+  '.xlsb': 'application/vnd.ms-excel.sheet.binary.macroenabled.12',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.doc': 'application/msword',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.ppt': 'application/vnd.ms-powerpoint',
+  '.pdf': 'application/pdf',
+  '.zip': 'application/zip',
+  '.gz': 'application/gzip',
+  '.tar': 'application/x-tar',
+  '.7z': 'application/x-7z-compressed',
+  '.rar': 'application/vnd.rar',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.avif': 'image/avif',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  '.json': 'application/json',
+  '.xml': 'application/xml',
+  '.csv': 'text/csv',
+  '.tsv': 'text/tab-separated-values',
+  '.html': 'text/html',
+  '.css': 'text/css',
+  '.js': 'application/javascript',
+  '.md': 'text/markdown',
+  '.yaml': 'application/yaml',
+  '.yml': 'application/yaml',
+  '.txt': 'text/plain',
+  '.wasm': 'application/wasm',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.bin': 'application/octet-stream',
+};
+
+export function resolveAndroidSaveMimeType(filename: string, mimeType?: string): string | undefined {
+  const declared = (mimeType || '').split(';')[0].trim().toLowerCase();
+  const extMatch = /(\.[a-z0-9]+)$/i.exec(filename.trim());
+  const ext = extMatch ? extMatch[1].toLowerCase() : '';
+  const expected = ext ? ANDROID_EXTENSION_TO_MIME[ext] : undefined;
+
+  if (expected) {
+    if (!declared || declared === 'application/octet-stream' || declared !== expected) {
+      return expected;
+    }
+    return declared;
+  }
+
+  return declared || 'application/octet-stream';
+}
+
 export function dialogFilters(options?: FileOptions & { mimeType?: string }): FileOptions['filters'] {
   if (!__AIRREST_ANDROID__) return options?.filters;
   // Android's document picker filters by MIME type rather than extension.
@@ -423,10 +482,14 @@ export const tauriAdapter: PlatformAdapter = {
   cloudTransport: tauriCloudTransport,
   credentialStorage: tauriCredentialStorage,
   scriptExecutor: tauriScriptExecutor,
-  saveFile: async (filename: string, content: string | Uint8Array, options?: FileOptions) => {
+  saveFile: async (filename: string, content: string | Uint8Array, options?: FileOptions & { mimeType?: string }) => {
+    const isAndroid = typeof __AIRREST_ANDROID__ !== 'undefined' && __AIRREST_ANDROID__;
+    const filterOptions = isAndroid
+      ? { ...options, mimeType: resolveAndroidSaveMimeType(filename, options?.mimeType) }
+      : options;
     const selectedPath = await tauriSave({
       defaultPath: filename,
-      filters: dialogFilters(options),
+      filters: dialogFilters(filterOptions),
     });
     if (!selectedPath) return false;
 
