@@ -8,7 +8,7 @@
 
 [![GitHub Repository](https://img.shields.io/badge/GitHub-adiputera%2FAirREST-181717?logo=github)](https://github.com/adiputera/AirREST)
 [![Chrome Web Store](https://img.shields.io/badge/Chrome%20Web%20Store-Install-4285F4?logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/airrest-rest-client/kpajbolnoepgalhoinilfdfpcmgbdlld)
-[![Version](https://img.shields.io/badge/Version-1.3.12-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.3.13-blue.svg)](CHANGELOG.md)
 [![Manifest V3](https://img.shields.io/badge/Chrome%20Extension-Manifest%20V3-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)
 [![Tauri v2](https://img.shields.io/badge/Tauri-v2-24C8D8?logo=tauri&logoColor=white)](https://v2.tauri.app/)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
@@ -37,10 +37,11 @@ AirREST is a complete API testing studio that runs directly inside Google Chrome
 ## ✨ Features
 
 ### 1. 📑 Request Builder & Multi-Tab Workspace
-- **Multi-Tab Interface**: Open and manage concurrent request tabs with color-coded HTTP method badges.
+- **Multi-Tab Interface & Overflow Navigation**: Open and manage concurrent request tabs with color-coded HTTP method badges. When tabs overflow the strip, smooth horizontal scrolling with interactive left/right overflow count controls keeps the active tab reachable, while the `+` button adapts dynamically (adjacent to the rightmost tab, pinned right on overflow, or left-aligned when empty).
 - **Tab Management**: Context menu with options for New Request Tab, Duplicate Tab, Close Tab, Close Other Tabs, Close Tabs to the Right, and Close All Tabs, plus middle-click closing.
 - **HTTP Methods**: Full support for `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, and `OPTIONS`.
-- **Bidirectional URL & Query Sync**: Editing query parameters in the URL input updates the key-value table automatically, and edits within the table update the URL query string in real time. Supports multi-value keys, templated variables (`{{var}}`), and parameter toggling.
+- **Bidirectional URL, Query & Path Variable Sync**: Editing query parameters in the URL input updates the key-value table automatically, and edits within the table update the URL query string in real time. Supports multi-value keys, templated variables (`{{var}}`), parameter toggling, and URL **Path Variables** (`:param` segments) with variable interpolation.
+- **Per-Request Section Memory**: Remembers the last active configuration tab (`Params`, `Headers`, `Auth`, `Body`, `Pre-request`, `Tests`) for each open request during the session, including after `Save As`.
 - **Unsaved Modifications Tracker & Safe Close**: Visual indicator dot (`●`) marks tabs with unsaved edits. Closing a dirty tab—individually or via **Close Other Tabs**, **Close Tabs to the Right**, or **Close All Tabs**—closes clean tabs immediately and prompts sequentially (`1 of N`) with an interactive confirmation dialog (**Save**, **Close Tab** to discard, **Discard All** when multiple unsaved tabs remain, or **Cancel**) for each modified tab to prevent accidental data loss. Pressing <kbd>Ctrl + S</kbd> / <kbd>Cmd + S</kbd> saves updates directly into the source collection item.
 - **Per-Tab Undo & Redo History**: Revert accidental edits or mispasted request bodies at any time with <kbd>Ctrl + Z</kbd> / <kbd>Cmd + Z</kbd> (Undo) and <kbd>Ctrl + Y</kbd> / <kbd>Cmd + Shift + Z</kbd> (Redo), or via the compact mobile-friendly Undo button in the top-right action bar. In-memory per-tab history tracks up to 50 snapshots across body edits, parameters, headers, and configurations.
 - **Request Safety & Cancellation**: Inflight requests can be cancelled on demand via the **Cancel** button using native `AbortController`. Built-in 5-minute (300-second) execution deadlines and a 10 MiB streamed response body limit protect against memory overflow and hung connections.
@@ -75,10 +76,10 @@ AirREST is a complete API testing studio that runs directly inside Google Chrome
   - Between different **Offline Workspaces**.
   - Between an **Offline Workspace** and a **Cloud Project** (Personal or Team).
   - Across different **Cloud Projects** or **Teams**.
-- **Request Relocation (Move Request)**: Move any individual request between nested folders or across different collections:
-  - Move between nested subfolders within the same collection.
-  - Move from one collection to another collection's root or any nested subfolder.
-  - Interactive **Move Request Modal** with current location badges and hierarchical folder selector paths.
+- **Request & Folder Relocation (Move Request / Move Folder)**: Move individual requests or entire folders (with all nested subfolders and requests) across folders or different collections within the active scope:
+  - Move between nested subfolders within the same collection or across collections to the root or any target subfolder.
+  - Interactive **Move Request** and **Move Folder** modals with current location breadcrumbs, hierarchical folder selectors, and circular-nesting prevention (`isDescendantOf`).
+  - **Atomic Cloud Item Move**: In Cloud mode, cross-collection and folder moves dispatch `POST /api/v1/items/{id}/move` atomically while preserving item IDs, open tabs, unsaved edits, responses, and undo history.
 - **Request Saving, Save As & Duplicate Conflict Guard**:
   - **Save & Save As**: Save requests directly or create standalone duplicates across collections or within the same collection using **Save As**, preserving original requests in source collections.
   - **HTTP Method & Name Collision Guard**: Allows distinct HTTP methods with the same name (e.g. `POST token` and `GET token`) to coexist in the same collection without prompt, while guarding against identical method+name collisions (e.g. `POST token` and `POST token`).
@@ -92,8 +93,9 @@ AirREST is a complete API testing studio that runs directly inside Google Chrome
 - **Auto-Sync on Import & Proactive Retry**: Importing collections in Cloud mode automatically syncs all endpoints and folders directly to the backend. Import modals stay open on timeout/network failures to preserve draft data, while un-synced collections display a pending badge (`_syncStatus: 'pending'`) in the sidebar with a 1-click retry trigger.
 - **Unified Collection & Request Search**: Real-time multi-token search across collections, folders, request names, HTTP methods (e.g. GET, POST), and URL endpoints with quick-clear button and automatic tree expansion.
 - **Hierarchical Tree Navigation**:
-  - **1-Level Default Expansion**: Expanding any collection or folder defaults to 1 level only—child subfolders remain collapsed until explicitly opened, preventing tree clutter.
-  - **Expand All & Collapse All**: Quick actions in each collection and folder dropdown menu to recursively expand all nested items or fold them back to a tidy 1-level view.
+  - **Focused Active-Path Expansion**: Workspaces start with collections and folders collapsed, automatically expanding only the collection and ancestor folders containing the active saved request while keeping manual expansion choices intact during edits and background refreshes.
+  - **Expand All & Collapse All**: Quick actions in each collection and folder dropdown menu to recursively expand all nested items or collapse them back cleanly.
+- **Deleted Request Tabs Recovery**: If an open request, its parent folder, or its collection is removed during cloud synchronization, the tab remains open with a `Deleted` badge and recovery guidance so local edits and responses are preserved and can be re-saved to another collection.
 - **Multi-Tab Request Isolation & Collection Association**: Requests from different collections (even with identical names or endpoints) open in separate dedicated tabs without colliding or overwriting, complete with collection badges in the editor header and collection names in tab tooltips.
 - **In-Memory Tab Response Persistence**: Executed request responses are cached per-tab in runtime memory throughout the active session. Switching between tabs preserves each tab's latest response viewer state without re-executing. Closing a tab purges its response and releases binary blob memory, and responses are omitted from persistent storage so tabs start fresh upon relaunch.
 - **Zero-Tabs Empty State Studio**: Tabs can be closed completely (`closeTab`, `closeAllTabs`), leaving 0 tabs open. When no tabs are open, the studio renders an elegant empty state with quick actions to create a new request or browse collections and history.
@@ -132,6 +134,7 @@ AirREST is a complete API testing studio that runs directly inside Google Chrome
   - **API Key**: Configurable key/value pairs passed via Headers or Query Parameters.
   - **OAuth 2.0**: Extracts bearer tokens from imported Postman configurations.
 - **Inheritance Hierarchy**: Cascades authentication configurations from collections down to nested folders and requests, with per-request override and `noauth` options.
+- **Auth Variable Privacy**: Variable names and resolved values displayed beneath Bearer Token, Basic Auth password, and API Key value fields remain hidden until **Show** is clicked (and clicking **Hide** dismisses active variable tooltips).
 - **Read-Only Headers Preview & Override Warnings**: Active Auth-generated headers appear in the **Headers** tab as read-only `From Auth` rows (with `Edit in Auth` quick-navigation and revealable masking across Bearer, Basic, and API Key credentials scoped per request), while Body-derived `Content-Type` headers appear as unmasked read-only `From Body` rows (with `Edit in Body`). Manual headers matching the active Auth header, or manual `Content-Type` headers when paired with `form-data` payloads, trigger an amber warning tooltip indicating precedence across Send, desktop HTTP execution, and cURL export, while manual `Content-Type` overrides remain permitted for `json`, `graphql`, `xml`, `raw`, `x-www-form-urlencoded`, and `binary` bodies.
 
 ### 6. 💻 cURL Integration
@@ -143,10 +146,10 @@ AirREST is a complete API testing studio that runs directly inside Google Chrome
 AirREST provides a complete JavaScript scripting engine designed for **Pre-Request Automation**, **Response Assertions & Tests**, and **Automated Environment Chaining** (e.g., automatically capturing authentication tokens and passing them to subsequent requests).
 
 #### 🛡️ Architecture & Security
-Scripts are executed in a sandboxed, isolated environment using a dedicated Manifest V3 sandbox iframe (`sandbox.html`):
-- **Full Isolation**: The sandbox cannot access the extension's DOM, cookies, or privileged Chrome extension APIs, ensuring complete safety when executing user or imported scripts.
-- **Message-Based Communication**: The extension interacts with the sandbox strictly through asynchronous `window.postMessage`.
-- **Timeout Protection**: Script execution is bounded by a strict **2000ms timeout guard** to prevent infinite loops or frozen tabs.
+Scripts are executed in a sandboxed, isolated environment tailored to each runtime:
+- **Chrome Extension Sandbox (`sandbox.html`)**: Uses a dedicated Manifest V3 sandbox iframe communicating strictly through asynchronous `window.postMessage` with zero access to the extension's DOM, cookies, or privileged Chrome APIs.
+- **Native Desktop & Android Sandbox (`quickjs-emscripten`)**: Executes scripts inside a fresh, isolated QuickJS WebAssembly runtime bounded to a `64 MiB` heap and `512 KiB` stack, with on-demand `CryptoJS` loading.
+- **Timeout & Bounds Protection**: Script execution is bounded by a strict **2000ms timeout guard** along with payload size limits (`256 KiB` script source, `1 MiB` serialized env/vars, `2 MiB` response data) to prevent infinite loops or frozen tabs.
 
 #### 🔄 Script Execution Lifecycle
 ```
@@ -203,6 +206,16 @@ Scripts are executed in a sandboxed, isolated environment using a dedicated Mani
 | `pm.test(testName, fn)` | Defines an assertion block. If `fn` throws an error, the test fails and reports the error message. |
 | `pm.expect(actual).to.be(expected)` | Asserts strict equality (`===`) between `actual` and `expected`. |
 | `pm.expect(actual).to.equal(expected)` | Asserts loose equality (`==`) between `actual` and `expected`. |
+
+##### Request Inspection & Mutation (`pm.request`) & Cryptography (`CryptoJS`)
+*Available in Pre-request and Tests scripts across both Extension and Native QuickJS sandboxes:*
+| API | Description |
+|---|---|
+| `pm.request.method` / `pm.request.url` | Inspects the request HTTP method and parsed URL (`protocol`, `host`, `path`, `toString()`, `getQueryString()`). |
+| `pm.request.url.query` | PropertyList supporting `.get()`, `.set()`, `.upsert()`, `.add()`, `.remove()`, `.has()`, `.all()`, `.count()`, `.clear()`, and `.toObject()` with mutations applied to the in-flight request. |
+| `pm.request.headers` | PropertyList supporting `.get()`, `.set()`, `.upsert()`, `.add()`, `.remove()`, `.has()`, `.all()`, `.count()`, `.clear()`, and `.toObject()` for dynamic header injection. |
+| `pm.request.body` | Exposes `mode`, `raw`, `urlencoded.all()`, and `formdata.all()`. |
+| `CryptoJS` | Built-in `CryptoJS` library supporting AES (CBC/ECB), DES, TripleDES, SHA256, SHA512, MD5, HMAC, and encoders (`Utf8`, `Hex`, `Base64`, `Latin1`). |
 
 ##### Postman Legacy API Compatibility
 AirREST also provides backward compatibility for legacy Postman scripts:
@@ -295,12 +308,12 @@ pm.request.url.query.upsert({
 ### 8. 📊 Response Inspector
 - **Execution Metrics**: Shows HTTP status code, round-trip latency (`ms`), and payload byte size.
 - **Format Views**:
-  - **Pretty / Raw View**: Formatted JSON with syntax highlighting and raw text toggle.
+  - **Pretty / Raw View**: Formatted JSON, XML, and CSV previews with syntax highlighting, code folding, and raw text toggle.
   - **Image Preview**: Renders images (`webp`, `png`, `jpeg`, `gif`, `svg`, `avif`) with dimensions, transparency background, and full-screen view.
   - **Binary File Card**: Displays details for non-image binary downloads with a 1-click native file download button.
   - **Headers Table**: Structured view of response headers.
 - **Intelligent Connection & SSL Diagnostics**: Automatically diagnoses network failures (`status === 0`). For HTTPS endpoints with untrusted or self-signed certificates, renders a dedicated helper card with a 1-click **Open URL in New Tab** shortcut, step-by-step guidance (*Advanced -> Proceed to unsafe*), and an instant **Retry Request** button.
-- **Export Options**: 1-click response body copy and bit-exact file download from retained in-memory response bytes (with RFC 6266/5987 `Content-Disposition` filename resolution, path sanitization, and automatic MIME-to-extension fallback).
+- **Export & Memory Management**: 1-click response body copy and bit-exact file download from retained in-memory response bytes (bounded by a 128 MiB LRU raw-body budget across tabs and history, with RFC 6266/5987 `Content-Disposition` filename resolution, path sanitization, automatic MIME-to-extension fallback, and `gzip`/`deflate`/`brotli` decompression support in native HTTP).
 
 ### 9. 🕒 History & Persistent Storage
 - **Dispatched Request Log**: Automatically records requests with status codes and execution timestamps.
@@ -317,6 +330,8 @@ pm.request.url.query.upsert({
 - **Smart Client Caching & Auto-Sync**: 12-hour cache enables instant project switching without redundant network fetches. Automatic background delta synchronization (`pullCloudDelta`) runs on app launch and rehydration so team collections stay up to date seamlessly.
 - **Manual Sync**: Dedicated sync button to trigger immediate synchronization with the cloud backend.
 - **Rolling Refresh Tokens**: 30-day JWT renewal with background refresh keeps active sessions connected. Password changes revoke existing sessions and return replacement tokens to the device making the change; administrator resets revoke all target-user sessions. Refresh tokens are not single-use.
+- **Native Credential Vaults**: Native Desktop clients persist cloud credentials in the OS credential vault (Windows Credential Manager, macOS Keychain, or Linux Secret Service), while Android encrypts credential records with an AES-GCM key backed by Android Keystore.
+- **In-App Native Updates**: Desktop clients check signed GitHub releases via Tauri's updater with a `View changelog` link and post-install confirmation toast, while Android displays release update notifications.
 - **Optimistic Concurrency Control (OCC)**: Version-checked updates handle concurrent modifications cleanly.
 - **User Menu & Account Controls**: An interactive user menu is displayed on the right of the top navigation bar. When unauthenticated, it serves as a direct **Sign In** action to connect your cloud account; when logged in, it displays user details, role badge, an in-app **Change Password** modal (`PUT /api/v1/auth/password`), and a secure **Sign Out** option that clears cloud session tokens and cached workspaces.
 
@@ -468,7 +483,7 @@ AirREST is completely backend-agnostic! If you prefer implementing the backend i
 | `npm run build:all` | Compiles Extension, Offline Extension, and Hub |
 | `npm run typecheck` | Validates TypeScript types across common, extension, hub, and native |
 | `npm run lint` | Runs ESLint validation across the repository |
-| `npm run test:all` | **Runs the entire automated regression test suite** (33 test suites) |
+| `npm run test:all` | **Runs the entire automated regression test suite** (51 test scripts covering 62 test suites) |
 | `npm run test:desktop` | Runs native desktop & Android test suites |
 | `npm run test:hub` | Runs frontend Hub regression test suite |
 | `npm run test:security-clients` | Runs security client regression tests for extension & hub |
@@ -491,10 +506,13 @@ AirREST is completely backend-agnostic! If you prefer implementing the backend i
 ```
 ├── .github/
 │   └── workflows/
+│       ├── android-build.yml     # Android APK & AAB build workflow
+│       ├── ci.yml                # Lint, typecheck, extension/hub/backend CI
 │       └── desktop-release.yml   # Multi-OS Tauri v2 build & GitHub Release workflow
 ├── .gitignore                    # Ignore rules (.env, build outputs, dependencies)
 ├── BUILD.md                      # Comprehensive multi-target build, release & testing guide
 ├── CHANGELOG.md                  # Release notes & version history
+├── CHROMEWEBSTORE.md             # Chrome Web Store release notes & listing details
 ├── LICENSE                       # MIT License
 ├── package.json                  # Root npm workspace configuration (workspaces: ["packages/*", "apps/*"])
 ├── package-lock.json
@@ -503,20 +521,28 @@ AirREST is completely backend-agnostic! If you prefer implementing the backend i
 ├── packages/
 │   └── common/                   # Shared Universal Core Engine (@airrest/common)
 │       ├── src/
+│       │   ├── auth/             # Auth provider contracts & password provider
 │       │   ├── components/       # UI components (Header, RequestEditor, ResponseViewer, Modals)
 │       │   ├── lib/              # Business logic (cURL, fetcher, postman, scriptRunner, cloudApi)
+│       │   ├── public/           # Public package entry points (runtime, configuration, ui, platform)
 │       │   ├── store/            # Zustand persistent store with multi-workspace support
 │       │   ├── types/            # Domain interfaces and PlatformAdapter contracts
-│       │   ├── runtime.ts        # Runtime factory (createAirrestRuntime)
+│       │   ├── workspace/        # Pure workspace cache, sync, and transition modules
 │       │   ├── context.tsx       # AirrestProvider & useAirrestRuntime
+│       │   ├── distributionConfig.ts # Validated runtime/edition/update source config
 │       │   ├── index.ts          # Package public exports
+│       │   ├── productPolicy.ts  # Edition capability policies
+│       │   ├── runtime.ts        # Runtime factory (createAirrestRuntime)
 │       │   ├── styles.css        # Semantic CSS variable tokens
 │       │   └── App.tsx           # Shared application studio UI
 │       └── package.json          # Shared package configuration
 │
 ├── apps/
 │   ├── native/                   # Tauri v2 Shell for Desktop & Android (React 19 + Rust Core)
-│   │   ├── src/                  # Native renderer frontend & adapters (tauriAdapter.ts)
+│   │   ├── src/                  # Native renderer frontend
+│   │   │   ├── adapters/         # Tauri platform & vault adapters (tauriAdapter.ts)
+│   │   │   ├── components/       # Native update banners (DesktopUpdateBanner, AndroidUpdateBanner)
+│   │   │   └── scripts/          # Isolated QuickJS WASM script runner & worker
 │   │   ├── src-tauri/            # Tauri backend shell (Cargo.toml, capabilities, tauri.conf.json, gen/android)
 │   │   └── package.json          # Native app dependencies (@tauri-apps/api, plugins, quickjs-emscripten)
 │   │
@@ -546,7 +572,8 @@ AirREST is completely backend-agnostic! If you prefer implementing the backend i
     ├── api/                      # Vercel Serverless Function entrypoint (index.go)
     ├── cmd/server/               # Standalone server entrypoint (main.go)
     ├── config/                   # Configuration loader
-    ├── core/                     # Domain models, handlers, middleware, repositories, services
+    ├── core/                     # Application wiring, domain models, handlers, middleware, repositories, services
+    │   ├── app/                  # Application composition (New / NewWithOptions)
     │   ├── domain/               # Core data models (User, Team, Project, Collection, Item)
     │   ├── handler/              # HTTP REST handlers (Auth, Sync, Workspace, Admin)
     │   ├── middleware/           # JWT auth, CORS, and logging middleware
@@ -563,12 +590,6 @@ AirREST is completely backend-agnostic! If you prefer implementing the backend i
     ├── airrest_api_collection.json # Ready-to-use Postman/AirREST test collection
     └── README.md                 # Backend documentation & API reference
 ```
-
----
-
-## 📝 Changelog
-
-See [CHANGELOG.md](CHANGELOG.md) for detailed release notes and version history.
 
 ---
 

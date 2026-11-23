@@ -187,6 +187,7 @@ function unquoteHeaderParam(raw: string): string {
 }
 
 export function sanitizeDownloadFilename(rawName: string): string {
+  // eslint-disable-next-line no-control-regex -- Download filenames must have ASCII control characters removed.
   const withoutControl = rawName.replace(/[\x00-\x1f\x7f]/g, '');
   const segments = withoutControl.split(/[/\\]+/).filter(Boolean);
   let base = segments.length > 0 ? segments[segments.length - 1] : '';

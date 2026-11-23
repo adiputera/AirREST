@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.13] - 2026-11-23
+
+### Fixed
+- **Lint Checks**: Excluded local debugging documents and scripts under `docs/` from ESLint. Resolved shared response-viewer and store lint errors by documenting intentional control-character sanitization and declaring the store binding with `const`.
+
 ## [1.3.12] - 2026-11-20
 
 ### Changed

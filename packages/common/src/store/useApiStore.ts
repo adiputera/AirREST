@@ -1090,8 +1090,7 @@ export function createApiStore(
     }
   }
 
-  let store!: ApiStore;
-  store = create<ApiStoreState>()(
+  const store: ApiStore = create<ApiStoreState>()(
   persist(
     (rawSet, get) => {
       const set: typeof rawSet = ((fnOrState: any, replace?: any) => {

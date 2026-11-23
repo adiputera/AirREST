@@ -13,6 +13,7 @@ export default tseslint.config(
       '**/out/**',
       '**/src-tauri/**',
       'scripts/**',
+      'docs/**',
     ],
   },
   js.configs.recommended,

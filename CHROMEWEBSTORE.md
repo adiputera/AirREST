@@ -1,9 +1,11 @@
 # Chrome Web Store Listings — AirREST
 
-> Last Updated: 2026-11-20
+> Last Updated: 2026-11-23
 > Store URL: https://chromewebstore.google.com/detail/airrest-rest-client/kpajbolnoepgalhoinilfdfpcmgbdlld
 
 > Chrome Web Store release notes describe browser-extension changes only. Do not include backend, Hub, or desktop release notes here.
+
+> 1.3.13: Internal maintenance resolves lint errors in shared response filename sanitization and workspace store initialization while preserving existing extension behavior.
 
 > 1.3.12: Cloud request and folder moves preserve IDs so subsequent saves do not create duplicates. Moves wait for pending saves, retain open tabs and edits, and report failures without changing the local tree. Invalid target folders are rejected. Cloud moves require an updated AirREST backend.
 > Variable names and resolved values beneath Bearer Token, Basic Auth password, and API Key value inputs stay hidden until Show is clicked. Hide also dismisses variable tooltips.
