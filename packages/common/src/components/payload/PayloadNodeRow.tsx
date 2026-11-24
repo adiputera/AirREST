@@ -10,6 +10,7 @@ import { PayloadNode, PayloadValueType, DateConfig } from '../../types/payloadBu
 import { PayloadTypeBadge } from './PayloadTypeBadge';
 import { DateConfigPopover } from './DateConfigPopover';
 import { generateNodeId, createDefaultPayloadNode } from '../../lib/payloadCompiler';
+import { VariableInput } from '../VariableInput';
 
 interface PayloadNodeRowProps {
   node: PayloadNode;
@@ -17,6 +18,7 @@ interface PayloadNodeRowProps {
   index: number;
   level: number;
   isXmlMode?: boolean;
+  parentDisabled?: boolean;
   onUpdate: (updatedNode: PayloadNode) => void;
   onDelete: () => void;
 }
@@ -27,11 +29,13 @@ export const PayloadNodeRow: React.FC<PayloadNodeRowProps> = ({
   index,
   level,
   isXmlMode = false,
+  parentDisabled = false,
   onUpdate,
   onDelete,
 }) => {
   const isContainer = node.type === 'object' || node.type === 'list';
   const isCollapsed = Boolean(node.isCollapsed);
+  const isCommented = !node.enabled || Boolean(parentDisabled);
 
   const handleTypeChange = (newType: PayloadValueType) => {
     let updatedChildren = node.children;
@@ -108,13 +112,19 @@ export const PayloadNodeRow: React.FC<PayloadNodeRowProps> = ({
   };
 
   const indentPx = Math.min(level * 20, 160);
+  const commentedInputTextClass = isCommented
+    ? 'text-tx-muted italic line-through decoration-tx-faint'
+    : 'text-tx-primary';
 
   return (
     <div className="group/row flex flex-col">
       {/* Node Main Row */}
       <div
-        className={`flex flex-wrap items-center gap-2 py-1.5 px-2 rounded-lg transition border border-transparent ${
-          !node.enabled ? 'opacity-40 bg-element/20' : 'hover:bg-hover hover:border-line'
+        data-commented={isCommented ? 'true' : undefined}
+        className={`flex flex-wrap items-center gap-2 py-1.5 px-2 rounded-lg transition border ${
+          isCommented
+            ? 'bg-element/90 border-line/80 hover:bg-hover/80'
+            : 'border-transparent hover:bg-hover hover:border-line'
         }`}
         style={{ paddingLeft: `${Math.max(8, indentPx)}px` }}
       >
@@ -123,9 +133,25 @@ export const PayloadNodeRow: React.FC<PayloadNodeRowProps> = ({
           type="checkbox"
           checked={node.enabled}
           onChange={(e) => onUpdate({ ...node, enabled: e.target.checked })}
-          className="h-3.5 w-3.5 rounded border-line bg-card text-sky-500 accent-sky-500 cursor-pointer shrink-0"
-          title={node.enabled ? 'Disable field' : 'Enable field'}
+          className={`h-3.5 w-3.5 rounded border-line bg-card cursor-pointer shrink-0 ${
+            isCommented ? 'text-tx-muted accent-zinc-500' : 'text-sky-500 accent-sky-500'
+          }`}
+          title={node.enabled ? 'Comment out / disable field' : 'Uncomment / enable field'}
         />
+
+        {/* Explicit Comment Marker (//) for commented fields */}
+        {isCommented && (
+          <span
+            className="rounded border border-line-strong/70 bg-active/80 px-1 py-0.2 font-mono text-[10px] font-semibold text-tx-muted select-none shrink-0"
+            title={
+              !node.enabled
+                ? 'Commented out (excluded from request)'
+                : 'Inside commented parent (excluded from request)'
+            }
+          >
+            //
+          </span>
+        )}
 
         {/* Expand / Collapse Button for containers */}
         {isContainer ? (
@@ -147,17 +173,24 @@ export const PayloadNodeRow: React.FC<PayloadNodeRowProps> = ({
 
         {/* Key Input (for Objects) or Index Badge (for Lists) */}
         {parentType === 'list' ? (
-          <span className="font-mono text-[11px] text-tx-muted rounded bg-element px-1.5 py-0.5 border border-line shrink-0">
+          <span
+            className={`font-mono text-[11px] rounded px-1.5 py-0.5 border shrink-0 ${
+              isCommented
+                ? 'bg-active/70 text-tx-muted border-line-strong/70 line-through decoration-tx-faint'
+                : 'bg-element text-tx-muted border-line'
+            }`}
+          >
             [{index}]
           </span>
         ) : (
           <div className="flex items-center gap-1 min-w-[120px] max-w-[200px] flex-1 sm:flex-initial">
-            <input
-              type="text"
+            <VariableInput
               value={node.key}
-              onChange={(e) => onUpdate({ ...node, key: e.target.value })}
+              onChange={(key) => onUpdate({ ...node, key })}
               placeholder="field_name"
-              className="w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-tx-primary placeholder-tx-faint focus:bg-card focus:outline-none focus:ring-1 focus:ring-sky-500/50 border border-transparent focus:border-line"
+              size="sm"
+              wrapperClassName="border-transparent bg-transparent focus-within:bg-card focus-within:border-line"
+              inputClassName={commentedInputTextClass}
             />
           </div>
         )}
@@ -168,9 +201,11 @@ export const PayloadNodeRow: React.FC<PayloadNodeRowProps> = ({
             type="button"
             onClick={() => onUpdate({ ...node, xmlAttribute: !node.xmlAttribute })}
             className={`flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold transition border shrink-0 ${
-              node.xmlAttribute
-                ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400 border-amber-500/40'
-                : 'text-tx-muted border-line hover:text-tx-primary'
+              isCommented
+                ? 'bg-active/70 text-tx-muted border-line-strong/70'
+                : node.xmlAttribute
+                  ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400 border-amber-500/40'
+                  : 'text-tx-muted border-line hover:text-tx-primary'
             }`}
             title="Toggle as XML attribute in opening tag"
           >
@@ -180,27 +215,29 @@ export const PayloadNodeRow: React.FC<PayloadNodeRowProps> = ({
         )}
 
         {/* Type Badge Dropdown */}
-        <PayloadTypeBadge type={node.type} onChange={handleTypeChange} />
+        <PayloadTypeBadge type={node.type} onChange={handleTypeChange} muted={isCommented} />
 
         {/* Value Editor (based on type) */}
         <div className="flex-1 flex items-center gap-1.5 min-w-[160px]">
           {node.type === 'string' && (
-            <input
-              type="text"
+            <VariableInput
               value={node.value ?? ''}
-              onChange={(e) => onUpdate({ ...node, value: e.target.value })}
+              onChange={(val) => onUpdate({ ...node, value: val })}
               placeholder="String value or {{var}}"
-              className="w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-tx-primary placeholder-tx-faint focus:bg-card focus:outline-none focus:ring-1 focus:ring-sky-500/50 border border-transparent focus:border-line"
+              size="sm"
+              wrapperClassName="border-transparent bg-transparent focus-within:bg-card focus-within:border-line"
+              inputClassName={commentedInputTextClass}
             />
           )}
 
           {node.type === 'number' && (
-            <input
-              type="text"
+            <VariableInput
               value={node.value ?? ''}
-              onChange={(e) => onUpdate({ ...node, value: e.target.value })}
+              onChange={(val) => onUpdate({ ...node, value: val })}
               placeholder="0 or {{var}}"
-              className="w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-tx-primary placeholder-tx-faint focus:bg-card focus:outline-none focus:ring-1 focus:ring-amber-500/50 border border-transparent focus:border-line"
+              size="sm"
+              wrapperClassName="border-transparent bg-transparent focus-within:bg-card focus-within:border-line"
+              inputClassName={commentedInputTextClass}
             />
           )}
 
@@ -211,8 +248,12 @@ export const PayloadNodeRow: React.FC<PayloadNodeRowProps> = ({
                 onClick={() => onUpdate({ ...node, value: 'true' })}
                 className={`rounded px-2 py-0.5 text-[11px] font-mono font-medium transition ${
                   node.value === 'true' || node.value === (true as unknown)
-                    ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold'
-                    : 'text-tx-muted hover:text-tx-primary'
+                    ? isCommented
+                      ? 'bg-active text-tx-muted font-bold line-through decoration-tx-faint'
+                      : 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold'
+                    : isCommented
+                      ? 'text-tx-faint hover:text-tx-muted'
+                      : 'text-tx-muted hover:text-tx-primary'
                 }`}
               >
                 true
@@ -222,8 +263,12 @@ export const PayloadNodeRow: React.FC<PayloadNodeRowProps> = ({
                 onClick={() => onUpdate({ ...node, value: 'false' })}
                 className={`rounded px-2 py-0.5 text-[11px] font-mono font-medium transition ${
                   node.value === 'false' || node.value === (false as unknown)
-                    ? 'bg-rose-500/20 text-rose-600 dark:text-rose-400 font-bold'
-                    : 'text-tx-muted hover:text-tx-primary'
+                    ? isCommented
+                      ? 'bg-active text-tx-muted font-bold line-through decoration-tx-faint'
+                      : 'bg-rose-500/20 text-rose-600 dark:text-rose-400 font-bold'
+                    : isCommented
+                      ? 'text-tx-faint hover:text-tx-muted'
+                      : 'text-tx-muted hover:text-tx-primary'
                 }`}
               >
                 false
@@ -232,38 +277,52 @@ export const PayloadNodeRow: React.FC<PayloadNodeRowProps> = ({
           )}
 
           {node.type === 'null' && (
-            <span className="font-mono text-xs text-tx-muted italic px-2 py-1">
+            <span
+              className={`font-mono text-xs text-tx-muted italic px-2 py-1 ${
+                isCommented ? 'line-through decoration-tx-faint' : ''
+              }`}
+            >
               null
             </span>
           )}
 
           {node.type === 'date' && (
             <div className="flex items-center gap-1.5 w-full">
-              <input
-                type="text"
-                value={node.value ?? ''}
-                onChange={(e) => onUpdate({ ...node, value: e.target.value })}
-                placeholder="2026-11-02T05:12:00.000Z"
-                className="flex-1 rounded bg-transparent px-2 py-1 font-mono text-xs text-tx-primary placeholder-tx-faint focus:bg-card focus:outline-none focus:ring-1 focus:ring-purple-500/50 border border-transparent focus:border-line"
-              />
+              <div className="flex-1 min-w-0">
+                <VariableInput
+                  value={node.value ?? ''}
+                  onChange={(val) => onUpdate({ ...node, value: val })}
+                  placeholder="2026-11-02T05:12:00.000Z"
+                  size="sm"
+                  wrapperClassName="border-transparent bg-transparent focus-within:bg-card focus-within:border-line"
+                  inputClassName={commentedInputTextClass}
+                />
+              </div>
               <DateConfigPopover
                 config={node.dateConfig}
                 currentValue={node.value}
                 onChange={handleDateConfigChange}
+                muted={isCommented}
               />
             </div>
           )}
 
           {node.type === 'object' && (
             <div className="flex items-center gap-2 text-[11px] text-tx-muted font-mono">
-              <span>{`{ ${(node.children || []).length} field(s) }`}</span>
+              <span className={isCommented ? 'italic line-through decoration-tx-faint' : undefined}>
+                {`{ ${(node.children || []).length} field(s) }`}
+              </span>
               <button
                 type="button"
                 onClick={handleAddChild}
-                className="flex items-center gap-1 rounded border border-line bg-card px-1.5 py-0.5 text-[11px] font-sans text-tx-secondary hover:bg-hover hover:text-tx-primary transition"
+                className={`flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] font-sans transition ${
+                  isCommented
+                    ? 'border-line bg-element text-tx-muted hover:bg-hover hover:text-tx-secondary'
+                    : 'border-line bg-card text-tx-secondary hover:bg-hover hover:text-tx-primary'
+                }`}
                 title="Add field inside this object"
               >
-                <Plus className="h-3 w-3 text-sky-500" />
+                <Plus className={`h-3 w-3 ${isCommented ? 'text-tx-muted' : 'text-sky-500'}`} />
                 <span>Field</span>
               </button>
             </div>
@@ -271,14 +330,20 @@ export const PayloadNodeRow: React.FC<PayloadNodeRowProps> = ({
 
           {node.type === 'list' && (
             <div className="flex items-center gap-2 text-[11px] text-tx-muted font-mono">
-              <span>{`[ ${(node.children || []).length} item(s) ]`}</span>
+              <span className={isCommented ? 'italic line-through decoration-tx-faint' : undefined}>
+                {`[ ${(node.children || []).length} item(s) ]`}
+              </span>
               <button
                 type="button"
                 onClick={handleAddChild}
-                className="flex items-center gap-1 rounded border border-line bg-card px-1.5 py-0.5 text-[11px] font-sans text-tx-secondary hover:bg-hover hover:text-tx-primary transition"
+                className={`flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] font-sans transition ${
+                  isCommented
+                    ? 'border-line bg-element text-tx-muted hover:bg-hover hover:text-tx-secondary'
+                    : 'border-line bg-card text-tx-secondary hover:bg-hover hover:text-tx-primary'
+                }`}
                 title="Add item inside this list"
               >
-                <Plus className="h-3 w-3 text-indigo-500" />
+                <Plus className={`h-3 w-3 ${isCommented ? 'text-tx-muted' : 'text-indigo-500'}`} />
                 <span>Item</span>
               </button>
             </div>
@@ -291,7 +356,9 @@ export const PayloadNodeRow: React.FC<PayloadNodeRowProps> = ({
             <button
               type="button"
               onClick={handleAddChild}
-              className="p-1 rounded text-tx-muted hover:bg-hover hover:text-sky-500 transition"
+              className={`p-1 rounded text-tx-muted hover:bg-hover transition ${
+                isCommented ? 'hover:text-tx-secondary' : 'hover:text-sky-500'
+              }`}
               title={node.type === 'object' ? 'Add sub-field' : 'Add list item'}
             >
               <Plus className="h-3.5 w-3.5" />
@@ -311,7 +378,11 @@ export const PayloadNodeRow: React.FC<PayloadNodeRowProps> = ({
 
       {/* Recursive Children Rendering */}
       {isContainer && !isCollapsed && (
-        <div className="flex flex-col space-y-0.5 mt-0.5 border-l border-line/60 ml-3.5 pl-1.5">
+        <div
+          className={`flex flex-col space-y-0.5 mt-0.5 border-l ml-3.5 pl-1.5 ${
+            isCommented ? 'border-line-strong/70' : 'border-line/60'
+          }`}
+        >
           {(node.children || []).map((child, childIdx) => (
             <PayloadNodeRow
               key={child.id || `${node.id}_child_${childIdx}`}
@@ -320,6 +391,7 @@ export const PayloadNodeRow: React.FC<PayloadNodeRowProps> = ({
               index={childIdx}
               level={level + 1}
               isXmlMode={isXmlMode}
+              parentDisabled={isCommented}
               onUpdate={(updated) => handleUpdateChild(child.id, updated)}
               onDelete={() => handleDeleteChild(child.id)}
             />
@@ -334,7 +406,9 @@ export const PayloadNodeRow: React.FC<PayloadNodeRowProps> = ({
               <button
                 type="button"
                 onClick={handleAddChild}
-                className="text-sky-500 hover:underline flex items-center gap-0.5 text-[11px] not-italic font-medium"
+                className={`hover:underline flex items-center gap-0.5 text-[11px] not-italic font-medium ${
+                  isCommented ? 'text-tx-muted' : 'text-sky-500'
+                }`}
               >
                 <Plus className="h-3 w-3" />
                 <span>Add first item</span>

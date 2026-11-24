@@ -55,10 +55,13 @@ function compileTsModule(relativePath, mockDeps = {}, globals = {}) {
 }
 
 const authHeaders = compileTsModule('../packages/common/src/lib/authHeaders.ts');
+const autocomplete = compileTsModule('../packages/common/src/lib/autocomplete.ts');
 const urlParams = compileTsModule('../packages/common/src/lib/urlParams.ts');
+const formatters = compileTsModule('../packages/common/src/lib/formatters.ts');
 const fetcher = compileTsModule('../packages/common/src/lib/fetcher.ts', {
   './authHeaders': authHeaders,
   './urlParams': urlParams,
+  './formatters': formatters,
   './blobManager': { createTrackedBlobUrl: () => '' },
 });
 
@@ -77,17 +80,27 @@ function loadUiComponents(envVariables = []) {
       activeEnvironmentId: envVariables.length > 0 ? 'env-1' : null,
     });
 
+  const AutocompletePortalMod = compileTsModule('../packages/common/src/components/AutocompletePortal.tsx', {
+    react: React,
+    'react-dom': require('react-dom'),
+    'lucide-react': lucideReact,
+    '../lib/autocomplete': autocomplete,
+  });
+
   const VariableInputMod = compileTsModule('../packages/common/src/components/VariableInput.tsx', {
     react: React,
     'react-dom': require('react-dom'),
     'lucide-react': lucideReact,
     '../store/useApiStore': { useApiStore: mockStoreHook },
+    '../lib/autocomplete': autocomplete,
+    './AutocompletePortal': AutocompletePortalMod,
   });
 
   const KeyValueEditorMod = compileTsModule('../packages/common/src/components/KeyValueEditor.tsx', {
     react: React,
     'react-dom': require('react-dom'),
     'lucide-react': lucideReact,
+    '../lib/autocomplete': autocomplete,
     './VariableInput': VariableInputMod,
   });
 

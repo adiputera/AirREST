@@ -4,6 +4,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Plus, Trash2, Lock, AlertTriangle } from 'lucide-react';
 import { KeyValuePair } from '../types/api';
+import { AutocompleteInputMode } from '../lib/autocomplete';
 import { VariableInput } from './VariableInput';
 
 export interface ReadonlyKeyValueRow {
@@ -26,6 +27,7 @@ export interface KeyValueEditorProps {
   onRemove: (id: string) => void;
   keyPlaceholder?: string;
   valuePlaceholder?: string;
+  keyAutocompleteMode?: AutocompleteInputMode;
   readonlyRows?: ReadonlyKeyValueRow[];
   rowWarnings?: Record<string, string>;
 }
@@ -45,6 +47,7 @@ export const KeyValueEditor: React.FC<KeyValueEditorProps> = ({
   onRemove,
   keyPlaceholder = 'Key',
   valuePlaceholder = 'Value',
+  keyAutocompleteMode = 'variable-only',
   readonlyRows = [],
   rowWarnings,
 }) => {
@@ -274,6 +277,7 @@ export const KeyValueEditor: React.FC<KeyValueEditorProps> = ({
                           onChange={(key) => onUpdate(item.id, { key })}
                           placeholder={keyPlaceholder}
                           size="sm"
+                          autocompleteMode={keyAutocompleteMode}
                           ariaDescribedBy={warningMessage ? (isTooltipOpen ? tooltipId : srDescId) : undefined}
                         />
                       </div>

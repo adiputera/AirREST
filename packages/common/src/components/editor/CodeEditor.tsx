@@ -1,6 +1,16 @@
-import React, { useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
-import { EditorView, lineNumbers, highlightActiveLineGutter, keymap, placeholder as cmPlaceholder } from '@codemirror/view';
-import { Annotation, EditorState, Compartment, Transaction } from '@codemirror/state';
+import React, { useEffect, useRef, useImperativeHandle, forwardRef, useState, useMemo, useCallback, useId } from 'react';
+import {
+  EditorView,
+  Decoration,
+  DecorationSet,
+  ViewPlugin,
+  ViewUpdate,
+  lineNumbers,
+  highlightActiveLineGutter,
+  keymap,
+  placeholder as cmPlaceholder,
+} from '@codemirror/view';
+import { Annotation, EditorState, Compartment, Transaction, RangeSetBuilder, Prec } from '@codemirror/state';
 import { foldGutter, foldAll, unfoldAll, syntaxHighlighting, indentUnit, foldKeymap, HighlightStyle } from '@codemirror/language';
 import { defaultKeymap, history, historyKeymap, indentWithTab, toggleComment } from '@codemirror/commands';
 import { json, jsonLanguage } from '@codemirror/lang-json';
@@ -8,6 +18,15 @@ import { xml } from '@codemirror/lang-xml';
 import { tags as t } from '@lezer/highlight';
 import { useApiStore } from '../../store/useApiStore';
 import { resolveTheme } from '../../lib/theme';
+import { findJsonCommentRanges } from '../../lib/formatters';
+import {
+  AutocompleteContext,
+  AutocompleteSuggestionItem,
+  detectInputAutocompleteContext,
+  getVariableSuggestions,
+  applyAutocompleteSuggestion,
+} from '../../lib/autocomplete';
+import { AutocompletePortal, AutocompleteAnchorRect } from '../AutocompletePortal';
 
 export interface CodeEditorHandle {
   foldAll: () => void;
@@ -31,9 +50,45 @@ export interface CodeEditorProps {
   historyMode?: 'editor' | 'external';
   onUndo?: () => void;
   onRedo?: () => void;
+  enableVariableAutocomplete?: boolean;
 }
 
 const externalValueSync = Annotation.define<boolean>();
+
+const jsonCommentMark = Decoration.mark({ class: 'cm-jsonc-comment' });
+
+function buildJsonCommentDecorations(view: EditorView): DecorationSet {
+  const docText = view.state.doc.toString();
+  const ranges = findJsonCommentRanges(docText);
+  if (ranges.length === 0) return Decoration.none;
+
+  const builder = new RangeSetBuilder<Decoration>();
+  for (const range of ranges) {
+    if (range.from < range.to) {
+      builder.add(range.from, range.to, jsonCommentMark);
+    }
+  }
+  return builder.finish();
+}
+
+const jsonCommentHighlighterPlugin = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+
+    constructor(view: EditorView) {
+      this.decorations = buildJsonCommentDecorations(view);
+    }
+
+    update(update: ViewUpdate) {
+      if (update.docChanged) {
+        this.decorations = buildJsonCommentDecorations(update.view);
+      }
+    }
+  },
+  {
+    decorations: (plugin) => plugin.decorations,
+  }
+);
 
 /**
  * High-contrast dark syntax highlighting style.
@@ -163,6 +218,11 @@ const getCustomAirRestTheme = (isDark: boolean) =>
       '.cm-selectionMatch': {
         backgroundColor: isDark ? 'rgba(14, 165, 233, 0.15)' : 'rgba(2, 132, 199, 0.12)',
       },
+      '.cm-line .cm-jsonc-comment, .cm-line .cm-jsonc-comment *': {
+        color: isDark ? '#94a3b8 !important' : '#64748b !important',
+        fontStyle: 'italic !important',
+        fontWeight: '400 !important',
+      },
     },
     { dark: isDark }
   );
@@ -184,15 +244,46 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
       historyMode = 'editor',
       onUndo,
       onRedo,
+      enableVariableAutocomplete = true,
     },
     ref
   ) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
+    const generatedId = useId();
+    const listboxId = `cm-editor-ac-${generatedId}`;
 
     // Resolve current theme mode from store (dark vs light)
     const themeMode = useApiStore((state) => state.theme || 'system');
+    const environments = useApiStore((state) => state.environments);
+    const activeEnvironmentId = useApiStore((state) => state.activeEnvironmentId);
     const isDark = resolveTheme(themeMode) === 'dark';
+
+    // Autocomplete state for {{...}} variables inside CodeMirror
+    const [acContext, setAcContext] = useState<AutocompleteContext | null>(null);
+    const [acActiveIndex, setAcActiveIndex] = useState(0);
+    const [acAnchorRect, setAcAnchorRect] = useState<AutocompleteAnchorRect | null>(null);
+
+    const acSuggestions: AutocompleteSuggestionItem[] = useMemo(() => {
+      if (!acContext) return [];
+      return getVariableSuggestions(acContext.query, environments, activeEnvironmentId);
+    }, [acContext, environments, activeEnvironmentId]);
+
+    const isAutocompleteOpen = Boolean(
+      !readOnly && enableVariableAutocomplete && acContext && acSuggestions.length > 0
+    );
+
+    // Refs so CodeMirror keymaps and updateListeners always see latest autocomplete state
+    const isAcOpenRef = useRef(false);
+    isAcOpenRef.current = isAutocompleteOpen;
+    const acContextRef = useRef<AutocompleteContext | null>(null);
+    acContextRef.current = acContext;
+    const acSuggestionsRef = useRef<AutocompleteSuggestionItem[]>([]);
+    acSuggestionsRef.current = acSuggestions;
+    const acActiveIndexRef = useRef(0);
+    acActiveIndexRef.current = acActiveIndex;
+    const enableVarAcRef = useRef(enableVariableAutocomplete);
+    enableVarAcRef.current = enableVariableAutocomplete;
 
     // Compartments for dynamic configuration changes
     const readOnlyCompartmentRef = useRef(new Compartment());
@@ -210,6 +301,85 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
     const onRedoRef = useRef(onRedo);
     onRedoRef.current = onRedo;
     const isDiscreteChangeRef = useRef(false);
+
+    const computeCmAnchorRect = useCallback((view: EditorView, pos: number): AutocompleteAnchorRect | null => {
+      const coords = view.coordsAtPos(pos);
+      const containerRect = containerRef.current?.getBoundingClientRect();
+      if (coords) {
+        return {
+          left: coords.left,
+          top: coords.top,
+          bottom: coords.bottom,
+          width: Math.min(320, Math.max(240, (containerRect?.width || 360) * 0.6)),
+        };
+      }
+      if (containerRect) {
+        return {
+          left: containerRect.left + 24,
+          top: containerRect.top + 24,
+          bottom: containerRect.top + 44,
+          width: Math.min(320, containerRect.width),
+        };
+      }
+      return null;
+    }, []);
+
+    const handleSelectSuggestion = useCallback((index: number) => {
+      const view = viewRef.current;
+      const ctx = acContextRef.current;
+      const list = acSuggestionsRef.current;
+      if (!view || !ctx || index < 0 || index >= list.length) return;
+
+      const chosen = list[index];
+      const currentDoc = view.state.doc.toString();
+      const { nextText, nextCursorPos } = applyAutocompleteSuggestion(currentDoc, ctx, chosen);
+      const insertedSegment = nextText.slice(
+        ctx.replaceFrom,
+        nextText.length - (currentDoc.length - ctx.replaceTo)
+      );
+
+      setAcContext(null);
+      isDiscreteChangeRef.current = true;
+      view.dispatch({
+        changes: {
+          from: ctx.replaceFrom,
+          to: ctx.replaceTo,
+          insert: insertedSegment,
+        },
+        selection: { anchor: nextCursorPos },
+      });
+      view.focus();
+    }, []);
+
+    const handleSelectSuggestionRef = useRef(handleSelectSuggestion);
+    handleSelectSuggestionRef.current = handleSelectSuggestion;
+
+    useEffect(() => {
+      if (acActiveIndex >= acSuggestions.length && acSuggestions.length > 0) {
+        setAcActiveIndex(0);
+      }
+    }, [acActiveIndex, acSuggestions.length]);
+
+    useEffect(() => {
+      if (!isAutocompleteOpen) return;
+      const handleScrollOrResize = (e: Event) => {
+        const target = e.target as HTMLElement | null;
+        if (target && target.closest?.(`#${CSS.escape(listboxId)}`)) {
+          return;
+        }
+        const view = viewRef.current;
+        const ctx = acContextRef.current;
+        if (view && ctx) {
+          setAcAnchorRect(computeCmAnchorRect(view, ctx.openBracesIndex ?? ctx.replaceFrom));
+        }
+      };
+      window.addEventListener('scroll', handleScrollOrResize, true);
+      window.addEventListener('resize', handleScrollOrResize);
+      return () => {
+        window.removeEventListener('scroll', handleScrollOrResize, true);
+        window.removeEventListener('resize', handleScrollOrResize);
+      };
+    }, [isAutocompleteOpen, listboxId, computeCmAnchorRect]);
 
     useImperativeHandle(
       ref,
@@ -243,6 +413,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
               block: { open: '/*', close: '*/' },
             },
           }),
+          jsonCommentHighlighterPlugin,
         ];
       }
       if (lang === 'xml') return xml();
@@ -288,6 +459,60 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
       }
 
       if (!readOnly) {
+        // High-precedence keymap for variable autocomplete popup navigation
+        extensions.push(
+          Prec.highest(
+            keymap.of([
+              {
+                key: 'ArrowDown',
+                run: () => {
+                  if (!isAcOpenRef.current) return false;
+                  const len = acSuggestionsRef.current.length;
+                  if (len > 0) {
+                    setAcActiveIndex((prev) => (prev + 1) % len);
+                  }
+                  return true;
+                },
+              },
+              {
+                key: 'ArrowUp',
+                run: () => {
+                  if (!isAcOpenRef.current) return false;
+                  const len = acSuggestionsRef.current.length;
+                  if (len > 0) {
+                    setAcActiveIndex((prev) => (prev - 1 + len) % len);
+                  }
+                  return true;
+                },
+              },
+              {
+                key: 'Enter',
+                run: () => {
+                  if (!isAcOpenRef.current) return false;
+                  handleSelectSuggestionRef.current(acActiveIndexRef.current);
+                  return true;
+                },
+              },
+              {
+                key: 'Tab',
+                run: () => {
+                  if (!isAcOpenRef.current) return false;
+                  handleSelectSuggestionRef.current(acActiveIndexRef.current);
+                  return true;
+                },
+              },
+              {
+                key: 'Escape',
+                run: () => {
+                  if (!isAcOpenRef.current) return false;
+                  setAcContext(null);
+                  return true;
+                },
+              },
+            ])
+          )
+        );
+
         const keyBindings = [indentWithTab, ...defaultKeymap, ...foldKeymap];
         if (historyMode === 'external') {
           const commentBinding = language === 'json'
@@ -340,6 +565,16 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
           extensions.push(history());
           extensions.push(keymap.of([...keyBindings, ...historyKeymap]));
         }
+
+        extensions.push(
+          EditorView.domEventHandlers({
+            blur: () => {
+              setAcContext(null);
+              return false;
+            },
+          })
+        );
+
         extensions.push(
           EditorView.updateListener.of((update) => {
             const isExternalValueSync = update.transactions.some((transaction) =>
@@ -350,6 +585,40 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
               const isDiscreteChange = isDiscreteChangeRef.current;
               isDiscreteChangeRef.current = false;
               onChangeRef.current(newDoc, isDiscreteChange);
+            }
+
+            // Evaluate variable autocomplete trigger on user typing or cursor movement
+            if (
+              enableVarAcRef.current &&
+              !isExternalValueSync &&
+              (update.docChanged || update.selectionSet)
+            ) {
+              if (!update.view.hasFocus) {
+                setAcContext(null);
+                return;
+              }
+              const sel = update.state.selection.main;
+              if (!sel.empty) {
+                setAcContext(null);
+                return;
+              }
+              const docText = update.state.doc.toString();
+              const detected = detectInputAutocompleteContext(docText, sel.head, 'variable-only');
+              if (!detected) {
+                setAcContext(null);
+              } else {
+                setAcContext((prev) => {
+                  if (!prev || prev.query !== detected.query) {
+                    setAcActiveIndex(0);
+                  }
+                  return detected;
+                });
+                const rect = computeCmAnchorRect(
+                  update.view,
+                  detected.openBracesIndex ?? detected.replaceFrom
+                );
+                setAcAnchorRect(rect);
+              }
             }
           })
         );
@@ -416,17 +685,30 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
     const styleMaxHeight = typeof maxHeight === 'number' ? `${maxHeight}px` : maxHeight;
 
     return (
-      <div
-        ref={containerRef}
-        style={{
-          height: styleHeight,
-          minHeight: styleMinHeight,
-          maxHeight: styleMaxHeight,
-        }}
-        className={`w-full overflow-hidden rounded-xl border border-line bg-card font-mono text-xs text-tx-primary ${
-          readOnly ? '' : 'focus-within:border-sky-500 focus-within:ring-1 focus-within:ring-sky-500'
-        } transition ${className}`}
-      />
+      <>
+        <div
+          ref={containerRef}
+          style={{
+            height: styleHeight,
+            minHeight: styleMinHeight,
+            maxHeight: styleMaxHeight,
+          }}
+          className={`w-full overflow-hidden rounded-xl border border-line bg-card font-mono text-xs text-tx-primary ${
+            readOnly ? '' : 'focus-within:border-sky-500 focus-within:ring-1 focus-within:ring-sky-500'
+          } transition ${className}`}
+        />
+        <AutocompletePortal
+          isOpen={isAutocompleteOpen}
+          items={acSuggestions}
+          activeIndex={acActiveIndex}
+          onSelectIndex={handleSelectSuggestion}
+          onHighlightIndex={setAcActiveIndex}
+          anchorRect={acAnchorRect}
+          query={acContext?.query || ''}
+          kind="variable"
+          listboxId={listboxId}
+        />
+      </>
     );
   }
 );

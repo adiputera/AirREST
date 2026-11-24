@@ -28,6 +28,7 @@ import {
   Shield,
   AlertTriangle,
   GripVertical,
+  Copy,
 } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
 import { CollectionItem, ApiRequest, Collection } from '../types/api';
@@ -38,6 +39,8 @@ import { MoveCollectionModal } from './MoveCollectionModal';
 import { CollectionPermissionModal } from './CollectionPermissionModal';
 import { MoveRequestModal } from './MoveRequestModal';
 import { MoveFolderModal } from './MoveFolderModal';
+import { DuplicateCollectionModal } from './DuplicateCollectionModal';
+import { DuplicateItemModal } from './DuplicateItemModal';
 import { ImportModal } from './ImportModal';
 import { findRequestAncestorIds, isDescendantOf } from '../lib/treeHelper';
 import { canModifyCollection, hasScopePermission } from '../lib/jwt';
@@ -162,6 +165,7 @@ interface FolderItemProps {
   onRequestDelete: (item: CollectionItem) => void;
   onRequestMove: (item: CollectionItem, collectionId: string) => void;
   onRequestMoveFolder?: (item: CollectionItem, collectionId: string) => void;
+  onRequestDuplicateItem?: (item: CollectionItem, collectionId: string, trigger?: HTMLElement | null) => void;
   draggedItem: DraggedItemState | null;
   setDraggedItem: (item: DraggedItemState | null) => void;
   onReorderItem: (
@@ -187,6 +191,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
   onRequestDelete,
   onRequestMove,
   onRequestMoveFolder,
+  onRequestDuplicateItem,
   draggedItem,
   setDraggedItem,
   onReorderItem,
@@ -553,6 +558,18 @@ const FolderItem: React.FC<FolderItemProps> = ({
                           </button>
                           <button
                             type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setIsMenuOpen(false);
+                              onRequestDuplicateItem?.(item, collectionId, buttonRef.current);
+                            }}
+                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-tx-secondary hover:bg-hover hover:text-sky-500 transition"
+                          >
+                            <Copy className="h-3.5 w-3.5 text-sky-500 dark:text-sky-400" />
+                            <span>Duplicate Folder</span>
+                          </button>
+                          <button
+                            type="button"
                             onClick={handleCreateRequest}
                             className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-tx-secondary hover:bg-hover hover:text-sky-500 transition"
                           >
@@ -707,6 +724,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
                 onRequestDelete={onRequestDelete}
                 onRequestMove={onRequestMove}
                 onRequestMoveFolder={onRequestMoveFolder}
+                onRequestDuplicateItem={onRequestDuplicateItem}
                 draggedItem={draggedItem}
                 setDraggedItem={setDraggedItem}
                 onReorderItem={onReorderItem}
@@ -879,6 +897,18 @@ const FolderItem: React.FC<FolderItemProps> = ({
                   <FolderInput className="h-3.5 w-3.5 text-amber-500 dark:text-amber-400" />
                   <span>Move Request</span>
                 </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsMenuOpen(false);
+                    onRequestDuplicateItem?.(item, collectionId, buttonRef.current);
+                  }}
+                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-tx-secondary hover:bg-hover hover:text-sky-500 transition"
+                >
+                  <Copy className="h-3.5 w-3.5 text-sky-500 dark:text-sky-400" />
+                  <span>Duplicate Request</span>
+                </button>
                 <div className="my-1 border-t border-line" />
                 <button
                   type="button"
@@ -932,6 +962,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
   const refreshFeaturePolicy = useApiStore((state) => state.refreshFeaturePolicy);
   const pullCloudDelta = useApiStore((state) => state.pullCloudDelta);
   const syncStatus = useApiStore((state) => state.syncStatus);
+  const lastDuplicateReveal = useApiStore((state) => state.lastDuplicateReveal);
 
   const canWriteScope = hasScopePermission(cloudConfig.activeScope, 'collection:write', workspaceMode, cloudConfig.user?.role);
   const canMoveScope = hasScopePermission(cloudConfig.activeScope, 'collection:move', workspaceMode, cloudConfig.user?.role);
@@ -956,6 +987,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
   const [isCloudAuthOpen, setIsCloudAuthOpen] = useState(false);
   const [collectionToDelete, setCollectionToDelete] = useState<Collection | null>(null);
   const [collectionToMove, setCollectionToMove] = useState<Collection | null>(null);
+  const [collectionToDuplicate, setCollectionToDuplicate] = useState<{
+    collection: Collection;
+    trigger?: HTMLElement | null;
+  } | null>(null);
   const [collectionForPermission, setCollectionForPermission] = useState<Collection | null>(null);
   const [collectionActionError, setCollectionActionError] = useState<string | null>(null);
   const [isDeletingCollection, setIsDeletingCollection] = useState(false);
@@ -963,6 +998,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
   const [collapsedCollections, setCollapsedCollections] = useState<Record<string, boolean>>({});
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({});
   const lastRevealedPath = useRef<string | null>(null);
+  const lastRevealedDuplicateRevision = useRef<number>(0);
   const workspaceKey = JSON.stringify(workspaceMode === 'offline'
     ? [workspaceMode, activeOfflineWorkspaceId]
     : [workspaceMode, cloudConfig.apiUrl, cloudConfig.user?.id,
@@ -977,6 +1013,22 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
     setCollapsedCollections(collectionId ? { [collectionId]: false } : {});
     setOpenFolders(Object.fromEntries(folderIds.map((id) => [id, true])));
   }, [collections, activeTabId, workspaceKey]);
+
+  useEffect(() => {
+    if (!lastDuplicateReveal || lastDuplicateReveal.pathIds.length === 0) return;
+    if (lastRevealedDuplicateRevision.current === lastDuplicateReveal.revision) return;
+    lastRevealedDuplicateRevision.current = lastDuplicateReveal.revision;
+    const [collectionId, ...folderIds] = lastDuplicateReveal.pathIds;
+    if (collectionId) {
+      setCollapsedCollections((prev) => ({ ...prev, [collectionId]: false }));
+    }
+    if (folderIds.length > 0) {
+      setOpenFolders((prev) => ({
+        ...prev,
+        ...Object.fromEntries(folderIds.map((id) => [id, true])),
+      }));
+    }
+  }, [lastDuplicateReveal]);
 
   // Desktop Sidebar drag-to-resize (persisted in localStorage)
   const [isDesktop, setIsDesktop] = useState<boolean>(() =>
@@ -1127,6 +1179,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
   const [folderToMove, setFolderToMove] = useState<{
     item: CollectionItem;
     collectionId: string;
+  } | null>(null);
+  const [itemToDuplicate, setItemToDuplicate] = useState<{
+    item: CollectionItem;
+    collectionId: string;
+    trigger?: HTMLElement | null;
   } | null>(null);
   const [draggedItem, setDraggedItem] = useState<DraggedItemState | null>(null);
   const reorderItem = useApiStore((state) => state.reorderItem);
@@ -1728,6 +1785,18 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
                                           <FolderPlus className="h-3.5 w-3.5 text-amber-500 dark:text-amber-400" />
                                           <span>New Folder</span>
                                         </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            const trigger = colButtonRef.current;
+                                            setActiveAddMenuColId(null);
+                                            setCollectionToDuplicate({ collection: col, trigger });
+                                          }}
+                                          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-tx-secondary hover:bg-hover hover:text-sky-500 dark:hover:text-sky-400 transition"
+                                        >
+                                          <Copy className="h-3.5 w-3.5 text-sky-500 dark:text-sky-400" />
+                                          <span>Duplicate Collection</span>
+                                        </button>
                                         {canMoveScope && (
                                           <button
                                             type="button"
@@ -1906,6 +1975,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
                                   setFolderToMove({
                                     item: targetItem,
                                     collectionId: colId,
+                                  })
+                                }
+                                onRequestDuplicateItem={(targetItem, colId, trigger) =>
+                                  setItemToDuplicate({
+                                    item: targetItem,
+                                    collectionId: colId,
+                                    trigger,
                                   })
                                 }
                                 draggedItem={draggedItem}
@@ -2093,6 +2169,21 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
         onClose={() => setFolderToMove(null)}
         item={folderToMove?.item || null}
         sourceCollectionId={folderToMove?.collectionId || ''}
+      />
+
+      <DuplicateCollectionModal
+        isOpen={!!collectionToDuplicate}
+        onClose={() => setCollectionToDuplicate(null)}
+        collection={collectionToDuplicate?.collection || null}
+        returnFocusTo={collectionToDuplicate?.trigger}
+      />
+
+      <DuplicateItemModal
+        isOpen={!!itemToDuplicate}
+        onClose={() => setItemToDuplicate(null)}
+        item={itemToDuplicate?.item || null}
+        sourceCollectionId={itemToDuplicate?.collectionId || ''}
+        returnFocusTo={itemToDuplicate?.trigger}
       />
 
       <ImportModal

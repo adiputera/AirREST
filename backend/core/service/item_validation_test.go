@@ -55,6 +55,31 @@ func TestValidateCollectionItem(t *testing.T) {
 		t.Errorf("expected ErrInvalidItemPayload for overly long name, got: %v", err)
 	}
 
+	// Unicode rune boundary: 40 emojis (160 UTF-8 bytes, 40 runes) and 150 runes must pass; 151 runes must fail.
+	emoji40 := *validReq
+	emoji40.Name = strings.Repeat("🚀", 40)
+	if err := ValidateCollectionItem(&emoji40); err != nil {
+		t.Errorf("expected 40-emoji (160-byte, 40-rune) name to pass, got: %v", err)
+	}
+
+	rune150 := *validReq
+	rune150.Name = strings.Repeat("あ", 150)
+	if err := ValidateCollectionItem(&rune150); err != nil {
+		t.Errorf("expected 150-rune name to pass, got: %v", err)
+	}
+
+	rune151 := *validReq
+	rune151.Name = strings.Repeat("あ", 151)
+	if err := ValidateCollectionItem(&rune151); !errors.Is(err, ErrInvalidItemPayload) {
+		t.Errorf("expected ErrInvalidItemPayload for 151-rune name, got: %v", err)
+	}
+
+	invalidUTF8 := *validReq
+	invalidUTF8.Name = string([]byte{0xff, 0xfe, 'a'})
+	if err := ValidateCollectionItem(&invalidUTF8); !errors.Is(err, ErrInvalidItemPayload) {
+		t.Errorf("expected ErrInvalidItemPayload for invalid UTF-8 name, got: %v", err)
+	}
+
 	// 3. Type validation
 	invalidType := *validReq
 	invalidType.Type = "unknown"
@@ -205,5 +230,21 @@ func TestValidateImportItem(t *testing.T) {
 	invalidPathVarsImport.PathVariables = rawJSON(`{"id":"not-an-array"}`)
 	if err := ValidateImportItem(&invalidPathVarsImport); !errors.Is(err, ErrInvalidItemPayload) {
 		t.Fatalf("expected ErrInvalidItemPayload for non-array path variables, got: %v", err)
+	}
+
+	// Valid form-data attachment metadata in import
+	validFormMetaImport := *validImport
+	validFormMetaImport.BodyType = strPtr("form-data")
+	validFormMetaImport.BodyFormData = rawJSON(`[{"id":"fd1","key":"file","type":"file","value":"doc.pdf","fileName":"doc.pdf","fileSize":2048,"fileType":"application/pdf","needsReselection":true,"enabled":true}]`)
+	if err := ValidateImportItem(&validFormMetaImport); err != nil {
+		t.Fatalf("expected valid form-data metadata in import to pass, got: %v", err)
+	}
+
+	// Invalid form-data attachment metadata types
+	invalidFormMetaImport := *validImport
+	invalidFormMetaImport.BodyType = strPtr("form-data")
+	invalidFormMetaImport.BodyFormData = rawJSON(`[{"id":"fd1","key":"file","type":"file","fileSize":"bad","needsReselection":"nope"}]`)
+	if err := ValidateImportItem(&invalidFormMetaImport); !errors.Is(err, ErrInvalidItemPayload) {
+		t.Fatalf("expected ErrInvalidItemPayload for invalid form-data metadata in import, got: %v", err)
 	}
 }

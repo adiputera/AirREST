@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/adiputera/airrest-backend/core/domain"
 )
@@ -36,15 +38,23 @@ func newValidationError(field, message string) error {
 	}
 }
 
-func validateName(name string) error {
+// ValidateName validates collection and item names against UTF-8 validity, emptiness, and the 150-rune limit.
+func ValidateName(name string) error {
+	if !utf8.ValidString(name) {
+		return newValidationError("name", "name contains invalid UTF-8")
+	}
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
 		return newValidationError("name", "name is required")
 	}
-	if len(trimmed) > 150 {
+	if utf8.RuneCountInString(trimmed) > 150 {
 		return newValidationError("name", "name exceeds maximum length of 150 characters")
 	}
 	return nil
+}
+
+func validateName(name string) error {
+	return ValidateName(name)
 }
 
 func validateType(itemType domain.ItemType) error {
@@ -230,9 +240,21 @@ func validateFormDataArray(raw *json.RawMessage) error {
 			return newValidationError(fmt.Sprintf("body_form_data[%d]", i), "item must be an object")
 		}
 
+		if idVal, exists := itemMap["id"]; exists && idVal != nil {
+			if _, ok := idVal.(string); !ok {
+				return newValidationError(fmt.Sprintf("body_form_data[%d].id", i), "must be a string")
+			}
+		}
+
 		if keyVal, exists := itemMap["key"]; exists && keyVal != nil {
 			if _, ok := keyVal.(string); !ok {
 				return newValidationError(fmt.Sprintf("body_form_data[%d].key", i), "must be a string")
+			}
+		}
+
+		if valVal, exists := itemMap["value"]; exists && valVal != nil {
+			if _, ok := valVal.(string); !ok {
+				return newValidationError(fmt.Sprintf("body_form_data[%d].value", i), "must be a string")
 			}
 		}
 
@@ -245,6 +267,37 @@ func validateFormDataArray(raw *json.RawMessage) error {
 		if enabledVal, exists := itemMap["enabled"]; exists && enabledVal != nil {
 			if _, ok := enabledVal.(bool); !ok {
 				return newValidationError(fmt.Sprintf("body_form_data[%d].enabled", i), "must be a boolean")
+			}
+		}
+
+		if descVal, exists := itemMap["description"]; exists && descVal != nil {
+			if _, ok := descVal.(string); !ok {
+				return newValidationError(fmt.Sprintf("body_form_data[%d].description", i), "must be a string")
+			}
+		}
+
+		if fileNameVal, exists := itemMap["fileName"]; exists && fileNameVal != nil {
+			if _, ok := fileNameVal.(string); !ok {
+				return newValidationError(fmt.Sprintf("body_form_data[%d].fileName", i), "must be a string")
+			}
+		}
+
+		if fileSizeVal, exists := itemMap["fileSize"]; exists && fileSizeVal != nil {
+			sizeFloat, ok := fileSizeVal.(float64)
+			if !ok || math.IsNaN(sizeFloat) || math.IsInf(sizeFloat, 0) || sizeFloat < 0 || math.Trunc(sizeFloat) != sizeFloat {
+				return newValidationError(fmt.Sprintf("body_form_data[%d].fileSize", i), "must be a non-negative integer")
+			}
+		}
+
+		if fileTypeVal, exists := itemMap["fileType"]; exists && fileTypeVal != nil {
+			if _, ok := fileTypeVal.(string); !ok {
+				return newValidationError(fmt.Sprintf("body_form_data[%d].fileType", i), "must be a string")
+			}
+		}
+
+		if reselectVal, exists := itemMap["needsReselection"]; exists && reselectVal != nil {
+			if _, ok := reselectVal.(bool); !ok {
+				return newValidationError(fmt.Sprintf("body_form_data[%d].needsReselection", i), "must be a boolean")
 			}
 		}
 	}

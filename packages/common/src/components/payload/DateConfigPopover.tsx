@@ -7,6 +7,7 @@ interface DateConfigPopoverProps {
   config?: DateConfig;
   currentValue?: string;
   onChange: (newConfig: DateConfig, newValue: string) => void;
+  muted?: boolean;
 }
 
 const FORMAT_OPTIONS: { id: DateFormatOption; label: string; example: string }[] = [
@@ -17,7 +18,7 @@ const FORMAT_OPTIONS: { id: DateFormatOption; label: string; example: string }[]
   { id: 'unix-ms', label: 'Unix Timestamp (ms)', example: '1793574720000' },
 ];
 
-export const DateConfigPopover: React.FC<DateConfigPopoverProps> = ({ config, currentValue, onChange }) => {
+export const DateConfigPopover: React.FC<DateConfigPopoverProps> = ({ config, currentValue, onChange, muted = false }) => {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -70,7 +71,11 @@ export const DateConfigPopover: React.FC<DateConfigPopoverProps> = ({ config, cu
       <button
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
-        className="flex items-center gap-1.5 rounded-lg border border-purple-500/30 bg-purple-500/10 px-2 py-1 text-xs font-medium text-purple-600 dark:text-purple-400 hover:bg-purple-500/20 transition cursor-pointer"
+        className={`flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs font-medium transition cursor-pointer ${
+          muted
+            ? 'border-line-strong/70 bg-active/70 text-tx-muted hover:bg-active'
+            : 'border-purple-500/30 bg-purple-500/10 text-purple-600 dark:text-purple-400 hover:bg-purple-500/20'
+        }`}
         title="Configure date format and mode"
       >
         <Calendar className="h-3.5 w-3.5" />

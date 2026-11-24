@@ -24,7 +24,7 @@ import {
 import { jsonToTree, xmlToTree } from '../../lib/payloadReverseParser';
 import { PayloadNodeRow } from './PayloadNodeRow';
 import { handleCodeEditorKeyDown } from '../../lib/editorHelper';
-import { beautifyJson, beautifyXml, sanitizeRelaxedJson } from '../../lib/formatters';
+import { beautifyJson, beautifyXml, compileEffectiveJsonPayload, sanitizeRelaxedJson } from '../../lib/formatters';
 import { useBackHandler } from '../../lib/backNavigation';
 import { CodeEditor, CodeEditorHandle } from '../editor/CodeEditor';
 
@@ -144,8 +144,8 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
 
   // Serializer function
   const compileTree = useCallback(
-    (config: PayloadBuilderConfig): string => {
-      return format === 'json' ? treeToJson(config) : treeToXml(config);
+    (config: PayloadBuilderConfig, includeCommented = true): string => {
+      return format === 'json' ? treeToJson(config, { includeCommented }) : treeToXml(config);
     },
     [format]
   );
@@ -155,7 +155,7 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
     (updater: (prev: PayloadBuilderConfig) => PayloadBuilderConfig) => {
       setBuilderConfig((prev) => {
         const next = updater(prev);
-        const compiled = compileTree(next);
+        const compiled = compileTree(next, true);
         isInternalUpdateRef.current = true;
         onBodyContentChange(compiled);
         setRawText(compiled);
@@ -193,17 +193,22 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
 
   // Switch between view modes with automatic two-way sync
   const handleSelectViewMode = (mode: ViewMode) => {
-    if (mode === 'builder' && viewMode === 'raw') {
-      // User switched from Raw to Builder: attempt reverse parse
+    if ((mode === 'builder' || mode === 'preview') && viewMode === 'raw') {
+      // User switched from Raw to Builder/Preview: attempt reverse parse
       const res = format === 'json' ? jsonToTree(rawText) : xmlToTree(rawText);
       if (res.error) {
-        setParseError(`Reverse parse failed: ${res.error}. Showing previous builder state.`);
+        if (mode === 'builder') {
+          setParseError(`Reverse parse failed: ${res.error}. Showing previous builder state.`);
+        } else {
+          setParseError(null);
+        }
       } else if (res.config) {
         setBuilderConfig(res.config);
         setParseError(null);
       }
+    } else {
+      setParseError(null);
     }
-    setParseError(null);
     setViewMode(mode);
   };
 
@@ -243,9 +248,33 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
     }
   };
 
+  // Compiled text for builder sync and effective outbound preview
+  const compiledText = useMemo(() => {
+    return compileTree(builderConfig, true);
+  }, [compileTree, builderConfig]);
+
+  const previewText = useMemo(() => {
+    if (format === 'json') {
+      if (!rawText.trim()) {
+        return compileTree(builderConfig, false);
+      }
+      const effective = compileEffectiveJsonPayload(rawText);
+      if (!effective.trim()) {
+        return builderConfig.rootType === 'list' ? '[]' : '{}';
+      }
+      return effective;
+    }
+    return compileTree(builderConfig, false);
+  }, [format, rawText, compileTree, builderConfig]);
+
   // Copy compiled output to clipboard
   const handleCopy = () => {
-    const textToCopy = viewMode === 'raw' ? rawText : compileTree(builderConfig);
+    const textToCopy =
+      viewMode === 'raw'
+        ? rawText
+        : viewMode === 'preview'
+          ? previewText
+          : compiledText;
     navigator.clipboard.writeText(textToCopy);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -313,15 +342,10 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
     }));
   };
 
-  // Compiled text for preview
-  const compiledText = useMemo(() => {
-    return compileTree(builderConfig);
-  }, [compileTree, builderConfig]);
-
   const byteSize = useMemo(() => {
-    const text = viewMode === 'raw' ? rawText : compiledText;
+    const text = viewMode === 'raw' ? rawText : viewMode === 'preview' ? previewText : compiledText;
     return new TextEncoder().encode(text).length;
-  }, [viewMode, rawText, compiledText]);
+  }, [viewMode, rawText, previewText, compiledText]);
 
   // Shared Sub-Views
   const renderBuilderView = (isModal: boolean) => (
@@ -483,7 +507,7 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
       <pre
         className="w-full flex-1 min-h-[140px] overflow-auto rounded-xl border border-line bg-element p-3.5 font-mono text-xs text-tx-primary select-text leading-relaxed"
       >
-        <code>{compiledText || (format === 'json' ? '{}' : '<request />')}</code>
+        <code>{previewText || (format === 'json' ? '{}' : '<request />')}</code>
       </pre>
     </div>
   );

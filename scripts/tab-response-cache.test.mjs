@@ -229,7 +229,8 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
       fetchCollectionById: noop,
       fetchScopeEnvironments: noop,
     },
-    'treeHelper': { reorderItemInTree: noop },
+    'treeHelper': { reorderItemInTree: noop, findRequestAncestorIds: () => [] },
+    'duplicate': { duplicateCollectionTree: noop, duplicateItemSubtree: noop, insertItemIntoCollectionTree: noop, formatImportDuplicateCollectionPayload: noop, getTargetFolderDepth: () => 0 },
     'cloudSyncTransformer': {
       buildCollectionFromDetails: (collection) => ({ ...collection, items: collection.items ?? [] }),
       buildEnvironmentsFromDelta: (environments) => (environments ?? []).map((environment) => ({
@@ -1366,7 +1367,8 @@ function loadStoreWithRealBlobManager({ executeApiRequest, productPolicy } = {})
     'cloudSyncCollections': {},
     'cloudCollectionSync': {},
     'cloudApi': { normalizeCloudApiUrl: (u) => u, registerTokenRefreshCallback: noop, registerAuthEvictedCallback: noop, fetchUserWorkspaces: noop, fetchUserTeams: noop, fetchTeamProjects: noop, fetchScopeCollections: noop, fetchCollectionById: noop, fetchScopeEnvironments: noop },
-    'treeHelper': { reorderItemInTree: noop },
+    'treeHelper': { reorderItemInTree: noop, findRequestAncestorIds: () => [] },
+    'duplicate': { duplicateCollectionTree: noop, duplicateItemSubtree: noop, insertItemIntoCollectionTree: noop, formatImportDuplicateCollectionPayload: noop, getTargetFolderDepth: () => 0 },
     'cloudSyncTransformer': {},
     'edition': { defaultProductPolicy: { workspace: { cloud: true, offline: true } } },
     'jwt': { canModifyCollection: () => true, hasScopePermission: () => true },

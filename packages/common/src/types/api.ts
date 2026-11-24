@@ -255,3 +255,33 @@ export interface ScopesCacheData {
   teamsWithProjects: { team: CloudTeam; projects: CloudProject[] }[];
   lastFetchedAt: number;
 }
+
+export interface PendingDuplicateIntent {
+  operationId: string;
+  ownerKey: string | null;
+  kind: 'collection' | 'import_duplicate' | 'item';
+  sourceCollectionId: string;
+  sourceItemId?: string;
+  targetScope?: ActiveScope;
+  targetCollectionId?: string;
+  targetParentId?: string | null;
+  sanitizedPayload?: { name: string; description?: string; items: any[] };
+  createdAt: number;
+  status: 'pending' | 'reconcile_required';
+}
+
+export interface DuplicateActionResult {
+  success: boolean;
+  error?: string;
+  operationId?: string;
+  createdCollectionId?: string;
+  createdItemId?: string;
+  targetCollectionId?: string;
+  targetParentId?: string | null;
+  targetScope?: ActiveScope;
+  name?: string;
+  minRole?: ProjectRole;
+  reconcilePending?: boolean;
+  deletedOnServer?: boolean;
+  revealPathIds?: string[];
+}

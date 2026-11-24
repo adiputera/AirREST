@@ -125,8 +125,8 @@ func (s *CollectionService) CreateCollection(ctx context.Context, user *domain.U
 	}
 
 	c.Name = strings.TrimSpace(c.Name)
-	if c.Name == "" {
-		return errors.New("collection name is required")
+	if err := ValidateName(c.Name); err != nil {
+		return err
 	}
 
 	if c.MinRole == "" {
@@ -256,6 +256,11 @@ func (s *CollectionService) UpdateCollection(ctx context.Context, user *domain.U
 
 	if c.Name == "" {
 		c.Name = existing.Name
+	} else {
+		c.Name = strings.TrimSpace(c.Name)
+		if err := ValidateName(c.Name); err != nil {
+			return nil, err
+		}
 	}
 	if c.Description == nil {
 		c.Description = existing.Description

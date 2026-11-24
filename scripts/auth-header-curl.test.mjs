@@ -40,14 +40,17 @@ function loadModule(relativePath, mockDeps = {}) {
 
 const authHeaders = loadModule('../packages/common/src/lib/authHeaders.ts');
 const urlParams = loadModule('../packages/common/src/lib/urlParams.ts');
+const formatters = loadModule('../packages/common/src/lib/formatters.ts');
 const fetcher = loadModule('../packages/common/src/lib/fetcher.ts', {
   './authHeaders': authHeaders,
   './urlParams': urlParams,
+  './formatters': formatters,
   './blobManager': { createTrackedBlobUrl: () => '' },
 });
 const curl = loadModule('../packages/common/src/lib/curl.ts', {
   './authHeaders': authHeaders,
   './urlParams': urlParams,
+  './formatters': formatters,
   './fetcher': fetcher,
 });
 
@@ -252,5 +255,28 @@ test('cURL and fetcher stay in parity for Body default Content-Type, manual non-
   const preparedCtKeys = Object.keys(formPrepared.finalHeaders).filter((k) => k.toLowerCase() === 'content-type');
   assert.equal(preparedCtKeys.length, 0, 'fetcher form-data must omit Content-Type so boundary is runtime-managed');
   assert.equal(formPrepared.finalHeaders['X-Custom'], 'yes');
+});
+
+test('cURL export strips JSON comments while parseCurlCommand preserves comments and detects JSON bodyType', () => {
+  const rawWithComment = '{\n  //"field_1": "sadsadsa",\n  "field_2": "sadadsa",\n  "field_3": "sadasdsa"\n}';
+  const cmd = curl.generateCurlCommand({
+    ...baseRequest,
+    method: 'POST',
+    bodyType: 'json',
+    bodyContent: rawWithComment,
+    headers: [],
+    auth: { type: 'none' },
+  });
+
+  assert.ok(!cmd.includes('field_1'), 'Generated cURL must not include commented JSON fields');
+  assert.ok(cmd.includes('"field_2": "sadadsa"'));
+  assert.ok(cmd.includes('"field_3": "sadasdsa"'));
+
+  const imported = curl.parseCurlCommand(
+    `curl --url 'https://httpbin.org/post' -H 'content-type: application/json' --data-raw '// leading\n${rawWithComment}'`
+  );
+  assert.equal(imported.bodyType, 'json');
+  assert.equal(imported.rawType, 'json');
+  assert.ok(imported.bodyContent.includes('//"field_1": "sadsadsa"'));
 });
 

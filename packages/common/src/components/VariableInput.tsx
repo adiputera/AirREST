@@ -1,9 +1,19 @@
 'use client';
 
-import React, { useState, useRef, useLayoutEffect, useMemo, useEffect } from 'react';
+import React, { useState, useRef, useLayoutEffect, useMemo, useEffect, useCallback, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { Eye, EyeOff, AlertCircle, CheckCircle2, Sparkles } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
+import {
+  AutocompleteInputMode,
+  AutocompleteContext,
+  AutocompleteSuggestionItem,
+  detectInputAutocompleteContext,
+  getHeaderSuggestions,
+  getVariableSuggestions,
+  applyAutocompleteSuggestion,
+} from '../lib/autocomplete';
+import { AutocompletePortal, AutocompleteAnchorRect } from './AutocompletePortal';
 
 export interface VariableToken {
   text: string;
@@ -19,6 +29,7 @@ export interface VariableInputProps {
   placeholder?: string;
   className?: string;
   inputClassName?: string;
+  wrapperClassName?: string;
   type?: 'text' | 'password';
   disabled?: boolean;
   readOnly?: boolean;
@@ -28,6 +39,7 @@ export interface VariableInputProps {
   showPreview?: boolean;
   size?: 'sm' | 'md' | 'lg';
   id?: string;
+  autocompleteMode?: AutocompleteInputMode;
 }
 
 interface HoveredVariableInfo {
@@ -108,6 +120,7 @@ export const VariableInput: React.FC<VariableInputProps> = ({
   placeholder = '',
   className = '',
   inputClassName = '',
+  wrapperClassName = '',
   type = 'text',
   disabled = false,
   readOnly = false,
@@ -117,18 +130,28 @@ export const VariableInput: React.FC<VariableInputProps> = ({
   showPreview = false,
   size = 'md',
   id,
+  autocompleteMode = 'variable-only',
 }) => {
   const environments = useApiStore((state) => state.environments);
   const activeEnvironmentId = useApiStore((state) => state.activeEnvironmentId);
+  const generatedId = useId();
+  const listboxId = `var-input-ac-${generatedId}`;
 
   const [showPassword, setShowPassword] = useState(false);
   const [hoveredVar, setHoveredVar] = useState<HoveredVariableInfo | null>(null);
 
+  // Autocomplete states
+  const [acContext, setAcContext] = useState<AutocompleteContext | null>(null);
+  const [acActiveIndex, setAcActiveIndex] = useState(0);
+  const [acAnchorRect, setAcAnchorRect] = useState<AutocompleteAnchorRect | null>(null);
+
   useEffect(() => {
     setShowPassword(false);
     setHoveredVar(null);
+    setAcContext(null);
   }, [type, maskResetKey]);
 
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const mirrorRef = useRef<HTMLDivElement>(null);
 
@@ -157,6 +180,97 @@ export const VariableInput: React.FC<VariableInputProps> = ({
 
   const tokens = useMemo(() => tokenizeVariables(safeValue, envVarsMap), [safeValue, envVarsMap]);
 
+  const measureAnchorRect = useCallback((): AutocompleteAnchorRect | null => {
+    const targetEl = wrapperRef.current || inputRef.current;
+    if (!targetEl) return null;
+    const rect = targetEl.getBoundingClientRect();
+    return {
+      left: rect.left,
+      top: rect.top,
+      bottom: rect.bottom,
+      width: rect.width,
+    };
+  }, []);
+
+  const updateAutocompleteFromInput = useCallback(
+    (nextText: string, cursorPos: number | null, options?: { forceOpenHeader?: boolean }) => {
+      if (readOnly || disabled || autocompleteMode === 'none') {
+        setAcContext(null);
+        return;
+      }
+      const pos = cursorPos ?? nextText.length;
+      const detected = detectInputAutocompleteContext(nextText, pos, autocompleteMode, options);
+      if (!detected) {
+        setAcContext(null);
+        return;
+      }
+
+      // If header mode and user already selected the exact header name (case-sensitive) and no forceOpen,
+      // check whether there are other prefix matches or if it's already completed
+      if (detected.kind === 'header' && !options?.forceOpenHeader) {
+        const matches = getHeaderSuggestions(detected.query);
+        if (
+          matches.length === 0 ||
+          (matches.length === 1 && matches[0].label === nextText.trim())
+        ) {
+          setAcContext(null);
+          return;
+        }
+      }
+
+      setAcContext((prev) => {
+        if (!prev || prev.kind !== detected.kind || prev.query !== detected.query) {
+          setAcActiveIndex(0);
+        }
+        return detected;
+      });
+      setAcAnchorRect(measureAnchorRect());
+      setHoveredVar(null);
+    },
+    [readOnly, disabled, autocompleteMode, measureAnchorRect]
+  );
+
+  const acSuggestions: AutocompleteSuggestionItem[] = useMemo(() => {
+    if (!acContext) return [];
+    if (acContext.kind === 'header') {
+      return getHeaderSuggestions(acContext.query);
+    }
+    return getVariableSuggestions(acContext.query, environments, activeEnvironmentId);
+  }, [acContext, environments, activeEnvironmentId]);
+
+  const isAutocompleteOpen = Boolean(acContext && acSuggestions.length > 0 && !readOnly && !disabled);
+
+  useEffect(() => {
+    if (acActiveIndex >= acSuggestions.length && acSuggestions.length > 0) {
+      setAcActiveIndex(0);
+    }
+  }, [acActiveIndex, acSuggestions.length]);
+
+  const handleSelectSuggestion = useCallback(
+    (index: number) => {
+      if (!acContext || index < 0 || index >= acSuggestions.length) return;
+      const chosen = acSuggestions[index];
+      const { nextText, nextCursorPos } = applyAutocompleteSuggestion(safeValue, acContext, chosen);
+      setAcContext(null);
+      onChange(nextText);
+
+      if (typeof requestAnimationFrame !== 'undefined') {
+        requestAnimationFrame(() => {
+          const inputEl = inputRef.current;
+          if (inputEl) {
+            inputEl.focus();
+            try {
+              inputEl.setSelectionRange(nextCursorPos, nextCursorPos);
+            } catch {
+              // ignore selection range error on non-text types
+            }
+          }
+        });
+      }
+    },
+    [acContext, acSuggestions, safeValue, onChange]
+  );
+
   // Keep mirror scroll position synchronized with input scroll
   const syncScroll = () => {
     if (mirrorRef.current && inputRef.current) {
@@ -168,16 +282,26 @@ export const VariableInput: React.FC<VariableInputProps> = ({
     syncScroll();
   }, [safeValue]);
 
-  // Clear tooltip when window scrolls or resizes
+  // Clear tooltip & reposition/dismiss autocomplete when window scrolls or resizes
   useEffect(() => {
-    const handleDismiss = () => setHoveredVar(null);
-    window.addEventListener('scroll', handleDismiss, true);
-    window.addEventListener('resize', handleDismiss);
-    return () => {
-      window.removeEventListener('scroll', handleDismiss, true);
-      window.removeEventListener('resize', handleDismiss);
+    const handleScrollOrResize = (e: Event) => {
+      setHoveredVar(null);
+      if (isAutocompleteOpen) {
+        // Ignore scroll events originating inside the autocomplete listbox itself
+        const target = e.target as HTMLElement | null;
+        if (target && target.closest?.(`#${CSS.escape(listboxId)}`)) {
+          return;
+        }
+        setAcAnchorRect(measureAnchorRect());
+      }
     };
-  }, []);
+    window.addEventListener('scroll', handleScrollOrResize, true);
+    window.addEventListener('resize', handleScrollOrResize);
+    return () => {
+      window.removeEventListener('scroll', handleScrollOrResize, true);
+      window.removeEventListener('resize', handleScrollOrResize);
+    };
+  }, [isAutocompleteOpen, listboxId, measureAnchorRect]);
 
   const isPasswordMasked = type === 'password' && !showPassword;
 
@@ -209,7 +333,7 @@ export const VariableInput: React.FC<VariableInputProps> = ({
 
   // Detect mouse hover over variable tokens in the mirror layer
   const handleMouseMove = (e: React.MouseEvent<HTMLInputElement>) => {
-    if (!mirrorRef.current || isPasswordMasked) {
+    if (!mirrorRef.current || isPasswordMasked || isAutocompleteOpen) {
       if (hoveredVar) setHoveredVar(null);
       return;
     }
@@ -271,9 +395,10 @@ export const VariableInput: React.FC<VariableInputProps> = ({
   return (
     <div className={`relative w-full ${className}`}>
       <div
+        ref={wrapperRef}
         className={`relative flex w-full items-center overflow-hidden rounded-md border border-line transition focus-within:border-sky-500 focus-within:ring-1 focus-within:ring-sky-500 ${
           readOnly ? 'bg-element/60' : 'bg-card/90'
-        } ${disabled ? 'opacity-60 cursor-not-allowed' : ''}`}
+        } ${disabled ? 'opacity-60 cursor-not-allowed' : ''} ${wrapperClassName}`}
       >
         {/* Syntax Highlighting Mirror Layer */}
         {!isPasswordMasked && safeValue.length > 0 && (
@@ -316,11 +441,21 @@ export const VariableInput: React.FC<VariableInputProps> = ({
           value={safeValue}
           disabled={disabled}
           readOnly={readOnly}
+          role={!readOnly && autocompleteMode !== 'none' ? 'combobox' : undefined}
+          aria-expanded={!readOnly && autocompleteMode !== 'none' ? isAutocompleteOpen : undefined}
+          aria-autocomplete={!readOnly && autocompleteMode !== 'none' ? 'list' : undefined}
+          aria-controls={isAutocompleteOpen ? listboxId : undefined}
+          aria-activedescendant={
+            isAutocompleteOpen ? `${listboxId}-item-${acActiveIndex}` : undefined
+          }
           aria-readonly={readOnly || undefined}
           aria-describedby={ariaDescribedBy}
           onChange={(e) => {
             if (readOnly) return;
-            onChange(e.target.value);
+            const nextVal = e.target.value;
+            const cursorPos = e.target.selectionStart;
+            onChange(nextVal);
+            updateAutocompleteFromInput(nextVal, cursorPos);
           }}
           onMouseMove={handleMouseMove}
           onMouseLeave={handleMouseLeave}
@@ -328,18 +463,76 @@ export const VariableInput: React.FC<VariableInputProps> = ({
             syncScroll();
             if (hoveredVar) setHoveredVar(null);
           }}
-          onKeyUp={syncScroll}
+          onKeyUp={(e) => {
+            syncScroll();
+            if (
+              e.key === 'ArrowLeft' ||
+              e.key === 'ArrowRight' ||
+              e.key === 'Home' ||
+              e.key === 'End'
+            ) {
+              updateAutocompleteFromInput(e.currentTarget.value, e.currentTarget.selectionStart);
+            }
+          }}
           onKeyDown={(e) => {
             if (hoveredVar) setHoveredVar(null);
             syncScroll();
+
+            if (isAutocompleteOpen) {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                e.stopPropagation();
+                setAcActiveIndex((prev) => (prev + 1) % acSuggestions.length);
+                return;
+              }
+              if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                e.stopPropagation();
+                setAcActiveIndex((prev) => (prev - 1 + acSuggestions.length) % acSuggestions.length);
+                return;
+              }
+              if (e.key === 'Enter' || e.key === 'Tab') {
+                e.preventDefault();
+                e.stopPropagation();
+                handleSelectSuggestion(acActiveIndex);
+                return;
+              }
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                setAcContext(null);
+                return;
+              }
+            } else if (!readOnly && !disabled) {
+              // Allow Ctrl+Space or ArrowDown on a header-name field to manually open suggestions
+              if (
+                (e.ctrlKey && e.key === ' ') ||
+                (autocompleteMode === 'header-name' && e.key === 'ArrowDown')
+              ) {
+                e.preventDefault();
+                updateAutocompleteFromInput(
+                  e.currentTarget.value,
+                  e.currentTarget.selectionStart,
+                  { forceOpenHeader: autocompleteMode === 'header-name' }
+                );
+                return;
+              }
+            }
+
             onKeyDown?.(e);
           }}
-          onClick={syncScroll}
+          onClick={(e) => {
+            syncScroll();
+            updateAutocompleteFromInput(e.currentTarget.value, e.currentTarget.selectionStart);
+          }}
+          onBlur={() => {
+            setAcContext(null);
+          }}
           onSelect={syncScroll}
           placeholder={placeholder}
           className={`w-full bg-transparent font-mono text-xs leading-5 focus:outline-none placeholder-tx-muted ${
             readOnly ? 'caret-transparent cursor-text' : 'caret-sky-400'
-          } ${sizeClasses} ${!isPasswordMasked && value.length > 0
+          } ${sizeClasses} ${!isPasswordMasked && safeValue.length > 0
               ? 'text-transparent selection:bg-sky-500/30 selection:text-transparent'
               : 'text-tx-primary'
             } ${inputClassName}`}
@@ -362,8 +555,21 @@ export const VariableInput: React.FC<VariableInputProps> = ({
         )}
       </div>
 
+      {/* Autocomplete Dropdown Portal */}
+      <AutocompletePortal
+        isOpen={isAutocompleteOpen}
+        items={acSuggestions}
+        activeIndex={acActiveIndex}
+        onSelectIndex={handleSelectSuggestion}
+        onHighlightIndex={setAcActiveIndex}
+        anchorRect={acAnchorRect}
+        query={acContext?.query || ''}
+        kind={acContext?.kind || 'variable'}
+        listboxId={listboxId}
+      />
+
       {/* Hover Popup Tooltip */}
-      {!isPasswordMasked && hoveredVar &&
+      {!isPasswordMasked && !isAutocompleteOpen && hoveredVar &&
         typeof document !== 'undefined' &&
         createPortal(
           <div

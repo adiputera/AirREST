@@ -6,6 +6,7 @@ interface PayloadTypeBadgeProps {
   type: PayloadValueType;
   onChange: (newType: PayloadValueType) => void;
   disabled?: boolean;
+  muted?: boolean;
 }
 
 const TYPE_CONFIGS: Record<
@@ -65,11 +66,14 @@ const TYPE_CONFIGS: Record<
 
 const ALL_TYPES: PayloadValueType[] = ['string', 'number', 'boolean', 'date', 'list', 'object', 'null'];
 
-export const PayloadTypeBadge: React.FC<PayloadTypeBadgeProps> = ({ type, onChange, disabled }) => {
+export const PayloadTypeBadge: React.FC<PayloadTypeBadgeProps> = ({ type, onChange, disabled, muted = false }) => {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const activeConfig = TYPE_CONFIGS[type] || TYPE_CONFIGS.string;
+  const triggerColors = muted
+    ? 'bg-active/70 hover:bg-active text-tx-muted border-line-strong/70'
+    : `${activeConfig.badgeBg} ${activeConfig.color} ${activeConfig.border}`;
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -92,7 +96,7 @@ export const PayloadTypeBadge: React.FC<PayloadTypeBadgeProps> = ({ type, onChan
         type="button"
         disabled={disabled}
         onClick={() => setIsOpen((prev) => !prev)}
-        className={`flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[11px] font-semibold transition ${activeConfig.badgeBg} ${activeConfig.color} ${activeConfig.border} ${
+        className={`flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[11px] font-semibold transition ${triggerColors} ${
           disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
         }`}
         title={`Change type (current: ${activeConfig.label})`}

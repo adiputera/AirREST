@@ -1,6 +1,7 @@
 import { ApiRequest, HttpMethod, KeyValuePair, AuthConfig, FormDataItem, BinaryFileData, RawType } from '../types/api';
 import { resolveBodyContentTypeHeader, resolveEffectiveAuthHeader, resolveManualHeaders } from './authHeaders';
 import { interpolateVariables } from './fetcher';
+import { compileEffectiveJsonPayload } from './formatters';
 import { substitutePathVariables } from './urlParams';
 
 function generateId(): string {
@@ -196,9 +197,10 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
         } else {
           bodyContent = data;
           const trimmed = data.trim();
-          if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+          const effectiveJson = compileEffectiveJsonPayload(trimmed).trim();
+          if (effectiveJson.startsWith('{') || effectiveJson.startsWith('[')) {
             try {
-              const parsed = JSON.parse(data);
+              const parsed = JSON.parse(effectiveJson);
               if (parsed && typeof parsed === 'object' && typeof parsed.query === 'string') {
                 bodyType = 'graphql';
                 graphqlQuery = parsed.query;
@@ -450,7 +452,7 @@ export function generateCurlCommand(
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     if (request.bodyType === 'graphql') {
       const q = interpolateVariables(request.graphqlQuery || request.bodyContent || '', variables);
-      const vStr = interpolateVariables(request.graphqlVariables || '', variables).trim();
+      const vStr = compileEffectiveJsonPayload(interpolateVariables(request.graphqlVariables || '', variables)).trim();
       let vParsed: unknown = undefined;
       if (vStr) {
         try {
@@ -465,6 +467,13 @@ export function generateCurlCommand(
       parts.push(`-d '${body.replace(/'/g, `'\\''`)}'`);
     } else if (
       request.bodyType === 'json' ||
+      (request.bodyType === 'raw' && request.rawType === 'json')
+    ) {
+      const body = compileEffectiveJsonPayload(interpolateVariables(request.bodyContent || '', variables));
+      if (body) {
+        parts.push(`-d '${body.replace(/'/g, `'\\''`)}'`);
+      }
+    } else if (
       request.bodyType === 'xml' ||
       request.bodyType === 'raw'
     ) {

@@ -65,6 +65,7 @@ function setupStoreHarness({ fetchImpl, preScriptImpl }) {
 
   const authHeaders = transpileRun('../packages/common/src/lib/authHeaders.ts', (id) => require(id));
   const urlParams = transpileRun('../packages/common/src/lib/urlParams.ts', (id) => require(id));
+  const formatters = transpileRun('../packages/common/src/lib/formatters.ts', (id) => require(id));
   const requestDiff = transpileRun('../packages/common/src/lib/requestDiff.ts', (id) => require(id));
   const postman = transpileRun('../packages/common/src/lib/postman.ts', (id) => {
     if (id.includes('urlParams')) return urlParams;
@@ -73,6 +74,7 @@ function setupStoreHarness({ fetchImpl, preScriptImpl }) {
   const fetcher = transpileRun('../packages/common/src/lib/fetcher.ts', (id) => {
     if (id.includes('authHeaders')) return authHeaders;
     if (id.includes('urlParams')) return urlParams;
+    if (id.includes('formatters')) return formatters;
     if (id.includes('blobManager')) return { createTrackedBlobUrl: () => '' };
     return require(id);
   });
@@ -192,7 +194,8 @@ function setupStoreHarness({ fetchImpl, preScriptImpl }) {
       registerTokenRefreshCallback: noop,
       registerAuthEvictedCallback: noop,
     },
-    treeHelper: { reorderItemInTree: noop },
+    treeHelper: { reorderItemInTree: noop, findRequestAncestorIds: () => [] },
+    duplicate: { duplicateCollectionTree: noop, duplicateItemSubtree: noop, insertItemIntoCollectionTree: noop, formatImportDuplicateCollectionPayload: noop, getTargetFolderDepth: () => 0 },
     cloudSyncTransformer: {
       buildCollectionFromDetails: (c) => c,
       buildEnvironmentsFromDelta: (e) => e,

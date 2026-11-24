@@ -243,7 +243,8 @@ function loadStore({ executePreRequestScript, executeApiRequest, cloudApi = {}, 
       fetchScopeEnvironments: noop,
       ...cloudApi,
     },
-    'treeHelper': { reorderItemInTree: noop },
+    'treeHelper': { reorderItemInTree: noop, findRequestAncestorIds: () => [] },
+    'duplicate': { duplicateCollectionTree: noop, duplicateItemSubtree: noop, insertItemIntoCollectionTree: noop, formatImportDuplicateCollectionPayload: noop, getTargetFolderDepth: () => 0 },
     'cloudSyncTransformer': {
       buildCollectionFromDetails: (collection) => ({ ...collection, items: collection.items ?? [] }),
       buildEnvironmentsFromDelta: (environments) => (environments ?? []).map((environment) => ({

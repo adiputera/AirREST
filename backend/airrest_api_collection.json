@@ -1316,51 +1316,149 @@
               "mode": "raw",
               "raw": "{\n  \"target_workspace_id\": \"{{workspaceId}}\"\n}"
             },
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/collections/{{collectionId}}/move",
-              "host": [
-                "{{baseUrl}}"
+              "url": {
+                "raw": "{{baseUrl}}/api/v1/collections/{{collectionId}}/move",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "api",
+                  "v1",
+                  "collections",
+                  "{{collectionId}}",
+                  "move"
+                ]
+              }
+            }
+          },
+          {
+            "name": "Duplicate Collection",
+            "request": {
+              "method": "POST",
+              "header": [
+                {
+                  "key": "Authorization",
+                  "value": "Bearer {{token}}"
+                },
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
               ],
-              "path": [
-                "api",
-                "v1",
-                "collections",
-                "{{collectionId}}",
-                "move"
-              ]
+              "body": {
+                "mode": "raw",
+                "raw": "{\n  \"operation_id\": \"{{$guid}}\",\n  \"target_workspace_id\": \"{{workspaceId}}\"\n}"
+              },
+              "url": {
+                "raw": "{{baseUrl}}/api/v1/collections/{{collectionId}}/duplicate",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "api",
+                  "v1",
+                  "collections",
+                  "{{collectionId}}",
+                  "duplicate"
+                ]
+              }
+            }
+          },
+          {
+            "name": "Import Duplicate Collection (Offline to Cloud)",
+            "request": {
+              "method": "POST",
+              "header": [
+                {
+                  "key": "Authorization",
+                  "value": "Bearer {{token}}"
+                },
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": {
+                "mode": "raw",
+                "raw": "{\n  \"operation_id\": \"{{$guid}}\",\n  \"target_workspace_id\": \"{{workspaceId}}\",\n  \"collection\": {\n    \"name\": \"Product APIs\",\n    \"description\": \"Uploaded offline collection\",\n    \"items\": [\n      {\n        \"type\": \"request\",\n        \"name\": \"Sample Request\",\n        \"sort_order\": 0,\n        \"method\": \"GET\",\n        \"url\": \"https://httpbin.org/get?user=tester&tag=api\"\n      }\n    ]\n  }\n}"
+              },
+              "url": {
+                "raw": "{{baseUrl}}/api/v1/collections/import-duplicate",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "api",
+                  "v1",
+                  "collections",
+                  "import-duplicate"
+                ]
+              }
+            }
+          },
+          {
+            "name": "Move Request or Folder",
+            "request": {
+              "method": "POST",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": {
+                "mode": "raw",
+                "raw": "{\n  \"source_collection_id\": \"{{collectionId}}\",\n  \"target_collection_id\": \"{{targetCollectionId}}\",\n  \"target_parent_id\": null\n}"
+              },
+              "url": {
+                "raw": "{{baseUrl}}/api/v1/items/{{itemId}}/move",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "api",
+                  "v1",
+                  "items",
+                  "{{itemId}}",
+                  "move"
+                ]
+              },
+              "description": "Moves an item and folder descendants atomically within the same workspace or project. Requires collection:write and min_role access to both collections. Preserves content and IDs; increments item and source/target collection versions and timestamps. source_collection_id is the location precondition (409 on a changed location); no base_version field. An identical cross-collection retry at the same destination succeeds. Clients must finish pending saves before moving. Import-batch retains copy semantics and must not be used for moves."
+            }
+          },
+          {
+            "name": "Duplicate Request or Folder",
+            "request": {
+              "method": "POST",
+              "header": [
+                {
+                  "key": "Authorization",
+                  "value": "Bearer {{token}}"
+                },
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": {
+                "mode": "raw",
+                "raw": "{\n  \"operation_id\": \"{{$guid}}\",\n  \"source_collection_id\": \"{{collectionId}}\",\n  \"target_collection_id\": \"{{targetCollectionId}}\",\n  \"target_parent_id\": null\n}"
+              },
+              "url": {
+                "raw": "{{baseUrl}}/api/v1/items/{{itemId}}/duplicate",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "api",
+                  "v1",
+                  "items",
+                  "{{itemId}}",
+                  "duplicate"
+                ]
+              }
             }
           }
-        },
-        {
-          "name": "Move Request or Folder",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"source_collection_id\": \"{{collectionId}}\",\n  \"target_collection_id\": \"{{targetCollectionId}}\",\n  \"target_parent_id\": null\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/items/{{itemId}}/move",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "items",
-                "{{itemId}}",
-                "move"
-              ]
-            },
-            "description": "Moves an item and folder descendants atomically within the same workspace or project. Requires collection:write and min_role access to both collections. Preserves content and IDs; increments item and source/target collection versions and timestamps. source_collection_id is the location precondition (409 on a changed location); no base_version field. An identical cross-collection retry at the same destination succeeds. Clients must finish pending saves before moving. Import-batch retains copy semantics and must not be used for moves."
-          }
-        }
       ]
     },
     {

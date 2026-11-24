@@ -36,6 +36,7 @@ import { SaveToCollectionModal } from './SaveToCollectionModal';
 import { useBackHandler } from '../lib/backNavigation';
 import { generateCurlCommand } from '../lib/curl';
 import { VariableInput } from './VariableInput';
+import { VariableTextarea } from './VariableTextarea';
 import { interpolateVariables } from '../lib/fetcher';
 import { analyzeHeadersForEditor, interpolateStaticVariables } from '../lib/authHeaders';
 import { beautifyXml, beautifyGraphQL, beautifyJson } from '../lib/formatters';
@@ -1051,12 +1052,11 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, 
                                 {pv.key}
                               </td>
                               <td className="px-2 py-1.5">
-                                <input
-                                  type="text"
+                                <VariableInput
                                   value={pv.value}
-                                  onChange={(e) => updatePathVariable(pv.id, { value: e.target.value })}
+                                  onChange={(value) => updatePathVariable(pv.id, { value })}
                                   placeholder="Value or {{variable}}"
-                                  className="w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-tx-primary placeholder-tx-faint focus:bg-card focus:outline-none focus:ring-1 focus:ring-sky-500/50"
+                                  size="sm"
                                 />
                               </td>
                               <td className="px-2 py-1.5">
@@ -1090,6 +1090,7 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, 
                 onRemove={removeHeader}
                 keyPlaceholder="Header name (e.g. Authorization)"
                 valuePlaceholder="Header value or {{token}}"
+                keyAutocompleteMode="header-name"
                 readonlyRows={derivedReadonlyRows}
                 rowWarnings={headersAnalysis.warningsById}
               />
@@ -1175,6 +1176,9 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, 
                           value={currentTab?.auth?.apiKeyKey || ''}
                           onChange={(apiKeyKey) => updateAuth({ apiKeyKey })}
                           placeholder="e.g. X-API-Key or api_key"
+                          autocompleteMode={
+                            currentTab?.auth?.apiKeyIn !== 'query' ? 'header-name' : 'variable-only'
+                          }
                         />
                       </div>
                       <div className="space-y-1.5">
@@ -1339,12 +1343,11 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, 
                                 />
                               </td>
                               <td className="px-2 py-1.5">
-                                <input
-                                  type="text"
+                                <VariableInput
                                   value={item.key}
-                                  onChange={(e) => updateFormDataItem(item.id, { key: e.target.value })}
+                                  onChange={(key) => updateFormDataItem(item.id, { key })}
                                   placeholder="Key"
-                                  className="w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-tx-primary placeholder-tx-faint focus:bg-card focus:outline-none"
+                                  size="sm"
                                 />
                               </td>
                               <td className="px-2 py-1.5">
@@ -1387,12 +1390,11 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, 
                                     )}
                                   </div>
                                 ) : (
-                                  <input
-                                    type="text"
+                                  <VariableInput
                                     value={item.value}
-                                    onChange={(e) => updateFormDataItem(item.id, { value: e.target.value })}
+                                    onChange={(value) => updateFormDataItem(item.id, { value })}
                                     placeholder="Text value or {{variable}}"
-                                    className="w-full rounded bg-transparent px-2 py-1 font-mono text-xs text-tx-primary placeholder-tx-faint focus:bg-card focus:outline-none"
+                                    size="sm"
                                   />
                                 )}
                               </td>
@@ -1428,9 +1430,9 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, 
                         <div className="flex items-center justify-between text-[11px] text-tx-muted shrink-0">
                           <span>Enter fields as <code className="text-sky-600 dark:text-sky-300">key: value</code> or <code className="text-sky-600 dark:text-sky-300">key=value</code> (one per line):</span>
                         </div>
-                        <textarea
+                        <VariableTextarea
                           value={urlEncodedBulkText}
-                          onChange={(e) => setUrlEncodedBulkText(e.target.value)}
+                          onValueChange={setUrlEncodedBulkText}
                           onKeyDown={(e) =>
                             handleCodeEditorKeyDown(e, {
                               onChange: (val) => setUrlEncodedBulkText(val),
@@ -1599,11 +1601,11 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, 
                           <span>Prettify Query</span>
                         </button>
                       </div>
-                      <textarea
+                      <VariableTextarea
                         value={currentTab.graphqlQuery ?? currentTab.bodyContent}
-                        onChange={(e) => {
-                          setGraphqlQuery(e.target.value);
-                          setBodyContent(e.target.value);
+                        onValueChange={(val) => {
+                          setGraphqlQuery(val);
+                          setBodyContent(val);
                           if (graphqlQueryError) setGraphqlQueryError(null);
                         }}
                         onKeyDown={(e) =>
@@ -1641,10 +1643,10 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, 
                           <span>Beautify Variables</span>
                         </button>
                       </div>
-                      <textarea
+                      <VariableTextarea
                         value={currentTab.graphqlVariables || ''}
-                        onChange={(e) => {
-                          setGraphqlVariables(e.target.value);
+                        onValueChange={(val) => {
+                          setGraphqlVariables(val);
                           if (graphqlVariablesError) setGraphqlVariablesError(null);
                         }}
                         onKeyDown={(e) =>
@@ -1684,10 +1686,10 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, 
                   />
                 ) : currentTab.bodyType !== 'none' ? (
                   <div className="flex-1 min-h-0 flex flex-col space-y-1">
-                    <textarea
+                    <VariableTextarea
                       value={currentTab.bodyContent}
-                      onChange={(e) => {
-                        setBodyContent(e.target.value);
+                      onValueChange={(val) => {
+                        setBodyContent(val);
                         if (jsonFormatError) setJsonFormatError(null);
                         if (xmlFormatError) setXmlFormatError(null);
                       }}

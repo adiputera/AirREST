@@ -67,6 +67,8 @@ test('CodeEditor supports JSON comments and external undo ownership', () => {
   assert.ok(content.includes('stopPropagation: true'), 'External undo shortcut does not reach global handlers');
   assert.ok(content.includes('toggleComment(view)'), 'JSON comments use CodeMirror command support');
   assert.ok(content.includes('isDiscreteChangeRef'), 'Comment toggles are stored as discrete request history entries');
+  assert.ok(content.includes('jsonCommentHighlighterPlugin'), 'CodeEditor highlights JSONC comments across full lines/blocks');
+  assert.ok(content.includes('.cm-jsonc-comment'), 'CodeEditor styles JSONC comments in both dark and light themes');
 });
 
 test('ResponseViewer integrates CodeEditor for body response inspection with folding', () => {

@@ -223,7 +223,11 @@ const GZIP_THRESHOLD = 64 * 1024;
 
 function supportsGzipRequest(endpoint: string): boolean {
   const path = endpoint.split('?', 1)[0];
-  return path === '/api/v1/sync/push' || path === '/api/v1/sync/import-batch';
+  return (
+    path === '/api/v1/sync/push' ||
+    path === '/api/v1/sync/import-batch' ||
+    path === '/api/v1/collections/import-duplicate'
+  );
 }
 
 async function gzipRequestBody(body: string, signal?: AbortSignal): Promise<ArrayBuffer | null> {
@@ -923,6 +927,138 @@ export interface ReorderItemPayload {
   sort_order: number;
 }
 
+export interface DuplicateCollectionReceipt {
+  operation_id: string;
+  status: 'committed' | 'committed_deleted' | 'expired_committed';
+  collection_id: string;
+  workspace_id?: string | null;
+  project_id?: string | null;
+  name: string;
+  min_role: ProjectRole;
+  version: number;
+  updated_at: string;
+  item_count: number;
+}
+
+export interface DuplicateItemReceipt {
+  operation_id: string;
+  status: 'committed' | 'committed_deleted' | 'expired_committed';
+  root_item_id: string;
+  target_collection_id: string;
+  target_parent_id?: string | null;
+  target_collection_version: number;
+  name: string;
+  item_count: number;
+}
+
+export interface ImportDuplicateCollectionBody {
+  name: string;
+  description?: string;
+  items: any[];
+}
+
+export async function duplicateScopeCollection(
+  apiUrl: string,
+  token: string | undefined,
+  collectionId: string,
+  targetScope: ActiveScope,
+  operationId: string,
+  refreshToken?: string,
+  signal?: AbortSignal,
+  client = defaultCloudClientState,
+): Promise<DuplicateCollectionReceipt> {
+  const payload: Record<string, string> = { operation_id: operationId };
+  if (targetScope.type === 'workspace') {
+    payload.target_workspace_id = targetScope.id;
+  } else {
+    payload.target_project_id = targetScope.id;
+  }
+
+  const res = await fetchWithAuth(`/api/v1/collections/${collectionId}/duplicate`, {
+    method: 'POST',
+    apiUrl,
+    token,
+    refreshToken,
+    signal,
+    body: JSON.stringify(payload),
+  }, client);
+
+  const json = await safeJson(res);
+  if (!res.ok) {
+    throw new CloudApiError(extractError(json, 'Failed to duplicate collection', res.status), res.status, extractErrorCode(json));
+  }
+  return unwrapData<DuplicateCollectionReceipt>(json);
+}
+
+export async function importDuplicateCollection(
+  apiUrl: string,
+  token: string | undefined,
+  targetScope: ActiveScope,
+  collection: ImportDuplicateCollectionBody,
+  operationId: string,
+  refreshToken?: string,
+  signal?: AbortSignal,
+  client = defaultCloudClientState,
+): Promise<DuplicateCollectionReceipt> {
+  const payload: Record<string, any> = {
+    operation_id: operationId,
+    collection,
+  };
+  if (targetScope.type === 'workspace') {
+    payload.target_workspace_id = targetScope.id;
+  } else {
+    payload.target_project_id = targetScope.id;
+  }
+
+  const res = await fetchWithAuth('/api/v1/collections/import-duplicate', {
+    method: 'POST',
+    apiUrl,
+    token,
+    refreshToken,
+    signal,
+    body: JSON.stringify(payload),
+  }, client);
+
+  const json = await safeJson(res);
+  if (!res.ok) {
+    throw new CloudApiError(extractError(json, 'Failed to upload duplicated collection', res.status), res.status, extractErrorCode(json));
+  }
+  return unwrapData<DuplicateCollectionReceipt>(json);
+}
+
+export async function duplicateScopeItem(
+  apiUrl: string,
+  token: string | undefined,
+  itemId: string,
+  sourceCollectionId: string,
+  targetCollectionId: string,
+  targetParentId: string | null,
+  operationId: string,
+  refreshToken?: string,
+  signal?: AbortSignal,
+  client = defaultCloudClientState,
+): Promise<DuplicateItemReceipt> {
+  const res = await fetchWithAuth(`/api/v1/items/${itemId}/duplicate`, {
+    method: 'POST',
+    apiUrl,
+    token,
+    refreshToken,
+    signal,
+    body: JSON.stringify({
+      operation_id: operationId,
+      source_collection_id: sourceCollectionId,
+      target_collection_id: targetCollectionId,
+      target_parent_id: targetParentId,
+    }),
+  }, client);
+
+  const json = await safeJson(res);
+  if (!res.ok) {
+    throw new CloudApiError(extractError(json, 'Failed to duplicate item', res.status), res.status, extractErrorCode(json));
+  }
+  return unwrapData<DuplicateItemReceipt>(json);
+}
+
 export async function moveScopeItem(
   apiUrl: string,
   token: string | undefined,
@@ -1316,8 +1452,14 @@ export function createCloudClient(config: CloudClientConfig = {}) {
       batchImportToScope(apiUrl, token, scope, collections, refreshToken, signal, state),
     moveScopeCollection: (apiUrl: string, token: string | undefined, collectionId: string, targetScope: ActiveScope, refreshToken?: string, signal?: AbortSignal) =>
       moveScopeCollection(apiUrl, token, collectionId, targetScope, refreshToken, signal, state),
+    duplicateScopeCollection: (apiUrl: string, token: string | undefined, collectionId: string, targetScope: ActiveScope, operationId: string, refreshToken?: string, signal?: AbortSignal) =>
+      duplicateScopeCollection(apiUrl, token, collectionId, targetScope, operationId, refreshToken, signal, state),
+    importDuplicateCollection: (apiUrl: string, token: string | undefined, targetScope: ActiveScope, collection: ImportDuplicateCollectionBody, operationId: string, refreshToken?: string, signal?: AbortSignal) =>
+      importDuplicateCollection(apiUrl, token, targetScope, collection, operationId, refreshToken, signal, state),
     moveScopeItem: (apiUrl: string, token: string | undefined, itemId: string, sourceCollectionId: string, targetCollectionId: string, targetParentId: string | null, refreshToken?: string, signal?: AbortSignal) =>
       moveScopeItem(apiUrl, token, itemId, sourceCollectionId, targetCollectionId, targetParentId, refreshToken, signal, state),
+    duplicateScopeItem: (apiUrl: string, token: string | undefined, itemId: string, sourceCollectionId: string, targetCollectionId: string, targetParentId: string | null, operationId: string, refreshToken?: string, signal?: AbortSignal) =>
+      duplicateScopeItem(apiUrl, token, itemId, sourceCollectionId, targetCollectionId, targetParentId, operationId, refreshToken, signal, state),
     reorderCollectionItems: (apiUrl: string, token: string | undefined, collectionId: string, items: ReorderItemPayload[], refreshToken?: string, signal?: AbortSignal) =>
       reorderCollectionItems(apiUrl, token, collectionId, items, refreshToken, signal, state),
     createScopeEnvironment: (apiUrl: string, token: string | undefined, scope: ActiveScope, env: { name: string; variables: any[]; min_role?: string }, refreshToken?: string, signal?: AbortSignal) =>

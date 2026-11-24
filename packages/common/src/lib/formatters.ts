@@ -69,41 +69,35 @@ export function beautifyXml(xml?: string | null): { formatted: string; error?: s
   return { formatted: formatted.trim() };
 }
 
+export interface TextRange {
+  from: number;
+  to: number;
+}
+
 /**
- * Safely strips single-line (//) and multi-line (/* *\/) comments from a JSON-like string
- * without corrupting URLs or comment-like sequences inside quotes.
+ * Finds character ranges `[from, to)` of single-line (`//`) and block (`/* *\/`) comments
+ * in JSON/JSONC text while ignoring comment-like sequences inside string literals.
  */
-export function stripJsonComments(input: string): string {
-  let output = '';
+export function findJsonCommentRanges(input: string): TextRange[] {
+  if (!input || (!input.includes('//') && !input.includes('/*'))) {
+    return [];
+  }
+
+  const ranges: TextRange[] = [];
   let inString = false;
   let quoteChar = '';
-  let inLineComment = false;
-  let inBlockComment = false;
+  let escaped = false;
 
   for (let i = 0; i < input.length; i++) {
     const char = input[i];
     const next = input[i + 1];
-    const prev = i > 0 ? input[i - 1] : '';
-
-    if (inLineComment) {
-      if (char === '\n' || char === '\r') {
-        inLineComment = false;
-        output += char;
-      }
-      continue;
-    }
-
-    if (inBlockComment) {
-      if (char === '*' && next === '/') {
-        inBlockComment = false;
-        i++;
-      }
-      continue;
-    }
 
     if (inString) {
-      output += char;
-      if (char === quoteChar && prev !== '\\') {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === quoteChar) {
         inString = false;
       }
       continue;
@@ -112,26 +106,241 @@ export function stripJsonComments(input: string): string {
     if (char === '"' || char === "'") {
       inString = true;
       quoteChar = char;
-      output += char;
+      escaped = false;
+      continue;
+    }
+
+    if (char === '/' && next === '/') {
+      const from = i;
+      i += 2;
+      while (i < input.length && input[i] !== '\n' && input[i] !== '\r') {
+        i++;
+      }
+      ranges.push({ from, to: i });
+      // Rewind one step if loop stopped at newline so outer loop checks next char cleanly
+      i--;
+      continue;
+    }
+
+    if (char === '/' && next === '*') {
+      const from = i;
+      const closeIdx = input.indexOf('*/', i + 2);
+      const to = closeIdx === -1 ? input.length : closeIdx + 2;
+      ranges.push({ from, to });
+      i = to - 1;
+    }
+  }
+
+  return ranges;
+}
+
+/**
+ * Safely strips single-line (//) and multi-line (/* *\/) comments from a JSON-like string
+ * without corrupting URLs or comment-like sequences inside quotes.
+ */
+export function stripJsonComments(input: string): string {
+  const ranges = findJsonCommentRanges(input);
+  if (ranges.length === 0) return input;
+
+  let output = '';
+  let cursor = 0;
+  for (const { from, to } of ranges) {
+    output += input.slice(cursor, from);
+    cursor = to;
+  }
+  return output + input.slice(cursor);
+}
+
+/**
+ * Strips JSON comments while removing lines that contained only whitespace and comments,
+ * keeping intentional non-comment blank lines and string contents intact.
+ */
+function stripJsonCommentsCleanly(input: string): string {
+  let output = '';
+  let lineBuffer = '';
+  let lineHadNonWhitespaceCode = false;
+  let lineHadComment = false;
+  let inString = false;
+  let quoteChar = '';
+  let escaped = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  const flushLine = (lineBreak: string) => {
+    if (lineHadComment && !lineHadNonWhitespaceCode) {
+      // Drop lines whose entire non-whitespace content was commented out
+    } else if (lineHadComment) {
+      output += lineBuffer.replace(/[ \t]+$/, '') + lineBreak;
+    } else {
+      output += lineBuffer + lineBreak;
+    }
+    lineBuffer = '';
+    lineHadNonWhitespaceCode = false;
+    lineHadComment = false;
+  };
+
+  for (let i = 0; i < input.length; i++) {
+    const char = input[i];
+    const next = input[i + 1];
+
+    if (inLineComment) {
+      if (char === '\r' && next === '\n') {
+        inLineComment = false;
+        flushLine('\r\n');
+        i++;
+      } else if (char === '\n' || char === '\r') {
+        inLineComment = false;
+        flushLine(char);
+      }
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (char === '*' && next === '/') {
+        inBlockComment = false;
+        i++;
+      } else if (char === '\r' && next === '\n') {
+        flushLine('\r\n');
+        i++;
+      } else if (char === '\n' || char === '\r') {
+        flushLine(char);
+      }
+      continue;
+    }
+
+    if (inString) {
+      lineBuffer += char;
+      lineHadNonWhitespaceCode = true;
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === quoteChar) {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '\r' && next === '\n') {
+      flushLine('\r\n');
+      i++;
+      continue;
+    }
+
+    if (char === '\n' || char === '\r') {
+      flushLine(char);
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      inString = true;
+      quoteChar = char;
+      escaped = false;
+      lineBuffer += char;
+      lineHadNonWhitespaceCode = true;
       continue;
     }
 
     if (char === '/' && next === '/') {
       inLineComment = true;
+      lineHadComment = true;
       i++;
       continue;
     }
 
     if (char === '/' && next === '*') {
       inBlockComment = true;
+      lineHadComment = true;
       i++;
       continue;
+    }
+
+    lineBuffer += char;
+    if (char !== ' ' && char !== '\t') {
+      lineHadNonWhitespaceCode = true;
+    }
+  }
+
+  if (lineBuffer.length > 0 || (lineHadComment && lineHadNonWhitespaceCode)) {
+    output += lineHadComment && !lineHadNonWhitespaceCode ? '' : (lineHadComment ? lineBuffer.replace(/[ \t]+$/, '') : lineBuffer);
+  }
+
+  return output;
+}
+
+/**
+ * Removes trailing commas immediately preceding `}` or `]` outside of string literals.
+ */
+export function removeJsonTrailingCommas(input: string): string {
+  let output = '';
+  let inString = false;
+  let quoteChar = '';
+  let escaped = false;
+
+  for (let i = 0; i < input.length; i++) {
+    const char = input[i];
+
+    if (inString) {
+      output += char;
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === quoteChar) {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      inString = true;
+      quoteChar = char;
+      escaped = false;
+      output += char;
+      continue;
+    }
+
+    if (char === ',') {
+      let j = i + 1;
+      while (j < input.length && /\s/.test(input[j])) {
+        j++;
+      }
+      if (j < input.length && (input[j] === '}' || input[j] === ']')) {
+        continue;
+      }
     }
 
     output += char;
   }
 
   return output;
+}
+
+/**
+ * Compiles a JSON or JSONC (JSON with comments and trailing commas) payload into a clean
+ * outbound JSON string ready for HTTP transport and cURL generation without altering
+ * string contents, key ordering, or large number formatting.
+ */
+export function compileEffectiveJsonPayload(rawJson?: string | null): string {
+  if (!rawJson || typeof rawJson !== 'string') return '';
+  if (!rawJson.trim()) return rawJson;
+
+  // Fast path: if already valid strict RFC 8259 JSON, keep as-is
+  try {
+    JSON.parse(rawJson);
+    return rawJson;
+  } catch {
+    // Proceed with comment & trailing-comma stripping
+  }
+
+  const stripped = stripJsonCommentsCleanly(rawJson);
+  const withoutTrailingCommas = removeJsonTrailingCommas(stripped);
+
+  if (!withoutTrailingCommas.trim()) {
+    return '';
+  }
+
+  return withoutTrailingCommas;
 }
 
 /**
@@ -168,9 +377,7 @@ export function sanitizeRelaxedJson(raw?: string | null): string {
   clean = clean.replace(/((?:\[|,)\s*)(\{\{[^{}]+\}\})/g, '$1"__AIRREST_TMPL_$2__"');
 
   // 6. Remove trailing commas before } or ]
-  while (/,(\s*[}\]])/.test(clean)) {
-    clean = clean.replace(/,(\s*[}\]])/g, '$1');
-  }
+  clean = removeJsonTrailingCommas(clean);
 
   // 7. Insert missing comma between lines ending with value and next property
   clean = clean.replace(/(["\d\w}\]])(\s*\n\s*"[^"]+"\s*:)/g, '$1,$2');
@@ -178,16 +385,16 @@ export function sanitizeRelaxedJson(raw?: string | null): string {
   return clean;
 }
 
-type JsonLikeTokenKind = 'open-object' | 'close-object' | 'open-array' | 'close-array' | 'colon' | 'comma' | 'atom' | 'line-comment' | 'block-comment';
+export type JsonLikeTokenKind = 'open-object' | 'close-object' | 'open-array' | 'close-array' | 'colon' | 'comma' | 'atom' | 'line-comment' | 'block-comment';
 
-interface JsonLikeToken {
+export interface JsonLikeToken {
   kind: JsonLikeTokenKind;
   text: string;
   /** Whether a line break separated this token from the previous token in the source. */
   newlineBefore?: boolean;
 }
 
-function tokenizeJsonLike(input: string): { tokens: JsonLikeToken[]; error?: string } {
+export function tokenizeJsonLike(input: string): { tokens: JsonLikeToken[]; error?: string } {
   const tokens: JsonLikeToken[] = [];
   let sawNewline = false;
   const push = (kind: JsonLikeTokenKind, text: string) => {
@@ -424,6 +631,7 @@ function formatJsonLikeTokens(tokens: JsonLikeToken[]): string {
     }
 
     if (token.kind === 'line-comment') {
+      if (token.newlineBefore && !atLineStart) newline();
       if (!atLineStart && !output.endsWith(' ')) write(' ');
       write(token.text);
       newline();
@@ -431,6 +639,7 @@ function formatJsonLikeTokens(tokens: JsonLikeToken[]): string {
     }
 
     if (token.kind === 'block-comment') {
+      if (token.newlineBefore && !atLineStart) newline();
       if (!atLineStart && !output.endsWith(' ')) write(' ');
       write(token.text);
       const next = nextToken(index);

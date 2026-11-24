@@ -31,6 +31,17 @@ function loadAuthHeaders() {
 }
 const authHeaders = loadAuthHeaders();
 
+function loadFormatters() {
+  const source = fs.readFileSync(new URL('../packages/common/src/lib/formatters.ts', import.meta.url), 'utf8');
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const exports = {};
+  vm.runInNewContext(compiled, { exports, JSON, RegExp }, { filename: 'packages/common/src/lib/formatters.ts' });
+  return exports;
+}
+const formatters = loadFormatters();
+
 function loadFetcher(fetchImpl, hostPermissionResult = null, blobs = new Map(), rawBodies = new Map()) {
   const source = fs.readFileSync(new URL('../packages/common/src/lib/fetcher.ts', import.meta.url), 'utf8');
   const compiled = ts.transpileModule(source, {
@@ -42,6 +53,9 @@ function loadFetcher(fetchImpl, hostPermissionResult = null, blobs = new Map(), 
     require: (id) => {
       if (id.includes('authHeaders')) {
         return authHeaders;
+      }
+      if (id.includes('formatters')) {
+        return formatters;
       }
       if (id.includes('blobManager')) {
         return {
@@ -760,4 +774,41 @@ test('synthetic status 0 errors disable Download, modal displays downloadError, 
   assert.equal(revokedUrls.length, 0, 'Must not revoke synchronously');
   scheduledTimers[0].fn();
   assert.deepEqual(revokedUrls, ['blob:fallback-1']);
+});
+
+test('prepareRequest strips JSON comments and trailing commas before sending JSON, raw JSON, and GraphQL variables', () => {
+  const { prepareRequest } = loadFetcher(async () => new Response());
+
+  const jsonReq = {
+    ...binaryRequest(),
+    bodyType: 'json',
+    bodyContent: '{\n  //"field_1": "sadsadsa",\n  "field_2": "{{val}}",\n  "field_3": "sadasdsa"\n}',
+  };
+  const preparedJson = prepareRequest(jsonReq, { val: 'sadadsa' });
+  assert.deepEqual(JSON.parse(preparedJson.finalBody), {
+    field_2: 'sadadsa',
+    field_3: 'sadasdsa',
+  });
+  assert.ok(!String(preparedJson.finalBody).includes('field_1'));
+
+  const rawJsonReq = {
+    ...binaryRequest(),
+    bodyType: 'raw',
+    rawType: 'json',
+    bodyContent: '{\n  "keep": true,\n  // "drop": false\n}',
+  };
+  const preparedRawJson = prepareRequest(rawJsonReq, {});
+  assert.deepEqual(JSON.parse(preparedRawJson.finalBody), { keep: true });
+
+  const gqlReq = {
+    ...binaryRequest(),
+    bodyType: 'graphql',
+    graphqlQuery: 'query ($id: ID!) { item(id: $id) { id } }',
+    graphqlVariables: '{\n  // "unused": 1,\n  "id": "{{itemId}}"\n}',
+  };
+  const preparedGql = prepareRequest(gqlReq, { itemId: '42' });
+  assert.deepEqual(JSON.parse(preparedGql.finalBody), {
+    query: 'query ($id: ID!) { item(id: $id) { id } }',
+    variables: { id: '42' },
+  });
 });

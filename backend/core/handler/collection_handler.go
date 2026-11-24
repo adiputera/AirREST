@@ -111,6 +111,10 @@ func (h *CollectionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.collectionService.CreateCollection(r.Context(), user, col); err != nil {
+		if errors.Is(err, service.ErrInvalidItemPayload) {
+			response.Error(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST")
+			return
+		}
 		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
 		return
 	}
@@ -164,6 +168,10 @@ func (h *CollectionHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, postgres.ErrVersionConflict) {
 			response.Conflict(w, "conflict: collection has been modified by another user", updated)
+			return
+		}
+		if errors.Is(err, service.ErrInvalidItemPayload) {
+			response.Error(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST")
 			return
 		}
 		if errors.Is(err, postgres.ErrCollectionNotFound) {

@@ -2,6 +2,7 @@ import { ApiRequest, ApiResponse, NetworkErrorCategory } from '../types/api';
 import { PlatformAdapter, TestRequestOptions } from '../types/platform';
 import { resolveBodyContentTypeHeader, resolveEffectiveAuthHeader, resolveManualHeaders } from './authHeaders';
 import { createTrackedBlobUrl, createTrackedRawBody } from './blobManager';
+import { compileEffectiveJsonPayload } from './formatters';
 import { substitutePathVariables } from './urlParams';
 
 export const RESPONSE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024; // 10 MiB
@@ -205,13 +206,13 @@ export function prepareRequest(
       if (!hasContentTypeHeader) {
         headers['Content-Type'] = 'application/json';
       }
-      bodyPayload = interpolateVariables(request.bodyContent || '', variables);
+      bodyPayload = compileEffectiveJsonPayload(interpolateVariables(request.bodyContent || '', variables));
     } else if (request.bodyType === 'graphql') {
       if (!hasContentTypeHeader) {
         headers['Content-Type'] = 'application/json';
       }
       const rawQuery = interpolateVariables(request.graphqlQuery || request.bodyContent || '', variables);
-      const rawVars = interpolateVariables(request.graphqlVariables || '', variables).trim();
+      const rawVars = compileEffectiveJsonPayload(interpolateVariables(request.graphqlVariables || '', variables)).trim();
       let parsedVars: unknown = undefined;
       if (rawVars) {
         try {

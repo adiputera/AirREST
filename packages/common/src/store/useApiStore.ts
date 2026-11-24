@@ -32,6 +32,8 @@ import {
   FeatureFlags,
   ProjectRole,
   ThemeMode,
+  PendingDuplicateIntent,
+  DuplicateActionResult,
 } from '../types/api';
 import { applyTheme } from '../lib/theme';
 import { executeApiRequest } from '../lib/fetcher';
@@ -61,6 +63,9 @@ import {
   deleteScopeItem as legacyDeleteScopeItem,
   moveScopeCollection as legacyMoveScopeCollection,
   moveScopeItem as legacyMoveScopeItem,
+  duplicateScopeCollection as legacyDuplicateScopeCollection,
+  importDuplicateCollection as legacyImportDuplicateCollection,
+  duplicateScopeItem as legacyDuplicateScopeItem,
   reorderCollectionItems as legacyReorderCollectionItems,
   fetchUserWorkspaces,
   createCloudWorkspace as legacyCreateCloudWorkspace,
@@ -76,7 +81,15 @@ import {
   normalizeCloudApiUrl,
 } from '../lib/cloudApi';
 import type { CloudClient } from '../lib/cloudApi';
-import { reorderItemInTree, isDescendantOf } from '../lib/treeHelper';
+import { reorderItemInTree, isDescendantOf, findRequestAncestorIds } from '../lib/treeHelper';
+import {
+  duplicateCollectionTree,
+  duplicateItemSubtree,
+  insertItemIntoCollectionTree,
+  formatImportDuplicateCollectionPayload,
+  getTargetFolderDepth,
+  validateDuplicateName,
+} from '../lib/duplicate';
 import {
   buildCollectionFromDetails,
   buildEnvironmentsFromDelta,
@@ -455,6 +468,10 @@ export interface ApiStoreState {
 
   // Collections & History
   createCollection: (name: string, description?: string) => string;
+  createCollectionAsync: (
+    name: string,
+    description?: string
+  ) => Promise<{ success: boolean; collectionId?: string; error?: string }>;
   renameCollection: (id: string, name: string) => void;
   createFolder: (collectionId: string, parentFolderId: string | null, name?: string) => string;
   createRequestInCollection: (collectionId: string, folderId: string | null, name?: string) => ApiRequest | null;
@@ -476,6 +493,25 @@ export interface ApiStoreState {
     minRole: ProjectRole
   ) => Promise<{ success: boolean; error?: string }>;
   moveCollection: (collectionId: string, targetScope: ActiveScope) => Promise<{ success: boolean; error?: string }>;
+  duplicateCollection: (
+    collectionId: string,
+    targetScope: ActiveScope,
+    options?: { operationId?: string }
+  ) => Promise<DuplicateActionResult>;
+  duplicateCollectionItem: (
+    sourceCollectionId: string,
+    itemId: string,
+    targetCollectionId: string,
+    targetParentId: string | null,
+    options?: { operationId?: string }
+  ) => Promise<DuplicateActionResult>;
+  loadCollectionDetails: (
+    collectionId: string
+  ) => Promise<{ success: boolean; collection?: Collection; error?: string }>;
+  pendingDuplicateIntents: Record<string, PendingDuplicateIntent>;
+  lastDuplicateReveal: { pathIds: string[]; revision: number } | null;
+  retryPendingDuplicateIntent: (operationId: string) => Promise<DuplicateActionResult>;
+  clearPendingDuplicateIntent: (operationId: string) => void;
   moveRequest: (
     sourceCollectionId: string,
     requestId: string,
@@ -639,6 +675,9 @@ export function createApiStore(
   const deleteScopeItem = options.cloudClient?.deleteScopeItem ?? legacyDeleteScopeItem;
   const moveScopeCollection = options.cloudClient?.moveScopeCollection ?? legacyMoveScopeCollection;
   const moveScopeItem = options.cloudClient?.moveScopeItem ?? legacyMoveScopeItem;
+  const duplicateScopeCollection = options.cloudClient?.duplicateScopeCollection ?? legacyDuplicateScopeCollection;
+  const importDuplicateCollection = options.cloudClient?.importDuplicateCollection ?? legacyImportDuplicateCollection;
+  const duplicateScopeItem = options.cloudClient?.duplicateScopeItem ?? legacyDuplicateScopeItem;
   const reorderCollectionItems = options.cloudClient?.reorderCollectionItems ?? legacyReorderCollectionItems;
   const createCloudWorkspace = options.cloudClient?.createCloudWorkspace ?? legacyCreateCloudWorkspace;
   const updateCloudWorkspace = options.cloudClient?.updateCloudWorkspace ?? legacyUpdateCloudWorkspace;
@@ -650,6 +689,7 @@ export function createApiStore(
   const collectionSaveSyncRevisions = new Map<string, number>();
   const collectionSaveSyncQueues = new Map<string, Promise<void>>();
   const movingCollections = new Map<string, symbol>();
+  const duplicatingCollections = new Map<string, symbol>();
   let collectionSaveSyncGeneration = 0;
   const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
   let isStoreDisposed = false;
@@ -916,6 +956,7 @@ export function createApiStore(
 
   function invalidateAsyncOperations({ session = false }: { session?: boolean } = {}) {
     movingCollections.clear();
+    duplicatingCollections.clear();
     collectionSaveSyncGeneration += 1;
     asyncOperations.invalidate({ session });
     if (session) {
@@ -1054,8 +1095,8 @@ export function createApiStore(
     if (store.getState().collections.some((col) => ids.includes(col.id) && col._needsMoveReconciliation)) {
       return { success: false, error: 'Sync the workspace to confirm the previous move before moving items again.' };
     }
-    if (ids.some((id) => movingCollections.has(id))) {
-      return { success: false, error: 'A move is already in progress for this collection.' };
+    if (ids.some((id) => movingCollections.has(id) || duplicatingCollections.has(id))) {
+      return { success: false, error: 'A move or duplicate operation is already in progress for this collection.' };
     }
     const lock = Symbol('item move');
     ids.forEach((id) => movingCollections.set(id, lock));
@@ -1148,6 +1189,8 @@ export function createApiStore(
       scopeCache: {},
       cloudCacheOwner: null,
       cloudCacheArchives: emptyCloudCacheArchives(),
+      pendingDuplicateIntents: {},
+      lastDuplicateReveal: null,
       scopesCache: undefined,
       isSwitchingWorkspace: false,
 
@@ -1933,7 +1976,7 @@ export function createApiStore(
       },
       setSyncStatus: (syncStatus, syncError = null) => set({ syncStatus, syncError }),
       pullCloudDelta: async () => {
-        if (isOfflineOnly || movingCollections.size > 0) return;
+        if (isOfflineOnly || movingCollections.size > 0 || duplicatingCollections.size > 0) return;
         const { workspaceMode, cloudConfig } = get();
         if (workspaceMode !== 'cloud' || !isCloudSessionActive(cloudConfig) || !cloudConfig.activeScope) {
           return;
@@ -4729,6 +4772,123 @@ export function createApiStore(
         return newCol.id;
       },
 
+      createCollectionAsync: async (name, description = '') => {
+        const { workspaceMode, cloudConfig, offlineWorkspaces, activeOfflineWorkspaceId } = get();
+        if (!hasScopePermission(cloudConfig.activeScope, 'collection:write', workspaceMode, cloudConfig.user?.role)) {
+          return { success: false, error: 'Write permission in the active workspace is required to create a collection.' };
+        }
+
+        let validatedName: string;
+        try {
+          validatedName = validateDuplicateName(name, 'Collection name');
+        } catch (err: unknown) {
+          return { success: false, error: err instanceof Error ? err.message : 'Invalid collection name.' };
+        }
+
+        const isCloud = workspaceMode === 'cloud';
+        const now = Date.now();
+        const newCol: Collection = {
+          id: generateId(),
+          name: validatedName,
+          description: description.trim(),
+          items: [],
+          createdAt: now,
+          updatedAt: now,
+          _origin: isCloud ? 'cloud' : 'offline',
+          _syncStatus: 'synced',
+          ...(isCloud ? { version: 1, minRole: 'reader' as ProjectRole, isPartial: false } : {}),
+        };
+
+        if (!isCloud) {
+          const capturedOfflineWsId = activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID;
+          const prevCollections = get().collections;
+          const prevOfflineCache = get().offlineScopeCache || {};
+          const nextCollections = [newCol, ...prevCollections];
+          const updatedWorkspaces = (offlineWorkspaces || []).map((w) =>
+            w.id === capturedOfflineWsId ? { ...w, collections: nextCollections, updatedAt: Date.now() } : w,
+          );
+          set({ collections: nextCollections, offlineWorkspaces: updatedWorkspaces });
+          try {
+            await get().persistNativeCredentialState();
+            return { success: true, collectionId: newCol.id };
+          } catch {
+            const latestState = get();
+            const isStillSameOfflineWs =
+              latestState.workspaceMode === 'offline' &&
+              latestState.activeOfflineWorkspaceId === capturedOfflineWsId;
+            if (isStillSameOfflineWs) {
+              set({ collections: prevCollections, offlineWorkspaces });
+            } else {
+              const latestCache = { ...(latestState.offlineScopeCache || {}) };
+              if (prevOfflineCache[capturedOfflineWsId]) {
+                latestCache[capturedOfflineWsId] = prevOfflineCache[capturedOfflineWsId];
+              } else if (latestCache[capturedOfflineWsId]) {
+                latestCache[capturedOfflineWsId] = {
+                  ...latestCache[capturedOfflineWsId],
+                  collections: prevCollections,
+                };
+              }
+              set({ offlineScopeCache: latestCache, offlineWorkspaces });
+            }
+            return { success: false, error: 'Failed to persist new collection.' };
+          }
+        }
+
+        if (isOfflineOnly || !isCloudSessionActive(cloudConfig) || !cloudConfig.activeScope) {
+          return { success: false, error: 'Cloud session required to create a cloud collection.' };
+        }
+        if (activePullOperation && isAsyncOperationCurrent(activePullOperation)) {
+          return { success: false, error: 'Wait for workspace sync to finish before creating a collection.' };
+        }
+
+        const capturedSessionGen = cloudSessionGeneration;
+        const currentOwnerKey = cloudCacheOwnerKey(cloudConfig, normalizeCloudApiUrl);
+        const operation = beginAsyncOperation();
+        try {
+          await batchImportToScope(
+            cloudConfig.apiUrl,
+            cloudConfig.token,
+            cloudConfig.activeScope,
+            [newCol],
+            cloudConfig.refreshToken,
+            operation.controller.signal,
+          );
+          if (
+            !isAsyncOperationCurrent(operation) ||
+            isStoreDisposed ||
+            cloudSessionGeneration !== capturedSessionGen ||
+            cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) !== currentOwnerKey
+          ) {
+            return { success: false, error: 'Session or workspace changed before creation finished.' };
+          }
+
+          const scopeKey = getScopeCacheKey(cloudConfig.activeScope);
+          set((state) => {
+            const nextCollections = [newCol, ...state.collections];
+            const prevScopeCache = state.scopeCache || {};
+            const existingScopeEntry = prevScopeCache[scopeKey];
+            const nextScopeCache = existingScopeEntry
+              ? {
+                  ...prevScopeCache,
+                  [scopeKey]: { ...existingScopeEntry, collections: nextCollections, lastSyncedAt: Date.now() },
+                }
+              : prevScopeCache;
+            return {
+              collections: nextCollections,
+              scopeCache: nextScopeCache,
+            };
+          });
+          return { success: true, collectionId: newCol.id };
+        } catch (err: unknown) {
+          if (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation)) {
+            return { success: false, error: 'Collection creation cancelled.' };
+          }
+          return { success: false, error: err instanceof Error ? err.message : 'Failed to create collection in cloud.' };
+        } finally {
+          completeAsyncOperation(operation);
+        }
+      },
+
       renameCollection: (id, name) => {
         const trimmed = name.trim();
         if (!trimmed) return;
@@ -5191,8 +5351,8 @@ export function createApiStore(
 
       saveRequestToCollection: (collectionId, folderId, request, sourceTabId) => {
         const { workspaceMode, cloudConfig, collections, tabs } = get();
-        if (movingCollections.has(collectionId)) {
-          return { success: false, cloudStatus: 'not-applicable', error: 'Wait for the collection move to finish before saving.' };
+        if (movingCollections.has(collectionId) || duplicatingCollections.has(collectionId)) {
+          return { success: false, cloudStatus: 'not-applicable', error: 'Wait for the collection move or duplicate to finish before saving.' };
         }
         const collection = collections.find((candidate) => candidate.id === collectionId);
         if (!collection) {
@@ -6255,6 +6415,1236 @@ export function createApiStore(
         }
       },
 
+      loadCollectionDetails: async (collectionId) => {
+        if (isOfflineOnly) {
+          return { success: false, error: 'Cloud collections are disabled for this product.' };
+        }
+        const { workspaceMode, cloudConfig } = get();
+        if (workspaceMode !== 'cloud' || !isCloudSessionActive(cloudConfig) || !cloudConfig.activeScope) {
+          return { success: false, error: 'Sign in to load cloud collection details.' };
+        }
+        const operation = beginAsyncOperation();
+        try {
+          const raw = await fetchCollectionByIdForRuntime(
+            cloudConfig.apiUrl,
+            cloudConfig.token,
+            collectionId,
+            cloudConfig.refreshToken,
+            operation.controller.signal,
+          );
+          if (!isAsyncOperationCurrent(operation)) {
+            return { success: false, error: 'Session or scope changed.' };
+          }
+          const built = buildCollectionFromDetails(raw);
+          set((state) => {
+            const exists = state.collections.some((c) => c.id === built.id);
+            const nextCollections = exists
+              ? state.collections.map((c) => {
+                  if (c.id !== built.id) return c;
+                  if (c._syncStatus === 'pending') return c;
+                  return {
+                    ...built,
+                    ...(c._needsMoveReconciliation ? { _needsMoveReconciliation: true } : {}),
+                  };
+                })
+              : [...state.collections, built];
+            return { collections: nextCollections };
+          });
+          return { success: true, collection: built };
+        } catch (err: unknown) {
+          if (!isAsyncOperationCurrent(operation)) {
+            return { success: false, error: 'Operation cancelled.' };
+          }
+          return { success: false, error: err instanceof Error ? err.message : 'Failed to load collection details.' };
+        } finally {
+          completeAsyncOperation(operation);
+        }
+      },
+
+      clearPendingDuplicateIntent: (operationId) => {
+        set((state) => {
+          if (!state.pendingDuplicateIntents?.[operationId]) return state;
+          const next = { ...(state.pendingDuplicateIntents || {}) };
+          delete next[operationId];
+          return { pendingDuplicateIntents: next };
+        });
+      },
+
+      retryPendingDuplicateIntent: async (operationId) => {
+        const intent = get().pendingDuplicateIntents?.[operationId];
+        if (!intent) {
+          return { success: false, error: 'Pending duplicate intent not found.' };
+        }
+        const currentOwner = cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl);
+        if (intent.ownerKey !== null && intent.ownerKey !== currentOwner) {
+          return { success: false, error: 'This pending duplicate belongs to a different cloud account.' };
+        }
+        if (intent.kind === 'item') {
+          if (!intent.targetCollectionId) {
+            return { success: false, error: 'Pending item duplicate intent is missing target collection.' };
+          }
+          return get().duplicateCollectionItem(
+            intent.sourceCollectionId,
+            intent.sourceItemId || '',
+            intent.targetCollectionId,
+            intent.targetParentId ?? null,
+            { operationId: intent.operationId },
+          );
+        }
+        if (!intent.targetScope) {
+          return { success: false, error: 'Pending collection duplicate intent is missing target scope.' };
+        }
+        return get().duplicateCollection(intent.sourceCollectionId, intent.targetScope, {
+          operationId: intent.operationId,
+        });
+      },
+
+      duplicateCollection: async (collectionId, targetScope, actionOptions) => {
+        const flushPersisted = async () => {
+          await get().persistNativeCredentialState();
+        };
+        const findCollectionNodePath = (col: Collection): string[] => [col.id];
+        const stateAtStart = get();
+        const {
+          workspaceMode,
+          collections,
+          cloudConfig,
+          offlineWorkspaces,
+          activeOfflineWorkspaceId,
+          offlineScopeCache,
+        } = stateAtStart;
+
+        const existingIntent = actionOptions?.operationId
+          ? stateAtStart.pendingDuplicateIntents?.[actionOptions.operationId]
+          : undefined;
+        const currentOwnerKey = isCloudSessionActive(cloudConfig)
+          ? cloudCacheOwnerKey(cloudConfig, normalizeCloudApiUrl)
+          : null;
+
+        const resolveReceiptScopeKey = (
+          receipt: { workspace_id?: string | null; project_id?: string | null },
+          fallbackScopeKey: string,
+        ): string => {
+          if (receipt.workspace_id) return `workspace:${receipt.workspace_id}`;
+          if (receipt.project_id) return `project:${receipt.project_id}`;
+          return fallbackScopeKey;
+        };
+
+        const resolveReceiptTargetScope = (
+          receipt: { workspace_id?: string | null; project_id?: string | null },
+          fallbackScope: ActiveScope,
+        ): ActiveScope => {
+          if (receipt.workspace_id) {
+            return fallbackScope.type === 'workspace' && fallbackScope.id === receipt.workspace_id
+              ? fallbackScope
+              : { id: receipt.workspace_id, name: fallbackScope.name, type: 'workspace' };
+          }
+          if (receipt.project_id) {
+            return fallbackScope.type === 'project' && fallbackScope.id === receipt.project_id
+              ? fallbackScope
+              : { id: receipt.project_id, name: fallbackScope.name, type: 'project' };
+          }
+          return fallbackScope;
+        };
+
+        // Shared reconciliation for a committed/replayed collection duplicate receipt (import_duplicate or collection).
+        const finalizeCommittedCollectionReceipt = async (
+          opId: string,
+          receipt: {
+            collection_id: string;
+            workspace_id?: string | null;
+            project_id?: string | null;
+            name: string;
+            min_role: ProjectRole;
+            version: number;
+            status: string;
+          },
+          fallbackTargetScope: ActiveScope,
+          capturedSessionGen: number,
+          ownerKey: string,
+          operationSignal: AbortSignal,
+          checkActiveOp: () => boolean,
+        ): Promise<DuplicateActionResult> => {
+          const fallbackScopeKey = getScopeCacheKey(fallbackTargetScope);
+          const authoritativeScopeKey = resolveReceiptScopeKey(receipt, fallbackScopeKey);
+          const resolvedTargetScope = resolveReceiptTargetScope(receipt, fallbackTargetScope);
+
+          const nextIntents = { ...(get().pendingDuplicateIntents || {}) };
+          delete nextIntents[opId];
+
+          const latestState = get();
+          const latestActiveScopeKey =
+            latestState.workspaceMode === 'cloud' && latestState.cloudConfig.activeScope
+              ? getScopeCacheKey(latestState.cloudConfig.activeScope)
+              : null;
+          const matchesActiveScope =
+            latestActiveScopeKey !== null && latestActiveScopeKey === authoritativeScopeKey;
+
+          const clearAffectedScopeCaches = (baseCache: Record<string, any> | undefined) => {
+            const nextScopeCache = { ...(baseCache || {}) };
+            delete nextScopeCache[authoritativeScopeKey];
+            if (fallbackScopeKey !== authoritativeScopeKey) {
+              delete nextScopeCache[fallbackScopeKey];
+            }
+            return nextScopeCache;
+          };
+
+          if (receipt.status === 'committed_deleted') {
+            set({
+              pendingDuplicateIntents: nextIntents,
+              scopeCache: clearAffectedScopeCaches(latestState.scopeCache),
+              syncStatus: 'idle',
+              ...(matchesActiveScope
+                ? { collections: latestState.collections.filter((c) => c.id !== receipt.collection_id) }
+                : {}),
+            });
+            return {
+              success: true,
+              operationId: opId,
+              createdCollectionId: receipt.collection_id,
+              targetScope: resolvedTargetScope,
+              name: receipt.name,
+              minRole: receipt.min_role,
+              deletedOnServer: true,
+            };
+          }
+
+          if (matchesActiveScope && checkActiveOp()) {
+            let createdCol: Collection | undefined;
+            let rawMatchesActive = true;
+            try {
+              const raw = await fetchCollectionByIdForRuntime(
+                cloudConfig.apiUrl,
+                cloudConfig.token,
+                receipt.collection_id,
+                cloudConfig.refreshToken,
+                operationSignal,
+              );
+              const rawScopeKey = raw?.workspace_id
+                ? `workspace:${raw.workspace_id}`
+                : raw?.project_id
+                  ? `project:${raw.project_id}`
+                  : null;
+              if (rawScopeKey && rawScopeKey !== latestActiveScopeKey) {
+                rawMatchesActive = false;
+              } else {
+                createdCol = buildCollectionFromDetails(raw);
+              }
+            } catch {
+              createdCol = {
+                id: receipt.collection_id,
+                name: receipt.name,
+                items: [],
+                version: receipt.version,
+                minRole: receipt.min_role,
+                isPartial: true,
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+                _origin: 'cloud',
+              };
+            }
+            if (
+              !checkActiveOp() ||
+              cloudSessionGeneration !== capturedSessionGen ||
+              cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) !== ownerKey
+            ) {
+              return { success: false, operationId: opId, error: 'Session or scope changed.' };
+            }
+            const stateAfterFetch = get();
+            const postFetchActiveScopeKey =
+              stateAfterFetch.workspaceMode === 'cloud' && stateAfterFetch.cloudConfig.activeScope
+                ? getScopeCacheKey(stateAfterFetch.cloudConfig.activeScope)
+                : null;
+            if (rawMatchesActive && createdCol && postFetchActiveScopeKey === authoritativeScopeKey) {
+              set((state) => {
+                const filtered = state.collections.filter((c) => c.id !== createdCol!.id);
+                return {
+                  pendingDuplicateIntents: nextIntents,
+                  scopeCache: clearAffectedScopeCaches(state.scopeCache),
+                  collections: [...filtered, createdCol!],
+                  lastDuplicateReveal: {
+                    pathIds: [createdCol!.id],
+                    revision: (state.lastDuplicateReveal?.revision ?? 0) + 1,
+                  },
+                  syncStatus: 'idle',
+                };
+              });
+              return {
+                success: true,
+                operationId: opId,
+                createdCollectionId: receipt.collection_id,
+                targetScope: resolvedTargetScope,
+                name: createdCol.name,
+                minRole: createdCol.minRole,
+                revealPathIds: [createdCol.id],
+              };
+            }
+          }
+
+          set((state) => ({
+            pendingDuplicateIntents: nextIntents,
+            scopeCache: clearAffectedScopeCaches(state.scopeCache),
+            syncStatus: 'idle',
+          }));
+          return {
+            success: true,
+            operationId: opId,
+            createdCollectionId: receipt.collection_id,
+            targetScope: resolvedTargetScope,
+            name: receipt.name,
+            minRole: receipt.min_role,
+          };
+        };
+
+        // Replay path for persisted intents (even if source collection/item disappeared locally after submit).
+        if (existingIntent && targetScope.type !== 'offline_workspace') {
+          if (isOfflineOnly || !isCloudSessionActive(cloudConfig) || !currentOwnerKey || existingIntent.ownerKey !== currentOwnerKey) {
+            return { success: false, error: 'Sign in with the owning cloud account to reconcile this duplicate.' };
+          }
+          if (existingIntent.kind === 'import_duplicate' && existingIntent.sanitizedPayload) {
+            const operation = beginAsyncOperation();
+            const capturedSessionGen = cloudSessionGeneration;
+            try {
+              set({ syncStatus: 'syncing', syncError: null });
+              const receipt = await importDuplicateCollection(
+                cloudConfig.apiUrl,
+                cloudConfig.token,
+                targetScope,
+                existingIntent.sanitizedPayload,
+                existingIntent.operationId,
+                cloudConfig.refreshToken,
+                operation.controller.signal,
+              );
+              const stillSameOwner =
+                !isStoreDisposed &&
+                cloudSessionGeneration === capturedSessionGen &&
+                currentOwnerKey !== null &&
+                cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
+              if (!stillSameOwner) {
+                return { success: false, error: 'Session changed', operationId: existingIntent.operationId };
+              }
+              return await finalizeCommittedCollectionReceipt(
+                existingIntent.operationId,
+                receipt,
+                targetScope,
+                capturedSessionGen,
+                currentOwnerKey,
+                operation.controller.signal,
+                () => !isStoreDisposed && isAsyncOperationCurrent(operation),
+              );
+            } catch (err: unknown) {
+              const rejected = err instanceof CloudApiError && [400, 401, 403, 404, 409, 413, 415].includes(err.status);
+              const stillSameOwner =
+                !isStoreDisposed &&
+                cloudSessionGeneration === capturedSessionGen &&
+                currentOwnerKey !== null &&
+                cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
+              if (stillSameOwner) {
+                const nextIntents = { ...(get().pendingDuplicateIntents || {}) };
+                if (rejected) {
+                  delete nextIntents[existingIntent.operationId];
+                } else {
+                  nextIntents[existingIntent.operationId] = { ...existingIntent, status: 'reconcile_required' };
+                }
+                set({
+                  pendingDuplicateIntents: nextIntents,
+                  syncStatus: 'error',
+                  syncError: err instanceof Error ? err.message : 'Failed to upload duplicated collection',
+                });
+              }
+              return {
+                success: false,
+                operationId: existingIntent.operationId,
+                reconcilePending: !rejected,
+                error: err instanceof Error ? err.message : 'Failed to upload duplicated collection',
+              };
+            } finally {
+              completeAsyncOperation(operation);
+            }
+          }
+
+          if (existingIntent.kind === 'collection') {
+            if (duplicatingCollections.has(collectionId)) {
+              return { success: false, error: 'Another move or duplicate operation is in progress for this collection.' };
+            }
+            const lock = Symbol('collection duplicate replay');
+            duplicatingCollections.set(collectionId, lock);
+            const operation = beginAsyncOperation();
+            const capturedSessionGen = cloudSessionGeneration;
+            try {
+              set({ syncStatus: 'syncing', syncError: null });
+              const receipt = await duplicateScopeCollection(
+                cloudConfig.apiUrl,
+                cloudConfig.token,
+                existingIntent.sourceCollectionId,
+                targetScope,
+                existingIntent.operationId,
+                cloudConfig.refreshToken,
+                operation.controller.signal,
+              );
+              const stillSameOwner =
+                !isStoreDisposed &&
+                cloudSessionGeneration === capturedSessionGen &&
+                currentOwnerKey !== null &&
+                cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
+              if (!stillSameOwner || !isAsyncOperationCurrent(operation)) {
+                return { success: false, error: 'Session or scope changed.', operationId: existingIntent.operationId };
+              }
+              return await finalizeCommittedCollectionReceipt(
+                existingIntent.operationId,
+                receipt,
+                targetScope,
+                capturedSessionGen,
+                currentOwnerKey,
+                operation.controller.signal,
+                () => isAsyncOperationCurrent(operation),
+              );
+            } catch (err: unknown) {
+              const rejected = err instanceof CloudApiError && [400, 401, 403, 404, 409, 413].includes(err.status);
+              const stillCurrent =
+                isAsyncOperationCurrent(operation) &&
+                cloudSessionGeneration === capturedSessionGen &&
+                cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
+              if (stillCurrent) {
+                const nextIntents = { ...(get().pendingDuplicateIntents || {}) };
+                if (rejected) {
+                  delete nextIntents[existingIntent.operationId];
+                } else {
+                  nextIntents[existingIntent.operationId] = { ...existingIntent, status: 'reconcile_required' };
+                }
+                set({
+                  pendingDuplicateIntents: nextIntents,
+                  syncStatus: 'error',
+                  syncError: err instanceof Error ? err.message : 'Failed to duplicate collection',
+                });
+              }
+              return {
+                success: false,
+                operationId: existingIntent.operationId,
+                reconcilePending: !rejected,
+                error: err instanceof Error ? err.message : 'Failed to duplicate collection',
+              };
+            } finally {
+              completeAsyncOperation(operation);
+              if (duplicatingCollections.get(collectionId) === lock) {
+                duplicatingCollections.delete(collectionId);
+              }
+            }
+          }
+        }
+
+        const sourceCol = collections.find((c) => c.id === collectionId);
+        if (!sourceCol) {
+          return { success: false, error: 'Source collection not found.' };
+        }
+        if (sourceCol._needsMoveReconciliation) {
+          return { success: false, error: 'Sync the workspace to confirm the previous move before duplicating.' };
+        }
+
+        // 1. Target is an offline workspace
+        if (targetScope.type === 'offline_workspace') {
+          if (!allowsOfflineWorkspace) {
+            return { success: false, error: 'Offline workspaces are disabled for this product.' };
+          }
+          if (workspaceMode === 'cloud') {
+            return { success: false, error: 'Duplicating cloud collections to offline workspaces is not supported.' };
+          }
+          const targetExists = (offlineWorkspaces || []).some((w) => w.id === targetScope.id);
+          if (!targetExists) {
+            return { success: false, error: 'Target offline workspace no longer exists.' };
+          }
+
+          let cloned: Collection;
+          try {
+            cloned = duplicateCollectionTree(sourceCol, {
+              sameContainer: targetScope.id === activeOfflineWorkspaceId,
+              targetOrigin: 'offline',
+            });
+          } catch (err: unknown) {
+            return { success: false, error: err instanceof Error ? err.message : 'Invalid collection for duplication.' };
+          }
+
+          const prevCollections = get().collections;
+          const prevOfflineCache = get().offlineScopeCache || {};
+          const prevReveal = get().lastDuplicateReveal;
+          const isSameOfflineWs = targetScope.id === activeOfflineWorkspaceId;
+
+          if (isSameOfflineWs) {
+            set((state) => ({
+              collections: [...state.collections, cloned],
+              lastDuplicateReveal: {
+                pathIds: findCollectionNodePath(cloned),
+                revision: (state.lastDuplicateReveal?.revision ?? 0) + 1,
+              },
+            }));
+          } else {
+            const targetEntry = prevOfflineCache[targetScope.id] || {
+              collections: [],
+              environments: [],
+              activeEnvironmentId: null,
+              tabs: [createInitialTab()],
+              history: [],
+            };
+            set({
+              offlineScopeCache: {
+                ...prevOfflineCache,
+                [targetScope.id]: {
+                  ...targetEntry,
+                  collections: [...(targetEntry.collections || []), cloned],
+                },
+              },
+            });
+          }
+
+          try {
+            await flushPersisted();
+          } catch {
+            // Roll back only the targeted offline workspace snapshot so switching workspaces mid-flush cannot clobber the active workspace.
+            const latestState = get();
+            const isStillSameOfflineWs =
+              latestState.workspaceMode === 'offline' &&
+              latestState.activeOfflineWorkspaceId === activeOfflineWorkspaceId;
+            if (isSameOfflineWs) {
+              if (isStillSameOfflineWs) {
+                set({
+                  collections: prevCollections,
+                  offlineScopeCache: prevOfflineCache,
+                  lastDuplicateReveal: prevReveal,
+                });
+              } else {
+                const latestOfflineCache = { ...(latestState.offlineScopeCache || {}) };
+                if (prevOfflineCache[activeOfflineWorkspaceId]) {
+                  latestOfflineCache[activeOfflineWorkspaceId] = prevOfflineCache[activeOfflineWorkspaceId];
+                } else if (latestOfflineCache[activeOfflineWorkspaceId]) {
+                  latestOfflineCache[activeOfflineWorkspaceId] = {
+                    ...latestOfflineCache[activeOfflineWorkspaceId],
+                    collections: prevCollections,
+                  };
+                }
+                set({ offlineScopeCache: latestOfflineCache });
+              }
+            } else {
+              const latestOfflineCache = { ...(latestState.offlineScopeCache || {}) };
+              if (prevOfflineCache[targetScope.id]) {
+                latestOfflineCache[targetScope.id] = prevOfflineCache[targetScope.id];
+              } else {
+                delete latestOfflineCache[targetScope.id];
+              }
+              set({ offlineScopeCache: latestOfflineCache });
+            }
+            return { success: false, error: 'Failed to persist duplicated collection to local storage.' };
+          }
+
+          return {
+            success: true,
+            createdCollectionId: cloned.id,
+            targetScope,
+            name: cloned.name,
+            minRole: cloned.minRole,
+            ...(isSameOfflineWs ? { revealPathIds: [cloned.id] } : {}),
+          };
+        }
+
+        // 2. Cloud targets require cloud policy and active session
+        if (isOfflineOnly) {
+          return { success: false, error: 'Offline edition cannot duplicate collections to cloud workspaces.' };
+        }
+        if (!isCloudSessionActive(cloudConfig) || !currentOwnerKey) {
+          return { success: false, error: 'Cloud authentication required to duplicate to a cloud workspace.' };
+        }
+
+        // 2a. Offline -> Cloud upload duplicate
+        if (workspaceMode === 'offline') {
+          if (
+            targetScope.type === 'project' &&
+            !hasScopePermission(targetScope, 'collection:write', 'cloud', cloudConfig.user?.role)
+          ) {
+            return { success: false, error: 'Write permission in the target project is required.' };
+          }
+
+          let sanitizedPayload: { name: string; description?: string; items: any[] };
+          try {
+            const sanitizedCol = duplicateCollectionTree(sourceCol, {
+              sameContainer: false,
+              targetOrigin: 'cloud',
+              sanitizeForCloud: true,
+            });
+            sanitizedPayload = formatImportDuplicateCollectionPayload(sanitizedCol);
+          } catch (err: unknown) {
+            return { success: false, error: err instanceof Error ? err.message : 'Invalid collection for cloud upload.' };
+          }
+
+          const opId = actionOptions?.operationId || crypto.randomUUID();
+          const intent: PendingDuplicateIntent = {
+            operationId: opId,
+            ownerKey: currentOwnerKey,
+            kind: 'import_duplicate',
+            sourceCollectionId: sourceCol.id,
+            targetScope,
+            sanitizedPayload,
+            createdAt: Date.now(),
+            status: 'pending',
+          };
+
+          const prevIntents = get().pendingDuplicateIntents || {};
+          set({
+            pendingDuplicateIntents: { ...prevIntents, [opId]: intent },
+          });
+          try {
+            await flushPersisted();
+          } catch {
+            set({ pendingDuplicateIntents: prevIntents });
+            return { success: false, error: 'Failed to persist duplicate intent before uploading.' };
+          }
+
+          const operation = beginAsyncOperation();
+          const capturedSessionGen = cloudSessionGeneration;
+          try {
+            set({ syncStatus: 'syncing', syncError: null });
+            const receipt = await importDuplicateCollection(
+              cloudConfig.apiUrl,
+              cloudConfig.token,
+              targetScope,
+              sanitizedPayload,
+              opId,
+              cloudConfig.refreshToken,
+              operation.controller.signal,
+            );
+            const stillSameOwner =
+              !isStoreDisposed &&
+              cloudSessionGeneration === capturedSessionGen &&
+              cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
+            if (!stillSameOwner) {
+              return { success: false, operationId: opId, error: 'Session changed' };
+            }
+            return await finalizeCommittedCollectionReceipt(
+              opId,
+              receipt,
+              targetScope,
+              capturedSessionGen,
+              currentOwnerKey,
+              operation.controller.signal,
+              () => !isStoreDisposed && isAsyncOperationCurrent(operation),
+            );
+          } catch (err: unknown) {
+            const rejected = err instanceof CloudApiError && [400, 401, 403, 404, 409, 413, 415].includes(err.status);
+            const stillSameOwner =
+              !isStoreDisposed &&
+              cloudSessionGeneration === capturedSessionGen &&
+              cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
+            if (stillSameOwner) {
+              const nextIntents = { ...(get().pendingDuplicateIntents || {}) };
+              if (rejected) {
+                delete nextIntents[opId];
+              } else {
+                nextIntents[opId] = { ...intent, status: 'reconcile_required' };
+              }
+              set({
+                pendingDuplicateIntents: nextIntents,
+                syncStatus: 'error',
+                syncError: err instanceof Error ? err.message : 'Failed to upload duplicated collection',
+              });
+            }
+            return {
+              success: false,
+              operationId: opId,
+              reconcilePending: !rejected,
+              error: err instanceof Error ? err.message : 'Failed to upload duplicated collection',
+            };
+          } finally {
+            completeAsyncOperation(operation);
+          }
+        }
+
+        // 2b. Cloud -> Cloud duplicate
+        const activeScope = cloudConfig.activeScope;
+        if (!activeScope) {
+          return { success: false, error: 'No active cloud workspace selected.' };
+        }
+        if (activeScope.type === 'project' && targetScope.type === 'workspace') {
+          return { success: false, error: 'Collections in projects cannot be duplicated to personal workspaces.' };
+        }
+        if (!canModifyCollection(sourceCol.minRole, activeScope, 'cloud', cloudConfig.user?.role)) {
+          return { success: false, error: 'Write access to the source collection is required.' };
+        }
+        if (
+          targetScope.type === 'project' &&
+          !hasScopePermission(targetScope, 'collection:write', 'cloud', cloudConfig.user?.role)
+        ) {
+          return { success: false, error: 'Write permission in the target project is required.' };
+        }
+        if (activePullOperation && isAsyncOperationCurrent(activePullOperation)) {
+          return { success: false, error: 'Wait for workspace sync to finish before duplicating.' };
+        }
+        if (movingCollections.has(collectionId) || duplicatingCollections.has(collectionId)) {
+          return { success: false, error: 'Another move or duplicate operation is in progress for this collection.' };
+        }
+
+        const lock = Symbol('collection duplicate');
+        duplicatingCollections.set(collectionId, lock);
+        const operation = beginAsyncOperation();
+        const capturedSessionGen = cloudSessionGeneration;
+        const sourceScopeKey = getScopeCacheKey(activeScope);
+        const targetScopeKey = getScopeCacheKey(targetScope);
+        const opId = existingIntent?.operationId || actionOptions?.operationId || crypto.randomUUID();
+        const intent: PendingDuplicateIntent = existingIntent || {
+          operationId: opId,
+          ownerKey: currentOwnerKey,
+          kind: 'collection',
+          sourceCollectionId: collectionId,
+          targetScope,
+          createdAt: Date.now(),
+          status: 'pending',
+        };
+
+        try {
+          await collectionSaveSyncQueues.get(`${activeScope.type}:${activeScope.id}:${collectionId}`);
+          if (!isAsyncOperationCurrent(operation)) {
+            return { success: false, error: 'Operation cancelled.' };
+          }
+          const latestCol = get().collections.find((c) => c.id === collectionId);
+          if (!latestCol) {
+            return { success: false, error: 'Source collection not found.' };
+          }
+          if (latestCol._syncStatus === 'pending' || latestCol._needsMoveReconciliation) {
+            return { success: false, error: 'Sync pending changes in this collection before duplicating.' };
+          }
+
+          const prevIntents = get().pendingDuplicateIntents || {};
+          set({ pendingDuplicateIntents: { ...prevIntents, [opId]: intent } });
+          try {
+            await flushPersisted();
+          } catch {
+            set({ pendingDuplicateIntents: prevIntents });
+            return { success: false, error: 'Failed to persist duplicate intent.' };
+          }
+
+          set({ syncStatus: 'syncing', syncError: null });
+          const receipt = await duplicateScopeCollection(
+            cloudConfig.apiUrl,
+            cloudConfig.token,
+            collectionId,
+            targetScope,
+            opId,
+            cloudConfig.refreshToken,
+            operation.controller.signal,
+          );
+          if (
+            !isAsyncOperationCurrent(operation) ||
+            cloudSessionGeneration !== capturedSessionGen ||
+            cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) !== currentOwnerKey
+          ) {
+            return { success: false, operationId: opId, error: 'Session or scope changed.' };
+          }
+
+          return await finalizeCommittedCollectionReceipt(
+            opId,
+            receipt,
+            targetScope,
+            capturedSessionGen,
+            currentOwnerKey,
+            operation.controller.signal,
+            () => isAsyncOperationCurrent(operation),
+          );
+        } catch (err: unknown) {
+          const rejected = err instanceof CloudApiError && [400, 401, 403, 404, 409, 413].includes(err.status);
+          const stillCurrent =
+            isAsyncOperationCurrent(operation) &&
+            cloudSessionGeneration === capturedSessionGen &&
+            cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
+          if (stillCurrent) {
+            const nextIntents = { ...(get().pendingDuplicateIntents || {}) };
+            if (rejected) {
+              delete nextIntents[opId];
+            } else {
+              nextIntents[opId] = { ...intent, status: 'reconcile_required' };
+            }
+            set({
+              pendingDuplicateIntents: nextIntents,
+              syncStatus: 'error',
+              syncError: err instanceof Error ? err.message : 'Failed to duplicate collection',
+            });
+          }
+          return {
+            success: false,
+            operationId: opId,
+            reconcilePending: !rejected,
+            error: err instanceof Error ? err.message : 'Failed to duplicate collection',
+          };
+        } finally {
+          completeAsyncOperation(operation);
+          if (duplicatingCollections.get(collectionId) === lock) {
+            duplicatingCollections.delete(collectionId);
+          }
+        }
+      },
+
+      duplicateCollectionItem: async (sourceCollectionId, itemId, targetCollectionId, targetParentId, actionOptions) => {
+        const flushPersisted = async () => {
+          await get().persistNativeCredentialState();
+        };
+        const findSavedItemInTree = (items: CollectionItem[]): CollectionItem | null => {
+          for (const it of items) {
+            if (it.id === itemId || (it.type === 'request' && it.request?.id === itemId)) {
+              return it;
+            }
+            if (it.type === 'folder' && Array.isArray(it.items)) {
+              const found = findSavedItemInTree(it.items);
+              if (found) return found;
+            }
+          }
+          return null;
+        };
+        const findFolderRevealPath = (items: CollectionItem[], targetId: string): string[] | null => {
+          for (const it of items) {
+            if (it.id === targetId) return [it.id];
+            if (it.type === 'folder' && Array.isArray(it.items)) {
+              const sub = findFolderRevealPath(it.items, targetId);
+              if (sub) return [it.id, ...sub];
+            }
+          }
+          return null;
+        };
+
+        const stateAtStart = get();
+        const { workspaceMode, collections, cloudConfig, activeOfflineWorkspaceId } = stateAtStart;
+        const existingIntent = actionOptions?.operationId
+          ? stateAtStart.pendingDuplicateIntents?.[actionOptions.operationId]
+          : undefined;
+        const currentOwnerKey = cloudCacheOwnerKey(cloudConfig, normalizeCloudApiUrl);
+
+        // Shared reconciliation once duplicateScopeItem commits on the server.
+        // Post-commit GET failures must never turn a committed server mutation into a failure.
+        const finalizeCommittedItemReceipt = async (
+          opId: string,
+          receipt: {
+            root_item_id: string;
+            target_collection_id: string;
+            target_parent_id?: string | null;
+            target_collection_version: number;
+            name: string;
+            status: string;
+          },
+          capturedSessionGen: number,
+          ownerKey: string,
+          operationSignal: AbortSignal,
+          checkActiveOp: () => boolean,
+        ): Promise<DuplicateActionResult> => {
+          const nextIntents = { ...(get().pendingDuplicateIntents || {}) };
+          delete nextIntents[opId];
+
+          if (receipt.status === 'committed_deleted') {
+            set({ pendingDuplicateIntents: nextIntents, syncStatus: 'idle' });
+            return {
+              success: true,
+              operationId: opId,
+              createdItemId: receipt.root_item_id,
+              targetCollectionId: receipt.target_collection_id,
+              targetParentId: receipt.target_parent_id ?? null,
+              name: receipt.name,
+              deletedOnServer: true,
+            };
+          }
+
+          let refreshedTargetCol: Collection | null = null;
+          let rawMatchesActiveScope = true;
+          try {
+            const rawTargetCol = await fetchCollectionByIdForRuntime(
+              cloudConfig.apiUrl,
+              cloudConfig.token,
+              receipt.target_collection_id,
+              cloudConfig.refreshToken,
+              operationSignal,
+            );
+            const activeScopeNow = get().cloudConfig.activeScope;
+            const activeScopeKeyNow =
+              get().workspaceMode === 'cloud' && activeScopeNow ? getScopeCacheKey(activeScopeNow) : null;
+            const rawScopeKey = rawTargetCol?.workspace_id
+              ? `workspace:${rawTargetCol.workspace_id}`
+              : rawTargetCol?.project_id
+                ? `project:${rawTargetCol.project_id}`
+                : null;
+            if (rawScopeKey && activeScopeKeyNow && rawScopeKey !== activeScopeKeyNow) {
+              rawMatchesActiveScope = false;
+            } else {
+              refreshedTargetCol = buildCollectionFromDetails(rawTargetCol);
+            }
+          } catch {
+            refreshedTargetCol = null;
+          }
+
+          if (
+            !checkActiveOp() ||
+            cloudSessionGeneration !== capturedSessionGen ||
+            cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) !== ownerKey
+          ) {
+            return { success: false, operationId: opId, error: 'Session or scope changed.' };
+          }
+
+          if (refreshedTargetCol && rawMatchesActiveScope) {
+            const revealFromReq = findRequestAncestorIds([refreshedTargetCol], receipt.root_item_id);
+            const revealIds = revealFromReq.length > 0
+              ? revealFromReq
+              : [
+                  refreshedTargetCol.id,
+                  ...(findFolderRevealPath(refreshedTargetCol.items || [], receipt.root_item_id) || []),
+                ];
+
+            set((state) => {
+              const exists = state.collections.some((c) => c.id === refreshedTargetCol!.id);
+              const nextCollections = exists
+                ? state.collections.map((c) => (c.id === refreshedTargetCol!.id ? refreshedTargetCol! : c))
+                : state.collections;
+              return {
+                pendingDuplicateIntents: nextIntents,
+                collections: nextCollections,
+                lastDuplicateReveal: {
+                  pathIds: revealIds,
+                  revision: (state.lastDuplicateReveal?.revision ?? 0) + 1,
+                },
+                syncStatus: 'idle',
+              };
+            });
+
+            return {
+              success: true,
+              operationId: opId,
+              createdItemId: receipt.root_item_id,
+              targetCollectionId: receipt.target_collection_id,
+              targetParentId: receipt.target_parent_id ?? null,
+              name: receipt.name,
+              revealPathIds: revealIds,
+            };
+          }
+
+          // Server commit succeeded, but post-commit GET failed or collection belongs to an inactive scope.
+          set((state) => ({
+            pendingDuplicateIntents: nextIntents,
+            collections: rawMatchesActiveScope
+              ? state.collections.map((c) =>
+                  c.id === receipt.target_collection_id
+                    ? {
+                        ...c,
+                        version: receipt.target_collection_version ?? c.version,
+                        isPartial: true,
+                        updatedAt: Date.now(),
+                      }
+                    : c,
+                )
+              : state.collections,
+            syncStatus: 'idle',
+          }));
+
+          return {
+            success: true,
+            operationId: opId,
+            createdItemId: receipt.root_item_id,
+            targetCollectionId: receipt.target_collection_id,
+            targetParentId: receipt.target_parent_id ?? null,
+            name: receipt.name,
+          };
+        };
+
+        // Replay path for persisted item duplicate intents even if source item/collection changed locally.
+        if (existingIntent && existingIntent.kind === 'item') {
+          if (isOfflineOnly || !isCloudSessionActive(cloudConfig) || !cloudConfig.activeScope || !currentOwnerKey) {
+            return { success: false, error: 'Sign in before duplicating cloud items.' };
+          }
+          if (existingIntent.ownerKey !== currentOwnerKey) {
+            return { success: false, error: 'This pending duplicate belongs to a different cloud account.' };
+          }
+          if (activePullOperation && isAsyncOperationCurrent(activePullOperation)) {
+            return { success: false, error: 'Wait for workspace sync to finish before duplicating items.' };
+          }
+          const replaySourceColId = existingIntent.sourceCollectionId;
+          const replayTargetColId = existingIntent.targetCollectionId || targetCollectionId;
+          const replayIds = [...new Set([replaySourceColId, replayTargetColId])];
+          if (replayIds.some((id) => movingCollections.has(id) || duplicatingCollections.has(id))) {
+            return { success: false, error: 'A move or duplicate operation is already in progress for this collection.' };
+          }
+          const lock = Symbol('item duplicate replay');
+          replayIds.forEach((id) => duplicatingCollections.set(id, lock));
+          const operation = beginAsyncOperation();
+          const capturedSessionGen = cloudSessionGeneration;
+          try {
+            set({ syncStatus: 'syncing', syncError: null });
+            const receipt = await duplicateScopeItem(
+              cloudConfig.apiUrl,
+              cloudConfig.token,
+              existingIntent.sourceItemId || itemId,
+              replaySourceColId,
+              replayTargetColId,
+              existingIntent.targetParentId ?? targetParentId,
+              existingIntent.operationId,
+              cloudConfig.refreshToken,
+              operation.controller.signal,
+            );
+            if (
+              !isAsyncOperationCurrent(operation) ||
+              cloudSessionGeneration !== capturedSessionGen ||
+              cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) !== currentOwnerKey
+            ) {
+              return { success: false, operationId: existingIntent.operationId, error: 'Session or scope changed.' };
+            }
+            return await finalizeCommittedItemReceipt(
+              existingIntent.operationId,
+              receipt,
+              capturedSessionGen,
+              currentOwnerKey,
+              operation.controller.signal,
+              () => isAsyncOperationCurrent(operation),
+            );
+          } catch (err: unknown) {
+            const rejected = err instanceof CloudApiError && [400, 401, 403, 404, 409, 413].includes(err.status);
+            const stillCurrent =
+              isAsyncOperationCurrent(operation) &&
+              cloudSessionGeneration === capturedSessionGen &&
+              cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
+            if (stillCurrent) {
+              const nextIntents = { ...(get().pendingDuplicateIntents || {}) };
+              if (rejected) {
+                delete nextIntents[existingIntent.operationId];
+              } else {
+                nextIntents[existingIntent.operationId] = { ...existingIntent, status: 'reconcile_required' };
+              }
+              set({
+                pendingDuplicateIntents: nextIntents,
+                syncStatus: 'error',
+                syncError: err instanceof Error ? err.message : 'Failed to duplicate item',
+              });
+            }
+            return {
+              success: false,
+              operationId: existingIntent.operationId,
+              reconcilePending: !rejected,
+              error: err instanceof Error ? err.message : 'Failed to duplicate item',
+            };
+          } finally {
+            completeAsyncOperation(operation);
+            replayIds.forEach((id) => {
+              if (duplicatingCollections.get(id) === lock) duplicatingCollections.delete(id);
+            });
+          }
+        }
+
+        const sourceCol = collections.find((c) => c.id === sourceCollectionId);
+        const targetCol = collections.find((c) => c.id === targetCollectionId);
+        if (!sourceCol) return { success: false, error: 'Source collection not found.' };
+        if (!targetCol) return { success: false, error: 'Target collection not found.' };
+        if (sourceCol._needsMoveReconciliation || targetCol._needsMoveReconciliation) {
+          return { success: false, error: 'Sync the workspace to confirm the previous move before duplicating.' };
+        }
+        if (sourceCol.isPartial || targetCol.isPartial) {
+          return { success: false, error: 'Load collection details before duplicating.' };
+        }
+        if (!canModifyCollection(sourceCol.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+          return { success: false, error: 'Write access to the source collection is required.' };
+        }
+        if (!canModifyCollection(targetCol.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+          return { success: false, error: 'Write access to the target collection is required.' };
+        }
+
+        const savedItem = findSavedItemInTree(sourceCol.items || []);
+        if (!savedItem) {
+          return { success: false, error: 'Item not found in source collection.' };
+        }
+
+        const targetParentDepth = getTargetFolderDepth(targetCol.items || [], targetParentId);
+        if (targetParentDepth === null) {
+          return { success: false, error: 'Target folder not found in target collection.' };
+        }
+
+        // 1. Offline item duplicate
+        if (workspaceMode !== 'cloud') {
+          let clonedItem: CollectionItem;
+          try {
+            clonedItem = duplicateItemSubtree(savedItem, {
+              sameCollection: sourceCollectionId === targetCollectionId,
+              targetParentDepth,
+            });
+          } catch (err: unknown) {
+            return { success: false, error: err instanceof Error ? err.message : 'Invalid item for duplication.' };
+          }
+
+          const nextTargetItems = insertItemIntoCollectionTree(targetCol.items || [], clonedItem, targetParentId);
+          if (!nextTargetItems) {
+            return { success: false, error: 'Target folder not found in target collection.' };
+          }
+
+          const capturedOfflineWsId = activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID;
+          const prevCollections = get().collections;
+          const prevOfflineCache = get().offlineScopeCache || {};
+          const prevReveal = get().lastDuplicateReveal;
+          const revealIds = [
+            targetCollectionId,
+            ...(targetParentId ? (findFolderRevealPath(nextTargetItems, targetParentId) || [targetParentId]) : []),
+            ...(clonedItem.type === 'folder' ? [clonedItem.id] : []),
+          ];
+
+          set((state) => ({
+            collections: state.collections.map((c) =>
+              c.id === targetCollectionId
+                ? { ...c, items: nextTargetItems, updatedAt: Date.now() }
+                : c,
+            ),
+            lastDuplicateReveal: {
+              pathIds: revealIds,
+              revision: (state.lastDuplicateReveal?.revision ?? 0) + 1,
+            },
+          }));
+
+          try {
+            await flushPersisted();
+          } catch {
+            const latestState = get();
+            const isStillSameOfflineWs =
+              latestState.workspaceMode === 'offline' &&
+              latestState.activeOfflineWorkspaceId === capturedOfflineWsId;
+            if (isStillSameOfflineWs) {
+              set({ collections: prevCollections, lastDuplicateReveal: prevReveal });
+            } else {
+              const latestOfflineCache = { ...(latestState.offlineScopeCache || {}) };
+              if (prevOfflineCache[capturedOfflineWsId]) {
+                latestOfflineCache[capturedOfflineWsId] = prevOfflineCache[capturedOfflineWsId];
+              } else if (latestOfflineCache[capturedOfflineWsId]) {
+                latestOfflineCache[capturedOfflineWsId] = {
+                  ...latestOfflineCache[capturedOfflineWsId],
+                  collections: prevCollections,
+                };
+              }
+              set({ offlineScopeCache: latestOfflineCache });
+            }
+            return { success: false, error: 'Failed to persist duplicated item to local storage.' };
+          }
+
+          return {
+            success: true,
+            createdItemId: clonedItem.id,
+            targetCollectionId,
+            targetParentId,
+            name: clonedItem.name,
+            revealPathIds: revealIds,
+          };
+        }
+
+        // 2. Cloud item duplicate (run client validation first so invalid names/depth fail fast without network)
+        try {
+          duplicateItemSubtree(savedItem, {
+            sameCollection: sourceCollectionId === targetCollectionId,
+            targetParentDepth,
+          });
+        } catch (err: unknown) {
+          return { success: false, error: err instanceof Error ? err.message : 'Invalid item for duplication.' };
+        }
+
+        const scope = cloudConfig.activeScope;
+        if (isOfflineOnly || !isCloudSessionActive(cloudConfig) || !scope || !currentOwnerKey) {
+          return { success: false, error: 'Sign in before duplicating cloud items.' };
+        }
+        if (activePullOperation && isAsyncOperationCurrent(activePullOperation)) {
+          return { success: false, error: 'Wait for workspace sync to finish before duplicating items.' };
+        }
+
+        const ids = [...new Set([sourceCollectionId, targetCollectionId])];
+        if (ids.some((id) => movingCollections.has(id) || duplicatingCollections.has(id))) {
+          return { success: false, error: 'A move or duplicate operation is already in progress for this collection.' };
+        }
+
+        const lock = Symbol('item duplicate');
+        ids.forEach((id) => duplicatingCollections.set(id, lock));
+        const operation = beginAsyncOperation();
+        const capturedSessionGen = cloudSessionGeneration;
+        const opId = actionOptions?.operationId || crypto.randomUUID();
+        const intent: PendingDuplicateIntent = {
+          operationId: opId,
+          ownerKey: currentOwnerKey,
+          kind: 'item',
+          sourceCollectionId,
+          sourceItemId: savedItem.id,
+          targetCollectionId,
+          targetParentId,
+          createdAt: Date.now(),
+          status: 'pending',
+        };
+
+        try {
+          await Promise.all(ids.map((id) => collectionSaveSyncQueues.get(`${scope.type}:${scope.id}:${id}`)));
+          if (!isAsyncOperationCurrent(operation)) {
+            return { success: false, error: 'Operation cancelled.' };
+          }
+          if (get().collections.some((col) => ids.includes(col.id) && (col._syncStatus === 'pending' || col._needsMoveReconciliation))) {
+            return { success: false, error: 'Sync pending changes in both collections before duplicating.' };
+          }
+
+          const prevIntents = get().pendingDuplicateIntents || {};
+          set({ pendingDuplicateIntents: { ...prevIntents, [opId]: intent } });
+          try {
+            await flushPersisted();
+          } catch {
+            set({ pendingDuplicateIntents: prevIntents });
+            return { success: false, error: 'Failed to persist duplicate intent.' };
+          }
+
+          const receipt = await duplicateScopeItem(
+            cloudConfig.apiUrl,
+            cloudConfig.token,
+            savedItem.id,
+            sourceCollectionId,
+            targetCollectionId,
+            targetParentId,
+            opId,
+            cloudConfig.refreshToken,
+            operation.controller.signal,
+          );
+          if (
+            !isAsyncOperationCurrent(operation) ||
+            cloudSessionGeneration !== capturedSessionGen ||
+            cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) !== currentOwnerKey
+          ) {
+            return { success: false, operationId: opId, error: 'Session or scope changed.' };
+          }
+
+          return await finalizeCommittedItemReceipt(
+            opId,
+            receipt,
+            capturedSessionGen,
+            currentOwnerKey,
+            operation.controller.signal,
+            () => isAsyncOperationCurrent(operation),
+          );
+        } catch (err: unknown) {
+          const rejected = err instanceof CloudApiError && [400, 401, 403, 404, 409, 413].includes(err.status);
+          const stillCurrent =
+            isAsyncOperationCurrent(operation) &&
+            cloudSessionGeneration === capturedSessionGen &&
+            cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
+          if (stillCurrent) {
+            const nextIntents = { ...(get().pendingDuplicateIntents || {}) };
+            if (rejected) {
+              delete nextIntents[opId];
+            } else {
+              nextIntents[opId] = { ...intent, status: 'reconcile_required' };
+            }
+            set({
+              pendingDuplicateIntents: nextIntents,
+              syncStatus: 'error',
+              syncError: err instanceof Error ? err.message : 'Failed to duplicate item',
+            });
+          }
+          return {
+            success: false,
+            operationId: opId,
+            reconcilePending: !rejected,
+            error: err instanceof Error ? err.message : 'Failed to duplicate item',
+          };
+        } finally {
+          completeAsyncOperation(operation);
+          ids.forEach((id) => {
+            if (duplicatingCollections.get(id) === lock) duplicatingCollections.delete(id);
+          });
+        }
+      },
+
       openRequestInTab: (request, initialResponse) => {
         set((state) => {
           const targetId = request.id;
@@ -6387,7 +7777,17 @@ export function createApiStore(
   },
   {
       name: 'air-rest-storage',
-      storage: createJSONStorage(() => customStorage),
+      storage: createJSONStorage(() => ({
+        getItem: (name) => customStorage.getItem(name),
+        setItem: async (name, value) => {
+          try {
+            await customStorage.setItem(name, value);
+          } catch {
+            // Background Zustand writes swallow unhandled rejections; explicit operations await persistNativeCredentialState().
+          }
+        },
+        removeItem: (name) => customStorage.removeItem(name),
+      })),
       partialize: (state) => {
         const providerSession = state.cloudConfig.sessionKind === 'provider';
         const nativeScope = getNativeCredentialScope(state.cloudConfig);
@@ -6463,6 +7863,7 @@ export function createApiStore(
               },
           nativeCredentialState: state.nativeCredentialState,
           nativeCredentialCleanupPending: state.nativeCredentialCleanupPending ? true : undefined,
+          pendingDuplicateIntents: state.pendingDuplicateIntents || {},
           theme: state.theme ?? 'system',
         };
       },

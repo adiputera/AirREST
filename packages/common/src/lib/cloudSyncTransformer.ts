@@ -1,4 +1,4 @@
-import { Collection, CollectionItem, Environment, EnvironmentVariable, ApiRequest } from '../types/api';
+import { Collection, CollectionItem, Environment, EnvironmentVariable, ApiRequest, FormDataItem } from '../types/api';
 import { parsePathVariablesFromUrl } from './urlParams';
 
 
@@ -89,7 +89,7 @@ export function buildItemTree(
       bodyContent: item.body_content || '',
       graphqlQuery: item.graphql_query || '',
       graphqlVariables: item.graphql_variables || '',
-      bodyFormData: item.body_type === 'x-www-form-urlencoded' ? [] : safeJsonArray(item.body_form_data, []),
+      bodyFormData: item.body_type === 'x-www-form-urlencoded' ? [] : safeFormDataArray(item.body_form_data, []),
       bodyUrlEncoded: item.body_type === 'x-www-form-urlencoded' ? safeJsonArray(item.body_form_data, []) : [],
       preRequestScript: item.pre_request_script || '',
       postResponseScript: item.post_response_script || '',
@@ -159,6 +159,43 @@ export function safeJsonArray(val: any, fallback: any[]): any[] {
       ...(item.description ? { description: String(item.description) } : {}),
       ...(item.type ? { type: item.type } : {}),
     }));
+}
+
+/**
+ * Parses form-data rows while retaining typed attachment metadata allowlist fields.
+ */
+export function safeFormDataArray(val: any, fallback: FormDataItem[]): FormDataItem[] {
+  if (val === null || val === undefined) return fallback;
+  let parsed = val;
+  if (typeof val === 'string') {
+    try {
+      parsed = JSON.parse(val);
+    } catch {
+      return fallback;
+    }
+  }
+  if (!Array.isArray(parsed)) return fallback;
+  return parsed
+    .filter((item) => item !== null && typeof item === 'object')
+    .map((item): FormDataItem => {
+      const type: 'text' | 'file' = item.type === 'file' ? 'file' : 'text';
+      const entry: FormDataItem = {
+        id: String(item.id || Math.random().toString(36).substring(2, 9)),
+        key: String(item.key ?? ''),
+        type,
+        value: String(item.value ?? ''),
+        enabled: item.enabled !== false,
+      };
+      if (type === 'file') {
+        if (typeof item.fileName === 'string') entry.fileName = item.fileName;
+        if (typeof item.fileSize === 'number' && Number.isFinite(item.fileSize) && item.fileSize >= 0) {
+          entry.fileSize = item.fileSize;
+        }
+        if (typeof item.fileType === 'string') entry.fileType = item.fileType;
+        if (typeof item.needsReselection === 'boolean') entry.needsReselection = item.needsReselection;
+      }
+      return entry;
+    });
 }
 
 export function safeJsonObject(val: any, fallback: Record<string, any>): Record<string, any> {

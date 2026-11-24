@@ -67,6 +67,7 @@ func NewWithOptions(ctx context.Context, options Options) (*App, error) {
 	teamRepo := postgres.NewTeamRepository(pool)
 	projectRepo := postgres.NewProjectRepository(pool)
 	collectionRepo := postgres.NewCollectionRepository(pool)
+	duplicateRepo := postgres.NewDuplicateRepository(pool)
 	envRepo := postgres.NewEnvironmentRepository(pool)
 	featurePolicyRepo := postgres.NewFeaturePolicyRepository(pool)
 
@@ -83,6 +84,7 @@ func NewWithOptions(ctx context.Context, options Options) (*App, error) {
 	projectService := service.NewProjectService(projectRepo, teamRepo, teamService)
 	featurePolicyService := service.NewFeaturePolicyService(featurePolicyRepo)
 	collectionService := service.NewCollectionService(collectionRepo, workspaceRepo, projectRepo, projectService, featurePolicyService)
+	duplicateService := service.NewDuplicateService(duplicateRepo)
 	envService := service.NewEnvironmentService(envRepo, collectionService, projectService)
 	syncService := service.NewSyncService(pool, collectionService, envService)
 
@@ -103,6 +105,7 @@ func NewWithOptions(ctx context.Context, options Options) (*App, error) {
 	teamHandler := handler.NewTeamHandler(teamService)
 	projectHandler := handler.NewProjectHandler(projectService)
 	collectionHandler := handler.NewCollectionHandler(collectionService)
+	duplicateHandler := handler.NewDuplicateHandler(duplicateService)
 	envHandler := handler.NewEnvironmentHandler(envService)
 	syncHandler := handler.NewSyncHandler(syncService)
 	featurePolicyHandler := handler.NewFeaturePolicyHandler(featurePolicyService)
@@ -221,10 +224,12 @@ func NewWithOptions(ctx context.Context, options Options) (*App, error) {
 			r.Route("/collections", func(r chi.Router) {
 				r.With(middleware.GzipJSONResponse(middleware.MaxGzipResponseBytes, middleware.MaxIdentityResponseBytes)).Get("/", collectionHandler.List)
 				r.Post("/", collectionHandler.Create)
+				r.With(middleware.DecodeGzipRequest(middleware.MaxGzipRequestBytes, middleware.MaxGzipDecodedRequestBytes), middleware.RequireSingleJSONDocument).Post("/import-duplicate", duplicateHandler.ImportDuplicateCollection)
 				r.With(middleware.GzipJSONResponse(middleware.MaxGzipResponseBytes, middleware.MaxIdentityResponseBytes)).Get("/{id}", collectionHandler.Get)
 				r.Put("/{id}", collectionHandler.Update)
 				r.Delete("/{id}", collectionHandler.Delete)
 				r.Post("/{id}/move", collectionHandler.Move)
+				r.Post("/{id}/duplicate", duplicateHandler.DuplicateCollection)
 				r.Put("/{id}/reorder", collectionHandler.ReorderItems)
 				r.Put("/{id}/items/reorder", collectionHandler.ReorderItems)
 			})
@@ -235,6 +240,7 @@ func NewWithOptions(ctx context.Context, options Options) (*App, error) {
 				r.Get("/{id}", collectionHandler.GetItem)
 				r.Put("/{id}", collectionHandler.UpdateItem)
 				r.Post("/{id}/move", collectionHandler.MoveItem)
+				r.Post("/{id}/duplicate", duplicateHandler.DuplicateItem)
 				r.Delete("/{id}", collectionHandler.DeleteItem)
 			})
 

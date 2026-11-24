@@ -343,6 +343,10 @@ In addition to enums, the Frontend relies on specific primitive types and relati
 - `DELETE /api/v1/collections/{id}` *(Auth)* — Soft delete collection (tombstone). Requires both existing RBAC/min-role checks and global `collection.delete`; a disabled feature returns `403 FEATURE_DISABLED`.
 - `POST /api/v1/collections/{id}/move` *(Auth)* — Move collection across scopes. Personal/offline sources may move into a project; a project collection cannot move into a personal workspace. Requires both existing RBAC/min-role checks and global `collection.move`; a disabled feature returns `403 FEATURE_DISABLED`.
   - Payload: `{ "target_workspace_id"?: UUID, "target_project_id"?: UUID }`
+- `POST /api/v1/collections/{id}/duplicate` *(Auth)* — Atomically duplicate a collection into a target workspace or project (`201`). Requires `collection:write` and `min_role` access on source, plus `collection:write` on target. Supports `personal → personal`, `personal → project`, and `project → project` (including cross-team); `project → personal` is forbidden (`403`). Clamps `min_role` to `targetRole` when `targetRole < source.min_role`. Does not depend on `collection:move` or `collection.move` feature policy.
+  - Payload: `{ "operation_id": UUID, "target_workspace_id"?: UUID, "target_project_id"?: UUID }`
+- `POST /api/v1/collections/import-duplicate` *(Auth)* — Idempotent offline-to-cloud collection duplicate upload (`201`, `min_role = 'reader'`). Accepts identity JSON up to 4 MiB or one `Content-Encoding: gzip` member up to 3,000,000 bytes and 16 MiB decoded.
+  - Payload: `{ "operation_id": UUID, "target_workspace_id"?: UUID, "target_project_id"?: UUID, "collection": { "name": string, "description"?: string, "items": ImportItemRequest[] } }`
 - `PUT /api/v1/collections/{id}/reorder` *(Auth)* — Batch reorder items and folder parentage (also accessible via contract alias `PUT /api/v1/collections/{id}/items/reorder`).
   - Payload: `{ "items": [{ "id": UUID, "parent_id": UUID|null, "sort_order": int }] }`
 - `POST /api/v1/items` *(Auth)* — Create request or folder item.
@@ -350,6 +354,8 @@ In addition to enums, the Frontend relies on specific primitive types and relati
 - `GET /api/v1/items/{id}` *(Auth)* — Get item details.
 - `PUT /api/v1/items/{id}` *(Auth)* — Update item (enforces `base_version` OCC).
   - Payload: `{ "item": CollectionItem, "base_version": int64 }`
+- `POST /api/v1/items/{id}/duplicate` *(Auth)* — Atomically duplicate a request or folder subtree into the collection root or a target folder (`target_parent_id`) within the same workspace/project (`201`). Requires `collection:write` and `min_role` on both collections.
+  - Payload: `{ "operation_id": UUID, "source_collection_id": UUID, "target_collection_id": UUID, "target_parent_id"?: UUID|null }`
 - `DELETE /api/v1/items/{id}` *(Auth)* — Soft delete item (tombstone).
 
 ### 8. Environments & Variables
@@ -632,3 +638,21 @@ The source collection is the location precondition; this endpoint does not accep
 The frontend waits for both collections' queued saves, blocks further saves in those collections while moving, and commits its local tree only after server success. Open tab IDs, response caches, unsaved edits, and undo history stay unchanged. Failed or cancelled moves retain the local source tree and report an error. A workspace sync in progress must finish before a move starts. Before sending a move, both local collection snapshots persist `_needsMoveReconciliation`. Success or a definite 400/403/404 rejection clears it. A lost reply, cancellation, conflict, or server failure leaves it set: saves/import uploads are blocked and the cache is considered stale until cloud detail refresh reconciles the location, even after restart or a failed detail fetch. This marker is local metadata and is never sent in API/Postman payloads. Repeating the same cross-collection move is idempotent.
 
 **Do not implement moves using `/sync/import-batch`.** Import intentionally creates a fresh ID when an incoming item ID belongs to another collection and does not delete omitted source items. Import semantics remain unchanged. Deploy a backend supporting the move endpoint before using cloud moves from client 1.3.12; older backends return an error without a local move or an import fallback.
+
+### Atomic collection & item duplicate (1.3.13)
+
+Three idempotent create-only endpoints implement Duplicate with transaction-scoped `FOR SHARE` / `FOR UPDATE` authorization (`pgx.Tx`), fresh server-generated UUIDs, Unicode rune name validation (`<= 150` runes for root final name and all descendants), `5000` item / `32` combined depth bounds, and `FormDataItem` attachment metadata preservation (`fileName`, `fileSize`, `fileType`, `needsReselection`):
+
+1. **`POST /api/v1/collections/{id}/duplicate`**:
+   - Clones a cloud collection and all active items (`deleted_at IS NULL`) to `target_workspace_id` or `target_project_id`.
+   - Naming: appends literal `" copy"` when source and target share the same workspace/project ID; keeps source name across different workspaces/projects.
+   - Access: requires `collection:write` + `min_role` on source and `collection:write` on target (supports `personal → personal`, `personal → project`, and `project → project` across teams; blocks `project → personal` with `403`). If `targetRole < source.min_role` on a project destination, `min_role` is clamped to `targetRole` to prevent self-lockout.
+2. **`POST /api/v1/collections/import-duplicate`**:
+   - Uploads an offline collection into a cloud workspace/project with `min_role = 'reader'`.
+   - Accepts identity JSON up to `4 MiB` or gzip-compressed JSON up to `3,000,000` wire bytes / `16 MiB` decoded.
+3. **`POST /api/v1/items/{id}/duplicate`**:
+   - Clones a request or folder subtree into `target_collection_id` (root or `target_parent_id` folder) within the same workspace/project, appending at `MAX(sort_order) + 1`.
+   - Naming: appends literal `" copy"` to the duplicated root only when `target_collection_id == source_collection_id`; descendant names stay unchanged.
+   - Snapshot-first cloning safely supports duplicating a folder into itself or its own descendants as long as `targetParentDepth + subtreeDepth <= 32`.
+
+All three endpoints reserve `(actor_id, operation_id)` in `duplicate_operations` with a canonical SHA-256 payload fingerprint and return HTTP `201` with a compact receipt (`status: "committed" | "committed_deleted" | "expired_committed"`). Replaying the same `operation_id` with an identical payload revalidates current actor access and returns the live receipt without creating a second copy (and without resurrecting deleted copies); reusing `operation_id` with a different fingerprint returns `409 CONFLICT`. Clients hydrate active collections via `GET /api/v1/collections/{id}` or delta pull instead of relying on unbounded inline response snapshots.

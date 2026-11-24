@@ -146,23 +146,101 @@ export function compileNodeToJsonValue(node: PayloadNode): unknown {
 }
 
 /**
- * Compiles a PayloadBuilderConfig to formatted JSON string
+ * Renders object or list nodes into formatted JSON lines, optionally emitting disabled nodes as `// ` comments.
  */
-export function treeToJson(config: PayloadBuilderConfig): string {
-  const activeNodes = (config.nodes || []).filter((node) => node && node.enabled !== false);
+function renderJsonContainerLines(
+  nodes: PayloadNode[],
+  containerType: 'object' | 'list',
+  indentLevel: number
+): string[] {
+  const indent = '  '.repeat(indentLevel);
+  const lines: string[] = [];
 
-  if (config.rootType === 'list') {
-    const listResult = activeNodes.map((node) => compileNodeToJsonValue(node));
-    return JSON.stringify(listResult, null, 2);
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    if (!node) continue;
+
+    const isEnabled = node.enabled !== false;
+    const hasNextActive = nodes.slice(i + 1).some((n) => n && n.enabled !== false);
+    const hasNextAny = i < nodes.length - 1;
+    const needsComma = isEnabled ? hasNextActive : hasNextAny;
+    const comma = needsComma ? ',' : '';
+
+    const keyPrefix =
+      containerType === 'object'
+        ? `${JSON.stringify(node.key ? node.key.trim() : 'key')}: `
+        : '';
+
+    let nodeLines: string[];
+
+    if (node.type === 'object' || node.type === 'list') {
+      const openChar = node.type === 'object' ? '{' : '[';
+      const closeChar = node.type === 'object' ? '}' : ']';
+      const children = (node.children || []).filter(Boolean);
+
+      if (children.length === 0) {
+        nodeLines = [`${indent}${keyPrefix}${openChar}${closeChar}${comma}`];
+      } else {
+        const innerLines = renderJsonContainerLines(children, node.type, indentLevel + 1);
+        nodeLines = [
+          `${indent}${keyPrefix}${openChar}`,
+          ...innerLines,
+          `${indent}${closeChar}${comma}`,
+        ];
+      }
+    } else {
+      const jsonVal = JSON.stringify(compileNodeToJsonValue(node));
+      nodeLines = [`${indent}${keyPrefix}${jsonVal}${comma}`];
+    }
+
+    if (isEnabled) {
+      lines.push(...nodeLines);
+    } else {
+      for (const line of nodeLines) {
+        lines.push(`${line.slice(0, indent.length)}// ${line.slice(indent.length)}`);
+      }
+    }
   }
 
-  // Root is Object
-  const objResult: Record<string, unknown> = {};
-  for (const node of activeNodes) {
-    const key = node.key ? node.key.trim() : 'key';
-    objResult[key] = compileNodeToJsonValue(node);
+  return lines;
+}
+
+/**
+ * Compiles a PayloadBuilderConfig to formatted JSON string.
+ * When `options.includeCommented` is true, disabled nodes (`enabled: false`) are emitted
+ * in-place as `//` commented JSON lines instead of being stripped.
+ */
+export function treeToJson(
+  config: PayloadBuilderConfig,
+  options?: { includeCommented?: boolean }
+): string {
+  if (!options?.includeCommented) {
+    const activeNodes = (config.nodes || []).filter((node) => node && node.enabled !== false);
+
+    if (config.rootType === 'list') {
+      const listResult = activeNodes.map((node) => compileNodeToJsonValue(node));
+      return JSON.stringify(listResult, null, 2);
+    }
+
+    // Root is Object
+    const objResult: Record<string, unknown> = {};
+    for (const node of activeNodes) {
+      const key = node.key ? node.key.trim() : 'key';
+      objResult[key] = compileNodeToJsonValue(node);
+    }
+    return JSON.stringify(objResult, null, 2);
   }
-  return JSON.stringify(objResult, null, 2);
+
+  const allNodes = (config.nodes || []).filter(Boolean);
+  const openChar = config.rootType === 'list' ? '[' : '{';
+  const closeChar = config.rootType === 'list' ? ']' : '}';
+
+  if (allNodes.length === 0) {
+    return `${openChar}${closeChar}`;
+  }
+
+  const innerLines = renderJsonContainerLines(allNodes, config.rootType, 1);
+  return `${openChar}\n${innerLines.join('\n')}\n${closeChar}`;
 }
 
 /**

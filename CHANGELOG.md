@@ -7,9 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.3.13] - 2026-11-23
+## [1.3.13] - 2026-11-24
+
+### Added
+- **HTTP Header Name & Environment Variable (`{{...}}`) Autocomplete**:
+  - **Header Key Autocomplete**: Typing in any **Headers** table key input (or the **Auth -> API Key** key name when `Add to: Header` is active) opens a floating suggestion menu of common HTTP request headers (e.g., typing `Au` suggests `Authorization`; typing `Ac` suggests `Accept`, `Accept-Encoding`, `Accept-Language`; typing `Key` suggests `X-API-Key`, `Idempotency-Key`) ranked by prefix, hyphen-segment boundary, and usage priority with category badges and descriptions.
+  - **Instant Variable (`{{`) Autocomplete**: Typing `{{` across single-line and multi-line request inputs—including the URL bar, Query Params, Path Variables, Headers (keys and values), Auth credential inputs (Bearer Token, Basic Auth username/password, API Key), Form-Data keys/text values, URL-Encoded fields (table and Bulk Edit), Visual Payload Builder tree nodes, Raw JSON/XML (`CodeEditor`), GraphQL queries/variables, and raw text/HTML bodies—immediately opens an interactive variable picker listing enabled variables from the active environment (with resolved value previews and scope badges), fallback variables from other workspace environments, and built-in dynamic variables (`{{$guid}}`, `{{$timestamp}}`, `{{$isoTimestamp}}`, `{{$randomInt}}`), auto-closing `}}` without duplicating existing closing braces.
+- **Collection, Folder & Request Duplication**: Added `Duplicate Collection`, `Duplicate Folder`, and `Duplicate Request` across offline workspaces and cloud scopes (`offline -> offline`, `offline -> cloud`, `personal cloud -> personal/project cloud`, and `project cloud -> project cloud`) from the 3-dots sidebar menus (gated by write permissions on both source and target, preserving source items and generating fresh UUIDs).
+  - Folder and request duplication support placing copies at any existing writable collection root, inside any target subfolder (including duplicating a folder snapshot into itself or a descendant), or into a brand-new collection created inline (`createCollectionAsync`), appending literal ` copy` inside the same container/collection while keeping names unchanged across containers and for nested descendants.
+  - Added backend duplicate endpoints (`POST /api/v1/collections/{id}/duplicate`, `POST /api/v1/collections/import-duplicate`, `POST /api/v1/items/{id}/duplicate`) backed by the PostgreSQL `duplicate_operations` idempotency ledger (`009_duplicate_operations.sql`), gzip import support, 150-rune UTF-8 validation, 32-level nesting limits, `min_role` clamping when the user's target project role is lower than the source `min_role`, and attachment metadata sanitization on offline-to-cloud uploads.
+  - Added crash-safe durable duplicate intents, lazy partial target folder loading, automatic reveal/expansion of newly created copies, and retry/reconciliation handling across both the Chrome extension and native apps.
+- **JSON Comment Support Across Execution, cURL & Visual Payload Builder**: Added full end-to-end JSONC (`//` and `/* */`) comment support for JSON, raw JSON, and GraphQL JSON variables:
+  - Outbound HTTP requests (`prepareRequest`), `Result Preview`, and `Copy as cURL` (`generateCurlCommand`) now strip single-line/block comments and trailing commas without altering string contents (such as URLs or escaped backslashes), while `parseCurlCommand` detects JSON bodies with leading or inline comments.
+  - Bidirectional Raw <-> Visual Payload Builder sync (`jsonToTree` and `treeToJson`) now preserves single-line, multi-line, block-commented properties, and commented array items as disabled nodes (`enabled: false`) in-place instead of dropping them, and renders commented nodes and their nested descendants with theme-aware grayed-out styling, `//` indicators, muted type/date badges, and strikethrough text across both Light and Dark modes.
+  - Raw JSON editor (`CodeEditor`) now applies full-line and multi-line comment syntax highlighting (`.cm-jsonc-comment`, italic muted slate `#94a3b8` in Dark Mode and `#64748b` in Light Mode) over `//` and `/* */` JSON comments without affecting comment-like URLs inside strings.
 
 ### Fixed
+- **JSON Beautifier Comment Line Placement**: Standalone commented lines following a property without a trailing comma stay on their own line during `Beautify JSON`, and `stripJsonComments` now tracks escaped backslashes accurately before closing quotes.
 - **Lint Checks**: Excluded local debugging documents and scripts under `docs/` from ESLint. Resolved shared response-viewer and store lint errors by documenting intentional control-character sanitization and declaring the store binding with `const`.
 
 ## [1.3.12] - 2026-11-20

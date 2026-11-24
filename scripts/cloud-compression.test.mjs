@@ -179,3 +179,25 @@ test('keeps large non-sync bodies within the existing identity limit', async () 
     /4 MiB/,
   );
 });
+
+test('gzip-compresses large import-duplicate payloads using the same 3 MB wire / 16 MiB decoded budget', async () => {
+  const api = loadCloudApi();
+  let received;
+  api.setCloudTransport({
+    fetch: async (_url, init) => {
+      received = init;
+      return new Response(JSON.stringify({ data: { collection_id: 'c1', operation_id: 'op-1', status: 'committed', name: 'Big', min_role: 'reader', version: 1, updated_at: '2026-11-24T00:00:00Z', item_count: 1 } }), { status: 201 });
+    },
+  });
+
+  await api.importDuplicateCollection(
+    'https://example.com',
+    'tok',
+    { id: 'ws-1', name: 'WS', type: 'workspace' },
+    { name: 'Big', items: [{ type: 'request', name: 'Large', body_content: 'x'.repeat(128 * 1024) }] },
+    'op-1',
+  );
+
+  assert.equal(received.headers['content-encoding'], 'gzip');
+  assert.ok(received.body instanceof ArrayBuffer);
+});

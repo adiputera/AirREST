@@ -435,3 +435,221 @@ test('payloadCompiler: createInitialPayloadConfig creates clean empty structure 
   const emptyList = compiler.createInitialPayloadConfig('list');
   assert.equal(emptyList.nodes.length, 0);
 });
+
+test('payloadReverseParser & payloadCompiler: commented JSON fields round-trip as disabled nodes', () => {
+  const parser = loadModule('../packages/common/src/lib/payloadReverseParser.ts');
+  const compiler = loadModule('../packages/common/src/lib/payloadCompiler.ts');
+
+  const rawJsonc = `{
+  // Prose note that must not become a field
+  // Status: 200
+  //"field_1": "sadsadsa",
+  "field_2": "sadadsa",
+  // "nested": {
+  //   "inner": 123,
+  //   "flag": true
+  // },
+  /* "block_field": 99, */
+  "tags": [
+    // "tag_0",
+    "tag_1"
+  ],
+  "field_3": "sadasdsa"
+}`;
+
+  const { config, error } = parser.jsonToTree(rawJsonc);
+  assert.equal(error, undefined);
+  assert.equal(config.rootType, 'object');
+
+  assert.deepEqual(
+    Array.from(config.nodes, (n) => [n.key, n.enabled, n.type]),
+    [
+      ['field_1', false, 'string'],
+      ['field_2', true, 'string'],
+      ['nested', false, 'object'],
+      ['block_field', false, 'number'],
+      ['tags', true, 'list'],
+      ['field_3', true, 'string'],
+    ]
+  );
+
+  assert.equal(config.nodes[0].value, 'sadsadsa');
+  assert.equal(config.nodes[2].children.length, 2);
+  assert.equal(config.nodes[2].children[0].key, 'inner');
+  assert.equal(config.nodes[2].children[0].enabled, true);
+  assert.deepEqual(
+    Array.from(config.nodes[4].children, (c) => [c.value, c.enabled]),
+    [
+      ['tag_0', false],
+      ['tag_1', true],
+    ]
+  );
+
+  // Builder -> Raw serialization preserves disabled nodes as // comments
+  const rawWithComments = compiler.treeToJson(config, { includeCommented: true });
+  assert.ok(rawWithComments.includes('// "field_1": "sadsadsa",'));
+  assert.ok(rawWithComments.includes('// "nested": {'));
+  assert.ok(rawWithComments.includes('//   "inner": 123,'));
+  assert.ok(rawWithComments.includes('// "tag_0",'));
+
+  // Effective outbound JSON (includeCommented: false) excludes disabled nodes cleanly
+  const effectiveJson = compiler.treeToJson(config, { includeCommented: false });
+  assert.deepEqual(JSON.parse(effectiveJson), {
+    field_2: 'sadadsa',
+    tags: ['tag_1'],
+    field_3: 'sadasdsa',
+  });
+
+  // Round-trip re-parse from treeToJson(..., { includeCommented: true }) preserves disabled state
+  const reparsed = parser.jsonToTree(rawWithComments);
+  assert.equal(reparsed.error, undefined);
+  assert.deepEqual(
+    Array.from(reparsed.config.nodes, (n) => [n.key, n.enabled]),
+    [
+      ['field_1', false],
+      ['field_2', true],
+      ['nested', false],
+      ['block_field', false],
+      ['tags', true],
+      ['field_3', true],
+    ]
+  );
+});
+
+test('PayloadNodeRow renders gray commented styling and propagates parentDisabled to children', () => {
+  const compiler = loadModule('../packages/common/src/lib/payloadCompiler.ts');
+
+  const jsx = (type, props) => ({ type, props });
+  const transpileUi = (relPath, deps) => {
+    const filePath = new URL(relPath, import.meta.url);
+    const source = fs.readFileSync(filePath, 'utf8');
+    const compiled = ts.transpileModule(source, {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
+    }).outputText;
+    const exports = {};
+    vm.runInNewContext(
+      compiled,
+      {
+        exports,
+        require: (id) => deps[id] || {},
+        Math,
+        Date,
+        Number,
+        Boolean,
+        String,
+        isNaN,
+      },
+      { filename: filePath.pathname }
+    );
+    return exports;
+  };
+
+  const reactMock = {
+    useState: (init) => [typeof init === 'function' ? init() : init, () => {}],
+    useRef: (init = null) => ({ current: init }),
+    useEffect: () => {},
+  };
+  const lucideMock = new Proxy({}, { get: (_, name) => name });
+
+  const { PayloadTypeBadge } = transpileUi('../packages/common/src/components/payload/PayloadTypeBadge.tsx', {
+    react: { ...reactMock, default: reactMock },
+    'react/jsx-runtime': { jsx, jsxs: jsx },
+    'lucide-react': lucideMock,
+  });
+
+  const { DateConfigPopover } = transpileUi('../packages/common/src/components/payload/DateConfigPopover.tsx', {
+    react: { ...reactMock, default: reactMock },
+    'react/jsx-runtime': { jsx, jsxs: jsx },
+    'lucide-react': lucideMock,
+    '../../lib/payloadCompiler': compiler,
+  });
+
+  const { PayloadNodeRow } = transpileUi('../packages/common/src/components/payload/PayloadNodeRow.tsx', {
+    react: { ...reactMock, default: reactMock },
+    'react/jsx-runtime': { jsx, jsxs: jsx },
+    'lucide-react': lucideMock,
+    './PayloadTypeBadge': { PayloadTypeBadge },
+    './DateConfigPopover': { DateConfigPopover },
+    '../../lib/payloadCompiler': compiler,
+    '../VariableInput': {
+      VariableInput: (props) =>
+        jsx('input', {
+          type: 'text',
+          value: props.value,
+          placeholder: props.placeholder,
+          className: `${props.wrapperClassName || ''} ${props.inputClassName || ''}`,
+        }),
+    },
+  });
+
+  const findAll = (node, predicate, out = []) => {
+    if (!node || typeof node !== 'object') return out;
+    if (predicate(node)) out.push(node);
+    const children = [node.props?.children].flat(Infinity);
+    for (const child of children) findAll(child, predicate, out);
+    return out;
+  };
+
+  const renderTree = (element) => {
+    if (Array.isArray(element)) return element.map(renderTree);
+    if (!element || typeof element !== 'object') return element;
+    if (typeof element.type === 'function') {
+      return renderTree(element.type(element.props));
+    }
+    const children = element.props?.children !== undefined ? renderTree(element.props.children) : undefined;
+    return { ...element, props: { ...element.props, children } };
+  };
+
+  const commentedParent = {
+    id: 'obj-1',
+    key: 'nested',
+    type: 'object',
+    enabled: false,
+    children: [
+      { id: 'str-1', key: 'field_1', type: 'string', value: 'hello', enabled: true },
+      { id: 'date-1', key: 'created_at', type: 'date', value: '2026-11-24', enabled: true },
+    ],
+  };
+
+  const rendered = renderTree(
+    PayloadNodeRow({
+      node: commentedParent,
+      parentType: 'object',
+      index: 0,
+      level: 0,
+      onUpdate: () => {},
+      onDelete: () => {},
+    })
+  );
+
+  const commentedRows = findAll(rendered, (n) => n.props?.['data-commented'] === 'true');
+  assert.equal(commentedRows.length, 3, 'Commented parent and both nested children must be marked commented');
+  for (const row of commentedRows) {
+    assert.match(row.props.className, /bg-element\/90/, 'Uses theme-aware gray surface token for light and dark mode');
+    assert.doesNotMatch(row.props.className, /opacity-40/, 'Avoids low-contrast global opacity-40');
+  }
+
+  const commentMarkers = findAll(rendered, (n) => n.type === 'span' && n.props?.children === '//');
+  assert.equal(commentMarkers.length, 3, 'Each commented row displays // indicator');
+
+  const mutedInputs = findAll(rendered, (n) => n.type === 'input' && n.props?.type === 'text');
+  assert.ok(mutedInputs.length >= 4);
+  for (const input of mutedInputs) {
+    assert.match(input.props.className, /text-tx-muted/, 'Commented inputs use muted gray token');
+    assert.match(input.props.className, /line-through/, 'Commented inputs use strikethrough styling');
+  }
+
+  const activeNode = { id: 'str-active', key: 'field_2', type: 'string', value: 'world', enabled: true };
+  const renderedActive = renderTree(
+    PayloadNodeRow({
+      node: activeNode,
+      parentType: 'object',
+      index: 0,
+      level: 0,
+      onUpdate: () => {},
+      onDelete: () => {},
+    })
+  );
+  assert.equal(findAll(renderedActive, (n) => n.props?.['data-commented'] === 'true').length, 0);
+  assert.equal(findAll(renderedActive, (n) => n.type === 'span' && n.props?.children === '//').length, 0);
+});

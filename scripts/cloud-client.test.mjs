@@ -789,3 +789,84 @@ test('provider sign-out cannot log out a replacement session', async () => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(logouts, 0);
 });
+
+test('A01: duplicateScopeCollection, importDuplicateCollection, and duplicateScopeItem send typed requests, bearer/provider auth, and map CloudApiError', async () => {
+  const { createCloudClient } = loadCloudApi();
+  const calls = [];
+  const client = createCloudClient({
+    transport: {
+      fetch: async (url, init) => {
+        calls.push({ url, method: init.method, headers: init.headers, body: init.body });
+        if (url.endsWith('/collections/col-1/duplicate')) {
+          return new Response(JSON.stringify({
+            success: true,
+            data: {
+              operation_id: 'op-1',
+              status: 'committed',
+              collection_id: 'col-2',
+              project_id: 'proj-1',
+              name: 'Product APIs',
+              min_role: 'contributor',
+              version: 1,
+              updated_at: '2026-11-24T00:00:00Z',
+              item_count: 3,
+            },
+          }), { status: 201 });
+        }
+        if (url.endsWith('/collections/import-duplicate')) {
+          return new Response(JSON.stringify({
+            success: true,
+            data: {
+              operation_id: 'op-2',
+              status: 'committed',
+              collection_id: 'col-3',
+              workspace_id: 'ws-1',
+              name: 'Offline Col',
+              min_role: 'reader',
+              version: 1,
+              updated_at: '2026-11-24T00:00:00Z',
+              item_count: 1,
+            },
+          }), { status: 201 });
+        }
+        if (url.endsWith('/items/item-1/duplicate')) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'operation_id conflict',
+            code: 'CONFLICT',
+          }), { status: 409 });
+        }
+        return new Response('{}', { status: 404 });
+      },
+    },
+  });
+
+  const colRec = await client.duplicateScopeCollection(
+    'https://api.example.com',
+    'tok-1',
+    'col-1',
+    { id: 'proj-1', name: 'Proj', type: 'project' },
+    'op-1',
+  );
+  assert.equal(colRec.collection_id, 'col-2');
+  assert.equal(colRec.min_role, 'contributor');
+
+  const impRec = await client.importDuplicateCollection(
+    'https://api.example.com',
+    'tok-1',
+    { id: 'ws-1', name: 'WS', type: 'workspace' },
+    { name: 'Offline Col', description: '', items: [] },
+    'op-2',
+  );
+  assert.equal(impRec.collection_id, 'col-3');
+
+  await assert.rejects(
+    client.duplicateScopeItem('https://api.example.com', 'tok-1', 'item-1', 'col-1', 'col-2', 'folder-9', 'op-3'),
+    (err) => err.name === 'CloudApiError' && err.status === 409 && err.code === 'CONFLICT',
+  );
+
+  assert.equal(calls.length, 3);
+  assert.equal(JSON.parse(calls[0].body).target_project_id, 'proj-1');
+  assert.equal(JSON.parse(calls[2].body).target_parent_id, 'folder-9');
+  client.dispose();
+});

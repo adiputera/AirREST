@@ -14,7 +14,7 @@ function loadFormatters() {
   return exports;
 }
 
-const { beautifyJson } = loadFormatters();
+const { beautifyJson, compileEffectiveJsonPayload, stripJsonComments, findJsonCommentRanges } = loadFormatters();
 
 test('beautifyJson preserves JSONC comments, templates, values, and string contents', () => {
   const input = `{
@@ -76,4 +76,66 @@ test('beautifyJson keeps indentation balanced for containers that only hold comm
     '{\n  "a": { /* c */\n  },\n  "b": [ // d\n  ],\n  "c": {\n    "d": 1\n  }\n}',
   );
   assert.equal(beautifyJson(result.formatted).formatted, result.formatted, 'Formatting is idempotent');
+});
+
+test('beautifyJson keeps standalone commented fields on their own line when preceding line has no comma', () => {
+  const input = '{\n  "field_1": "a"\n  // "field_2": "b"\n}';
+  const result = beautifyJson(input);
+
+  assert.equal(result.error, undefined);
+  assert.equal(result.formatted, input);
+});
+
+test('compileEffectiveJsonPayload strips line/block comments and trailing commas while preserving strings', () => {
+  const topComment = '{\n  //"field_1": "sadsadsa",\n  "field_2": "sadadsa",\n  "field_3": "sadasdsa"\n}';
+  const compiledTop = compileEffectiveJsonPayload(topComment);
+  assert.deepEqual(JSON.parse(compiledTop), { field_2: 'sadadsa', field_3: 'sadasdsa' });
+  assert.ok(!compiledTop.includes('field_1'));
+
+  const lastFieldComment = '{\n  "field_1": "keep",\n  // "field_2": "drop"\n}';
+  const compiledLast = compileEffectiveJsonPayload(lastFieldComment);
+  assert.deepEqual(JSON.parse(compiledLast), { field_1: 'keep' });
+
+  const blockAndInline = `{
+    "url": "https://httpbin.org/post?a=1//b", // inline note
+    "winPath": "C:\\\\",
+    "commaInString": "hello, }",
+    /* "commented": {
+      "nested": true
+    }, */
+    "arr": [
+      1,
+      // 2,
+    ]
+  }`;
+  const compiledComplex = compileEffectiveJsonPayload(blockAndInline);
+  assert.deepEqual(JSON.parse(compiledComplex), {
+    url: 'https://httpbin.org/post?a=1//b',
+    winPath: 'C:\\',
+    commaInString: 'hello, }',
+    arr: [1],
+  });
+
+  // Escaped backslash before quote must not break comment stripping
+  const escapedStr = stripJsonComments('{"path": "C:\\\\"} // trailing');
+  assert.equal(escapedStr.trim(), '{"path": "C:\\\\"}');
+});
+
+test('findJsonCommentRanges locates line and block comments while ignoring comment-like URLs inside strings', () => {
+  const input = '{\n  //"field_1": "sadsadsa",\n  "url": "https://httpbin.org/post//test",\n  /* block\n     comment */\n  "field_2": "ok" // end\n}';
+  const ranges = findJsonCommentRanges(input);
+  const extracted = Array.from(ranges, (r) => input.slice(r.from, r.to));
+
+  assert.deepEqual(extracted, [
+    '//"field_1": "sadsadsa",',
+    '/* block\n     comment */',
+    '// end',
+  ]);
+
+  const unterminated = '{\n  /* open comment';
+  const unterminatedRanges = findJsonCommentRanges(unterminated);
+  assert.deepEqual(
+    Array.from(unterminatedRanges, (r) => unterminated.slice(r.from, r.to)),
+    ['/* open comment']
+  );
 });

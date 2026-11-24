@@ -1270,6 +1270,138 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
         '401':
           $ref: '#/components/responses/Unauthorized'
+  /api/v1/collections/{id}/duplicate:
+    post:
+      tags:
+        - Collections
+      summary: Duplicate collection into a workspace or project
+      description: |
+        Atomically clones a collection and all active items with fresh UUIDs and idempotency keyed by `(actor_id, operation_id)`.
+        Requires `collection:write` and `min_role` access on source, plus `collection:write` on destination.
+        Supports personal -> personal, personal -> project, and project -> project (same or different team).
+        Project -> personal is forbidden (`403`). When `targetRole < source.min_role` on a project destination,
+        the duplicated collection's `min_role` is clamped to `targetRole` to prevent self-lockout.
+        Does not depend on `collection:move` or the `collection.move` feature policy. Returns a compact receipt.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DuplicateCollectionRequest'
+      responses:
+        '201':
+          description: Collection duplicated (or idempotently replayed).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DuplicateCollectionReceiptEnvelope'
+        '400':
+          description: Invalid payload, UUID, or final collection/item name exceeds 150 Unicode runes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Write access or scope boundary (e.g. project -> personal) denied.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Source collection or target scope not found or deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: "`operation_id` reused with a different payload/fingerprint, or concurrent scope change."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '413':
+          description: Exceeds 5000 items, 32 depth levels, or request byte limit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /api/v1/collections/import-duplicate:
+    post:
+      tags:
+        - Collections
+      summary: Upload offline collection as an idempotent duplicate into cloud workspace or project
+      description: |
+        Creates a brand new cloud collection from an offline tree with `min_role = 'reader'` and idempotency keyed by `(actor_id, operation_id)`.
+        Accepts identity JSON up to 4 MiB or one `Content-Encoding: gzip` member up to 3,000,000 bytes and 16 MiB decoded.
+        Validates 150 Unicode rune names, 5000 items, 32 depth levels, and typed `FormDataItem` attachment metadata before writes.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportDuplicateCollectionRequest'
+      responses:
+        '201':
+          description: Offline collection duplicated to cloud (or idempotently replayed).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DuplicateCollectionReceiptEnvelope'
+        '400':
+          description: Invalid payload, Unicode rune name > 150, or invalid form-data metadata types.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Write access denied in target workspace or project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Target workspace or project not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: "`operation_id` reused with a different payload/fingerprint."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '413':
+          description: Exceeds 5000 items, 32 depth levels, or transfer byte limits.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '415':
+          description: Unsupported content encoding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /api/v1/collections/{id}/reorder:
     put:
       tags:
@@ -1477,6 +1609,72 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '413':
           $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /api/v1/items/{id}/duplicate:
+    post:
+      tags:
+        - Collection Items
+      summary: Duplicate a request or folder subtree with new IDs
+      description: |
+        Atomically duplicates a request or folder subtree within the same workspace or project, targeting the collection root or a specific folder (`target_parent_id`).
+        Requires `collection:write` and `min_role` access on both source and target collections.
+        Appends `" copy"` only when `target_collection_id == source_collection_id`. Snapshot-first cloning safely handles duplicating a folder into itself or its descendants.
+        Enforces 150 Unicode rune final names, 5000 items, and combined depth `targetParentDepth + subtreeDepth <= 32`. Returns a compact receipt.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DuplicateItemRequest'
+      responses:
+        '201':
+          description: Item duplicated (or idempotently replayed).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DuplicateItemReceiptEnvelope'
+        '400':
+          description: Invalid UUID, invalid target folder, cross-scope target, or name > 150 Unicode runes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: "Write access or `min_role` denied on source or target collection."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Source item or source/target collection not found or deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: "`operation_id` reused with a different payload/fingerprint, or concurrent scope change."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '413':
+          description: Combined depth > 32, > 5000 items, or body exceeds limit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
   /api/v1/items/{id}:
@@ -2960,6 +3158,32 @@ components:
           items:
             $ref: '#/components/schemas/CollectionItem'
 
+    FormDataItem:
+      type: object
+      properties:
+        id:
+          type: string
+        key:
+          type: string
+        type:
+          type: string
+          enum: [text, file]
+        value:
+          type: string
+        description:
+          type: string
+        enabled:
+          type: boolean
+        fileName:
+          type: string
+        fileSize:
+          type: integer
+          minimum: 0
+        fileType:
+          type: string
+        needsReselection:
+          type: boolean
+
     KeyValuePair:
       type: object
       required:
@@ -3075,7 +3299,7 @@ components:
         body_form_data:
           type: array
           items:
-            type: object
+            $ref: '#/components/schemas/FormDataItem'
         pre_request_script:
           type: string
           nullable: true
@@ -3390,7 +3614,7 @@ components:
         body_form_data:
           type: array
           items:
-            type: object
+            $ref: '#/components/schemas/FormDataItem'
         pre_request_script:
           type: string
         post_response_script:
@@ -3637,6 +3861,186 @@ components:
         target_project_id:
           type: string
           format: uuid
+
+    DuplicateCollectionRequest:
+      type: object
+      required:
+        - operation_id
+      properties:
+        operation_id:
+          type: string
+          format: uuid
+        target_workspace_id:
+          type: string
+          format: uuid
+        target_project_id:
+          type: string
+          format: uuid
+      oneOf:
+        - required: [target_workspace_id]
+          not: { required: [target_project_id] }
+        - required: [target_project_id]
+          not: { required: [target_workspace_id] }
+
+    ImportDuplicateCollectionPayload:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          maxLength: 150
+        description:
+          type: string
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ImportItemRequest'
+
+    ImportDuplicateCollectionRequest:
+      type: object
+      required:
+        - operation_id
+        - collection
+      properties:
+        operation_id:
+          type: string
+          format: uuid
+        target_workspace_id:
+          type: string
+          format: uuid
+        target_project_id:
+          type: string
+          format: uuid
+        collection:
+          $ref: '#/components/schemas/ImportDuplicateCollectionPayload'
+      oneOf:
+        - required: [target_workspace_id]
+          not: { required: [target_project_id] }
+        - required: [target_project_id]
+          not: { required: [target_workspace_id] }
+
+    DuplicateItemRequest:
+      type: object
+      required:
+        - operation_id
+        - source_collection_id
+        - target_collection_id
+      properties:
+        operation_id:
+          type: string
+          format: uuid
+        source_collection_id:
+          type: string
+          format: uuid
+        target_collection_id:
+          type: string
+          format: uuid
+        target_parent_id:
+          type: [string, 'null']
+          format: uuid
+
+    DuplicateCollectionReceipt:
+      type: object
+      required:
+        - operation_id
+        - status
+        - collection_id
+        - name
+        - min_role
+        - version
+        - updated_at
+        - item_count
+      properties:
+        operation_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [committed, committed_deleted, expired_committed]
+        collection_id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+          nullable: true
+        project_id:
+          type: string
+          format: uuid
+          nullable: true
+        name:
+          type: string
+        min_role:
+          $ref: '#/components/schemas/ProjectRole'
+        version:
+          type: integer
+          format: int64
+        updated_at:
+          type: string
+          format: date-time
+        item_count:
+          type: integer
+
+    DuplicateCollectionReceiptEnvelope:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/DuplicateCollectionReceipt'
+
+    DuplicateItemReceipt:
+      type: object
+      required:
+        - operation_id
+        - status
+        - root_item_id
+        - target_collection_id
+        - target_collection_version
+        - name
+        - item_count
+      properties:
+        operation_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [committed, committed_deleted, expired_committed]
+        root_item_id:
+          type: string
+          format: uuid
+        target_collection_id:
+          type: string
+          format: uuid
+        target_parent_id:
+          type: string
+          format: uuid
+          nullable: true
+        target_collection_version:
+          type: integer
+          format: int64
+        name:
+          type: string
+        item_count:
+          type: integer
+
+    DuplicateItemReceiptEnvelope:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/DuplicateItemReceipt'
 
     ReorderItemPosition:
       type: object

@@ -20,8 +20,19 @@ function loadProductionAuthHeaders() {
   return exports;
 }
 
+function loadProductionFormatters() {
+  const src = fs.readFileSync(new URL('../packages/common/src/lib/formatters.ts', import.meta.url), 'utf8');
+  const compiled = ts.transpileModule(src, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const exports = {};
+  vm.runInNewContext(compiled, { exports, JSON, RegExp }, { filename: 'formatters.ts' });
+  return exports;
+}
+
 function loadProductionFetcher() {
   const authHeaders = loadProductionAuthHeaders();
+  const formatters = loadProductionFormatters();
   const fetcherSrc = fs.readFileSync(new URL('../packages/common/src/lib/fetcher.ts', import.meta.url), 'utf8');
   const compiled = ts.transpileModule(fetcherSrc, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -31,7 +42,11 @@ function loadProductionFetcher() {
     compiled,
     {
       exports,
-      require: (id) => (id.includes('authHeaders') ? authHeaders : {}),
+      require: (id) => {
+        if (id.includes('authHeaders')) return authHeaders;
+        if (id.includes('formatters')) return formatters;
+        return {};
+      },
       console,
       setTimeout,
       clearTimeout,
@@ -815,6 +830,7 @@ test('D3 (P2): Multi-runtime isolation with production runtime and store instanc
       }
       if (id.includes('storage')) return { appStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} }, onStorageCommit: () => () => {} };
       if (id.includes('authHeaders')) return runModule('../packages/common/src/lib/authHeaders.ts', sandbox);
+      if (id.includes('formatters')) return runModule('../packages/common/src/lib/formatters.ts', sandbox);
       if (id.includes('fetcher')) return runModule('../packages/common/src/lib/fetcher.ts', sandbox);
       if (id.includes('blobManager')) return runModule('../packages/common/src/lib/blobManager.ts', sandbox);
       if (id.includes('postman')) return runModule('../packages/common/src/lib/postman.ts', sandbox);
@@ -823,6 +839,7 @@ test('D3 (P2): Multi-runtime isolation with production runtime and store instanc
       if (id.includes('passwordAuthProvider')) return { createPasswordAuthProvider: () => ({}) };
       if (id.includes('cloudApi')) return runModule('../packages/common/src/lib/cloudApi.ts', sandbox);
       if (id.includes('treeHelper')) return runModule('../packages/common/src/lib/treeHelper.ts', sandbox);
+      if (id.includes('duplicate')) return runModule('../packages/common/src/lib/duplicate.ts', sandbox);
       if (id.includes('useApiStore')) return runModule('../packages/common/src/store/useApiStore.ts', sandbox);
       if (id.includes('runtime')) return runModule('../packages/common/src/runtime.ts', sandbox);
       return {};
@@ -1018,6 +1035,7 @@ test('V1 (P1): Cross-origin refresh isolation - separate origins do not join or 
         if (id.includes('cloudCollectionSync')) return runModule('../packages/common/src/workspace/cloudCollectionSync.ts');
         if (id.includes('storage')) return { appStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} }, onStorageCommit: () => () => {} };
         if (id.includes('authHeaders')) return runModule('../packages/common/src/lib/authHeaders.ts');
+        if (id.includes('formatters')) return runModule('../packages/common/src/lib/formatters.ts');
       if (id.includes('fetcher')) return runModule('../packages/common/src/lib/fetcher.ts');
         if (id.includes('blobManager')) return runModule('../packages/common/src/lib/blobManager.ts');
         if (id.includes('postman')) return runModule('../packages/common/src/lib/postman.ts');
@@ -1026,6 +1044,8 @@ test('V1 (P1): Cross-origin refresh isolation - separate origins do not join or 
         if (id.includes('passwordAuthProvider')) return { createPasswordAuthProvider: () => ({}) };
         if (id.includes('cloudApi')) return runModule('../packages/common/src/lib/cloudApi.ts');
         if (id.includes('treeHelper')) return runModule('../packages/common/src/lib/treeHelper.ts');
+      if (id.includes('duplicate')) return runModule('../packages/common/src/lib/duplicate.ts');
+        if (id.includes('duplicate')) return runModule('../packages/common/src/lib/duplicate.ts');
         if (id.includes('useApiStore')) return runModule('../packages/common/src/store/useApiStore.ts');
         if (id.includes('runtime')) return runModule('../packages/common/src/runtime.ts');
         return {};
@@ -1147,6 +1167,7 @@ test('V2 (P2): Retried 401 after silent token rotation evicts the rotated token 
       if (id.includes('cloudCollectionSync')) return runModule('../packages/common/src/workspace/cloudCollectionSync.ts');
       if (id.includes('storage')) return { appStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} }, onStorageCommit: () => () => {} };
       if (id.includes('authHeaders')) return runModule('../packages/common/src/lib/authHeaders.ts');
+      if (id.includes('formatters')) return runModule('../packages/common/src/lib/formatters.ts');
       if (id.includes('fetcher')) return runModule('../packages/common/src/lib/fetcher.ts');
       if (id.includes('blobManager')) return runModule('../packages/common/src/lib/blobManager.ts');
       if (id.includes('postman')) return runModule('../packages/common/src/lib/postman.ts');
@@ -1155,6 +1176,7 @@ test('V2 (P2): Retried 401 after silent token rotation evicts the rotated token 
       if (id.includes('passwordAuthProvider')) return { createPasswordAuthProvider: () => ({}) };
       if (id.includes('cloudApi')) return runModule('../packages/common/src/lib/cloudApi.ts');
       if (id.includes('treeHelper')) return runModule('../packages/common/src/lib/treeHelper.ts');
+      if (id.includes('duplicate')) return runModule('../packages/common/src/lib/duplicate.ts');
       if (id.includes('jwt')) return runModule('../packages/common/src/lib/jwt.ts');
       if (id.includes('requestDiff')) return runModule('../packages/common/src/lib/requestDiff.ts');
       if (id.includes('cloudSyncTransformer')) return runModule('../packages/common/src/lib/cloudSyncTransformer.ts');
@@ -1328,6 +1350,7 @@ test('V5 (P2): runtime.dispose() aborts in-flight request signals and prevents l
       if (id.includes('cloudCollectionSync')) return runModule('../packages/common/src/workspace/cloudCollectionSync.ts');
       if (id.includes('storage')) return { appStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} }, onStorageCommit: () => () => {} };
       if (id.includes('authHeaders')) return runModule('../packages/common/src/lib/authHeaders.ts');
+      if (id.includes('formatters')) return runModule('../packages/common/src/lib/formatters.ts');
       if (id.includes('fetcher')) return runModule('../packages/common/src/lib/fetcher.ts');
       if (id.includes('blobManager')) return runModule('../packages/common/src/lib/blobManager.ts');
       if (id.includes('postman')) return runModule('../packages/common/src/lib/postman.ts');
@@ -1336,6 +1359,7 @@ test('V5 (P2): runtime.dispose() aborts in-flight request signals and prevents l
       if (id.includes('passwordAuthProvider')) return { createPasswordAuthProvider: () => ({}) };
       if (id.includes('cloudApi')) return runModule('../packages/common/src/lib/cloudApi.ts');
       if (id.includes('treeHelper')) return runModule('../packages/common/src/lib/treeHelper.ts');
+      if (id.includes('duplicate')) return runModule('../packages/common/src/lib/duplicate.ts');
       if (id.includes('jwt')) return runModule('../packages/common/src/lib/jwt.ts');
       if (id.includes('requestDiff')) return runModule('../packages/common/src/lib/requestDiff.ts');
       if (id.includes('cloudSyncTransformer')) return runModule('../packages/common/src/lib/cloudSyncTransformer.ts');
@@ -1458,6 +1482,7 @@ test('R2 (P2): debounced environment cloud sync pending in transport is aborted 
       if (id.includes('cloudCollectionSync')) return runModule('../packages/common/src/workspace/cloudCollectionSync.ts');
       if (id.includes('storage')) return { appStorage: memoryStorage, onStorageCommit: () => () => {} };
       if (id.includes('authHeaders')) return runModule('../packages/common/src/lib/authHeaders.ts');
+      if (id.includes('formatters')) return runModule('../packages/common/src/lib/formatters.ts');
       if (id.includes('fetcher')) return runModule('../packages/common/src/lib/fetcher.ts');
       if (id.includes('blobManager')) return runModule('../packages/common/src/lib/blobManager.ts');
       if (id.includes('postman')) return runModule('../packages/common/src/lib/postman.ts');
@@ -1466,6 +1491,7 @@ test('R2 (P2): debounced environment cloud sync pending in transport is aborted 
       if (id.includes('passwordAuthProvider')) return { createPasswordAuthProvider: () => ({}) };
       if (id.includes('cloudApi')) return runModule('../packages/common/src/lib/cloudApi.ts');
       if (id.includes('treeHelper')) return runModule('../packages/common/src/lib/treeHelper.ts');
+      if (id.includes('duplicate')) return runModule('../packages/common/src/lib/duplicate.ts');
       if (id.includes('jwt')) return runModule('../packages/common/src/lib/jwt.ts');
       if (id.includes('requestDiff')) return runModule('../packages/common/src/lib/requestDiff.ts');
       if (id.includes('cloudSyncTransformer')) return runModule('../packages/common/src/lib/cloudSyncTransformer.ts');
@@ -1597,6 +1623,7 @@ export async function setupRuntimeModules(customStorage = null) {
       if (id.includes('cloudCollectionSync')) return runModule('../packages/common/src/workspace/cloudCollectionSync.ts');
       if (id.includes('storage')) return { appStorage: memoryStorage, onStorageCommit: () => () => {} };
       if (id.includes('authHeaders')) return runModule('../packages/common/src/lib/authHeaders.ts');
+      if (id.includes('formatters')) return runModule('../packages/common/src/lib/formatters.ts');
       if (id.includes('fetcher')) return runModule('../packages/common/src/lib/fetcher.ts');
       if (id.includes('blobManager')) return runModule('../packages/common/src/lib/blobManager.ts');
       if (id.includes('postman')) return runModule('../packages/common/src/lib/postman.ts');
@@ -1605,6 +1632,7 @@ export async function setupRuntimeModules(customStorage = null) {
       if (id.includes('passwordAuthProvider')) return { createPasswordAuthProvider: () => ({}) };
       if (id.includes('cloudApi')) return runModule('../packages/common/src/lib/cloudApi.ts');
       if (id.includes('treeHelper')) return runModule('../packages/common/src/lib/treeHelper.ts');
+      if (id.includes('duplicate')) return runModule('../packages/common/src/lib/duplicate.ts');
       if (id.includes('jwt')) return runModule('../packages/common/src/lib/jwt.ts');
       if (id.includes('requestDiff')) return runModule('../packages/common/src/lib/requestDiff.ts');
       if (id.includes('cloudSyncTransformer')) return runModule('../packages/common/src/lib/cloudSyncTransformer.ts');
