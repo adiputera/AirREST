@@ -63,3 +63,52 @@ test('should connect the editor tabs to request-scoped section state', () => {
   assert.match(source, /pruneRequestEditorSections\(sections, tabs\.map\(\(tab\) => tab\.id\)\)/);
   assert.match(source, /migrateRequestEditorSection/);
 });
+
+test('should resolve and queue the most relevant initial section for imported cURL requests', () => {
+  const {
+    getRequestEditorSection,
+    pruneRequestEditorSections,
+    queueInitialRequestEditorSection,
+    resolveInitialCurlSection,
+    setRequestEditorSection,
+  } = loadRequestEditorSectionState();
+
+  assert.equal(resolveInitialCurlSection({ method: 'POST', bodyType: 'json', bodyContent: '{"a":1}' }), 'body');
+  assert.equal(
+    resolveInitialCurlSection({
+      method: 'GET',
+      bodyType: 'none',
+      params: [{ id: 'p1', key: 'page', value: '1', enabled: true }],
+    }),
+    'params'
+  );
+  assert.equal(
+    resolveInitialCurlSection({
+      method: 'GET',
+      bodyType: 'none',
+      params: [{ id: 'p0', key: '', value: '', enabled: true }],
+      headers: [{ id: 'h1', key: 'X-Trace', value: '1', enabled: true }],
+    }),
+    'headers'
+  );
+  assert.equal(
+    resolveInitialCurlSection({
+      method: 'GET',
+      bodyType: 'none',
+      params: [{ id: 'p0', key: '', value: '', enabled: true }],
+      headers: [{ id: 'h0', key: '', value: '', enabled: true }],
+      auth: { type: 'bearer', bearerToken: 'tok' },
+    }),
+    'auth'
+  );
+
+  queueInitialRequestEditorSection('curl-tab-1', 'body');
+  assert.equal(getRequestEditorSection({}, 'curl-tab-1'), 'body');
+
+  const updated = setRequestEditorSection({}, 'curl-tab-1', 'headers');
+  assert.equal(getRequestEditorSection(updated, 'curl-tab-1'), 'headers');
+
+  queueInitialRequestEditorSection('curl-tab-2', 'auth');
+  pruneRequestEditorSections({}, []);
+  assert.equal(getRequestEditorSection({}, 'curl-tab-2'), 'params');
+});

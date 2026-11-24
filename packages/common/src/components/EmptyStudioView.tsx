@@ -63,9 +63,14 @@ export const EmptyStudioView: React.FC<EmptyStudioViewProps> = ({ onCreateTab })
         </div>
 
         {/* Quick Tips */}
-        <div className="mt-8 flex items-center gap-2 text-[11px] text-tx-faint font-mono">
-          <Layers className="h-3 w-3" />
-          <span>Tip: Click any endpoint in the sidebar tree to open it in a tab</span>
+        <div className="mt-8 flex flex-col items-center gap-1.5 text-[11px] text-tx-faint font-mono">
+          <div className="flex items-center gap-2">
+            <Layers className="h-3 w-3" />
+            <span>Tip: Click any endpoint in the sidebar tree to open it in a tab</span>
+          </div>
+          <div>
+            <span>Or press Ctrl+V / ⌘+V anywhere to paste a cURL command as a new request</span>
+          </div>
         </div>
       </div>
     </div>

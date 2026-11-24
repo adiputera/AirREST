@@ -54,6 +54,9 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
         }
       }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+      data-modal="true"
+      role="dialog"
+      aria-modal="true"
     >
       <div className="w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl border border-line bg-surface p-6 shadow-2xl">
         <div className="flex items-start gap-3.5">

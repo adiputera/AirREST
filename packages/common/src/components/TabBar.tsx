@@ -7,6 +7,7 @@ import { MethodBadge } from './MethodBadge';
 import { isRequestModified, findSavedRequestInCollections, flattenCollectionRequests } from '../lib/requestDiff';
 import { useBackHandler } from '../lib/backNavigation';
 import { hasScopePermission, canModifyCollection } from '../lib/jwt';
+import { usePlatformAdapter } from '../context';
 import { SaveToCollectionModal } from './SaveToCollectionModal';
 import { ApiRequest } from '../types/api';
 import {
@@ -22,6 +23,12 @@ import {
   resolveNextDirtyTab,
   type TabCloseScope,
 } from './tabBarClosePlan';
+import {
+  getCloseTabShortcutLabel,
+  hasOpenBlockingModal,
+  isApplePlatform,
+  isCloseActiveTabShortcut,
+} from './tabBarShortcuts';
 
 interface ContextMenuPosition {
   x: number;
@@ -42,8 +49,16 @@ export const TabBar: React.FC = () => {
   const closeTabsToRight = useApiStore((state) => state.closeTabsToRight);
   const duplicateTab = useApiStore((state) => state.duplicateTab);
   const saveRequestToCollection = useApiStore((state) => state.saveRequestToCollection);
+  const isSwitchingWorkspace = useApiStore((state) => state.isSwitchingWorkspace);
   const workspaceMode = useApiStore((state) => state.workspaceMode);
   const cloudConfig = useApiStore((state) => state.cloudConfig);
+  const runtimeAdapter = usePlatformAdapter();
+  const isDesktopRuntime = runtimeAdapter?.platformId === 'desktop';
+  const isMacPlatform = isApplePlatform();
+  const closeTabShortcutLabel = getCloseTabShortcutLabel({
+    isDesktop: isDesktopRuntime,
+    isMac: isMacPlatform,
+  });
 
   const [contextMenu, setContextMenu] = useState<ContextMenuPosition | null>(null);
   const [unsavedConfirmTab, setUnsavedConfirmTab] = useState<ApiRequest | null>(null);
@@ -389,6 +404,39 @@ export const TabBar: React.FC = () => {
     handleRequestCloseScope({ type: 'single', tabId });
   };
 
+  const handleRequestCloseTabRef = useRef(handleRequestCloseTab);
+  handleRequestCloseTabRef.current = handleRequestCloseTab;
+
+  const shortcutBlockedRef = useRef(false);
+  shortcutBlockedRef.current = Boolean(isSwitchingWorkspace || unsavedConfirmTab || isSaveModalOpen);
+
+  // Close the active request tab with Alt+W (all platforms) or Ctrl+W / Cmd+W (desktop)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (
+        !isCloseActiveTabShortcut(e, {
+          isDesktop: isDesktopRuntime,
+          isMac: isMacPlatform,
+        })
+      ) {
+        return;
+      }
+
+      if (shortcutBlockedRef.current || hasOpenBlockingModal()) return;
+
+      const currentActiveId = activeTabIdRef.current;
+      if (!currentActiveId || !tabIdsRef.current.includes(currentActiveId)) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      setContextMenu(null);
+      handleRequestCloseTabRef.current(currentActiveId);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isDesktopRuntime, isMacPlatform]);
+
   const handleTabAuxClick = (e: React.MouseEvent, tabId: string) => {
     // Middle click closes tab
     if (e.button === 1) {
@@ -570,7 +618,7 @@ export const TabBar: React.FC = () => {
                     handleRequestCloseTab(tab.id);
                   }}
                   className="ml-auto rounded p-0.5 text-tx-muted opacity-60 hover:bg-hover hover:text-tx-primary group-hover:opacity-100 transition"
-                  title="Close tab"
+                  title={isActive ? `Close tab (${closeTabShortcutLabel})` : 'Close tab'}
                 >
                   <X className="h-3 w-3" />
                 </button>

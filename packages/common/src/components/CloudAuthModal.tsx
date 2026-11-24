@@ -308,6 +308,9 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
         }
       }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in duration-150"
+      data-modal="true"
+      role="dialog"
+      aria-modal="true"
     >
       <div className="relative max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-2xl border border-line-strong bg-card p-4 shadow-2xl shadow-black/90 md:p-6">
         {/* Close Button */}

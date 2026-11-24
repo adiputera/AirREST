@@ -34,7 +34,7 @@ import { KeyValueEditor, ReadonlyKeyValueRow } from './KeyValueEditor';
 import { METHOD_COLORS } from './MethodBadge';
 import { SaveToCollectionModal } from './SaveToCollectionModal';
 import { useBackHandler } from '../lib/backNavigation';
-import { generateCurlCommand } from '../lib/curl';
+import { generateCurlCommand, tryParseCurlCommand } from '../lib/curl';
 import { VariableInput } from './VariableInput';
 import { VariableTextarea } from './VariableTextarea';
 import { interpolateVariables } from '../lib/fetcher';
@@ -52,6 +52,8 @@ import {
   getRequestEditorSection,
   migrateRequestEditorSection,
   pruneRequestEditorSections,
+  queueInitialRequestEditorSection,
+  resolveInitialCurlSection,
   setRequestEditorSection,
   type RequestEditorSection,
 } from './requestEditorSectionState';
@@ -72,6 +74,7 @@ export interface RequestEditorProps {
 export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, mobileScrollContent }) => {
   const tabs = useApiStore((state) => state.tabs);
   const activeTabId = useApiStore((state) => state.activeTabId);
+  const createTab = useApiStore((state) => state.createTab);
   const updateActiveRequest = useApiStore((state) => state.updateActiveRequest);
   const updateParam = useApiStore((state) => state.updateParam);
   const addParam = useApiStore((state) => state.addParam);
@@ -183,6 +186,24 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, 
   useEffect(() => {
     setSectionsByRequestId((sections) => pruneRequestEditorSections(sections, tabs.map((tab) => tab.id)));
   }, [tabs]);
+
+  useEffect(() => {
+    const handleCurlPasted = (event: Event) => {
+      const detail = (event as CustomEvent<{ tabId?: string; section?: RequestEditorSection }>).detail;
+      if (!detail?.tabId || !detail?.section) return;
+      const targetTabId = detail.tabId;
+      const targetSection = detail.section;
+      setSectionsByRequestId((sections) => setRequestEditorSection(sections, targetTabId, targetSection));
+      setIsConfigCollapsed(false);
+      try {
+        localStorage.setItem('airrest:request_config_collapsed', 'false');
+      } catch {
+        // ignore
+      }
+    };
+    window.addEventListener('airrest:curl-pasted', handleCurlPasted);
+    return () => window.removeEventListener('airrest:curl-pasted', handleCurlPasted);
+  }, []);
 
   const workspaceMode = useApiStore((state) => state.workspaceMode);
   const cloudConfig = useApiStore((state) => state.cloudConfig);
@@ -829,13 +850,47 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, 
             <VariableInput
               value={currentTab.url}
               onChange={(url) => updateActiveRequest({ url })}
+              onPaste={(e) => {
+                if (e.defaultPrevented) return;
+                const pastedText = e.clipboardData?.getData('text/plain') || '';
+                const parsedCurl = tryParseCurlCommand(pastedText);
+                if (!parsedCurl) return;
+
+                e.preventDefault();
+                e.stopPropagation();
+                const targetSection = resolveInitialCurlSection(parsedCurl);
+                createTab(parsedCurl);
+                const newTabId = useApiStore.getState().activeTabId;
+                if (newTabId) {
+                  queueInitialRequestEditorSection(newTabId, targetSection);
+                  setSectionsByRequestId((sections) =>
+                    setRequestEditorSection(sections, newTabId, targetSection)
+                  );
+                }
+                setIsConfigCollapsed(false);
+                try {
+                  localStorage.setItem('airrest:request_config_collapsed', 'false');
+                } catch {
+                  // ignore
+                }
+                window.dispatchEvent(
+                  new CustomEvent('airrest:curl-pasted', {
+                    detail: {
+                      tabId: newTabId,
+                      section: targetSection,
+                      method: parsedCurl.method || 'GET',
+                      url: parsedCurl.url || '',
+                    },
+                  })
+                );
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
                   sendRequest();
                 }
               }}
-              placeholder="Enter URL (e.g. {{baseUrl}}/api/v1/resource or http://localhost:8080)"
+              placeholder="Enter URL or paste cURL command (e.g. {{baseUrl}}/api/v1/resource or curl -X POST ...)"
               size="lg"
             />
           </div>

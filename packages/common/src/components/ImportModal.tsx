@@ -37,6 +37,10 @@ import { handleCodeEditorKeyDown } from '../lib/editorHelper';
 import { canModifyCollection, canModifyEnvironment, hasScopePermission } from '../lib/jwt';
 import { usePlatformAdapter } from '../context';
 import { useBackHandler } from '../lib/backNavigation';
+import {
+  queueInitialRequestEditorSection,
+  resolveInitialCurlSection,
+} from './requestEditorSectionState';
 
 interface ImportModalProps {
   isOpen: boolean;
@@ -339,7 +343,12 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
         return;
       }
 
+      const targetSection = resolveInitialCurlSection(parsedReq);
       createTab(parsedReq);
+      const newTabId = useApiStore.getState().activeTabId;
+      if (newTabId) {
+        queueInitialRequestEditorSection(newTabId, targetSection);
+      }
       setSuccessMsg('cURL request imported into a new tab!');
       setTimeout(() => {
         onClose();
@@ -361,7 +370,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+    <div data-modal="true" role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
       <div className="max-h-[90dvh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-line bg-surface p-4 shadow-2xl md:p-6">
         {conflict ? (
           conflict.type === 'environment' ? (

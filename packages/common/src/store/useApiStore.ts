@@ -3372,13 +3372,15 @@ export function createApiStore(
       },
 
       createTab: (initial) => {
+        const url = initial?.url || '';
         const newReq: ApiRequest = {
           id: generateId(),
           name: initial?.name || 'Untitled Request',
           method: initial?.method || 'GET',
-          url: initial?.url || '',
-          params: initial?.params || [{ id: generateId(), key: '', value: '', enabled: true }],
-          headers: initial?.headers || [{ id: generateId(), key: '', value: '', enabled: true }],
+          url,
+          params: initial?.params?.length ? initial.params : parseQueryParamsFromUrl(url),
+          pathVariables: initial?.pathVariables ?? parsePathVariablesFromUrl(url),
+          headers: initial?.headers?.length ? initial.headers : [{ id: generateId(), key: '', value: '', enabled: true }],
           auth: initial?.auth || { type: 'none' },
           bodyType: initial?.bodyType || 'none',
           rawType: initial?.rawType || 'text',
@@ -3387,7 +3389,7 @@ export function createApiStore(
           graphqlVariables: initial?.graphqlVariables || '',
           bodyFormData: initial?.bodyFormData || [],
           bodyBinaryFile: initial?.bodyBinaryFile,
-          bodyUrlEncoded: initial?.bodyUrlEncoded || [{ id: generateId(), key: '', value: '', enabled: true }],
+          bodyUrlEncoded: initial?.bodyUrlEncoded?.length ? initial.bodyUrlEncoded : [{ id: generateId(), key: '', value: '', enabled: true }],
           preRequestScript: initial?.preRequestScript || '',
           postResponseScript: initial?.postResponseScript || '',
           createdAt: Date.now(),
@@ -3398,6 +3400,7 @@ export function createApiStore(
           tabs: [...state.tabs, newReq],
           activeTabId: newReq.id,
           activeResponse: null,
+          tabRevealRevision: state.tabRevealRevision + 1,
           canUndoActiveRequest: false,
           canRedoActiveRequest: false,
         }));

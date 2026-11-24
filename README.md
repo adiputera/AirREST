@@ -8,7 +8,7 @@
 
 [![GitHub Repository](https://img.shields.io/badge/GitHub-adiputera%2FAirREST-181717?logo=github)](https://github.com/adiputera/AirREST)
 [![Chrome Web Store](https://img.shields.io/badge/Chrome%20Web%20Store-Install-4285F4?logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/airrest-rest-client/kpajbolnoepgalhoinilfdfpcmgbdlld)
-[![Version](https://img.shields.io/badge/Version-1.3.13-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.4.0-blue.svg)](CHANGELOG.md)
 [![Manifest V3](https://img.shields.io/badge/Chrome%20Extension-Manifest%20V3-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)
 [![Tauri v2](https://img.shields.io/badge/Tauri-v2-24C8D8?logo=tauri&logoColor=white)](https://v2.tauri.app/)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
@@ -45,7 +45,7 @@ AirREST is a complete API testing studio that runs directly inside Google Chrome
 - **Unsaved Modifications Tracker & Safe Close**: Visual indicator dot (`●`) marks tabs with unsaved edits. Closing a dirty tab—individually or via **Close Other Tabs**, **Close Tabs to the Right**, or **Close All Tabs**—closes clean tabs immediately and prompts sequentially (`1 of N`) with an interactive confirmation dialog (**Save**, **Close Tab** to discard, **Discard All** when multiple unsaved tabs remain, or **Cancel**) for each modified tab to prevent accidental data loss. Pressing <kbd>Ctrl + S</kbd> / <kbd>Cmd + S</kbd> saves updates directly into the source collection item.
 - **Per-Tab Undo & Redo History**: Revert accidental edits or mispasted request bodies at any time with <kbd>Ctrl + Z</kbd> / <kbd>Cmd + Z</kbd> (Undo) and <kbd>Ctrl + Y</kbd> / <kbd>Cmd + Shift + Z</kbd> (Redo), or via the compact mobile-friendly Undo button in the top-right action bar. In-memory per-tab history tracks up to 50 snapshots across body edits, parameters, headers, and configurations.
 - **Request Safety & Cancellation**: Inflight requests can be cancelled on demand via the **Cancel** button using native `AbortController`. Built-in 5-minute (300-second) execution deadlines and a 10 MiB streamed response body limit protect against memory overflow and hung connections.
-- **Keyboard Shortcuts**: Quick dispatch with <kbd>Ctrl + Enter</kbd> / <kbd>Cmd + Enter</kbd>, quick save with <kbd>Ctrl + S</kbd> / <kbd>Cmd + S</kbd>, and instant undo/redo with <kbd>Ctrl + Z</kbd> / <kbd>Cmd + Z</kbd>.
+- **Keyboard Shortcuts**: Quick dispatch with <kbd>Ctrl + Enter</kbd> / <kbd>Cmd + Enter</kbd>, quick save with <kbd>Ctrl + S</kbd> / <kbd>Cmd + S</kbd>, instant undo/redo with <kbd>Ctrl + Z</kbd> / <kbd>Cmd + Z</kbd>, and close active request tab (including the last open tab, with unsaved-changes confirmation) via <kbd>Alt + W</kbd> / <kbd>Option + W</kbd> across all platforms or <kbd>Ctrl + W</kbd> / <kbd>Cmd + W</kbd> on Desktop.
 - **Studio Request vs Response Split-Pane Resizer & Persistence**:
   - Horizontal drag-to-resize divider separating the entire Request panel (Params, Headers, Auth, Body, Scripts) from the Response panel on desktop screens.
   - Independent scrolling: Request configuration scrolls inside the upper pane without pushing the Response header off the screen.
@@ -144,7 +144,8 @@ AirREST is a complete API testing studio that runs directly inside Google Chrome
 
 ### 6. 💻 cURL Integration
 - **Copy as cURL**: Generates shell-ready cURL commands with resolved variables, query parameters, headers, and request bodies.
-- **Import from cURL**: Parses cURL commands from terminals or browser DevTools into the active request builder (supports `-X`, `-H`, `-d`, `--json`, `--data-binary`, `-F`, `-u`, `-b`, and query parameters).
+- **Instant cURL Paste Anywhere (URL Bar & Global Window)**: Paste a raw cURL command directly into the **URL Bar** or press <kbd>Ctrl + V</kbd> / <kbd>Cmd + V</kbd> anywhere while AirREST is open (including on the `No Requests Open` empty studio state, Sidebar, or Response Viewer) to automatically parse and open it as a brand-new request tab without altering your current open request tab.
+- **Import from cURL**: Parses cURL commands from terminals, documentation, or browser DevTools (`Copy as cURL (bash)` including ANSI-C `$'...'` strings, escaped double quotes `\"`, bash `'\\''` single-quote concatenation, multiline `\` and `^` continuations, `-X`, `-H`, `-d`, `--data-raw`, `--data-binary`, `--data-urlencode`, `--data-ascii`, `--json`, `-F`, `-u`, `--oauth2-bearer`, `-b`, `-A`, `-e`, `-I`/`--head`, `-G`/`--get`, path variables `:param`, and query parameters) and auto-focuses the most relevant configuration tab (`Body`, `Params`, `Headers`, or `Auth`).
 
 ### 7. 📜 Sandboxed Scripting Engine (`pm.*` & `postman.*`)
 

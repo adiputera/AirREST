@@ -2,26 +2,381 @@ import { ApiRequest, HttpMethod, KeyValuePair, AuthConfig, FormDataItem, BinaryF
 import { resolveBodyContentTypeHeader, resolveEffectiveAuthHeader, resolveManualHeaders } from './authHeaders';
 import { interpolateVariables } from './fetcher';
 import { compileEffectiveJsonPayload } from './formatters';
-import { substitutePathVariables } from './urlParams';
+import { parsePathVariablesFromUrl, parseQueryParamsFromUrl, substitutePathVariables } from './urlParams';
 
 function generateId(): string {
   return Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
+}
+
+const NON_URL_VALUE_FLAGS = new Set([
+  '-o',
+  '--output',
+  '-x',
+  '--proxy',
+  '--cacert',
+  '--cert',
+  '--key',
+  '-m',
+  '--max-time',
+  '--connect-timeout',
+  '-w',
+  '--write-out',
+  '-D',
+  '--dump-header',
+  '-c',
+  '--cookie-jar',
+  '--resolve',
+  '--interface',
+  '--proto',
+  '--retry',
+  '--retry-delay',
+  '--retry-max-time',
+  '--limit-rate',
+  '--max-redirs',
+  '-K',
+  '--config',
+  '-T',
+  '--upload-file',
+]);
+
+const LONG_FLAGS_WITH_EQUALS = new Set([
+  '--request',
+  '--url',
+  '--header',
+  '--user',
+  '--user-agent',
+  '--cookie',
+  '--referer',
+  '--json',
+  '--form',
+  '--form-string',
+  '--data',
+  '--data-raw',
+  '--data-binary',
+  '--data-urlencode',
+  '--data-ascii',
+  '--oauth2-bearer',
+  ...Array.from(NON_URL_VALUE_FLAGS).filter((f) => f.startsWith('--')),
+]);
+
+/**
+ * Strips leading blank/comment lines, optional shell prompt (`$ ` or `> `),
+ * and the leading `curl` / `curl.exe` command token.
+ * Returns the remaining argument string if the input starts with a cURL invocation, or null otherwise.
+ */
+function stripCurlCommandPrefix(rawText: string): string | null {
+  if (typeof rawText !== 'string') return null;
+  let text = rawText.trim();
+  if (!text) return null;
+
+  // Strip leading full-line shell comments (# ...)
+  while (text.startsWith('#')) {
+    const newlineIdx = text.indexOf('\n');
+    if (newlineIdx === -1) return null;
+    text = text.slice(newlineIdx + 1).trim();
+  }
+
+  const match = /^(?:[$>]\s+)?curl(?:\.exe)?(?=[\s\\]|$)/i.exec(text);
+  if (!match) return null;
+
+  const rest = text.slice(match[0].length).trim();
+  return rest.length > 0 ? rest : null;
+}
+
+/**
+ * Checks whether a raw string looks like a cURL command invocation.
+ */
+export function isCurlCommand(rawText: string): boolean {
+  return stripCurlCommandPrefix(rawText) !== null;
+}
+
+/**
+ * Unescapes an ANSI-C quoted string ($'...') payload.
+ */
+function decodeAnsiCSegment(raw: string): string {
+  let out = '';
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (ch !== '\\' || i + 1 >= raw.length) {
+      out += ch;
+      continue;
+    }
+    const next = raw[++i];
+    switch (next) {
+      case 'n':
+        out += '\n';
+        break;
+      case 'r':
+        out += '\r';
+        break;
+      case 't':
+        out += '\t';
+        break;
+      case 'b':
+        out += '\b';
+        break;
+      case 'f':
+        out += '\f';
+        break;
+      case 'v':
+        out += '\v';
+        break;
+      case 'a':
+        out += '\x07';
+        break;
+      case 'e':
+      case 'E':
+        out += '\x1b';
+        break;
+      case '\\':
+        out += '\\';
+        break;
+      case "'":
+        out += "'";
+        break;
+      case '"':
+        out += '"';
+        break;
+      case 'x': {
+        const hex = raw.slice(i + 1, i + 3);
+        const match = /^[0-9a-fA-F]{1,2}/.exec(hex);
+        if (match) {
+          out += String.fromCharCode(parseInt(match[0], 16));
+          i += match[0].length;
+        } else {
+          out += '\\x';
+        }
+        break;
+      }
+      case 'u': {
+        const hex = raw.slice(i + 1, i + 5);
+        const match = /^[0-9a-fA-F]{1,4}/.exec(hex);
+        if (match) {
+          out += String.fromCharCode(parseInt(match[0], 16));
+          i += match[0].length;
+        } else {
+          out += '\\u';
+        }
+        break;
+      }
+      case 'U': {
+        const hex = raw.slice(i + 1, i + 9);
+        const match = /^[0-9a-fA-F]{1,8}/.exec(hex);
+        if (match) {
+          const cp = parseInt(match[0], 16);
+          out += cp <= 0x10ffff ? String.fromCodePoint(cp) : '';
+          i += match[0].length;
+        } else {
+          out += '\\U';
+        }
+        break;
+      }
+      default: {
+        if (next >= '0' && next <= '7') {
+          const oct = raw.slice(i, i + 3);
+          const match = /^[0-7]{1,3}/.exec(oct);
+          if (match) {
+            out += String.fromCharCode(parseInt(match[0], 8));
+            i += match[0].length - 1;
+            break;
+          }
+        }
+        out += next;
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Tokenizes a cURL argument string respecting single quotes ('...'), double quotes ("..."),
+ * ANSI-C quotes ($'...'), escaped characters (\', \", \\), adjacent quote concatenation ('O'\''Reilly'),
+ * and shell line continuations (\ or ^ before newline, or standalone \ between spaces).
+ */
+export function tokenizeCurlCommand(input: string): string[] {
+  const rawTokens: string[] = [];
+  let current = '';
+  let hasToken = false;
+  let i = 0;
+
+  while (i < input.length) {
+    const ch = input[i];
+
+    // Line continuation outside quotes: `\` or `^` followed by optional spaces/tabs and newline
+    if (ch === '\\' || ch === '^') {
+      let lookahead = i + 1;
+      while (lookahead < input.length && (input[lookahead] === ' ' || input[lookahead] === '\t')) {
+        lookahead++;
+      }
+      if (lookahead < input.length && input[lookahead] === '\r') {
+        lookahead++;
+      }
+      if (lookahead < input.length && input[lookahead] === '\n') {
+        i = lookahead + 1;
+        continue;
+      }
+
+      // Flattened single-line continuation: standalone `\` or `^` when not inside a token and followed by whitespace/end
+      if (
+        !hasToken &&
+        (i + 1 >= input.length || input[i + 1] === ' ' || input[i + 1] === '\t')
+      ) {
+        i++;
+        continue;
+      }
+    }
+
+    // Unquoted whitespace separates tokens
+    if (/\s/.test(ch)) {
+      if (hasToken) {
+        rawTokens.push(current);
+        current = '';
+        hasToken = false;
+      }
+      i++;
+      continue;
+    }
+
+    // ANSI-C quoting: $'...'
+    if (ch === '$' && input[i + 1] === "'") {
+      hasToken = true;
+      i += 2;
+      let ansiRaw = '';
+      while (i < input.length) {
+        if (input[i] === '\\' && i + 1 < input.length) {
+          ansiRaw += input[i] + input[i + 1];
+          i += 2;
+        } else if (input[i] === "'") {
+          i++;
+          break;
+        } else {
+          ansiRaw += input[i];
+          i++;
+        }
+      }
+      current += decodeAnsiCSegment(ansiRaw);
+      continue;
+    }
+
+    // Single quotes: '...'
+    if (ch === "'") {
+      hasToken = true;
+      i++;
+      while (i < input.length && input[i] !== "'") {
+        current += input[i];
+        i++;
+      }
+      if (i < input.length && input[i] === "'") {
+        i++;
+      }
+      continue;
+    }
+
+    // Double quotes: "..."
+    if (ch === '"') {
+      hasToken = true;
+      i++;
+      while (i < input.length && input[i] !== '"') {
+        if (input[i] === '\\' && i + 1 < input.length) {
+          const next = input[i + 1];
+          if (next === '\n') {
+            i += 2;
+            continue;
+          }
+          if (next === '\r' && input[i + 2] === '\n') {
+            i += 3;
+            continue;
+          }
+          if (next === '"' || next === '\\' || next === '$' || next === '`') {
+            current += next;
+            i += 2;
+            continue;
+          }
+        }
+        current += input[i];
+        i++;
+      }
+      if (i < input.length && input[i] === '"') {
+        i++;
+      }
+      continue;
+    }
+
+    // Unquoted backslash escape (e.g. \' in 'O'\''Reilly' or escaped space)
+    if (ch === '\\' && i + 1 < input.length) {
+      hasToken = true;
+      current += input[i + 1];
+      i += 2;
+      continue;
+    }
+
+    hasToken = true;
+    current += ch;
+    i++;
+  }
+
+  if (hasToken) {
+    rawTokens.push(current);
+  }
+
+  // Normalize attached short flags (-XPOST, -H"...") and --flag=value tokens
+  const tokens: string[] = [];
+  for (const tok of rawTokens) {
+    if (tok.startsWith('--')) {
+      const eqIdx = tok.indexOf('=');
+      if (eqIdx > 2) {
+        const flagName = tok.slice(0, eqIdx);
+        if (LONG_FLAGS_WITH_EQUALS.has(flagName)) {
+          tokens.push(flagName, tok.slice(eqIdx + 1));
+          continue;
+        }
+      }
+      tokens.push(tok);
+      continue;
+    }
+
+    if (tok.length > 2 && tok[0] === '-' && tok[1] !== '-') {
+      const shortFlag = tok.slice(0, 2);
+      if (/^-(X|H|d|u|F|b|A|e|o|x|m|w|D|c)$/.test(shortFlag)) {
+        tokens.push(shortFlag, tok.slice(2));
+        continue;
+      }
+    }
+
+    tokens.push(tok);
+  }
+
+  return tokens;
+}
+
+function isLikelyUrlToken(token: string): boolean {
+  if (!token || token.startsWith('-')) return false;
+  if (/^https?:\/\//i.test(token)) return true;
+  if (token.startsWith('{{')) return true;
+  if (/^localhost(?::\d+)?(?:[/?#]|$)/i.test(token)) return true;
+  if (/^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?(?:[/?#]|$)/.test(token)) return true;
+  if (token.includes('/')) return true;
+  if (/^[a-zA-Z0-9][-a-zA-Z0-9.]*\.[a-zA-Z]{2,}(?::\d+)?(?:[/?#]|$)/.test(token)) return true;
+  return false;
 }
 
 /**
  * Parses a raw cURL command string into an ApiRequest definition.
  */
 export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
-  let cleaned = rawCurl.trim();
-  if (cleaned.startsWith('curl ')) {
-    cleaned = cleaned.substring(5).trim();
-  }
+  const stripped = stripCurlCommandPrefix(rawCurl);
+  const cleaned = stripped !== null ? stripped : (typeof rawCurl === 'string' ? rawCurl.trim() : '');
 
   let method: HttpMethod = 'GET';
+  let explicitMethod: HttpMethod | null = null;
+  let isGetFlag = false;
+  let isHeadFlag = false;
   let url = '';
   const headers: KeyValuePair[] = [];
   const bodyFormData: FormDataItem[] = [];
   const bodyUrlEncoded: KeyValuePair[] = [];
+  const dataPayloads: string[] = [];
   let bodyBinaryFile: BinaryFileData | undefined = undefined;
   let bodyContent = '';
   let bodyType: ApiRequest['bodyType'] = 'none';
@@ -29,20 +384,7 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
   let graphqlQuery = '';
   let graphqlVariables = '';
 
-  // Tokenize preserving quoted strings
-  const regex = /[^\s"']+|"([^"]*)"|'([^']*)'/g;
-  const tokens: string[] = [];
-  let match;
-  while ((match = regex.exec(cleaned)) !== null) {
-    if (match[1] !== undefined) {
-      tokens.push(match[1]);
-    } else if (match[2] !== undefined) {
-      tokens.push(match[2]);
-    } else {
-      tokens.push(match[0]);
-    }
-  }
-
+  const tokens = tokenizeCurlCommand(cleaned);
   let auth: AuthConfig = { type: 'none' };
 
   for (let i = 0; i < tokens.length; i++) {
@@ -51,8 +393,16 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
     if (token === '-X' || token === '--request') {
       const next = tokens[++i];
       if (next) {
-        method = next.toUpperCase() as HttpMethod;
+        explicitMethod = next.toUpperCase() as HttpMethod;
+        method = explicitMethod;
       }
+    } else if (token === '-I' || token === '--head') {
+      isHeadFlag = true;
+      if (!explicitMethod) {
+        method = 'HEAD';
+      }
+    } else if (token === '-G' || token === '--get') {
+      isGetFlag = true;
     } else if (token === '-u' || token === '--user') {
       const userPass = tokens[++i] || '';
       const colonIndex = userPass.indexOf(':');
@@ -67,6 +417,14 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
           type: 'basic',
           basicUsername: userPass,
           basicPassword: '',
+        };
+      }
+    } else if (token === '--oauth2-bearer') {
+      const bearer = tokens[++i] || '';
+      if (bearer) {
+        auth = {
+          type: 'bearer',
+          bearerToken: bearer,
         };
       }
     } else if (token === '-H' || token === '--header') {
@@ -104,13 +462,24 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
           enabled: true,
         });
       }
+    } else if (token === '-e' || token === '--referer') {
+      const referer = tokens[++i];
+      if (referer) {
+        headers.push({
+          id: generateId(),
+          key: 'Referer',
+          value: referer,
+          enabled: true,
+        });
+      }
     } else if (token === '--json') {
       const data = tokens[++i];
       if (data !== undefined) {
+        dataPayloads.push(data);
         bodyContent = data;
         bodyType = 'json';
         rawType = 'json';
-        if (method === 'GET') {
+        if (!explicitMethod && !isGetFlag && !isHeadFlag && method === 'GET') {
           method = 'POST';
         }
         if (!headers.some((h) => h.key.toLowerCase() === 'content-type')) {
@@ -130,14 +499,14 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
           });
         }
       }
-    } else if (token === '-F' || token === '--form') {
+    } else if (token === '-F' || token === '--form' || token === '--form-string') {
       const formEntry = tokens[++i];
       if (formEntry) {
         const eqIdx = formEntry.indexOf('=');
         if (eqIdx > 0) {
           const k = formEntry.substring(0, eqIdx).trim();
           let v = formEntry.substring(eqIdx + 1).trim();
-          const isFile = v.startsWith('@');
+          const isFile = token !== '--form-string' && v.startsWith('@');
           if (isFile) {
             v = v.substring(1).trim();
           }
@@ -149,7 +518,7 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
             enabled: true,
           });
           bodyType = 'form-data';
-          if (method === 'GET') {
+          if (!explicitMethod && !isGetFlag && !isHeadFlag && method === 'GET') {
             method = 'POST';
           }
         }
@@ -157,6 +526,7 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
     } else if (token === '--data-urlencode') {
       const data = tokens[++i];
       if (data !== undefined) {
+        dataPayloads.push(data);
         bodyType = 'x-www-form-urlencoded';
         const eqIdx = data.indexOf('=');
         if (eqIdx > 0) {
@@ -174,7 +544,7 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
             enabled: true,
           });
         }
-        if (method === 'GET') {
+        if (!explicitMethod && !isGetFlag && !isHeadFlag && method === 'GET') {
           method = 'POST';
         }
       }
@@ -182,7 +552,8 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
       token === '-d' ||
       token === '--data' ||
       token === '--data-raw' ||
-      token === '--data-binary'
+      token === '--data-binary' ||
+      token === '--data-ascii'
     ) {
       const data = tokens[++i];
       if (data !== undefined) {
@@ -195,8 +566,9 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
             type: 'application/octet-stream',
           };
         } else {
-          bodyContent = data;
-          const trimmed = data.trim();
+          dataPayloads.push(data);
+          bodyContent = dataPayloads.length === 1 ? data : dataPayloads.join('&');
+          const trimmed = bodyContent.trim();
           const effectiveJson = compileEffectiveJsonPayload(trimmed).trim();
           if (effectiveJson.startsWith('{') || effectiveJson.startsWith('[')) {
             try {
@@ -221,23 +593,39 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
             rawType = 'text';
           }
         }
-        if (method === 'GET') {
-          method = 'POST'; // curl defaults to POST when -d is passed
+        if (!explicitMethod && !isGetFlag && !isHeadFlag && method === 'GET') {
+          method = 'POST'; // curl defaults to POST when -d is passed without -G/-I
         }
       }
     } else if (token === '--url') {
       url = tokens[++i] || '';
-    } else if (
-      (token.startsWith('http://') || token.startsWith('https://')) &&
-      !url
-    ) {
-      url = token;
-    } else if (!token.startsWith('-') && !url && token.includes('/')) {
+    } else if (NON_URL_VALUE_FLAGS.has(token)) {
+      i++;
+    } else if (!url && isLikelyUrlToken(token)) {
       url = token;
     }
   }
 
-  // Extract auth from Authorization header if not already specified with -u
+  // Handle -G / --get: move data payloads into query string and keep GET/HEAD unless -X overrode it
+  if (isGetFlag) {
+    if (!explicitMethod) {
+      method = isHeadFlag ? 'HEAD' : 'GET';
+    }
+    if (dataPayloads.length > 0 && url) {
+      const joinedQuery = dataPayloads.filter(Boolean).join('&');
+      if (joinedQuery) {
+        url += (url.includes('?') ? '&' : '?') + joinedQuery;
+      }
+      bodyContent = '';
+      bodyType = 'none';
+      rawType = 'text';
+      graphqlQuery = '';
+      graphqlVariables = '';
+      bodyUrlEncoded.length = 0;
+    }
+  }
+
+  // Extract auth from Authorization header if not already specified with -u / --oauth2-bearer
   if (auth.type === 'none') {
     const authHeader = headers.find((h) => String(h?.key ?? '').trim().toLowerCase() === 'authorization');
     if (authHeader && authHeader.value) {
@@ -278,9 +666,11 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
     if (ctVal.includes('application/xml') || ctVal.includes('text/xml')) {
       bodyType = 'xml';
       rawType = 'xml';
-    } else if (ctVal.includes('application/json')) {
-      bodyType = 'json';
-      rawType = 'json';
+    } else if (ctVal.includes('application/json') || ctVal.includes('+json')) {
+      if (bodyType !== 'graphql') {
+        bodyType = 'json';
+        rawType = 'json';
+      }
     } else if (ctVal.includes('text/html')) {
       bodyType = 'raw';
       rawType = 'html';
@@ -290,55 +680,30 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
     } else if (ctVal.includes('application/x-www-form-urlencoded')) {
       bodyType = 'x-www-form-urlencoded';
       if (bodyContent && bodyUrlEncoded.length === 0) {
-        try {
-          const parsed = new URLSearchParams(bodyContent);
-          parsed.forEach((val, key) => {
-            bodyUrlEncoded.push({
-              id: generateId(),
-              key,
-              value: val,
-              enabled: true,
-            });
-          });
-        } catch {
-          // ignore
+        const parsedParams = parseQueryParamsFromUrl(`?${bodyContent}`);
+        for (const p of parsedParams) {
+          if (p.key || p.value) {
+            bodyUrlEncoded.push(p);
+          }
         }
       }
     }
   }
 
-  // Extract query parameters from URL into params list
-  const params: KeyValuePair[] = [];
-  let finalUrl = url;
-
-  if (url && url.includes('?')) {
-    try {
-      const dummyBase = !/^https?:\/\//i.test(url) ? 'http://placeholder' : undefined;
-      const parsedUrl = new URL(url, dummyBase);
-      parsedUrl.searchParams.forEach((value, key) => {
-        params.push({
-          id: generateId(),
-          key,
-          value,
-          enabled: true,
-        });
-      });
-      // Keep full URL with query parameters in sync with params
-      finalUrl = url;
-    } catch {
-      // Retain url as is
-    }
-  }
-
-  if (params.length === 0) {
-    params.push({ id: generateId(), key: '', value: '', enabled: true });
-  }
+  const finalUrl = url.trim();
+  const params = parseQueryParamsFromUrl(finalUrl);
+  const pathVariables = parsePathVariablesFromUrl(finalUrl);
+  const finalHeaders =
+    cleanHeaders.length > 0
+      ? cleanHeaders
+      : [{ id: generateId(), key: '', value: '', enabled: true }];
 
   return {
     method,
     url: finalUrl,
     params,
-    headers: cleanHeaders,
+    pathVariables,
+    headers: finalHeaders,
     auth,
     bodyType,
     rawType,
@@ -348,8 +713,25 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
     bodyFormData,
     bodyBinaryFile,
     bodyUrlEncoded: bodyUrlEncoded.length > 0 ? bodyUrlEncoded : [{ id: generateId(), key: '', value: '', enabled: true }],
-    name: url ? `${method} ${finalUrl.substring(0, 30)}` : 'Imported cURL Request',
+    name: finalUrl ? `${method} ${finalUrl.substring(0, 30)}` : 'Imported cURL Request',
   };
+}
+
+/**
+ * Checks whether a clipboard/input string is a cURL command and parses it into an ApiRequest.
+ * Returns null if the text is not a valid cURL command with a detectable target URL.
+ */
+export function tryParseCurlCommand(rawText: string): Partial<ApiRequest> | null {
+  if (!isCurlCommand(rawText)) return null;
+  try {
+    const parsed = parseCurlCommand(rawText);
+    if (!parsed.url || !parsed.url.trim()) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
 }
 
 /**

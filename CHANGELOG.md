@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.0] - 2026-11-24
+
+### Added
+- **Instant cURL Paste in URL Bar & Anywhere in the Application**:
+  - **Paste cURL in URL Bar**: Pasting a cURL command into the request URL Bar intercepts the paste before mutating the current tab's URL or undo history, parses the cURL command, and opens it directly in a new active request tab. Normal URLs and `{{variable}}` templates continue to paste into the active URL input as usual.
+  - **Global cURL Paste (`Ctrl+V` / `⌘+V` Anywhere)**: Pressing `Ctrl+V` / `⌘+V` anywhere while AirREST is open (including on the 0-tabs `No Requests Open` empty studio view, Sidebar, Tab Bar, or Response Viewer, while respecting active modal dialogs) automatically detects valid cURL commands in the clipboard, opens them as a new request tab, selects and expands the most relevant initial configuration tab (`Body`, `Params`, `Headers`, or `Auth`), and displays a confirmation toast.
+  - **Enhanced Shell Tokenizer & cURL Flag Parser**: Upgraded `parseCurlCommand` with a strict `isCurlCommand` / `tryParseCurlCommand` detector and shell state-machine tokenizer (`tokenizeCurlCommand`) supporting Chrome DevTools ANSI-C `$'...'` strings, escaped double quotes (`\"`), concatenated bash single quotes (`'\\''`), multiline `\` and `^` continuations, attached short flags (`-XPOST`, `-H...`), `--flag=value` syntax, `-I`/`--head`, `-G`/`--get` query conversion, `--data-ascii`, `--oauth2-bearer`, `-e`/`--referer`, non-URL path option skipping (`-o`, `--cacert`, etc.), automatic `:param` Path Variable extraction, and raw `{{variable}}` query parameter preservation.
+- **Close Active Request Tab Keyboard Shortcut**:
+  - Added <kbd>Alt+W</kbd> / <kbd>Option+W</kbd> across all platforms (Extension, Hub, and Native) and <kbd>Ctrl+W</kbd> / <kbd>⌘+W</kbd> on Native Desktop to close the active request tab—including when only 1 tab is open (returning to the `EmptyStudioView`).
+  - Routes through the existing `TabBar` unsaved-changes confirmation flow (`handleRequestCloseTab`), skips repeat/prevented events and `AltGraph`, and stays disabled while blocking modals or workspace switches are active.
+
 ## [1.3.13] - 2026-11-24
 
 ### Added

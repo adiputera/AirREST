@@ -299,7 +299,7 @@ export const SaveToCollectionModal: React.FC<SaveToCollectionModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+    <div data-modal="true" role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
       <div className="w-full max-w-md rounded-2xl border border-line bg-surface p-6 shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-line pb-4">

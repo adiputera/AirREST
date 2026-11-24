@@ -280,3 +280,102 @@ test('cURL export strips JSON comments while parseCurlCommand preserves comments
   assert.ok(imported.bodyContent.includes('//"field_1": "sadsadsa"'));
 });
 
+test('isCurlCommand and tryParseCurlCommand reject plain URLs/JSON and accept valid cURL variants', () => {
+  // Plain URLs, variables, JSON, and non-curl text must NEVER be misidentified as cURL
+  for (const nonCurl of [
+    '',
+    '   ',
+    'https://api.example.com/v1/users',
+    'http://localhost:8080/health?check=1',
+    '{{baseUrl}}/api/v1/curl/items',
+    '{"curl": "https://api.example.com"}',
+    'curl',
+    'curl   ',
+    'curly https://api.example.com',
+    'curl-command https://api.example.com',
+    'curl -X POST', // no URL
+  ]) {
+    assert.equal(
+      curl.tryParseCurlCommand(nonCurl),
+      null,
+      `Expected tryParseCurlCommand to return null for: ${nonCurl}`
+    );
+  }
+
+  // Valid cURL invocations (standard, multiline continuation after curl, curl.exe, shell prompt, leading comment)
+  const validVariants = [
+    'curl https://api.example.com/v1/users',
+    'curl \\\n  https://api.example.com/v1/users',
+    'curl.exe -X GET "https://api.example.com/v1/users"',
+    '$ curl -X GET https://api.example.com/v1/users',
+    '# Fetch users endpoint\ncurl https://api.example.com/v1/users',
+    'curl "{{baseUrl}}"',
+    'curl localhost:8080',
+  ];
+
+  for (const cmd of validVariants) {
+    assert.equal(curl.isCurlCommand(cmd), true, `Expected isCurlCommand=true for: ${cmd}`);
+    const parsed = curl.tryParseCurlCommand(cmd);
+    assert.ok(parsed && parsed.url, `Expected non-empty parsed url for: ${cmd}`);
+  }
+});
+
+test('parseCurlCommand handles escaped quotes, ANSI-C $ quotes, attached/= flags, -G, -I, and non-URL path flags', () => {
+  // 1. Double-quoted JSON with escaped quotes \"
+  const doubleQuoted = curl.tryParseCurlCommand(
+    'curl -X POST "https://api.example.com/users" -H "Content-Type: application/json" -d "{\\"name\\":\\"Alice\\",\\"role\\":\\"admin\\"}"'
+  );
+  assert.ok(doubleQuoted);
+  assert.equal(doubleQuoted.method, 'POST');
+  assert.equal(doubleQuoted.bodyType, 'json');
+  assert.deepEqual(JSON.parse(doubleQuoted.bodyContent), { name: 'Alice', role: 'admin' });
+
+  // 2. Single-quoted JSON with bash '\'' escape (round-trip with generateCurlCommand)
+  const singleEscaped = curl.tryParseCurlCommand(
+    `curl -X POST "https://api.example.com/books" -d '{"author":"O'\\''Reilly","title":"REST"}'`
+  );
+  assert.ok(singleEscaped);
+  assert.equal(singleEscaped.bodyType, 'json');
+  assert.deepEqual(JSON.parse(singleEscaped.bodyContent), { author: "O'Reilly", title: 'REST' });
+
+  // 3. Chrome DevTools ANSI-C $'...' quoting
+  const ansiC = curl.tryParseCurlCommand(
+    `curl 'https://api.example.com/events' \\\n  -H 'content-type: application/json' \\\n  --data-raw $'{\\n  "event": "login",\\n  "quote": "O\\'Reilly"\\n}'`
+  );
+  assert.ok(ansiC);
+  assert.equal(ansiC.method, 'POST');
+  assert.equal(ansiC.bodyType, 'json');
+  assert.deepEqual(JSON.parse(ansiC.bodyContent), { event: 'login', quote: "O'Reilly" });
+
+  // 4. Attached short flags (-XPUT, -H...) and --flag=value plus non-URL path flags (-o /tmp/out.json)
+  const attachedAndEquals = curl.tryParseCurlCommand(
+    'curl -o /tmp/out.json --cacert /etc/ssl/ca.pem -XPUT --url="https://api.example.com/items/:id?env={{envName}}" --header="X-Custom: 42" --oauth2-bearer="my-token"'
+  );
+  assert.ok(attachedAndEquals);
+  assert.equal(attachedAndEquals.method, 'PUT');
+  assert.equal(attachedAndEquals.url, 'https://api.example.com/items/:id?env={{envName}}');
+  assert.equal(attachedAndEquals.auth.type, 'bearer');
+  assert.equal(attachedAndEquals.auth.bearerToken, 'my-token');
+  assert.ok(attachedAndEquals.headers.some((h) => h.key === 'X-Custom' && h.value === '42'));
+  assert.ok(attachedAndEquals.params.some((p) => p.key === 'env' && p.value === '{{envName}}'));
+  assert.ok(attachedAndEquals.pathVariables.some((pv) => pv.key === 'id'));
+
+  // 5. -G / --get moves -d payloads to query string and keeps GET
+  const getWithData = curl.tryParseCurlCommand(
+    'curl -G "https://api.example.com/search" -d "q=airrest" --data-urlencode "tag=api"'
+  );
+  assert.ok(getWithData);
+  assert.equal(getWithData.method, 'GET');
+  assert.equal(getWithData.bodyType, 'none');
+  assert.equal(getWithData.url, 'https://api.example.com/search?q=airrest&tag=api');
+  assert.ok(getWithData.params.some((p) => p.key === 'q' && p.value === 'airrest'));
+  assert.ok(getWithData.params.some((p) => p.key === 'tag' && p.value === 'api'));
+
+  // 6. -I / --head sets method to HEAD and ensures default empty header row when no headers are passed
+  const headReq = curl.tryParseCurlCommand('curl -I https://api.example.com/ping');
+  assert.ok(headReq);
+  assert.equal(headReq.method, 'HEAD');
+  assert.equal(headReq.headers.length, 1);
+  assert.equal(headReq.headers[0].key, '');
+});
+

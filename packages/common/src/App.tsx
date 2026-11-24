@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { GripHorizontal } from 'lucide-react';
+import { GripHorizontal, Terminal, CheckCircle2 } from 'lucide-react';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { TabBar } from './components/TabBar';
@@ -13,6 +13,11 @@ import { useStoreContext } from './store/storeContext';
 import { onStorageCommit } from './lib/storage';
 import { useBackHandler } from './lib/backNavigation';
 import { applyTheme, subscribeToSystemTheme } from './lib/theme';
+import { tryParseCurlCommand } from './lib/curl';
+import {
+  queueInitialRequestEditorSection,
+  resolveInitialCurlSection,
+} from './components/requestEditorSectionState';
 
 export const DEFAULT_REQUEST_PANE_HEIGHT = 320;
 export const MIN_REQUEST_PANE_HEIGHT = 150;
@@ -45,7 +50,80 @@ export const App: React.FC = () => {
   const refreshFeaturePolicy = activeStore((state) => state.refreshFeaturePolicy);
   const theme = activeStore((state) => state.theme || 'system');
   const hasInitialPulledRef = useRef(false);
+  const [curlPasteNotice, setCurlPasteNotice] = useState<{ method: string; url: string } | null>(null);
+  const curlPasteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useBackHandler(sidebarOpen, () => setSidebarOpen(false), 10);
+
+  useEffect(() => {
+    const showCurlToast = (method: string, url: string) => {
+      if (curlPasteTimerRef.current) {
+        clearTimeout(curlPasteTimerRef.current);
+      }
+      setCurlPasteNotice({ method, url });
+      curlPasteTimerRef.current = setTimeout(() => {
+        setCurlPasteNotice(null);
+        curlPasteTimerRef.current = null;
+      }, 2600);
+    };
+
+    const handleCurlPastedEvent = (event: Event) => {
+      const detail = (event as CustomEvent<{ method?: string; url?: string }>).detail;
+      if (detail?.url) {
+        showCurlToast(detail.method || 'GET', detail.url);
+      }
+    };
+
+    const handleGlobalPaste = (event: ClipboardEvent) => {
+      if (event.defaultPrevented || !hasHydrated || isSwitchingWorkspace) return;
+
+      // Do not intercept paste when a modal dialog (e.g. ImportModal, EnvironmentModal, Auth) is open
+      if (
+        typeof document !== 'undefined' &&
+        document.querySelector('[data-modal="true"], [role="dialog"]:not([data-payload-modal="true"])')
+      ) {
+        return;
+      }
+
+      const pastedText = event.clipboardData?.getData('text/plain') || '';
+      const parsedCurl = tryParseCurlCommand(pastedText);
+      if (!parsedCurl) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      const targetSection = resolveInitialCurlSection(parsedCurl);
+      createTab(parsedCurl);
+      const newTabId = activeStore.getState().activeTabId;
+      if (newTabId) {
+        queueInitialRequestEditorSection(newTabId, targetSection);
+      }
+      window.dispatchEvent(
+        new CustomEvent('airrest:curl-pasted', {
+          detail: {
+            tabId: newTabId,
+            section: targetSection,
+            method: parsedCurl.method || 'GET',
+            url: parsedCurl.url || '',
+          },
+        })
+      );
+    };
+
+    window.addEventListener('airrest:curl-pasted', handleCurlPastedEvent);
+    window.addEventListener('paste', handleGlobalPaste, true);
+    return () => {
+      window.removeEventListener('airrest:curl-pasted', handleCurlPastedEvent);
+      window.removeEventListener('paste', handleGlobalPaste, true);
+    };
+  }, [hasHydrated, isSwitchingWorkspace, createTab, activeStore]);
+
+  useEffect(() => {
+    return () => {
+      if (curlPasteTimerRef.current) {
+        clearTimeout(curlPasteTimerRef.current);
+      }
+    };
+  }, []);
 
   // Studio Desktop Request vs Response Split-Pane Resizer
   const [isDesktop, setIsDesktop] = useState<boolean>(() =>
@@ -422,6 +500,27 @@ export const App: React.FC = () => {
             >
               Reload
             </button>
+          </div>
+        )}
+        {curlPasteNotice && !isSwitchingWorkspace && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="fixed bottom-4 right-4 z-50 flex max-w-md items-center gap-2.5 rounded-xl border border-emerald-500/30 bg-card/95 px-3.5 py-2.5 text-xs text-tx-primary shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-2 duration-150"
+          >
+            <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-500 dark:text-emerald-400 border border-emerald-500/25">
+              <Terminal className="h-3.5 w-3.5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 font-semibold text-tx-primary">
+                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400 shrink-0" />
+                <span>Opened cURL as New Request</span>
+              </div>
+              <div className="mt-0.5 truncate font-mono text-[11px] text-tx-muted">
+                <span className="font-bold text-sky-500 dark:text-sky-400">{curlPasteNotice.method}</span>{' '}
+                <span>{curlPasteNotice.url}</span>
+              </div>
+            </div>
           </div>
         )}
       </div>

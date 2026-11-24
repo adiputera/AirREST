@@ -36,6 +36,7 @@ export interface VariableInputProps {
   ariaDescribedBy?: string;
   maskResetKey?: string | number;
   onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
+  onPaste?: (e: React.ClipboardEvent<HTMLInputElement>) => void;
   showPreview?: boolean;
   size?: 'sm' | 'md' | 'lg';
   id?: string;
@@ -127,6 +128,7 @@ export const VariableInput: React.FC<VariableInputProps> = ({
   ariaDescribedBy,
   maskResetKey,
   onKeyDown,
+  onPaste,
   showPreview = false,
   size = 'md',
   id,
@@ -524,6 +526,13 @@ export const VariableInput: React.FC<VariableInputProps> = ({
           onClick={(e) => {
             syncScroll();
             updateAutocompleteFromInput(e.currentTarget.value, e.currentTarget.selectionStart);
+          }}
+          onPaste={(e) => {
+            onPaste?.(e);
+            if (e.defaultPrevented) {
+              setAcContext(null);
+              setHoveredVar(null);
+            }
           }}
           onBlur={() => {
             setAcContext(null);

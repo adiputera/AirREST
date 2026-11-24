@@ -1186,12 +1186,25 @@ test('T-SEMI-PERSIST-8: createTab from 0 tabs successfully opens a single active
   store.getState().closeAllTabs();
   assert.equal(store.getState().tabs.length, 0);
 
-  store.getState().createTab({ name: 'Brand New Tab', url: 'https://api.example.com/start' });
+  store.getState().createTab({
+    name: 'Brand New Tab',
+    url: 'https://api.example.com/users/:id?token={{jwt}}',
+    headers: [],
+  });
 
   assert.equal(store.getState().tabs.length, 1);
   assert.equal(store.getState().tabs[0].name, 'Brand New Tab');
   assert.equal(store.getState().activeTabId, store.getState().tabs[0].id);
   assert.equal(store.getState().activeResponse, null);
+  assert.equal(store.getState().tabs[0].headers.length, 1, 'Empty headers array falls back to 1 empty row');
+  assert.ok(
+    store.getState().tabs[0].params.some((p) => p.key === 'token' && p.value === '{{jwt}}'),
+    'Query params are parsed automatically in createTab'
+  );
+  assert.ok(
+    store.getState().tabs[0].pathVariables.some((pv) => pv.key === 'id'),
+    'Path variables are parsed automatically in createTab'
+  );
 });
 
 test('T-EXT-TAB: switching tabs while sendRequest is in-flight does not overwrite activeResponse on new tab, and deleteOfflineWorkspace does not leak into offlineScopeCache', async () => {
