@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Upload,
   X,
@@ -13,14 +13,31 @@ import {
   Loader2,
   Copy,
   RefreshCw,
+  SkipForward,
+  Plus,
+  ArrowLeft,
+  FolderGit2,
 } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
+import { useStoreContext } from '../store/storeContext';
 import { parseCurlCommand } from '../lib/curl';
 import {
   importPostmanCollection,
   importPostmanEnvironment,
   detectPostmanJsonType,
 } from '../lib/postman';
+import {
+  ImportBatchItem,
+  ImportBatchStats,
+  parseImportBatchFiles,
+  recomputeBatchConflicts,
+  toggleImportBatchItem,
+  toggleAllImportBatchItems,
+  getImportBatchSelectionSummary,
+  formatBatchImportSummary,
+  isJsonCandidateFile,
+  readBrowserFiles,
+} from '../lib/importBatch';
 import {
   compareCollections,
   generateCopyCollectionName,
@@ -32,6 +49,7 @@ import {
   EnvironmentDiffSummary,
 } from '../lib/requestDiff';
 import { Collection, Environment, HttpMethod } from '../types/api';
+import { OpenedFileResult } from '../types/platform';
 import { MethodBadge } from './MethodBadge';
 import { handleCodeEditorKeyDown } from '../lib/editorHelper';
 import { canModifyCollection, canModifyEnvironment, hasScopePermission } from '../lib/jwt';
@@ -45,10 +63,13 @@ import {
 interface ImportModalProps {
   isOpen: boolean;
   onClose: () => void;
+  initialFiles?: OpenedFileResult[] | null;
 }
 
-export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => {
+export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initialFiles }) => {
   const runtimeAdapter = usePlatformAdapter();
+  const contextStore = useStoreContext();
+  const activeStore = contextStore || useApiStore;
   const [activeImportTab, setActiveImportTab] = useState<'postman' | 'curl'>('postman');
   const [jsonText, setJsonText] = useState('');
   const [curlText, setCurlText] = useState('');
@@ -56,15 +77,15 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
 
-  const collections = useApiStore((state) => state.collections);
-  const addCollection = useApiStore((state) => state.addCollection);
-  const replaceCollection = useApiStore((state) => state.replaceCollection);
-  const environments = useApiStore((state) => state.environments);
-  const addEnvironment = useApiStore((state) => state.addEnvironment);
-  const replaceEnvironment = useApiStore((state) => state.replaceEnvironment);
-  const createTab = useApiStore((state) => state.createTab);
-  const workspaceMode = useApiStore((state) => state.workspaceMode);
-  const cloudConfig = useApiStore((state) => state.cloudConfig);
+  const collections = activeStore((state) => state.collections);
+  const addCollection = activeStore((state) => state.addCollection);
+  const replaceCollection = activeStore((state) => state.replaceCollection);
+  const environments = activeStore((state) => state.environments);
+  const addEnvironment = activeStore((state) => state.addEnvironment);
+  const replaceEnvironment = activeStore((state) => state.replaceEnvironment);
+  const createTab = activeStore((state) => state.createTab);
+  const workspaceMode = activeStore((state) => state.workspaceMode);
+  const cloudConfig = activeStore((state) => state.cloudConfig);
 
   const [conflict, setConflict] = useState<
     | {
@@ -82,50 +103,173 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
     | null
   >(null);
   const [isResolvingConflict, setIsResolvingConflict] = useState(false);
+  const [batchItems, setBatchItems] = useState<ImportBatchItem[] | null>(null);
+  const [batchQueue, setBatchQueue] = useState<ImportBatchItem[]>([]);
+  const [batchStats, setBatchStats] = useState<ImportBatchStats | null>(null);
+  const [isBatchConflict, setIsBatchConflict] = useState(false);
+  const [openedFromInitialFiles, setOpenedFromInitialFiles] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const masterCheckboxRef = useRef<HTMLInputElement>(null);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const batchImportedIdsRef = useRef<Set<string>>(new Set());
+
+  const clearCloseTimer = useCallback(() => {
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }, []);
+
+  const resetModalState = useCallback(() => {
+    clearCloseTimer();
+    batchImportedIdsRef.current.clear();
+    setConflict(null);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setIsImporting(false);
+    setIsResolvingConflict(false);
+    setBatchItems(null);
+    setBatchQueue([]);
+    setBatchStats(null);
+    setIsBatchConflict(false);
+    setOpenedFromInitialFiles(false);
+  }, [clearCloseTimer]);
+
+  const handleModalClose = useCallback(() => {
+    resetModalState();
+    onClose();
+  }, [resetModalState, onClose]);
+
+  const openFilesIntoReview = useCallback(
+    (files: OpenedFileResult[], mode: 'replace' | 'append') => {
+      if (files.length === 0) return;
+      const liveState = activeStore.getState();
+      const canWriteCollection = hasScopePermission(
+        liveState.cloudConfig.activeScope,
+        'collection:write',
+        liveState.workspaceMode,
+        liveState.cloudConfig.user?.role
+      );
+      const canWriteEnvironment = hasScopePermission(
+        liveState.cloudConfig.activeScope,
+        'env:write',
+        liveState.workspaceMode,
+        liveState.cloudConfig.user?.role
+      );
+
+      setBatchItems((prev) => {
+        const existingBatch = mode === 'append' && prev ? prev : [];
+        const parsed = parseImportBatchFiles(files, {
+          existingCollections: liveState.collections,
+          existingEnvironments: liveState.environments,
+          canWriteCollection,
+          canWriteEnvironment,
+          existingBatchItems: existingBatch,
+        });
+        const combined = mode === 'append' ? [...existingBatch, ...parsed] : parsed;
+        return recomputeBatchConflicts(combined, liveState.collections, liveState.environments);
+      });
+      setActiveImportTab('postman');
+      setErrorMsg(null);
+      setSuccessMsg(null);
+    },
+    [activeStore]
+  );
+
+  useEffect(() => {
+    if (!isOpen) {
+      resetModalState();
+      return;
+    }
+    if (initialFiles && initialFiles.length > 0) {
+      setOpenedFromInitialFiles(true);
+      openFilesIntoReview(initialFiles, 'replace');
+    }
+  }, [isOpen, initialFiles, openFilesIntoReview, resetModalState]);
+
+  useEffect(() => {
+    return () => {
+      clearCloseTimer();
+    };
+  }, [clearCloseTimer]);
+
+  useEffect(() => {
+    if (!masterCheckboxRef.current || !batchItems) return;
+    const summary = getImportBatchSelectionSummary(batchItems);
+    masterCheckboxRef.current.indeterminate =
+      summary.selected > 0 && summary.selected < summary.selectable;
+  }, [batchItems]);
+
+  useEffect(() => {
+    if (!isOpen || conflict || activeImportTab !== 'postman') return;
+
+    const handleModalFilePaste = (event: ClipboardEvent) => {
+      if (event.defaultPrevented) return;
+      const pastedFiles = Array.from(event.clipboardData?.files || []).filter(isJsonCandidateFile);
+      if (pastedFiles.length === 0) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      void readBrowserFiles(pastedFiles).then((opened) => {
+        if (opened.length > 0) {
+          openFilesIntoReview(opened, batchItems ? 'append' : 'replace');
+        }
+      });
+    };
+
+    window.addEventListener('paste', handleModalFilePaste, true);
+    return () => {
+      window.removeEventListener('paste', handleModalFilePaste, true);
+    };
+  }, [isOpen, conflict, activeImportTab, batchItems, openFilesIntoReview]);
+
   useBackHandler(isOpen, () => {
     if (isImporting || isResolvingConflict) return;
     if (conflict) {
       setConflict(null);
+      setBatchQueue([]);
+      setBatchStats(null);
+      setIsBatchConflict(false);
       setErrorMsg(null);
       return;
     }
-    setErrorMsg(null);
-    setSuccessMsg(null);
-    onClose();
+    if (batchItems !== null) {
+      if (openedFromInitialFiles) {
+        handleModalClose();
+      } else {
+        setBatchItems(null);
+        setErrorMsg(null);
+        setSuccessMsg(null);
+      }
+      return;
+    }
+    handleModalClose();
   }, 20);
 
   if (!isOpen) return null;
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     setErrorMsg(null);
     setSuccessMsg(null);
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const content = event.target?.result as string;
-      setJsonText(content);
-    };
-    reader.readAsText(file);
+    const files = Array.from(e.target.files || []);
     e.target.value = '';
+    if (files.length === 0) return;
+
+    const opened = await readBrowserFiles(files, { requireJsonExtension: false });
+    openFilesIntoReview(opened, batchItems ? 'append' : 'replace');
   };
 
-  const handleFileDrop = (e: React.DragEvent) => {
+  const handleFileDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setErrorMsg(null);
     setSuccessMsg(null);
-    const file = e.dataTransfer.files?.[0];
-    if (!file) return;
+    const files = Array.from(e.dataTransfer.files || []);
+    if (files.length === 0) return;
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const content = event.target?.result as string;
-      setJsonText(content);
-    };
-    reader.readAsText(file);
+    const opened = await readBrowserFiles(files, { requireJsonExtension: true });
+    openFilesIntoReview(opened, batchItems ? 'append' : 'replace');
   };
 
   const handleChooseFileClick = async (e?: React.MouseEvent) => {
@@ -134,6 +278,21 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
       e.stopPropagation();
     }
     const adapter = runtimeAdapter;
+    if (adapter?.capabilities?.supportsNativeFileSystem && adapter?.openFiles) {
+      try {
+        setErrorMsg(null);
+        setSuccessMsg(null);
+        const results = await adapter.openFiles({
+          filters: [{ name: 'Postman JSON Files', extensions: ['json'] }],
+        });
+        if (results && results.length > 0) {
+          openFilesIntoReview(results, batchItems ? 'append' : 'replace');
+        }
+      } catch (err) {
+        setErrorMsg(err instanceof Error ? err.message : 'Failed to open files via system dialog.');
+      }
+      return;
+    }
     if (adapter?.capabilities?.supportsNativeFileSystem && adapter?.openFile) {
       try {
         setErrorMsg(null);
@@ -142,7 +301,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
           filters: [{ name: 'Postman JSON Files', extensions: ['json'] }],
         });
         if (result && typeof result.content === 'string') {
-          setJsonText(result.content);
+          openFilesIntoReview([result], batchItems ? 'append' : 'replace');
         }
       } catch (err) {
         setErrorMsg(err instanceof Error ? err.message : 'Failed to open file via system dialog.');
@@ -152,6 +311,186 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
 
     // Web / Extension fallback: trigger standard HTML file input
     fileInputRef.current?.click();
+  };
+
+  const finishBatchRun = (stats: ImportBatchStats) => {
+    setBatchQueue([]);
+    setBatchStats(null);
+    setIsBatchConflict(false);
+
+    const summary = formatBatchImportSummary(stats);
+    if (stats.failed.length > 0) {
+      const failDetails = stats.failed.map((f) => `${f.name}: ${f.error}`).join(' | ');
+      setErrorMsg(`${summary} ${failDetails}`);
+      if (stats.collectionsImported > 0 || stats.environmentsImported > 0) {
+        setSuccessMsg(summary);
+      }
+      return;
+    }
+
+    setSuccessMsg(summary);
+    clearCloseTimer();
+    closeTimerRef.current = setTimeout(() => {
+      handleModalClose();
+    }, 900);
+  };
+
+  const processBatchQueue = async (queue: ImportBatchItem[], initialStats: ImportBatchStats) => {
+    const currentStats: ImportBatchStats = {
+      collectionsImported: initialStats.collectionsImported,
+      environmentsImported: initialStats.environmentsImported,
+      skipped: initialStats.skipped,
+      failed: [...initialStats.failed],
+    };
+
+    for (let i = 0; i < queue.length; i++) {
+      const item = queue[i];
+      const remaining = queue.slice(i + 1);
+      const liveState = activeStore.getState();
+
+      if (item.type === 'environment' && item.parsedEnvironment) {
+        if (
+          !hasScopePermission(
+            liveState.cloudConfig.activeScope,
+            'env:write',
+            liveState.workspaceMode,
+            liveState.cloudConfig.user?.role
+          )
+        ) {
+          currentStats.failed.push({
+            name: item.name,
+            error: 'Insufficient permission to import environments into this scope (requires env:write).',
+          });
+          continue;
+        }
+
+        const incomingEnv = cloneEnvironmentWithNewIds(
+          item.parsedEnvironment,
+          item.parsedEnvironment.name
+        );
+        const existingEnv = liveState.environments.find(
+          (e) =>
+            String(e.name ?? '').trim().toLowerCase() ===
+            String(incomingEnv.name ?? '').trim().toLowerCase()
+        );
+
+        if (existingEnv) {
+          const diff = compareEnvironments(existingEnv, incomingEnv);
+          setBatchQueue(remaining);
+          setBatchStats(currentStats);
+          setIsBatchConflict(true);
+          setConflict({
+            type: 'environment',
+            existingEnv,
+            incomingEnv,
+            diff,
+          });
+          return;
+        }
+
+        try {
+          await addEnvironment(incomingEnv);
+          currentStats.environmentsImported += 1;
+        } catch (err: unknown) {
+          currentStats.failed.push({
+            name: item.name,
+            error: err instanceof Error ? err.message : 'Failed to import environment.',
+          });
+        }
+      } else if (item.type === 'collection' && item.parsedCollection) {
+        if (
+          !hasScopePermission(
+            liveState.cloudConfig.activeScope,
+            'collection:write',
+            liveState.workspaceMode,
+            liveState.cloudConfig.user?.role
+          )
+        ) {
+          currentStats.failed.push({
+            name: item.name,
+            error: 'Insufficient permission to import collections into this scope (requires collection:write).',
+          });
+          continue;
+        }
+
+        const incomingCol = cloneCollectionWithNewIds(
+          item.parsedCollection,
+          item.parsedCollection.name
+        );
+        const existingPendingCol = liveState.collections.find(
+          (c) =>
+            String(c.name ?? '').trim().toLowerCase() ===
+              String(incomingCol.name ?? '').trim().toLowerCase() &&
+            c._syncStatus === 'pending' &&
+            !batchImportedIdsRef.current.has(c.id)
+        );
+        if (existingPendingCol) {
+          incomingCol.id = existingPendingCol.id;
+        }
+
+        const existingCol = liveState.collections.find(
+          (c) =>
+            String(c.name ?? '').trim().toLowerCase() ===
+              String(incomingCol.name ?? '').trim().toLowerCase() &&
+            (c._syncStatus !== 'pending' || batchImportedIdsRef.current.has(c.id)) &&
+            c.id !== incomingCol.id
+        );
+
+        if (existingCol) {
+          const diff = compareCollections(existingCol, incomingCol);
+          setBatchQueue(remaining);
+          setBatchStats(currentStats);
+          setIsBatchConflict(true);
+          setConflict({
+            type: 'collection',
+            existingCol,
+            incomingCol,
+            diff,
+          });
+          return;
+        }
+
+        try {
+          await addCollection(incomingCol);
+          batchImportedIdsRef.current.add(incomingCol.id);
+          currentStats.collectionsImported += 1;
+        } catch (err: unknown) {
+          currentStats.failed.push({
+            name: item.name,
+            error: err instanceof Error ? err.message : 'Failed to import collection.',
+          });
+        }
+      }
+    }
+
+    finishBatchRun(currentStats);
+  };
+
+  const handleImportBatch = async () => {
+    if (!batchItems) return;
+    setErrorMsg(null);
+    setSuccessMsg(null);
+
+    const selectedItems = batchItems.filter(
+      (item) => item.checked && !item.disabled && item.type !== 'invalid'
+    );
+    if (selectedItems.length === 0) {
+      setErrorMsg('Please select at least one valid file to import.');
+      return;
+    }
+
+    setIsImporting(true);
+    batchImportedIdsRef.current = new Set();
+    try {
+      await processBatchQueue(selectedItems, {
+        collectionsImported: 0,
+        environmentsImported: 0,
+        skipped: 0,
+        failed: [],
+      });
+    } finally {
+      setIsImporting(false);
+    }
   };
 
   const handleImportPostman = async () => {
@@ -164,6 +503,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
     }
 
     setIsImporting(true);
+    batchImportedIdsRef.current = new Set();
     try {
       const detected = detectPostmanJsonType(jsonText);
 
@@ -191,10 +531,10 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
 
         await addEnvironment(incomingEnv);
         setSuccessMsg(`Postman Environment "${incomingEnv.name}" imported and activated!`);
-        setTimeout(() => {
-          onClose();
+        clearCloseTimer();
+        closeTimerRef.current = setTimeout(() => {
           setJsonText('');
-          setSuccessMsg(null);
+          handleModalClose();
         }, 900);
       } else {
         if (!hasScopePermission(cloudConfig.activeScope, 'collection:write', workspaceMode, cloudConfig.user?.role)) {
@@ -227,10 +567,10 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
 
         await addCollection(incomingCol);
         setSuccessMsg(`Postman Collection "${incomingCol.name}" imported and synced!`);
-        setTimeout(() => {
-          onClose();
+        clearCloseTimer();
+        closeTimerRef.current = setTimeout(() => {
           setJsonText('');
-          setSuccessMsg(null);
+          handleModalClose();
         }, 900);
       }
     } catch (err: unknown) {
@@ -240,41 +580,99 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
     }
   };
 
+  const handleBackFromConflict = () => {
+    setConflict(null);
+    setErrorMsg(null);
+    if (isBatchConflict) {
+      setBatchQueue([]);
+      setBatchStats(null);
+      setIsBatchConflict(false);
+    }
+  };
+
+  const advanceBatchAfterConflict = async (outcome: 'collection' | 'environment' | 'skipped') => {
+    const baseStats = batchStats || {
+      collectionsImported: 0,
+      environmentsImported: 0,
+      skipped: 0,
+      failed: [],
+    };
+    const nextStats: ImportBatchStats = {
+      collectionsImported:
+        baseStats.collectionsImported + (outcome === 'collection' ? 1 : 0),
+      environmentsImported:
+        baseStats.environmentsImported + (outcome === 'environment' ? 1 : 0),
+      skipped: baseStats.skipped + (outcome === 'skipped' ? 1 : 0),
+      failed: [...baseStats.failed],
+    };
+    const remaining = batchQueue;
+    setConflict(null);
+    if (remaining.length > 0) {
+      await processBatchQueue(remaining, nextStats);
+    } else {
+      finishBatchRun(nextStats);
+    }
+  };
+
+  const handleSkipConflict = async () => {
+    if (!conflict || !isBatchConflict) return;
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setIsResolvingConflict(true);
+    try {
+      await advanceBatchAfterConflict('skipped');
+    } finally {
+      setIsResolvingConflict(false);
+    }
+  };
+
   const handleImportAsCopy = async () => {
     if (!conflict) return;
     setIsResolvingConflict(true);
     setErrorMsg(null);
     try {
+      const liveState = activeStore.getState();
+      const importedType: 'collection' | 'environment' = conflict.type;
       if (conflict.type === 'collection') {
-        if (!hasScopePermission(cloudConfig.activeScope, 'collection:write', workspaceMode, cloudConfig.user?.role)) {
+        if (!hasScopePermission(liveState.cloudConfig.activeScope, 'collection:write', liveState.workspaceMode, liveState.cloudConfig.user?.role)) {
           setErrorMsg('Insufficient permission to create collection copies in this scope (requires collection:write).');
           return;
         }
 
-        const existingNames = collections.map((c) => c.name);
+        const existingNames = liveState.collections.map((c) => c.name);
         const copyName = generateCopyCollectionName(conflict.incomingCol.name, existingNames);
         const copyCol = cloneCollectionWithNewIds(conflict.incomingCol, copyName);
 
         await addCollection(copyCol);
-        setSuccessMsg(`Postman Collection "${copyName}" imported as copy!`);
+        batchImportedIdsRef.current.add(copyCol.id);
+        if (!isBatchConflict) {
+          setSuccessMsg(`Postman Collection "${copyName}" imported as copy!`);
+        }
       } else {
-        if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
+        if (!hasScopePermission(liveState.cloudConfig.activeScope, 'env:write', liveState.workspaceMode, liveState.cloudConfig.user?.role)) {
           setErrorMsg('Insufficient permission to create environment copies in this scope (requires env:write).');
           return;
         }
 
-        const existingNames = environments.map((e) => e.name);
+        const existingNames = liveState.environments.map((e) => e.name);
         const copyName = generateCopyEnvironmentName(conflict.incomingEnv.name, existingNames);
         const copyEnv = cloneEnvironmentWithNewIds(conflict.incomingEnv, copyName);
 
         await addEnvironment(copyEnv);
-        setSuccessMsg(`Postman Environment "${copyName}" imported as copy!`);
+        if (!isBatchConflict) {
+          setSuccessMsg(`Postman Environment "${copyName}" imported as copy!`);
+        }
       }
-      setTimeout(() => {
-        setConflict(null);
-        onClose();
+
+      if (isBatchConflict) {
+        await advanceBatchAfterConflict(importedType);
+        return;
+      }
+
+      clearCloseTimer();
+      closeTimerRef.current = setTimeout(() => {
         setJsonText('');
-        setSuccessMsg(null);
+        handleModalClose();
       }, 900);
     } catch (err: unknown) {
       setErrorMsg(
@@ -292,29 +690,41 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
     setIsResolvingConflict(true);
     setErrorMsg(null);
     try {
+      const liveState = activeStore.getState();
+      const importedType: 'collection' | 'environment' = conflict.type;
       if (conflict.type === 'collection') {
-        if (!canModifyCollection(conflict.existingCol.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+        if (!canModifyCollection(conflict.existingCol.minRole, liveState.cloudConfig.activeScope, liveState.workspaceMode, liveState.cloudConfig.user?.role)) {
           setErrorMsg(`Cannot replace collection: read-only for your role or lacking write permissions.`);
           return;
         }
 
         await replaceCollection(conflict.existingCol.id, conflict.incomingCol);
-        setSuccessMsg(`Collection "${conflict.existingCol.name}" replaced successfully!`);
+        batchImportedIdsRef.current.add(conflict.existingCol.id);
+        if (!isBatchConflict) {
+          setSuccessMsg(`Collection "${conflict.existingCol.name}" replaced successfully!`);
+        }
       } else {
-        if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role) ||
-            !canModifyEnvironment(conflict.existingEnv.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+        if (!hasScopePermission(liveState.cloudConfig.activeScope, 'env:write', liveState.workspaceMode, liveState.cloudConfig.user?.role) ||
+            !canModifyEnvironment(conflict.existingEnv.minRole, liveState.cloudConfig.activeScope, liveState.workspaceMode, liveState.cloudConfig.user?.role)) {
           setErrorMsg('Cannot replace environment: read-only for your role or lacking write permissions.');
           return;
         }
 
         await replaceEnvironment(conflict.existingEnv.id, conflict.incomingEnv);
-        setSuccessMsg(`Environment "${conflict.existingEnv.name}" replaced successfully!`);
+        if (!isBatchConflict) {
+          setSuccessMsg(`Environment "${conflict.existingEnv.name}" replaced successfully!`);
+        }
       }
-      setTimeout(() => {
-        setConflict(null);
-        onClose();
+
+      if (isBatchConflict) {
+        await advanceBatchAfterConflict(importedType);
+        return;
+      }
+
+      clearCloseTimer();
+      closeTimerRef.current = setTimeout(() => {
         setJsonText('');
-        setSuccessMsg(null);
+        handleModalClose();
       }, 900);
     } catch (err: unknown) {
       setErrorMsg(
@@ -345,33 +755,37 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
 
       const targetSection = resolveInitialCurlSection(parsedReq);
       createTab(parsedReq);
-      const newTabId = useApiStore.getState().activeTabId;
+      const newTabId = activeStore.getState().activeTabId;
       if (newTabId) {
         queueInitialRequestEditorSection(newTabId, targetSection);
       }
       setSuccessMsg('cURL request imported into a new tab!');
-      setTimeout(() => {
-        onClose();
+      clearCloseTimer();
+      closeTimerRef.current = setTimeout(() => {
         setCurlText('');
-        setSuccessMsg(null);
+        handleModalClose();
       }, 700);
     } catch (err: unknown) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to parse cURL command.');
     }
   };
 
-
-
-  const handleModalClose = () => {
-    setConflict(null);
-    setErrorMsg(null);
-    setSuccessMsg(null);
-    onClose();
-  };
+  const batchSummary = batchItems ? getImportBatchSelectionSummary(batchItems) : null;
 
   return (
     <div data-modal="true" role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
       <div className="max-h-[90dvh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-line bg-surface p-4 shadow-2xl md:p-6">
+        {/* Hidden File Input placed outside clickable triggers to prevent recursive bubbling */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept=".json,application/json"
+          onChange={handleFileUpload}
+          onClick={(e) => e.stopPropagation()}
+          className="hidden"
+        />
+
         {conflict ? (
           conflict.type === 'environment' ? (
             /* Environment Conflict Resolution View */
@@ -383,7 +797,14 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
                     <AlertTriangle className="h-5 w-5" />
                   </div>
                   <div>
-                    <h2 className="text-base font-semibold text-tx-primary">Environment Already Exists</h2>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h2 className="text-base font-semibold text-tx-primary">Environment Already Exists</h2>
+                      {isBatchConflict && (
+                        <span className="inline-flex items-center rounded-full border border-sky-500/25 bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium text-sky-600 dark:text-sky-300">
+                          Batch Import • {batchQueue.length} remaining
+                        </span>
+                      )}
+                    </div>
                     <p className="text-xs text-tx-muted">
                       An environment named <span className="font-semibold text-zinc-200">"{conflict.existingEnv.name}"</span> already exists in your workspace.
                     </p>
@@ -574,11 +995,22 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
                 <button
                   type="button"
                   disabled={isResolvingConflict}
-                  onClick={() => setConflict(null)}
+                  onClick={handleBackFromConflict}
                   className="rounded-xl px-4 py-2 text-xs font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition disabled:opacity-50"
                 >
                   Back
                 </button>
+                {isBatchConflict && (
+                  <button
+                    type="button"
+                    disabled={isResolvingConflict}
+                    onClick={handleSkipConflict}
+                    className="flex items-center justify-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-900 hover:bg-zinc-800 px-4 py-2 text-xs font-semibold text-zinc-300 shadow transition active:scale-95 disabled:opacity-50"
+                  >
+                    <SkipForward className="h-3.5 w-3.5 text-zinc-400" />
+                    <span>Skip</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   disabled={isResolvingConflict}
@@ -617,7 +1049,14 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
                     <AlertTriangle className="h-5 w-5" />
                   </div>
                   <div>
-                    <h2 className="text-base font-semibold text-zinc-100">Collection Already Exists</h2>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h2 className="text-base font-semibold text-zinc-100">Collection Already Exists</h2>
+                      {isBatchConflict && (
+                        <span className="inline-flex items-center rounded-full border border-sky-500/25 bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium text-sky-300">
+                          Batch Import • {batchQueue.length} remaining
+                        </span>
+                      )}
+                    </div>
                     <p className="text-xs text-zinc-400">
                       A collection named <span className="font-semibold text-zinc-200">"{conflict.existingCol.name}"</span> already exists in your workspace.
                     </p>
@@ -807,11 +1246,22 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
                 <button
                   type="button"
                   disabled={isResolvingConflict}
-                  onClick={() => setConflict(null)}
+                  onClick={handleBackFromConflict}
                   className="rounded-xl px-4 py-2 text-xs font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition disabled:opacity-50"
                 >
                   Back
                 </button>
+                {isBatchConflict && (
+                  <button
+                    type="button"
+                    disabled={isResolvingConflict}
+                    onClick={handleSkipConflict}
+                    className="flex items-center justify-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-900 hover:bg-zinc-800 px-4 py-2 text-xs font-semibold text-zinc-300 shadow transition active:scale-95 disabled:opacity-50"
+                  >
+                    <SkipForward className="h-3.5 w-3.5 text-zinc-400" />
+                    <span>Skip</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   disabled={isResolvingConflict}
@@ -841,6 +1291,223 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
               </div>
             </div>
           )
+        ) : batchItems !== null && batchSummary !== null ? (
+          /* Batch File Checklist Preview View */
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onDragEnter={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onDrop={handleFileDrop}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-line pb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-sky-500/10 text-sky-500 dark:text-sky-400 border border-sky-500/20">
+                  <FileJson className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="text-base font-semibold text-tx-primary">Review Files to Import</h2>
+                  <p className="text-xs text-tx-muted">
+                    Choose which Collections and Environments to import into your workspace
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={handleModalClose}
+                className="rounded-lg p-1.5 text-tx-muted hover:bg-hover hover:text-tx-primary transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Selection Toolbar */}
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+              <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-tx-primary select-none">
+                <input
+                  ref={masterCheckboxRef}
+                  type="checkbox"
+                  checked={batchSummary.selectable > 0 && batchSummary.selected === batchSummary.selectable}
+                  disabled={batchSummary.selectable === 0 || isImporting}
+                  onChange={(e) =>
+                    setBatchItems((prev) => {
+                      if (!prev) return prev;
+                      const liveState = activeStore.getState();
+                      return recomputeBatchConflicts(
+                        toggleAllImportBatchItems(prev, e.target.checked),
+                        liveState.collections,
+                        liveState.environments
+                      );
+                    })
+                  }
+                  className="h-4 w-4 rounded border-line-strong bg-card text-sky-500 focus:ring-sky-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+                />
+                <span>Select All</span>
+                <span className="rounded-full bg-element border border-line px-2 py-0.5 text-[11px] font-normal text-tx-muted">
+                  {batchSummary.selected} of {batchSummary.total} selected
+                </span>
+              </label>
+
+              <button
+                type="button"
+                disabled={isImporting}
+                onClick={handleChooseFileClick}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-card px-2.5 py-1.5 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition disabled:opacity-50"
+              >
+                <Plus className="h-3.5 w-3.5 text-sky-500 dark:text-sky-400" />
+                <span>Add Files</span>
+              </button>
+            </div>
+
+            {/* File Checklist */}
+            <div className="mt-3 max-h-72 overflow-y-auto rounded-xl border border-line bg-card/60 p-2 space-y-1.5">
+              {batchItems.map((item) => {
+                const isCollection = item.type === 'collection';
+                const isEnvironment = item.type === 'environment';
+                return (
+                  <label
+                    key={item.id}
+                    className={`flex items-start gap-3 rounded-lg border px-3 py-2.5 transition ${
+                      item.disabled
+                        ? 'border-line/70 bg-element/40 opacity-65 cursor-not-allowed'
+                        : item.checked
+                          ? 'border-sky-500/35 bg-sky-500/5 hover:bg-sky-500/10 cursor-pointer'
+                          : 'border-line bg-surface/80 hover:bg-hover cursor-pointer'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={item.checked}
+                      disabled={item.disabled || isImporting}
+                      onChange={() =>
+                        setBatchItems((prev) => {
+                          if (!prev) return prev;
+                          const liveState = activeStore.getState();
+                          return recomputeBatchConflicts(
+                            toggleImportBatchItem(prev, item.id),
+                            liveState.collections,
+                            liveState.environments
+                          );
+                        })
+                      }
+                      className="mt-0.5 h-4 w-4 shrink-0 rounded border-line-strong bg-card text-sky-500 focus:ring-sky-500 cursor-pointer disabled:cursor-not-allowed"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs font-semibold text-tx-primary truncate max-w-[260px]">
+                          {item.name}
+                        </span>
+                        {isCollection && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-sky-500/25 bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold text-sky-600 dark:text-sky-300">
+                            <FolderGit2 className="h-3 w-3" />
+                            <span>Collection</span>
+                          </span>
+                        )}
+                        {isEnvironment && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-300">
+                            <Globe className="h-3 w-3" />
+                            <span>Environment</span>
+                          </span>
+                        )}
+                        {item.type === 'invalid' && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-rose-500/25 bg-rose-500/10 px-2 py-0.5 text-[10px] font-semibold text-rose-600 dark:text-rose-300">
+                            <AlertCircle className="h-3 w-3" />
+                            <span>Invalid</span>
+                          </span>
+                        )}
+                        {item.hasConflict && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-300">
+                            <AlertTriangle className="h-3 w-3" />
+                            <span>Already exists</span>
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] text-tx-muted">
+                        {item.itemCountLabel && <span>{item.itemCountLabel}</span>}
+                        {item.filename !== item.name && (
+                          <span className="truncate font-mono text-[10px] text-tx-faint">
+                            {item.filename}
+                          </span>
+                        )}
+                      </div>
+
+                      {item.error && (
+                        <div className="mt-1 text-[11px] text-rose-600 dark:text-rose-400">
+                          {item.error}
+                        </div>
+                      )}
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+
+            {batchSummary.selectedConflicts > 0 && (
+              <p className="mt-2.5 text-[11px] text-amber-600 dark:text-amber-400">
+                Items marked "Already exists" will prompt you to Skip, Import as Copy, or Replace during import.
+              </p>
+            )}
+
+            {/* Alerts */}
+            {errorMsg && (
+              <div className="mt-3 flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-600 dark:text-rose-300">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{errorMsg}</span>
+              </div>
+            )}
+
+            {successMsg && (
+              <div className="mt-3 flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-600 dark:text-emerald-300">
+                <CheckCircle2 className="h-4 w-4 shrink-0" />
+                <span>{successMsg}</span>
+              </div>
+            )}
+
+            {/* Footer Actions */}
+            <div className="mt-6 flex items-center justify-between gap-2.5">
+              <button
+                type="button"
+                disabled={isImporting}
+                onClick={() => {
+                  if (openedFromInitialFiles) {
+                    handleModalClose();
+                  } else {
+                    setBatchItems(null);
+                    setErrorMsg(null);
+                    setSuccessMsg(null);
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-medium text-tx-muted hover:bg-hover hover:text-tx-primary transition disabled:opacity-50"
+              >
+                {!openedFromInitialFiles && <ArrowLeft className="h-3.5 w-3.5" />}
+                <span>{openedFromInitialFiles ? 'Cancel' : 'Back'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleImportBatch}
+                disabled={isImporting || batchSummary.selected === 0}
+                className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-5 py-2 text-xs font-semibold text-white shadow-lg shadow-sky-500/20 hover:from-sky-400 hover:to-blue-500 active:scale-95 transition disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isImporting ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <span>Importing & Syncing...</span>
+                  </>
+                ) : (
+                  <>
+                    <Upload className="h-3.5 w-3.5" />
+                    <span>Import Selected ({batchSummary.selected})</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
         ) : (
           /* Normal Import View */
           <div>
@@ -901,16 +1568,6 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
             {/* Tab 1: Postman Collection or Environment */}
             {activeImportTab === 'postman' && (
               <div className="mt-4 space-y-4">
-                {/* Hidden File Input placed outside clickable trigger to prevent recursive bubbling */}
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".json,application/json"
-                  onChange={handleFileUpload}
-                  onClick={(e) => e.stopPropagation()}
-                  className="hidden"
-                />
-
                 <div
                   role="button"
                   tabIndex={0}
@@ -930,11 +1587,16 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
                     e.stopPropagation();
                   }}
                   onDrop={handleFileDrop}
-                  className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-line bg-card/60 p-4 text-center transition hover:border-sky-500/50 hover:bg-hover focus:outline-none focus:ring-1 focus:ring-sky-500"
+                  className="flex cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-line bg-card/60 p-4 text-center transition hover:border-sky-500/50 hover:bg-hover focus:outline-none focus:ring-1 focus:ring-sky-500"
                 >
-                  <FileJson className="h-5 w-5 text-sky-500 dark:text-sky-400" />
-                  <span className="text-xs font-medium text-tx-secondary">
-                    Choose or drag a Postman Collection or Environment .json file
+                  <div className="flex items-center gap-2">
+                    <FileJson className="h-5 w-5 text-sky-500 dark:text-sky-400" />
+                    <span className="text-xs font-medium text-tx-secondary">
+                      Choose or drag Postman Collection or Environment .json files
+                    </span>
+                  </div>
+                  <span className="text-[11px] text-tx-faint">
+                    Supports selecting multiple files at once or pasting .json files
                   </span>
                 </div>
 

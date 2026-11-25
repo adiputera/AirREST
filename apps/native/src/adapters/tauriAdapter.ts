@@ -9,6 +9,7 @@ import {
   TestRequestOptions,
   TransportInit,
   FileOptions,
+  OpenedFileResult,
 } from '@airrest/common/platform';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { invoke } from '@tauri-apps/api/core';
@@ -470,6 +471,19 @@ export const tauriScriptExecutor: ScriptExecutor = {
   },
 };
 
+async function readValidatedTauriTextFile(filePath: string): Promise<{ filename: string; content: string }> {
+  const fileInfo = typeof tauriStat === 'function' ? await tauriStat(filePath).catch(() => null) : null;
+  if (fileInfo && typeof fileInfo.size === 'number' && fileInfo.size > MAX_IMPORT_FILE_BYTES) {
+    throw new Error('Selected file exceeds maximum allowed limit of 16 MB.');
+  }
+  const content = await tauriReadTextFile(filePath);
+  if (content.length > MAX_IMPORT_FILE_BYTES) {
+    throw new Error('Selected file exceeds maximum allowed limit of 16 MB.');
+  }
+  const filename = extractFilename(filePath);
+  return { filename, content };
+}
+
 export const tauriAdapter: PlatformAdapter = {
   platformId: typeof __AIRREST_ANDROID__ !== 'undefined' && __AIRREST_ANDROID__ ? 'android' : 'desktop',
   capabilities: {
@@ -515,20 +529,39 @@ export const tauriAdapter: PlatformAdapter = {
 
     try {
       const filePath = Array.isArray(selected) ? selected[0] : selected;
-      const fileInfo = typeof tauriStat === 'function' ? await tauriStat(filePath).catch(() => null) : null;
-      if (fileInfo && typeof fileInfo.size === 'number' && fileInfo.size > MAX_IMPORT_FILE_BYTES) {
-        throw new Error('Selected file exceeds maximum allowed limit of 16 MB.');
-      }
-      const content = await tauriReadTextFile(filePath);
-      if (content.length > MAX_IMPORT_FILE_BYTES) {
-        throw new Error('Selected file exceeds maximum allowed limit of 16 MB.');
-      }
-      const filename = extractFilename(filePath);
-      return { filename, content };
+      return await readValidatedTauriTextFile(filePath);
     } catch (err) {
       console.error('Failed to read file via native dialog:', err);
       throw err;
     }
+  },
+  openFiles: async (options?: FileOptions): Promise<OpenedFileResult[]> => {
+    const selected = await tauriOpen({
+      multiple: true,
+      directory: false,
+      filters: dialogFilters(options),
+    });
+    if (!selected) return [];
+
+    const paths = (Array.isArray(selected) ? selected : [selected]).filter(Boolean);
+    if (paths.length === 0) return [];
+
+    const results: OpenedFileResult[] = [];
+    for (const filePath of paths) {
+      const filename = extractFilename(filePath);
+      try {
+        const result = await readValidatedTauriTextFile(filePath);
+        results.push(result);
+      } catch (err) {
+        console.error('Failed to read file via native dialog:', err);
+        results.push({
+          filename,
+          content: '',
+          error: err instanceof Error ? err.message : 'Failed to read selected file.',
+        });
+      }
+    }
+    return results;
   },
   hasHostPermission: async () => true,
   requestHostPermission: async () => true,

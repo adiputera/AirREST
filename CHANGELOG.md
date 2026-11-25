@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.4.0] - 2026-11-24
 
 ### Added
+- **Multi-File Import with Checklist Preview, Global Paste & Drag-and-Drop**:
+  - **Multi-File Selection & Review Checklist**: Selecting or dropping multiple `.json` files in `ImportModal` (via `<input type="file" multiple>`, drag-and-drop, in-modal file paste, `chromeAdapter.openFiles`, or `tauriAdapter.openFiles` on Desktop & Android with 16 MiB per-file validation) opens a **Review Files to Import** checklist preview showing each file's parsed name, type badge (`Collection`, `Environment`, or `Invalid`), request/variable count, and `Already exists` conflict status. Users can toggle individual items or `Select All`, append more files via `Add Files`, and import only checked items (`Import Selected (N)`).
+  - **Sequential Conflict Resolution**: Checked items without name conflicts import immediately, while conflicting checked items step sequentially through the existing Collection/Environment diff dialog with `Skip`, `Import as Copy`, and `Replace` actions.
+  - **Global Paste & Window Drag-and-Drop Catch-All**: Pressing `Ctrl+V` / `⌘+V` anywhere in the app with copied `.json` files or valid Postman Collection/Environment JSON text (outside editable inputs and code editors, while preserving cURL paste priority and modal guards), or dragging `.json` files onto the application window (preserving internal sidebar drag-and-drop and Request Body binary dropzones), automatically opens `ImportModal` directly in the checklist preview.
 - **Instant cURL Paste in URL Bar & Anywhere in the Application**:
   - **Paste cURL in URL Bar**: Pasting a cURL command into the request URL Bar intercepts the paste before mutating the current tab's URL or undo history, parses the cURL command, and opens it directly in a new active request tab. Normal URLs and `{{variable}}` templates continue to paste into the active URL input as usual.
   - **Global cURL Paste (`Ctrl+V` / `⌘+V` Anywhere)**: Pressing `Ctrl+V` / `⌘+V` anywhere while AirREST is open (including on the 0-tabs `No Requests Open` empty studio view, Sidebar, Tab Bar, or Response Viewer, while respecting active modal dialogs) automatically detects valid cURL commands in the clipboard, opens them as a new request tab, selects and expands the most relevant initial configuration tab (`Body`, `Params`, `Headers`, or `Auth`), and displays a confirmation toast.
@@ -17,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Close Active Request Tab Keyboard Shortcut**:
   - Added <kbd>Alt+W</kbd> / <kbd>Option+W</kbd> across all platforms (Extension, Hub, and Native) and <kbd>Ctrl+W</kbd> / <kbd>⌘+W</kbd> on Native Desktop to close the active request tab—including when only 1 tab is open (returning to the `EmptyStudioView`).
   - Routes through the existing `TabBar` unsaved-changes confirmation flow (`handleRequestCloseTab`), skips repeat/prevented events and `AltGraph`, and stays disabled while blocking modals or workspace switches are active.
+
+### Fixed
+- **Offline Import Persistence, Storage Locking & Batch Duplicate Conflict Prompts**:
+  - Restored unauthenticated `cloud` workspace state on reload back to the active `offline` workspace when offline workspaces are enabled and no recoverable cloud session exists (after archiving any unowned cloud cache), preventing imported collections and environments from being quarantined and cleared on reload.
+  - Guarded background Zustand storage writes while initial async IndexedDB hydration is still in flight, added an in-process FIFO lock queue in `appStorage` for contexts without `navigator.locks`, kept `offlineScopeCache` synchronized in-memory across `addCollection`, `replaceCollection`, `addEnvironment`, and `replaceEnvironment`, and ensured duplicate collection files within the same multi-file batch always prompt for conflict resolution (`Skip`, `Import as Copy`, or `Replace`).
 
 ## [1.3.13] - 2026-11-24
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { GripHorizontal, Terminal, CheckCircle2 } from 'lucide-react';
+import { GripHorizontal, Terminal, CheckCircle2, FileJson } from 'lucide-react';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { TabBar } from './components/TabBar';
@@ -7,6 +7,7 @@ import { RequestEditor } from './components/RequestEditor';
 import { ResponseViewer } from './components/ResponseViewer';
 import { EmptyStudioView } from './components/EmptyStudioView';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { ImportModal } from './components/ImportModal';
 import { useApiStore } from './store/useApiStore';
 import { isCloudSessionActive } from './workspace/cloudSession';
 import { useStoreContext } from './store/storeContext';
@@ -14,6 +15,13 @@ import { onStorageCommit } from './lib/storage';
 import { useBackHandler } from './lib/backNavigation';
 import { applyTheme, subscribeToSystemTheme } from './lib/theme';
 import { tryParseCurlCommand } from './lib/curl';
+import { OpenedFileResult } from './types/platform';
+import {
+  isEditableTarget,
+  isJsonCandidateFile,
+  isStrictPostmanImportJson,
+  readBrowserFiles,
+} from './lib/importBatch';
 import {
   queueInitialRequestEditorSection,
   resolveInitialCurlSection,
@@ -29,6 +37,15 @@ export function clampRequestPaneHeight(
 ): number {
   const maxAllowed = Math.max(MIN_REQUEST_PANE_HEIGHT, containerHeight - MIN_RESPONSE_PANE_HEIGHT);
   return Math.max(MIN_REQUEST_PANE_HEIGHT, Math.min(maxAllowed, Math.round(height)));
+}
+
+function isBlockingDialogOpen(): boolean {
+  return (
+    typeof document !== 'undefined' &&
+    Boolean(
+      document.querySelector('[data-modal="true"], [role="dialog"]:not([data-payload-modal="true"])')
+    )
+  );
 }
 
 export const App: React.FC = () => {
@@ -52,6 +69,9 @@ export const App: React.FC = () => {
   const hasInitialPulledRef = useRef(false);
   const [curlPasteNotice, setCurlPasteNotice] = useState<{ method: string; url: string } | null>(null);
   const curlPasteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [globalImportFiles, setGlobalImportFiles] = useState<OpenedFileResult[] | null>(null);
+  const [isWindowFileDragActive, setIsWindowFileDragActive] = useState(false);
+  const windowDragDepthRef = useRef(0);
   useBackHandler(sidebarOpen, () => setSidebarOpen(false), 10);
 
   useEffect(() => {
@@ -77,36 +97,60 @@ export const App: React.FC = () => {
       if (event.defaultPrevented || !hasHydrated || isSwitchingWorkspace) return;
 
       // Do not intercept paste when a modal dialog (e.g. ImportModal, EnvironmentModal, Auth) is open
-      if (
-        typeof document !== 'undefined' &&
-        document.querySelector('[data-modal="true"], [role="dialog"]:not([data-payload-modal="true"])')
-      ) {
+      if (isBlockingDialogOpen()) {
+        return;
+      }
+
+      // 1. Pasted .json file(s) from OS file explorer
+      const pastedJsonFiles = Array.from(event.clipboardData?.files || []).filter(isJsonCandidateFile);
+      if (pastedJsonFiles.length > 0) {
+        event.preventDefault();
+        event.stopPropagation();
+        void readBrowserFiles(pastedJsonFiles).then((opened) => {
+          if (opened.length > 0) {
+            setGlobalImportFiles(opened);
+          }
+        });
         return;
       }
 
       const pastedText = event.clipboardData?.getData('text/plain') || '';
+
+      // 2. Pasted cURL command
       const parsedCurl = tryParseCurlCommand(pastedText);
-      if (!parsedCurl) return;
+      if (parsedCurl) {
+        event.preventDefault();
+        event.stopPropagation();
 
-      event.preventDefault();
-      event.stopPropagation();
-
-      const targetSection = resolveInitialCurlSection(parsedCurl);
-      createTab(parsedCurl);
-      const newTabId = activeStore.getState().activeTabId;
-      if (newTabId) {
-        queueInitialRequestEditorSection(newTabId, targetSection);
+        const targetSection = resolveInitialCurlSection(parsedCurl);
+        createTab(parsedCurl);
+        const newTabId = activeStore.getState().activeTabId;
+        if (newTabId) {
+          queueInitialRequestEditorSection(newTabId, targetSection);
+        }
+        window.dispatchEvent(
+          new CustomEvent('airrest:curl-pasted', {
+            detail: {
+              tabId: newTabId,
+              section: targetSection,
+              method: parsedCurl.method || 'GET',
+              url: parsedCurl.url || '',
+            },
+          })
+        );
+        return;
       }
-      window.dispatchEvent(
-        new CustomEvent('airrest:curl-pasted', {
-          detail: {
-            tabId: newTabId,
-            section: targetSection,
-            method: parsedCurl.method || 'GET',
-            url: parsedCurl.url || '',
-          },
-        })
-      );
+
+      // 3. Pasted Postman Collection or Environment JSON text (only outside editable inputs/editors)
+      if (
+        !isEditableTarget(event.target) &&
+        !isEditableTarget(typeof document !== 'undefined' ? document.activeElement : null) &&
+        isStrictPostmanImportJson(pastedText)
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        setGlobalImportFiles([{ filename: 'pasted.json', content: pastedText }]);
+      }
     };
 
     window.addEventListener('airrest:curl-pasted', handleCurlPastedEvent);
@@ -116,6 +160,86 @@ export const App: React.FC = () => {
       window.removeEventListener('paste', handleGlobalPaste, true);
     };
   }, [hasHydrated, isSwitchingWorkspace, createTab, activeStore]);
+
+  useEffect(() => {
+    const hasDraggedFiles = (dt: DataTransfer | null | undefined): boolean => {
+      if (!dt) return false;
+      if (dt.types && Array.from(dt.types).includes('Files')) return true;
+      return Boolean(dt.files && dt.files.length > 0);
+    };
+
+    const resetDragState = () => {
+      windowDragDepthRef.current = 0;
+      setIsWindowFileDragActive(false);
+    };
+
+    const handleDragEnter = (event: DragEvent) => {
+      if (!hasHydrated || isSwitchingWorkspace || isBlockingDialogOpen()) return;
+      if (!hasDraggedFiles(event.dataTransfer)) return;
+      windowDragDepthRef.current += 1;
+      setIsWindowFileDragActive(true);
+    };
+
+    const handleDragOver = (event: DragEvent) => {
+      if (!hasHydrated || isSwitchingWorkspace || isBlockingDialogOpen()) return;
+      if (!hasDraggedFiles(event.dataTransfer)) return;
+      if (!event.defaultPrevented) {
+        event.preventDefault();
+        if (event.dataTransfer) {
+          event.dataTransfer.dropEffect = 'copy';
+        }
+      }
+    };
+
+    const handleDragLeave = (event: DragEvent) => {
+      if (!hasDraggedFiles(event.dataTransfer)) return;
+      windowDragDepthRef.current = Math.max(0, windowDragDepthRef.current - 1);
+      if (windowDragDepthRef.current === 0) {
+        setIsWindowFileDragActive(false);
+      }
+    };
+
+    const handleDropCapture = () => {
+      resetDragState();
+    };
+
+    const handleWindowDrop = (event: DragEvent) => {
+      resetDragState();
+      if (event.defaultPrevented || !hasHydrated || isSwitchingWorkspace || isBlockingDialogOpen()) {
+        return;
+      }
+      const files = Array.from(event.dataTransfer?.files || []);
+      if (files.length === 0) return;
+
+      const hasJsonFile = files.some(isJsonCandidateFile);
+      if (!hasJsonFile) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      void readBrowserFiles(files, { requireJsonExtension: true }).then((opened) => {
+        if (opened.length > 0) {
+          setGlobalImportFiles(opened);
+        }
+      });
+    };
+
+    window.addEventListener('dragenter', handleDragEnter);
+    window.addEventListener('dragover', handleDragOver);
+    window.addEventListener('dragleave', handleDragLeave);
+    window.addEventListener('drop', handleDropCapture, true);
+    window.addEventListener('drop', handleWindowDrop);
+    window.addEventListener('dragend', resetDragState);
+    window.addEventListener('blur', resetDragState);
+    return () => {
+      window.removeEventListener('dragenter', handleDragEnter);
+      window.removeEventListener('dragover', handleDragOver);
+      window.removeEventListener('dragleave', handleDragLeave);
+      window.removeEventListener('drop', handleDropCapture, true);
+      window.removeEventListener('drop', handleWindowDrop);
+      window.removeEventListener('dragend', resetDragState);
+      window.removeEventListener('blur', resetDragState);
+    };
+  }, [hasHydrated, isSwitchingWorkspace]);
 
   useEffect(() => {
     return () => {
@@ -523,6 +647,31 @@ export const App: React.FC = () => {
             </div>
           </div>
         )}
+        {isWindowFileDragActive && !isSwitchingWorkspace && (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-[2px] p-6 animate-in fade-in duration-150"
+          >
+            <div className="flex max-w-md flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-sky-400/80 bg-surface/95 px-8 py-7 text-center shadow-2xl">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-sky-500/30 bg-sky-500/15 text-sky-500 dark:text-sky-400">
+                <FileJson className="h-6 w-6" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-tx-primary">
+                  Drop Postman .json files to import
+                </p>
+                <p className="mt-1 text-xs text-tx-muted">
+                  Collections and Environments will open in a checklist preview
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+        <ImportModal
+          isOpen={Boolean(globalImportFiles)}
+          initialFiles={globalImportFiles}
+          onClose={() => setGlobalImportFiles(null)}
+        />
       </div>
     </ErrorBoundary>
   );

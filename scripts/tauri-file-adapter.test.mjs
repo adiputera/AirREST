@@ -4,7 +4,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
 
-function loadAdapter(android, selection) {
+function loadAdapter(android, selection, options = {}) {
   const source = fs.readFileSync(new URL('../apps/native/src/adapters/tauriAdapter.ts', import.meta.url), 'utf8')
     .replaceAll('import.meta.url', '"file:///adapter.ts"');
   const compiled = ts.transpileModule(source, {
@@ -13,11 +13,12 @@ function loadAdapter(android, selection) {
   const calls = [];
   const modules = {
     '@tauri-apps/plugin-dialog': {
-      open: async (options) => { calls.push(['open', options]); return selection; },
-      save: async (options) => { calls.push(['save', options]); return selection; },
+      open: async (openOptions) => { calls.push(['open', openOptions]); return selection; },
+      save: async (saveOptions) => { calls.push(['save', saveOptions]); return selection; },
     },
     '@tauri-apps/plugin-fs': {
-      readTextFile: async (path) => { calls.push(['read', path]); return '{"values":[]}'; },
+      ...(options.stat ? { stat: options.stat } : {}),
+      readTextFile: options.readTextFile || (async (path) => { calls.push(['read', path]); return '{"values":[]}'; }),
       writeTextFile: async (path, data) => { calls.push(['write', path, data]); },
       writeFile: async (path, data) => { calls.push(['write-bytes', path, data]); },
     },
@@ -144,5 +145,48 @@ test('zero-byte binary write and write failures propagate properly; Android SAF 
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     'Android SAF filter must use extension MIME rather than mislabeled text/plain',
   );
+});
+
+test('openFiles supports desktop multi-select, Android content URIs, cancellation, and per-file size errors', async () => {
+  // Desktop multi-file selection
+  const desktop = loadAdapter(false, ['/tmp/product.json', '/tmp/staging.json']);
+  const desktopResults = await desktop.adapter.openFiles({ filters: [{ name: 'JSON', extensions: ['json'] }] });
+  assert.equal(desktop.calls[0][1].multiple, true);
+  assert.equal(desktop.calls[0][1].filters[0].extensions[0], 'json');
+  assert.equal(desktopResults.length, 2);
+  assert.equal(desktopResults[0].filename, 'product.json');
+  assert.equal(desktopResults[1].filename, 'staging.json');
+
+  // Android multi-file content URIs
+  const android = loadAdapter(true, [
+    'content://documents/document/document%3Acollection.json',
+    'content://documents/document/document%3Astaging.json',
+  ]);
+  const androidResults = await android.adapter.openFiles({ filters: [{ name: 'JSON', extensions: ['json'] }] });
+  assert.equal(android.calls[0][1].multiple, true);
+  assert.equal(android.calls[0][1].filters[0].extensions[0], 'application/json');
+  assert.equal(androidResults.length, 2);
+  assert.equal(androidResults[0].filename, 'collection.json');
+  assert.equal(androidResults[1].filename, 'staging.json');
+
+  // Cancelled multi-select returns empty array
+  const cancelled = loadAdapter(false, null);
+  assert.deepEqual(await cancelled.adapter.openFiles(), []);
+
+  // Oversized file in batch reports per-file error without failing valid siblings
+  const mixed = loadAdapter(false, ['/tmp/oversized.json', '/tmp/valid.json'], {
+    stat: async (filePath) => ({
+      size: filePath.includes('oversized') ? 20 * 1024 * 1024 : 32,
+      isFile: true,
+    }),
+    readTextFile: async (filePath) => (filePath.includes('valid') ? '{"info":{"name":"Valid"},"item":[]}' : '{}'),
+  });
+  const mixedResults = await mixed.adapter.openFiles();
+  assert.equal(mixedResults.length, 2);
+  assert.equal(mixedResults[0].filename, 'oversized.json');
+  assert.match(mixedResults[0].error, /16 MB/i);
+  assert.equal(mixedResults[1].filename, 'valid.json');
+  assert.equal(mixedResults[1].error, undefined);
+  assert.match(mixedResults[1].content, /Valid/);
 });
 

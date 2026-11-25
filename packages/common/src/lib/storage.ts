@@ -86,11 +86,29 @@ export function onStorageCommit(listener: (notice: StorageCommitNotice) => void)
   return () => storageChannel.removeEventListener('message', handler);
 }
 
+const inProcessLocks = new Map<string, Promise<void>>();
+
 async function withStorageLock<T>(key: string, task: () => Promise<T>): Promise<T> {
-  const locks = typeof navigator === 'undefined' ? undefined : (navigator as Navigator & {
-    locks?: { request: <R>(name: string, callback: () => Promise<R>) => Promise<R> };
-  }).locks;
-  return locks ? locks.request(`airrest-storage:${key}`, task) : task();
+  const previous = inProcessLocks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const queued = previous.then(() => current, () => current);
+  inProcessLocks.set(key, queued);
+
+  await previous.catch(() => undefined);
+  try {
+    const locks = typeof navigator === 'undefined' ? undefined : (navigator as Navigator & {
+      locks?: { request: <R>(name: string, callback: () => Promise<R>) => Promise<R> };
+    }).locks;
+    return await (locks ? locks.request(`airrest-storage:${key}`, task) : task());
+  } finally {
+    release();
+    if (inProcessLocks.get(key) === queued) {
+      inProcessLocks.delete(key);
+    }
+  }
 }
 
 function notifyStorageCommit(key: string, envelope: StorageEnvelope) {

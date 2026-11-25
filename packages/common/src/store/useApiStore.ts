@@ -698,6 +698,8 @@ export function createApiStore(
   let nativeCredentialQueue: Promise<void> = Promise.resolve();
   let cleanupInFlight: Promise<boolean> | null = null;
   let signOutInFlight: Promise<{ success: boolean; error?: string }> | null = null;
+  let hasCompletedInitialHydration = false;
+  let initialHydrationPending = false;
 
   function enqueueNativeCredentialOperation<T>(operation: () => Promise<T>): Promise<T> {
     const task = nativeCredentialQueue.then(operation, operation);
@@ -3156,10 +3158,30 @@ export function createApiStore(
           }
         }
 
-        set((state) => ({
-          environments: [...state.environments, env],
-          activeEnvironmentId: env.id,
-        }));
+        set((state) => {
+          const nextEnvironments = [...state.environments, env];
+          const localId = state.activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID;
+          const nextOfflineCache =
+            state.workspaceMode === 'offline'
+              ? {
+                  ...(state.offlineScopeCache || {}),
+                  [localId]: {
+                    collections: state.collections,
+                    tabs: state.tabs,
+                    activeTabId: state.activeTabId,
+                    history: state.history,
+                    ...(state.offlineScopeCache?.[localId] || {}),
+                    environments: nextEnvironments,
+                    activeEnvironmentId: env.id,
+                  },
+                }
+              : state.offlineScopeCache;
+          return {
+            environments: nextEnvironments,
+            activeEnvironmentId: env.id,
+            offlineScopeCache: nextOfflineCache,
+          };
+        });
 
         if (!isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && cloudConfig.activeScope) {
           const operation = beginAsyncOperation();
@@ -3187,6 +3209,7 @@ export function createApiStore(
                   activeEnvironmentId: state.activeEnvironmentId === env.id ? created.id : state.activeEnvironmentId,
                 };
               });
+              await flushStorePersistence();
               return created.id;
             }
           } catch (err: any) {
@@ -3198,6 +3221,7 @@ export function createApiStore(
             completeAsyncOperation(operation);
           }
         }
+        await flushStorePersistence();
         return env.id;
       },
 
@@ -3240,10 +3264,30 @@ export function createApiStore(
           updatedAt: Date.now(),
         };
 
-        set((s) => ({
-          environments: s.environments.map((e) => (e.id === existingId ? replacedEnv : e)),
-          activeEnvironmentId: existingId,
-        }));
+        set((s) => {
+          const nextEnvironments = s.environments.map((e) => (e.id === existingId ? replacedEnv : e));
+          const localId = s.activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID;
+          const nextOfflineCache =
+            s.workspaceMode === 'offline'
+              ? {
+                  ...(s.offlineScopeCache || {}),
+                  [localId]: {
+                    collections: s.collections,
+                    tabs: s.tabs,
+                    activeTabId: s.activeTabId,
+                    history: s.history,
+                    ...(s.offlineScopeCache?.[localId] || {}),
+                    environments: nextEnvironments,
+                    activeEnvironmentId: existingId,
+                  },
+                }
+              : s.offlineScopeCache;
+          return {
+            environments: nextEnvironments,
+            activeEnvironmentId: existingId,
+            offlineScopeCache: nextOfflineCache,
+          };
+        });
 
         if (!isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && cloudConfig.activeScope) {
           const operation = beginAsyncOperation();
@@ -3291,6 +3335,7 @@ export function createApiStore(
             completeAsyncOperation(operation);
           }
         }
+        await flushStorePersistence();
       },
 
       discardEnvironmentOccConflict: () => {
@@ -5529,10 +5574,28 @@ export function createApiStore(
         };
         set((state) => {
           const exists = state.collections.some((c) => c.id === taggedCol.id);
+          const nextCollections = exists
+            ? state.collections.map((c) => (c.id === taggedCol.id ? taggedCol : c))
+            : [taggedCol, ...state.collections];
+          const localId = state.activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID;
+          const nextOfflineCache =
+            state.workspaceMode === 'offline'
+              ? {
+                  ...(state.offlineScopeCache || {}),
+                  [localId]: {
+                    environments: state.environments,
+                    activeEnvironmentId: state.activeEnvironmentId,
+                    tabs: state.tabs,
+                    activeTabId: state.activeTabId,
+                    history: state.history,
+                    ...(state.offlineScopeCache?.[localId] || {}),
+                    collections: nextCollections,
+                  },
+                }
+              : state.offlineScopeCache;
           return {
-            collections: exists
-              ? state.collections.map((c) => (c.id === taggedCol.id ? taggedCol : c))
-              : [taggedCol, ...state.collections],
+            collections: nextCollections,
+            offlineScopeCache: nextOfflineCache,
           };
         });
 
@@ -5570,6 +5633,8 @@ export function createApiStore(
           } finally {
             completeAsyncOperation(operation);
           }
+        } else {
+          await flushStorePersistence();
         }
       },
 
@@ -5603,9 +5668,29 @@ export function createApiStore(
           _syncStatus: isCloud ? 'pending' : 'synced',
         };
 
-        set((s) => ({
-          collections: s.collections.map((c) => (c.id === existingId ? replacedCol : c)),
-        }));
+        set((s) => {
+          const nextCollections = s.collections.map((c) => (c.id === existingId ? replacedCol : c));
+          const localId = s.activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID;
+          const nextOfflineCache =
+            s.workspaceMode === 'offline'
+              ? {
+                  ...(s.offlineScopeCache || {}),
+                  [localId]: {
+                    environments: s.environments,
+                    activeEnvironmentId: s.activeEnvironmentId,
+                    tabs: s.tabs,
+                    activeTabId: s.activeTabId,
+                    history: s.history,
+                    ...(s.offlineScopeCache?.[localId] || {}),
+                    collections: nextCollections,
+                  },
+                }
+              : s.offlineScopeCache;
+          return {
+            collections: nextCollections,
+            offlineScopeCache: nextOfflineCache,
+          };
+        });
 
         const { workspaceMode, cloudConfig } = get();
         if (!isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && cloudConfig.activeScope) {
@@ -5656,6 +5741,8 @@ export function createApiStore(
           } finally {
             completeAsyncOperation(operation);
           }
+        } else {
+          await flushStorePersistence();
         }
       },
 
@@ -7783,6 +7870,9 @@ export function createApiStore(
       storage: createJSONStorage(() => ({
         getItem: (name) => customStorage.getItem(name),
         setItem: async (name, value) => {
+          if (initialHydrationPending) {
+            return;
+          }
           try {
             await customStorage.setItem(name, value);
           } catch {
@@ -7870,7 +7960,13 @@ export function createApiStore(
           theme: state.theme ?? 'system',
         };
       },
-      onRehydrateStorage: () => (state) => {
+      onRehydrateStorage: () => {
+        if (!hasCompletedInitialHydration) {
+          initialHydrationPending = true;
+        }
+        return (state) => {
+        hasCompletedInitialHydration = true;
+        initialHydrationPending = false;
         if (!state) return;
 
         if (!state.theme) {
@@ -7972,10 +8068,26 @@ export function createApiStore(
           }
         }
 
-        if (isOfflineOnly && state.workspaceMode === 'cloud') {
+        const hasRecoverableCloudIdentity = Boolean(
+          isCloudSessionActive(state.cloudConfig) ||
+            (credentialStorage &&
+              sameNativeCredentialScope(
+                state.nativeCredentialState?.scope,
+                getNativeCredentialScope(state.cloudConfig)
+              ))
+        );
+
+        if (
+          state.workspaceMode === 'cloud' &&
+          (isOfflineOnly || (allowsOfflineWorkspace && !hasRecoverableCloudIdentity))
+        ) {
           const localId = state.activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID;
-          const local = restoreWorkspaceResources(state.offlineScopeCache[localId], createInitialTab);
-          Object.assign(state, local, { workspaceMode: 'offline', hasConfiguredMode: true, lastSyncedAt: null });
+          const local = restoreWorkspaceResources(state.offlineScopeCache?.[localId], createInitialTab);
+          Object.assign(state, local, {
+            workspaceMode: 'offline',
+            ...(isOfflineOnly ? { hasConfiguredMode: true } : {}),
+            lastSyncedAt: null,
+          });
         }
 
         // A cloud-only product must never reopen the active offline workspace.
@@ -7988,6 +8100,8 @@ export function createApiStore(
         if (state.cloudConfig?.apiUrl) {
           state.cloudConfig.apiUrl = normalizeCloudApiUrl(state.cloudConfig.apiUrl);
         }
+
+        const persistedOfflineId = state.activeOfflineWorkspaceId;
 
         // 1. Ensure offlineWorkspaces has at least the default workspace
         if (!state.offlineWorkspaces || state.offlineWorkspaces.length === 0) {
@@ -8009,6 +8123,21 @@ export function createApiStore(
         }
 
         const activeLocalId = state.activeOfflineWorkspaceId;
+        if (
+          persistedOfflineId &&
+          persistedOfflineId !== activeLocalId &&
+          state.offlineScopeCache[persistedOfflineId]
+        ) {
+          const existingTarget = state.offlineScopeCache[activeLocalId];
+          const targetIsEmpty =
+            !existingTarget ||
+            (((existingTarget.collections || []).length === 0) &&
+              ((existingTarget.environments || []).length === 0));
+          if (targetIsEmpty) {
+            state.offlineScopeCache[activeLocalId] = state.offlineScopeCache[persistedOfflineId];
+          }
+        }
+
         if (!state.offlineScopeCache[activeLocalId]) {
           state.offlineScopeCache[activeLocalId] = {
             collections: state.workspaceMode === 'offline' ? state.collections : [],
@@ -8026,6 +8155,21 @@ export function createApiStore(
         if (state.workspaceMode === 'offline') {
           const currentEntry = state.offlineScopeCache[activeLocalId];
           if (currentEntry) {
+            if (
+              (currentEntry.collections || []).length === 0 &&
+              persistedOfflineId !== activeLocalId &&
+              (state.collections || []).length > 0
+            ) {
+              currentEntry.collections = state.collections;
+            }
+            if (
+              (currentEntry.environments || []).length === 0 &&
+              persistedOfflineId !== activeLocalId &&
+              (state.environments || []).length > 0
+            ) {
+              currentEntry.environments = state.environments;
+              currentEntry.activeEnvironmentId = state.activeEnvironmentId || null;
+            }
             state.collections = currentEntry.collections || [];
             state.environments = currentEntry.environments || [];
             state.activeEnvironmentId = currentEntry.activeEnvironmentId || null;
@@ -8048,6 +8192,7 @@ export function createApiStore(
         } else if (state.tabs.length === 0) {
           state.activeTabId = '';
         }
+        };
       },
     }
   )
@@ -8083,6 +8228,15 @@ export function createApiStore(
     }
     invalidateAsyncOperations({ session: true });
   };
+
+  async function flushStorePersistence() {
+    const options = store.persist?.getOptions?.();
+    if (!options?.name) return;
+    const partialize = options.partialize;
+    const persistedState = partialize ? partialize(store.getState()) : store.getState();
+    const serialized = JSON.stringify({ state: persistedState, version: options.version ?? 0 });
+    await customStorage.setItem(options.name, serialized);
+  }
 
   return store as ApiStore;
 }

@@ -4,6 +4,8 @@ import {
   CloudTransport,
   ScriptExecutor,
   ApiResponse,
+  FileOptions,
+  OpenedFileResult,
   runScriptInSandbox,
   resetSandboxIframe,
   hasHostPermission,
@@ -11,6 +13,74 @@ import {
   categorizeNetworkError,
   getChromiumNetworkError,
 } from '@airrest/common/platform';
+
+const MAX_IMPORT_FILE_BYTES = 16 * 1024 * 1024; // 16 MiB
+
+function readBrowserFileAsResult(file: File): Promise<OpenedFileResult> {
+  if (file.size > MAX_IMPORT_FILE_BYTES) {
+    return Promise.resolve({
+      filename: file.name,
+      content: '',
+      error: 'Selected file exceeds maximum allowed limit of 16 MB.',
+    });
+  }
+
+  return new Promise<OpenedFileResult>((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      resolve({
+        filename: file.name,
+        content: typeof e.target?.result === 'string' ? e.target.result : '',
+      });
+    };
+    reader.onerror = () => {
+      resolve({
+        filename: file.name,
+        content: '',
+        error: 'Failed to read selected file.',
+      });
+    };
+    reader.readAsText(file);
+  });
+}
+
+function pickBrowserFiles(options?: FileOptions, multiple = false): Promise<File[]> {
+  if (typeof document === 'undefined') return Promise.resolve([]);
+  return new Promise<File[]>((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = multiple;
+    if (options?.filters?.length) {
+      const exts = options.filters.flatMap((f) =>
+        f.extensions.map((ext) => (ext.startsWith('.') ? ext : `.${ext}`))
+      );
+      input.accept = exts.join(',');
+    }
+    input.style.display = 'none';
+    document.body.appendChild(input);
+
+    let settled = false;
+    const cleanup = () => {
+      if (!settled) {
+        settled = true;
+        input.remove();
+      }
+    };
+
+    input.onchange = () => {
+      const files = Array.from(input.files || []);
+      cleanup();
+      resolve(files);
+    };
+
+    input.oncancel = () => {
+      cleanup();
+      resolve([]);
+    };
+
+    input.click();
+  });
+}
 
 export const chromeTransport: TestTransport = {
   fetch: async (url, init, options) => {
@@ -88,56 +158,21 @@ export const chromeAdapter: PlatformAdapter = {
     return true;
   },
   openFile: async (options) => {
-    if (typeof document === 'undefined') return null;
-    return new Promise<{ filename: string; content: string } | null>((resolve) => {
-      const input = document.createElement('input');
-      input.type = 'file';
-      if (options?.filters?.length) {
-        const exts = options.filters.flatMap((f) =>
-          f.extensions.map((ext) => (ext.startsWith('.') ? ext : `.${ext}`))
-        );
-        input.accept = exts.join(',');
-      }
-      input.style.display = 'none';
-      document.body.appendChild(input);
-
-      let settled = false;
-      const cleanup = () => {
-        if (!settled) {
-          settled = true;
-          input.remove();
-        }
-      };
-
-      input.onchange = () => {
-        const file = input.files?.[0];
-        if (!file) {
-          cleanup();
-          resolve(null);
-          return;
-        }
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          cleanup();
-          resolve({
-            filename: file.name,
-            content: (e.target?.result as string) || '',
-          });
-        };
-        reader.onerror = () => {
-          cleanup();
-          resolve(null);
-        };
-        reader.readAsText(file);
-      };
-
-      input.oncancel = () => {
-        cleanup();
-        resolve(null);
-      };
-
-      input.click();
-    });
+    const [file] = await pickBrowserFiles(options, false);
+    if (!file) return null;
+    const result = await readBrowserFileAsResult(file);
+    if (result.error) {
+      throw new Error(result.error);
+    }
+    return {
+      filename: result.filename,
+      content: result.content,
+    };
+  },
+  openFiles: async (options) => {
+    const files = await pickBrowserFiles(options, true);
+    if (files.length === 0) return [];
+    return Promise.all(files.map(readBrowserFileAsResult));
   },
   hasHostPermission,
   requestHostPermission,

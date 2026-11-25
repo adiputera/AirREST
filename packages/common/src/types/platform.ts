@@ -81,6 +81,12 @@ export interface FileOptions {
   filters?: Array<{ name: string; extensions: string[] }>;
 }
 
+export interface OpenedFileResult {
+  filename: string;
+  content: string;
+  error?: string;
+}
+
 export interface PlatformAdapter {
   platformId: 'extension' | 'desktop' | 'android' | 'web';
   capabilities: PlatformCapabilities;
@@ -95,6 +101,7 @@ export interface PlatformAdapter {
     options?: FileOptions & { mimeType?: string }
   ): Promise<boolean>;
   openFile(options?: FileOptions): Promise<{ filename: string; content: string } | null>;
+  openFiles?(options?: FileOptions): Promise<OpenedFileResult[]>;
   hasHostPermission(url: string): Promise<boolean | null>;
   requestHostPermission(url: string): Promise<boolean>;
   dispose(): void;

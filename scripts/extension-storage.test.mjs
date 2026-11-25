@@ -79,3 +79,93 @@ test('selects the newest committed envelope and honors deletion tombstones', () 
   assert.equal(storage.selectStoredValue([newer, older]), 'new');
   assert.equal(storage.selectStoredValue([older, tombstone]), null);
 });
+
+test('serializes concurrent appStorage.setItem writes in FIFO order even when navigator.locks is unavailable', async () => {
+  const source = fs.readFileSync(new URL('../packages/common/src/lib/storage.ts', import.meta.url), 'utf8');
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+
+  const idbData = new Map();
+  const localData = new Map();
+  let getCallCount = 0;
+
+  const db = {
+    objectStoreNames: { contains: () => true },
+    transaction: () => {
+      const tx = {};
+      tx.objectStore = () => ({
+        get: (key) => {
+          const callIndex = ++getCallCount;
+          const request = {};
+          // Delay first read longer than second if they raced without an in-process lock
+          const delayMs = callIndex === 1 ? 15 : 1;
+          setTimeout(() => {
+            request.result = idbData.get(key);
+            request.onsuccess?.();
+          }, delayMs);
+          return request;
+        },
+        put: (val, key) => {
+          const request = {};
+          queueMicrotask(() => {
+            idbData.set(key, val);
+            request.onsuccess?.();
+            tx.oncomplete?.();
+          });
+          return request;
+        },
+        delete: (key) => {
+          const request = {};
+          queueMicrotask(() => {
+            idbData.delete(key);
+            request.onsuccess?.();
+            tx.oncomplete?.();
+          });
+          return request;
+        },
+      });
+      return tx;
+    },
+  };
+
+  const indexedDB = {
+    open: () => {
+      const request = { result: db };
+      queueMicrotask(() => request.onsuccess?.());
+      return request;
+    },
+  };
+
+  const localStorage = {
+    getItem: (key) => (localData.has(key) ? localData.get(key) : null),
+    setItem: (key, val) => {
+      localData.set(key, val);
+    },
+  };
+
+  const exports = {};
+  vm.runInNewContext(
+    compiled,
+    {
+      exports,
+      indexedDB,
+      localStorage,
+      navigator: {}, // non-secure HTTP context where navigator.locks is undefined
+      console,
+      Promise,
+      Error,
+      queueMicrotask,
+      setTimeout,
+    },
+    { filename: 'packages/common/src/lib/storage.ts' }
+  );
+
+  await Promise.all([
+    exports.appStorage.setItem('air-rest-storage', '{"collections":["first"]}'),
+    exports.appStorage.setItem('air-rest-storage', '{"collections":["first","second"]}'),
+  ]);
+
+  const finalValue = await exports.appStorage.getItem('air-rest-storage');
+  assert.equal(finalValue, '{"collections":["first","second"]}');
+});

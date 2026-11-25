@@ -4,6 +4,7 @@ export type {
   CloudTransport,
   FileOptions,
   NetworkErrorCategory,
+  OpenedFileResult,
   PlatformAdapter,
   ScriptExecutor,
   ScriptInput,
