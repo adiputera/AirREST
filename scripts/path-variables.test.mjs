@@ -146,8 +146,12 @@ test('fetcher & curl: prepareRequest and generateCurlCommand with path variables
 
 test('postman: import and export path variables with Postman collection', () => {
   const urlParams = loadModule('../packages/common/src/lib/urlParams.ts');
+  const examples = loadModule('../packages/common/src/lib/examples.ts', {
+    '../types/api': {},
+  });
   const postman = loadModule('../packages/common/src/lib/postman.ts', {
     './urlParams': urlParams,
+    './examples': examples,
     '../types/api': {},
   });
 

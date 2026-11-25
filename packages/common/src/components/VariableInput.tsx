@@ -167,9 +167,9 @@ export const VariableInput: React.FC<VariableInputProps> = ({
     const map: Record<string, string> = {};
     if (activeEnv) {
       for (const v of (activeEnv.variables || [])) {
-        if (v && v.enabled && String(v.key || '').trim()) {
-          const effVal = v.currentValue !== undefined && v.currentValue !== ''
-            ? v.currentValue
+        if (v && v.enabled && String(v.key ?? '').trim()) {
+          const effVal = v.currentValue !== undefined && v.currentValue !== null && v.currentValue !== ''
+            ? String(v.currentValue)
             : String(v.initialValue ?? v.value ?? '');
           map[String(v.key).trim()] = effVal;
         }
@@ -179,8 +179,31 @@ export const VariableInput: React.FC<VariableInputProps> = ({
   }, [activeEnv]);
 
   const safeValue = typeof value === 'string' ? value : '';
+  const lastInternalValueRef = useRef(safeValue);
+  const acHasNavigatedRef = useRef(false);
+
+  useEffect(() => {
+    if (safeValue !== lastInternalValueRef.current) {
+      lastInternalValueRef.current = safeValue;
+      setAcContext(null);
+      setHoveredVar(null);
+    }
+  }, [safeValue]);
+
+  useEffect(() => {
+    if (readOnly || disabled || autocompleteMode === 'none') {
+      setAcContext(null);
+    }
+  }, [readOnly, disabled, autocompleteMode]);
 
   const tokens = useMemo(() => tokenizeVariables(safeValue, envVarsMap), [safeValue, envVarsMap]);
+
+  const isAnchorRectVisible = useCallback((rect: { left: number; right: number; top: number; bottom: number }) => {
+    if (typeof window === 'undefined' || typeof window.innerHeight !== 'number' || typeof window.innerWidth !== 'number') {
+      return true;
+    }
+    return !(rect.bottom < 0 || rect.top > window.innerHeight || rect.right < 0 || rect.left > window.innerWidth);
+  }, []);
 
   const measureAnchorRect = useCallback((): AutocompleteAnchorRect | null => {
     const targetEl = wrapperRef.current || inputRef.current;
@@ -195,8 +218,21 @@ export const VariableInput: React.FC<VariableInputProps> = ({
   }, []);
 
   const updateAutocompleteFromInput = useCallback(
-    (nextText: string, cursorPos: number | null, options?: { forceOpenHeader?: boolean }) => {
+    (
+      nextText: string,
+      cursorPos: number | null,
+      options?: { forceOpenHeader?: boolean; selectionEnd?: number | null }
+    ) => {
       if (readOnly || disabled || autocompleteMode === 'none') {
+        setAcContext(null);
+        return;
+      }
+      if (
+        options?.selectionEnd !== undefined &&
+        options?.selectionEnd !== null &&
+        cursorPos !== null &&
+        options.selectionEnd !== cursorPos
+      ) {
         setAcContext(null);
         return;
       }
@@ -220,27 +256,45 @@ export const VariableInput: React.FC<VariableInputProps> = ({
         }
       }
 
+      const targetEl = wrapperRef.current || inputRef.current;
+      if (targetEl) {
+        const domRect = targetEl.getBoundingClientRect();
+        if (!isAnchorRectVisible(domRect)) {
+          setAcContext(null);
+          return;
+        }
+      }
+
       setAcContext((prev) => {
         if (!prev || prev.kind !== detected.kind || prev.query !== detected.query) {
           setAcActiveIndex(0);
+          acHasNavigatedRef.current = Boolean(options?.forceOpenHeader);
         }
         return detected;
       });
       setAcAnchorRect(measureAnchorRect());
       setHoveredVar(null);
     },
-    [readOnly, disabled, autocompleteMode, measureAnchorRect]
+    [readOnly, disabled, autocompleteMode, measureAnchorRect, isAnchorRectVisible]
   );
+
+  const isPasswordMasked = type === 'password' && !showPassword;
 
   const acSuggestions: AutocompleteSuggestionItem[] = useMemo(() => {
     if (!acContext) return [];
     if (acContext.kind === 'header') {
       return getHeaderSuggestions(acContext.query);
     }
-    return getVariableSuggestions(acContext.query, environments, activeEnvironmentId);
-  }, [acContext, environments, activeEnvironmentId]);
+    const suggestions = getVariableSuggestions(acContext.query, environments, activeEnvironmentId);
+    if (!isPasswordMasked) {
+      return suggestions;
+    }
+    return suggestions.map((item) => (item.isBuiltin ? item : { ...item, resolvedValue: '' }));
+  }, [acContext, environments, activeEnvironmentId, isPasswordMasked]);
 
-  const isAutocompleteOpen = Boolean(acContext && acSuggestions.length > 0 && !readOnly && !disabled);
+  const isAutocompleteOpen = Boolean(
+    autocompleteMode !== 'none' && acContext && acSuggestions.length > 0 && !readOnly && !disabled
+  );
 
   useEffect(() => {
     if (acActiveIndex >= acSuggestions.length && acSuggestions.length > 0) {
@@ -253,6 +307,7 @@ export const VariableInput: React.FC<VariableInputProps> = ({
       if (!acContext || index < 0 || index >= acSuggestions.length) return;
       const chosen = acSuggestions[index];
       const { nextText, nextCursorPos } = applyAutocompleteSuggestion(safeValue, acContext, chosen);
+      lastInternalValueRef.current = nextText;
       setAcContext(null);
       onChange(nextText);
 
@@ -289,9 +344,14 @@ export const VariableInput: React.FC<VariableInputProps> = ({
     const handleScrollOrResize = (e: Event) => {
       setHoveredVar(null);
       if (isAutocompleteOpen) {
-        // Ignore scroll events originating inside the autocomplete listbox itself
-        const target = e.target as HTMLElement | null;
-        if (target && target.closest?.(`#${CSS.escape(listboxId)}`)) {
+        const target = e.target as Node | null;
+        const listboxEl = typeof document !== 'undefined' ? document.getElementById(listboxId) : null;
+        if (target && listboxEl?.contains(target)) {
+          return;
+        }
+        const targetEl = wrapperRef.current || inputRef.current;
+        if (targetEl && !isAnchorRectVisible(targetEl.getBoundingClientRect())) {
+          setAcContext(null);
           return;
         }
         setAcAnchorRect(measureAnchorRect());
@@ -303,9 +363,7 @@ export const VariableInput: React.FC<VariableInputProps> = ({
       window.removeEventListener('scroll', handleScrollOrResize, true);
       window.removeEventListener('resize', handleScrollOrResize);
     };
-  }, [isAutocompleteOpen, listboxId, measureAnchorRect]);
-
-  const isPasswordMasked = type === 'password' && !showPassword;
+  }, [isAutocompleteOpen, listboxId, measureAnchorRect, isAnchorRectVisible]);
 
   // Sizing definitions
   const sizeClasses = {
@@ -456,8 +514,9 @@ export const VariableInput: React.FC<VariableInputProps> = ({
             if (readOnly) return;
             const nextVal = e.target.value;
             const cursorPos = e.target.selectionStart;
+            lastInternalValueRef.current = nextVal;
             onChange(nextVal);
-            updateAutocompleteFromInput(nextVal, cursorPos);
+            updateAutocompleteFromInput(nextVal, cursorPos, { selectionEnd: e.target.selectionEnd });
           }}
           onMouseMove={handleMouseMove}
           onMouseLeave={handleMouseLeave}
@@ -473,31 +532,57 @@ export const VariableInput: React.FC<VariableInputProps> = ({
               e.key === 'Home' ||
               e.key === 'End'
             ) {
-              updateAutocompleteFromInput(e.currentTarget.value, e.currentTarget.selectionStart);
+              updateAutocompleteFromInput(e.currentTarget.value, e.currentTarget.selectionStart, {
+                selectionEnd: e.currentTarget.selectionEnd,
+              });
             }
           }}
           onKeyDown={(e) => {
             if (hoveredVar) setHoveredVar(null);
             syncScroll();
 
+            if (e.nativeEvent?.isComposing || e.keyCode === 229) {
+              onKeyDown?.(e);
+              return;
+            }
+
             if (isAutocompleteOpen) {
               if (e.key === 'ArrowDown') {
                 e.preventDefault();
                 e.stopPropagation();
+                acHasNavigatedRef.current = true;
                 setAcActiveIndex((prev) => (prev + 1) % acSuggestions.length);
                 return;
               }
               if (e.key === 'ArrowUp') {
                 e.preventDefault();
                 e.stopPropagation();
+                acHasNavigatedRef.current = true;
                 setAcActiveIndex((prev) => (prev - 1 + acSuggestions.length) % acSuggestions.length);
                 return;
               }
-              if (e.key === 'Enter' || e.key === 'Tab') {
-                e.preventDefault();
-                e.stopPropagation();
-                handleSelectSuggestion(acActiveIndex);
-                return;
+              if (e.key === 'Enter') {
+                if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) {
+                  setAcContext(null);
+                } else {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  handleSelectSuggestion(acActiveIndex);
+                  return;
+                }
+              }
+              if (e.key === 'Tab') {
+                const isModifiedTab = e.shiftKey || e.ctrlKey || e.metaKey || e.altKey;
+                const shouldLetTabMoveFocus =
+                  isModifiedTab || (acContext?.kind === 'header' && !acHasNavigatedRef.current);
+                if (shouldLetTabMoveFocus) {
+                  setAcContext(null);
+                } else {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  handleSelectSuggestion(acActiveIndex);
+                  return;
+                }
               }
               if (e.key === 'Escape') {
                 e.preventDefault();
@@ -505,7 +590,7 @@ export const VariableInput: React.FC<VariableInputProps> = ({
                 setAcContext(null);
                 return;
               }
-            } else if (!readOnly && !disabled) {
+            } else if (!readOnly && !disabled && autocompleteMode !== 'none') {
               // Allow Ctrl+Space or ArrowDown on a header-name field to manually open suggestions
               if (
                 (e.ctrlKey && e.key === ' ') ||
@@ -515,7 +600,10 @@ export const VariableInput: React.FC<VariableInputProps> = ({
                 updateAutocompleteFromInput(
                   e.currentTarget.value,
                   e.currentTarget.selectionStart,
-                  { forceOpenHeader: autocompleteMode === 'header-name' }
+                  {
+                    forceOpenHeader: autocompleteMode === 'header-name',
+                    selectionEnd: e.currentTarget.selectionEnd,
+                  }
                 );
                 return;
               }
@@ -525,7 +613,9 @@ export const VariableInput: React.FC<VariableInputProps> = ({
           }}
           onClick={(e) => {
             syncScroll();
-            updateAutocompleteFromInput(e.currentTarget.value, e.currentTarget.selectionStart);
+            updateAutocompleteFromInput(e.currentTarget.value, e.currentTarget.selectionStart, {
+              selectionEnd: e.currentTarget.selectionEnd,
+            });
           }}
           onPaste={(e) => {
             onPaste?.(e);
@@ -534,10 +624,22 @@ export const VariableInput: React.FC<VariableInputProps> = ({
               setHoveredVar(null);
             }
           }}
-          onBlur={() => {
+          onBlur={(e) => {
+            const listboxEl = typeof document !== 'undefined' ? document.getElementById(listboxId) : null;
+            const related = e.relatedTarget as Node | null;
+            if (related && listboxEl?.contains(related)) {
+              return;
+            }
             setAcContext(null);
           }}
-          onSelect={syncScroll}
+          onSelect={(e) => {
+            syncScroll();
+            const start = e.currentTarget.selectionStart;
+            const end = e.currentTarget.selectionEnd;
+            if (start !== null && end !== null && start !== end) {
+              setAcContext(null);
+            }
+          }}
           placeholder={placeholder}
           className={`w-full bg-transparent font-mono text-xs leading-5 focus:outline-none placeholder-tx-muted ${
             readOnly ? 'caret-transparent cursor-text' : 'caret-sky-400'
@@ -551,6 +653,11 @@ export const VariableInput: React.FC<VariableInputProps> = ({
         {type === 'password' && (
           <button
             type="button"
+            data-autocomplete-keep-open="true"
+            onMouseDown={(e) => {
+              // Keep input focus so an open variable autocomplete dropdown updates masking live
+              e.preventDefault();
+            }}
             onClick={() => {
               setShowPassword(!showPassword);
               setHoveredVar(null);
@@ -571,10 +678,12 @@ export const VariableInput: React.FC<VariableInputProps> = ({
         activeIndex={acActiveIndex}
         onSelectIndex={handleSelectSuggestion}
         onHighlightIndex={setAcActiveIndex}
+        onDismiss={() => setAcContext(null)}
         anchorRect={acAnchorRect}
         query={acContext?.query || ''}
         kind={acContext?.kind || 'variable'}
         listboxId={listboxId}
+        maskValues={isPasswordMasked}
       />
 
       {/* Hover Popup Tooltip */}
@@ -620,14 +729,17 @@ export const VariableInput: React.FC<VariableInputProps> = ({
 
             <div className="space-y-1 font-mono text-[11px]">
               {(() => {
-                const matchedVar = activeEnv?.variables?.find((v) => v.key.trim() === hoveredVar.varName);
-                const initialVal = matchedVar?.initialValue ?? matchedVar?.value;
-                if (initialVal !== undefined) {
+                const matchedVar = activeEnv?.variables
+                  ?.filter((v) => v && v.enabled && String(v.key ?? '').trim() === hoveredVar.varName)
+                  .at(-1);
+                const rawInitial = matchedVar?.initialValue ?? matchedVar?.value;
+                if (rawInitial !== undefined && rawInitial !== null) {
+                  const initialStr = String(rawInitial);
                   return (
                     <div className="flex items-start gap-1.5">
                       <span className="text-tx-muted shrink-0">Initial Value:</span>
                       <span className="break-all font-medium text-tx-primary">
-                        {initialVal || '(empty string)'}
+                        {initialStr || '(empty string)'}
                       </span>
                     </div>
                   );

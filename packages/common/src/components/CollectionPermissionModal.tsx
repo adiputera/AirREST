@@ -120,6 +120,9 @@ export const CollectionPermissionModal: React.FC<CollectionPermissionModalProps>
           onClose();
         }
       }}
+      data-modal="true"
+      role="dialog"
+      aria-modal="true"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150 select-none"
     >
       <div

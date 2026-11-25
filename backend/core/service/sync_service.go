@@ -122,7 +122,7 @@ func (s *SyncService) PullDelta(
 			SELECT ci.id, ci.collection_id, ci.parent_id, ci.type, ci.name, ci.sort_order,
 			       ci.method, ci.url, ci.params, ci.path_variables, ci.headers, ci.auth, ci.body_type, ci.raw_type,
 			       ci.body_content, ci.graphql_query, ci.graphql_variables, ci.body_form_data,
-			       ci.pre_request_script, ci.post_response_script, ci.version, ci.last_modified_by,
+			       ci.pre_request_script, ci.post_response_script, ci.examples, ci.version, ci.last_modified_by,
 			       ci.created_at, ci.updated_at, ci.deleted_at, c.min_role
 			FROM collection_items ci
 			JOIN collections c ON ci.collection_id = c.id
@@ -133,7 +133,7 @@ func (s *SyncService) PullDelta(
 			SELECT ci.id, ci.collection_id, ci.parent_id, ci.type, ci.name, ci.sort_order,
 			       ci.method, ci.url, ci.params, ci.path_variables, ci.headers, ci.auth, ci.body_type, ci.raw_type,
 			       ci.body_content, ci.graphql_query, ci.graphql_variables, ci.body_form_data,
-			       ci.pre_request_script, ci.post_response_script, ci.version, ci.last_modified_by,
+			       ci.pre_request_script, ci.post_response_script, ci.examples, ci.version, ci.last_modified_by,
 			       ci.created_at, ci.updated_at, ci.deleted_at, c.min_role
 			FROM collection_items ci
 			JOIN collections c ON ci.collection_id = c.id
@@ -155,7 +155,7 @@ func (s *SyncService) PullDelta(
 			&item.ID, &item.CollectionID, &item.ParentID, &typeStr, &item.Name, &item.SortOrder,
 			&item.Method, &item.URL, &item.Params, &item.PathVariables, &item.Headers, &item.Auth, &item.BodyType, &item.RawType,
 			&item.BodyContent, &item.GraphQLQuery, &item.GraphQLVariables, &item.BodyFormData,
-			&item.PreRequestScript, &item.PostResponseScript, &item.Version, &item.LastModifiedBy,
+			&item.PreRequestScript, &item.PostResponseScript, &item.Examples, &item.Version, &item.LastModifiedBy,
 			&item.CreatedAt, &item.UpdatedAt, &item.DeletedAt, &colMinRole,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan item delta: %w", err)
@@ -175,6 +175,7 @@ func (s *SyncService) PullDelta(
 		return nil, fmt.Errorf("failed to read delta: %w", err)
 	}
 	itemRows.Close()
+	ApplySummaryModeToItems(result.Items)
 
 	// 3. Fetch Environments
 	var envQuery string
@@ -448,44 +449,56 @@ type ImportCollectionRequest struct {
 }
 
 type ImportItemRequest struct {
-	ID                 string              `json:"id"`
-	ParentID           *string             `json:"parent_id,omitempty"`
-	Type               string              `json:"type"`
-	Name               string              `json:"name"`
-	SortOrder          int                 `json:"sort_order"`
-	Method             *string             `json:"method,omitempty"`
-	URL                *string             `json:"url,omitempty"`
-	Params             *json.RawMessage    `json:"params,omitempty"`
-	PathVariables      *json.RawMessage    `json:"path_variables,omitempty"`
-	Headers            *json.RawMessage    `json:"headers,omitempty"`
-	Auth               *json.RawMessage    `json:"auth,omitempty"`
-	BodyType           *string             `json:"body_type,omitempty"`
-	RawType            *string             `json:"raw_type,omitempty"`
-	BodyContent        *string             `json:"body_content,omitempty"`
-	GraphQLQuery       *string             `json:"graphql_query,omitempty"`
-	GraphQLVariables   *string             `json:"graphql_variables,omitempty"`
-	BodyFormData       *json.RawMessage    `json:"body_form_data,omitempty"`
-	PreRequestScript   *string             `json:"pre_request_script,omitempty"`
-	PostResponseScript *string             `json:"post_response_script,omitempty"`
-	Items              []ImportItemRequest `json:"items,omitempty"`
+	ID                 string                 `json:"id"`
+	ParentID           *string                `json:"parent_id,omitempty"`
+	Type               string                 `json:"type"`
+	Name               string                 `json:"name"`
+	SortOrder          int                    `json:"sort_order"`
+	Method             *string                `json:"method,omitempty"`
+	URL                *string                `json:"url,omitempty"`
+	Params             *json.RawMessage       `json:"params,omitempty"`
+	PathVariables      *json.RawMessage       `json:"path_variables,omitempty"`
+	Headers            *json.RawMessage       `json:"headers,omitempty"`
+	Auth               *json.RawMessage       `json:"auth,omitempty"`
+	BodyType           *string                `json:"body_type,omitempty"`
+	RawType            *string                `json:"raw_type,omitempty"`
+	BodyContent        *string                `json:"body_content,omitempty"`
+	GraphQLQuery       *string                `json:"graphql_query,omitempty"`
+	GraphQLVariables   *string                `json:"graphql_variables,omitempty"`
+	BodyFormData       *json.RawMessage       `json:"body_form_data,omitempty"`
+	PreRequestScript   *string                `json:"pre_request_script,omitempty"`
+	PostResponseScript *string                `json:"post_response_script,omitempty"`
+	Examples           domain.OptionalRawJSON `json:"examples,omitzero"`
+	Items              []ImportItemRequest    `json:"items,omitempty"`
 }
 
-// ImportBatch allows claiming and migrating offline LocalStorage collections into user's workspace or project
-func (s *SyncService) ImportBatch(ctx context.Context, user *domain.User, workspaceID *uuid.UUID, projectID *uuid.UUID, collections []ImportCollectionRequest) error {
+type ImportBatchResult struct {
+	Message          string           `json:"message"`
+	ImportedExamples int              `json:"imported_examples"`
+	ItemVersions     map[string]int64 `json:"item_versions"`
+}
+
+// ImportBatchWithSummary claims and migrates offline collections and returns summary metadata.
+func (s *SyncService) ImportBatchWithSummary(ctx context.Context, user *domain.User, workspaceID *uuid.UUID, projectID *uuid.UUID, collections []ImportCollectionRequest) (*ImportBatchResult, error) {
 	if (workspaceID == nil) == (projectID == nil) {
-		return ErrInvalidScope
+		return nil, ErrInvalidScope
 	}
 	if err := validateImport(collections); err != nil {
-		return err
+		return nil, err
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to start import transaction: %w", err)
+		return nil, fmt.Errorf("failed to start import transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
 	role, err := authorizeImportScope(ctx, tx, user, workspaceID, projectID)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	result := &ImportBatchResult{
+		Message:          "collections successfully imported into cloud scope",
+		ImportedExamples: 0,
+		ItemVersions:     make(map[string]int64),
 	}
 	now := time.Now().UTC()
 	for _, colReq := range collections {
@@ -499,7 +512,7 @@ func (s *SyncService) ImportBatch(ctx context.Context, user *domain.User, worksp
 			var deletedAt *time.Time
 			err := tx.QueryRow(ctx, "SELECT workspace_id, project_id, min_role, deleted_at FROM collections WHERE id = $1 FOR UPDATE", colID).Scan(&existingWsID, &existingProjID, &minRole, &deletedAt)
 			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-				return fmt.Errorf("failed to inspect import collection: %w", err)
+				return nil, fmt.Errorf("failed to inspect import collection: %w", err)
 			}
 			if err == nil {
 				sameScope := (workspaceID != nil && existingWsID != nil && *workspaceID == *existingWsID) || (projectID != nil && existingProjID != nil && *projectID == *existingProjID)
@@ -507,7 +520,7 @@ func (s *SyncService) ImportBatch(ctx context.Context, user *domain.User, worksp
 					colID = uuid.New()
 				} else {
 					if deletedAt != nil || !CanAccessCollection(role, minRole) {
-						return ErrForbidden
+						return nil, ErrForbidden
 					}
 					exists = true
 				}
@@ -517,24 +530,33 @@ func (s *SyncService) ImportBatch(ctx context.Context, user *domain.User, worksp
 			_, err = tx.Exec(ctx, `UPDATE collections SET name=$2, description=$3, version=version+1, last_modified_by=$4, updated_at=$5 WHERE id=$1`, colID, colReq.Name, colReq.Description, user.ID, now)
 		} else {
 			var affected int64
-			result, insertErr := tx.Exec(ctx, `INSERT INTO collections (id, workspace_id, project_id, name, description, min_role, version, created_by, last_modified_by, created_at, updated_at)
+			res, insertErr := tx.Exec(ctx, `INSERT INTO collections (id, workspace_id, project_id, name, description, min_role, version, created_by, last_modified_by, created_at, updated_at)
     VALUES ($1,$2,$3,$4,$5,'reader',1,$6,$6,$7,$7) ON CONFLICT (id) DO NOTHING`, colID, workspaceID, projectID, colReq.Name, colReq.Description, user.ID, now)
 			err = insertErr
 			if err == nil {
-				affected = result.RowsAffected()
+				affected = res.RowsAffected()
 				if affected != 1 {
-					return ErrImportConflict
+					return nil, ErrImportConflict
 				}
 			}
 		}
 		if err != nil {
-			return fmt.Errorf("failed to write imported collection: %w", err)
+			return nil, fmt.Errorf("failed to write imported collection: %w", err)
 		}
-		if err := s.insertImportItems(ctx, tx, colID, nil, colReq.Items, user.ID, now); err != nil {
-			return err
+		if err := s.insertImportItems(ctx, tx, colID, nil, colReq.Items, user.ID, now, result); err != nil {
+			return nil, err
 		}
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// ImportBatch allows claiming and migrating offline LocalStorage collections into user's workspace or project.
+func (s *SyncService) ImportBatch(ctx context.Context, user *domain.User, workspaceID *uuid.UUID, projectID *uuid.UUID, collections []ImportCollectionRequest) error {
+	_, err := s.ImportBatchWithSummary(ctx, user, workspaceID, projectID, collections)
+	return err
 }
 
 func (s *SyncService) insertImportItems(
@@ -545,6 +567,7 @@ func (s *SyncService) insertImportItems(
 	items []ImportItemRequest,
 	userID uuid.UUID,
 	now time.Time,
+	summary *ImportBatchResult,
 ) error {
 	for _, itemReq := range items {
 		itemID, err := uuid.Parse(itemReq.ID)
@@ -567,19 +590,32 @@ func (s *SyncService) insertImportItems(
 			itemType = "request"
 		}
 
+		hasExplicitExamples := itemReq.Examples.Present && !itemReq.Examples.IsNull
+		examplesArg := "[]"
+		importedCountForItem := 0
+		if hasExplicitExamples && itemType == "request" {
+			if len(itemReq.Examples.Raw) > 0 {
+				examplesArg = string(itemReq.Examples.Raw)
+				var list []domain.SavedExample
+				if jsonErr := json.Unmarshal(itemReq.Examples.Raw, &list); jsonErr == nil {
+					importedCountForItem = len(list)
+				}
+			}
+		}
+
 		insertItemQuery := `
 			INSERT INTO collection_items (
 				id, collection_id, parent_id, type, name, sort_order,
 				method, url, params, path_variables, headers, auth, body_type, raw_type,
 				body_content, graphql_query, graphql_variables, body_form_data,
-				pre_request_script, post_response_script, version, last_modified_by,
+				pre_request_script, post_response_script, examples, version, last_modified_by,
 				created_at, updated_at
 			) VALUES (
 				$1, $2, $3, $4, $5, $6,
 				$7, $8, $9, $10, $11, $12, $13, $14,
 				$15, $16, $17, $18,
-				$19, $20, 1, $21,
-				$22, $22
+				$19, $20, $21::jsonb, 1, $22,
+				$23, $23
 			)
 			ON CONFLICT (id) DO UPDATE SET
 				collection_id = EXCLUDED.collection_id,
@@ -600,28 +636,35 @@ func (s *SyncService) insertImportItems(
 				body_form_data = EXCLUDED.body_form_data,
 				pre_request_script = EXCLUDED.pre_request_script,
 				post_response_script = EXCLUDED.post_response_script,
+				examples = CASE WHEN $24 THEN EXCLUDED.examples ELSE collection_items.examples END,
 				version = collection_items.version + 1,
 				last_modified_by = EXCLUDED.last_modified_by,
 				updated_at = EXCLUDED.updated_at
 			WHERE collection_items.collection_id = EXCLUDED.collection_id
+			RETURNING version
 		`
 
-		result, err := tx.Exec(ctx, insertItemQuery,
+		var savedVersion int64
+		err = tx.QueryRow(ctx, insertItemQuery,
 			itemID, colID, parentID, itemType, itemReq.Name, itemReq.SortOrder,
 			itemReq.Method, itemReq.URL, itemReq.Params, itemReq.PathVariables, itemReq.Headers, itemReq.Auth,
 			itemReq.BodyType, itemReq.RawType, itemReq.BodyContent, itemReq.GraphQLQuery,
 			itemReq.GraphQLVariables, itemReq.BodyFormData, itemReq.PreRequestScript,
-			itemReq.PostResponseScript, userID, now,
-		)
+			itemReq.PostResponseScript, examplesArg, userID, now, hasExplicitExamples,
+		).Scan(&savedVersion)
 		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrImportConflict
+			}
 			return fmt.Errorf("failed to import item %s: %w", itemReq.Name, err)
 		}
 
-		if result.RowsAffected() != 1 {
-			return ErrImportConflict
+		if summary != nil {
+			summary.ImportedExamples += importedCountForItem
+			summary.ItemVersions[itemID.String()] = savedVersion
 		}
 		if len(itemReq.Items) > 0 {
-			if err := s.insertImportItems(ctx, tx, colID, &itemID, itemReq.Items, userID, now); err != nil {
+			if err := s.insertImportItems(ctx, tx, colID, &itemID, itemReq.Items, userID, now, summary); err != nil {
 				return err
 			}
 		}

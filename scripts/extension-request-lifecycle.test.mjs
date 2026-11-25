@@ -33,7 +33,7 @@ function loadStore({ executePreRequestScript, executeApiRequest, cloudApi = {}, 
     'blobManager': { revokeBlobUrl: noop, revokeBlobUrls: noop },
     'fetcher': { executeApiRequest },
     'scriptRunner': { executePreRequestScript, executePostResponseScript: async () => ({ success: true, environment: {}, variables: {} }) },
-    'postman': { importPostmanCollection: noop, importPostmanEnvironment: noop, detectPostmanJsonType: noop },
+    'postman': { importPostmanCollection: noop, importPostmanEnvironment: noop, detectPostmanJsonType: noop, buildPostmanUrl: (url) => ({ raw: String(url || '') }) },
     'urlParams': { parseQueryParamsFromUrl: noop, parsePathVariablesFromUrl: () => [], buildUrlWithParams: noop },
     'asyncOperationCoordinator': {
       createAsyncOperationCoordinator: ({ isDisposed }) => {
@@ -241,6 +241,18 @@ function loadStore({ executePreRequestScript, executeApiRequest, cloudApi = {}, 
       fetchScopeCollections: noop,
       fetchCollectionById: noop,
       fetchScopeEnvironments: noop,
+      fetchScopeItem: noop,
+      fetchScopeCollectionExamples: async () => ({ items: [], collection_version: 1 }),
+      patchScopeItemExamples: noop,
+      replaceScopeCollection: noop,
+      fetchFeaturePolicy: async () => ({ capabilities: { saved_examples: true } }),
+      CloudApiError: class CloudApiError extends Error {
+        constructor(message, status, data) {
+          super(message);
+          this.status = status;
+          this.data = data;
+        }
+      },
       ...cloudApi,
     },
     'treeHelper': { reorderItemInTree: noop, findRequestAncestorIds: () => [] },
@@ -267,6 +279,37 @@ function loadStore({ executePreRequestScript, executeApiRequest, cloudApi = {}, 
     'theme': { applyTheme: noop },
     'storeContext': { StoreContext: {} },
   };
+
+  const loadLibModule = (name) => {
+    const source = fs.readFileSync(new URL(`../packages/common/src/lib/${name}.ts`, import.meta.url), 'utf8');
+    const output = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+    const exports = {};
+    vm.runInNewContext(output, {
+      exports,
+      require: (id) => modules[id.split('/').at(-1)] || require(id),
+      console,
+      crypto: { randomUUID: () => 'test-id' },
+      Date,
+      JSON,
+      Math,
+      Object,
+      Array,
+      Map,
+      Set,
+      RegExp,
+      Error,
+      URL,
+      URLSearchParams,
+      TextEncoder,
+      TextDecoder,
+      Blob: globalThis.Blob,
+      File: globalThis.File,
+      atob: globalThis.atob,
+      btoa: globalThis.btoa,
+    });
+    return exports;
+  };
+  modules.examples = loadLibModule('examples');
 
   const loadWorkspaceModule = (name) => {
     const source = fs.readFileSync(new URL(`../packages/common/src/workspace/${name}.ts`, import.meta.url), 'utf8');

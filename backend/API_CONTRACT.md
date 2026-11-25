@@ -341,7 +341,7 @@ In addition to enums, the Frontend relies on specific primitive types and relati
 - `PUT /api/v1/collections/{id}` *(Auth)* — Update collection (enforces `base_version` OCC).
   - Payload: `{ "name": string, "description"?: string, "min_role"?: ProjectRole, "base_version": int64 }`
 - `DELETE /api/v1/collections/{id}` *(Auth)* — Soft delete collection (tombstone). Requires both existing RBAC/min-role checks and global `collection.delete`; a disabled feature returns `403 FEATURE_DISABLED`.
-- `POST /api/v1/collections/{id}/move` *(Auth)* — Move collection across scopes. Personal/offline sources may move into a project; a project collection cannot move into a personal workspace. Requires both existing RBAC/min-role checks and global `collection.move`; a disabled feature returns `403 FEATURE_DISABLED`.
+- `POST /api/v1/collections/{id}/move` *(Auth)* — Move collection across scopes. Personal/offline sources may move into a project; a project collection cannot move into a personal workspace. Requires both existing RBAC/min-role checks and global `collection.move`; a disabled feature returns `403 FEATURE_DISABLED`. Locks the source collection `FOR UPDATE` and verifies expected source scope/min-role consistency (`404` if missing, `409` on concurrent move/conflict).
   - Payload: `{ "target_workspace_id"?: UUID, "target_project_id"?: UUID }`
 - `POST /api/v1/collections/{id}/duplicate` *(Auth)* — Atomically duplicate a collection into a target workspace or project (`201`). Requires `collection:write` and `min_role` access on source, plus `collection:write` on target. Supports `personal → personal`, `personal → project`, and `project → project` (including cross-team); `project → personal` is forbidden (`403`). Clamps `min_role` to `targetRole` when `targetRole < source.min_role`. Does not depend on `collection:move` or `collection.move` feature policy.
   - Payload: `{ "operation_id": UUID, "target_workspace_id"?: UUID, "target_project_id"?: UUID }`
@@ -631,7 +631,7 @@ npx @openapitools/openapi-generator-cli generate \
 }
 ```
 
-Both collection IDs are required nonzero UUID strings. `target_parent_id` is an optional UUID string or null; omitted/null selects the target root. The parent must be an active folder in the destination; cycles and cross-scope moves are rejected. Requests and all folder descendants retain their IDs and payloads. The root is appended to the destination siblings; child ordering is preserved. Item versions and both collection versions/timestamps advance in one transaction so subsequent cloud pulls see the change.
+Both collection IDs are required nonzero UUID strings. `target_parent_id` is an optional UUID string or null; omitted/null selects the target root. The parent must be an active folder in the destination; cycles, cross-scope moves, and moves resulting in total nesting depth > `32` (`maxItemMoveDepth`) are rejected with `400`. Requests and all folder descendants retain their IDs and payloads. The root is appended to the destination siblings; child ordering is preserved. Item versions and both collection versions/timestamps advance in one transaction so subsequent cloud pulls see the change.
 
 The source collection is the location precondition; this endpoint does not accept `base_version`. A changed source location or collection access snapshot returns `409 CONFLICT`. Repeating an identical cross-collection move already at the requested destination returns success. Other responses: `200` standard success envelope with `data.message = "item moved successfully"`; `400 BAD_REQUEST` for malformed/invalid destinations; `401 UNAUTHORIZED`; `403 FORBIDDEN` for denied access; `404 NOT_FOUND` for missing/deleted items or collections; `500 SERVER_ERROR` for transaction failure. Global body limits and admission/deadline handling can return `413`/`503`.
 
@@ -656,3 +656,28 @@ Three idempotent create-only endpoints implement Duplicate with transaction-scop
    - Snapshot-first cloning safely supports duplicating a folder into itself or its own descendants as long as `targetParentDepth + subtreeDepth <= 32`.
 
 All three endpoints reserve `(actor_id, operation_id)` in `duplicate_operations` with a canonical SHA-256 payload fingerprint and return HTTP `201` with a compact receipt (`status: "committed" | "committed_deleted" | "expired_committed"`). Replaying the same `operation_id` with an identical payload revalidates current actor access and returns the live receipt without creating a second copy (and without resurrecting deleted copies); reusing `operation_id` with a different fingerprint returns `409 CONFLICT`. Clients hydrate active collections via `GET /api/v1/collections/{id}` or delta pull instead of relying on unbounded inline response snapshots.
+
+### Saved Examples, Summary Projection, Per-Op Patch & Atomic Collection Replace (1.4.0)
+
+Request items (`type === "request"`) persist Postman-compatible `examples` (`JSONB NOT NULL DEFAULT '[]'::jsonb`; folders are enforced to `examples = '[]'::jsonb`):
+
+1. **Format, Size & Validation Rules**:
+   - Limits: max **512 KiB** per serialized example, max **50** examples per item, max **2 MiB** UTF-8 total `examples` JSON per item, max **150** Unicode runes for `name` (trimmed non-empty), `100 <= code <= 599`, unique `id` per parent item, `revision >= 1`.
+   - Formats: `json`, `xml`, or `html` (`application/*` or `text/*` MIME allowlist; textual SVG allowed under `application/xml` or `text/xml`, `image/svg+xml` and other `image/*`/`model/*` rejected; NUL bytes `\u0000`, BOM-only payloads, and invalid UTF-8 rejected; strict JSON / XML well-formedness / HTML checks without leaking payload bytes in validation errors).
+2. **`OptionalRawJSON` Semantics (`UpdateItem`, `ImportBatch`, `SyncPush`)**:
+   - `examples` **absent**: preserves existing server `examples` (`ImportBatch` keeps `collection_items.examples` intact; regular tab saves omit `examples`).
+   - `examples: null`: rejected with `400 BAD_REQUEST`.
+   - `examples: []`: clears all examples on the item (under OCC `base_version` for `UpdateItem`).
+3. **Summary Projection vs Full Hydration**:
+   - `GET /api/v1/collections/{id}`, `PUT /api/v1/collections/{id}/reorder` (`/items/reorder`, both gzip-enabled), and `GET /api/v1/sync/pull` NEVER return inline example bodies: they project `example_count`, `example_summaries` (`id`, `revision`, `name`, `code`, `status`, `_postman_previewlanguage`, `body_size_bytes`), and `examples_loaded` (`false` when count > 0, `true` when 0) within a safe ~2.5 MiB raw response budget (setting `example_summaries_truncated: true` if omitted to stay under transfer limits).
+   - `GET /api/v1/items/{id}` (gzip-enabled, returns `403 FORBIDDEN` vs `404 NOT_FOUND` strictly) returns full `examples` with `examples_loaded: true`.
+   - `GET /api/v1/collections/{id}/examples?cursor=&limit=&include_body=false|true` (gzip-enabled, RepeatableRead snapshot) paginates collection items with `collection_version` consistency for full Postman export / bulk hydration.
+4. **Per-Operation Mutation (`PATCH /api/v1/items/{id}/examples`)**:
+   - Payload: `{ operation_id, op: "add" | "rename" | "delete", base_version, example?, example_id?, base_example_revision?, name? }` (gzip-enabled response).
+   - Executes in one transaction (`item_example_operations` receipt `(actor_id, operation_id)` -> `collections` lock -> `collection_items` lock). Updates only `examples`, `version`, `updated_at`, `last_modified_by` without touching `parent_id`, `sort_order`, or request columns. Replaying same `operation_id` + matching fingerprint returns cached receipt without spurious `409`; `rename` increments `example.revision`.
+5. **Atomic Collection Replace (`POST /api/v1/collections/{id}/replace`)**:
+   - Accepts identity or gzip JSON (`DecodeGzipRequest` + `RequireSingleJSONDocument`), `{ operation_id, base_version, collection }`. Soft-deletes omitted items, upserts aligned items + examples, bumps `version`, and records a durable receipt in `collection_replace_operations` inside one ACID transaction.
+6. **Feature Capability & Batch Receipt**:
+   - `GET /api/v1/feature-policy` statically returns `capabilities: { saved_examples: true }`.
+   - `POST /api/v1/sync/import-batch` returns `imported_examples` and `item_versions`.
+

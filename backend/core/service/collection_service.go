@@ -14,6 +14,7 @@ import (
 var (
 	ErrReaderCannotModify                   = errors.New("reader role does not have permission to create or modify collections/requests")
 	ErrProjectCollectionMoveToPersonalScope = errors.New("collections in projects cannot be moved to personal workspaces")
+	ErrInvalidCollectionMove                = errors.New("invalid collection move")
 )
 
 type CollectionService struct {
@@ -191,6 +192,7 @@ func (s *CollectionService) ListCollections(ctx context.Context, user *domain.Us
 		for _, col := range collections {
 			items, err := s.collectionRepo.ListActiveItemsByCollection(ctx, col.ID)
 			if err == nil {
+				ApplySummaryModeToItems(items)
 				col.Items = items
 			}
 		}
@@ -216,6 +218,7 @@ func (s *CollectionService) GetCollection(ctx context.Context, user *domain.User
 
 	items, err := s.collectionRepo.ListActiveItemsByCollection(ctx, col.ID)
 	if err == nil {
+		ApplySummaryModeToItems(items)
 		col.Items = items
 	}
 
@@ -315,14 +318,14 @@ func (s *CollectionService) MoveCollection(ctx context.Context, user *domain.Use
 		return err
 	}
 	if col.DeletedAt != nil {
-		return errors.New("cannot move deleted collection")
+		return fmt.Errorf("%w: cannot move deleted collection", ErrInvalidCollectionMove)
 	}
 
 	if targetWorkspaceID == nil && targetProjectID == nil {
-		return errors.New("must specify either target_workspace_id or target_project_id")
+		return fmt.Errorf("%w: must specify either target_workspace_id or target_project_id", ErrInvalidCollectionMove)
 	}
 	if targetWorkspaceID != nil && targetProjectID != nil {
-		return errors.New("cannot specify both target_workspace_id and target_project_id")
+		return fmt.Errorf("%w: cannot specify both target_workspace_id and target_project_id", ErrInvalidCollectionMove)
 	}
 
 	// Case 1: Moving to target project
@@ -345,7 +348,7 @@ func (s *CollectionService) MoveCollection(ctx context.Context, user *domain.Use
 		// Check source
 		if col.ProjectID != nil {
 			if *col.ProjectID == *targetProjectID {
-				return errors.New("collection is already in target project")
+				return fmt.Errorf("%w: collection is already in target project", ErrInvalidCollectionMove)
 			}
 
 			sourceProj, err := s.projectRepo.GetByID(ctx, *col.ProjectID)
@@ -355,7 +358,7 @@ func (s *CollectionService) MoveCollection(ctx context.Context, user *domain.Use
 
 			// Scope rule: Must be in the same team!
 			if sourceProj.TeamID != targetProj.TeamID {
-				return errors.New("collections can only be moved between projects within the same team")
+				return fmt.Errorf("%w: collections can only be moved between projects within the same team", ErrInvalidCollectionMove)
 			}
 
 			// Check source project role: user must be maintainer or administrator and meet collection min_role
@@ -379,7 +382,7 @@ func (s *CollectionService) MoveCollection(ctx context.Context, user *domain.Use
 				return err
 			}
 		}
-		return s.collectionRepo.MoveCollection(ctx, collectionID, nil, targetProjectID, user.ID)
+		return s.collectionRepo.MoveCollection(ctx, collectionID, col, nil, targetProjectID, user.ID)
 	}
 
 	// Case 2: Moving to target personal workspace
@@ -394,7 +397,7 @@ func (s *CollectionService) MoveCollection(ctx context.Context, user *domain.Use
 
 		if col.WorkspaceID != nil {
 			if *col.WorkspaceID == *targetWorkspaceID {
-				return errors.New("collection is already in target workspace")
+				return fmt.Errorf("%w: collection is already in target workspace", ErrInvalidCollectionMove)
 			}
 			sourceWs, err := s.workspaceRepo.GetByID(ctx, *col.WorkspaceID)
 			if err != nil {
@@ -416,7 +419,7 @@ func (s *CollectionService) MoveCollection(ctx context.Context, user *domain.Use
 				return err
 			}
 		}
-		return s.collectionRepo.MoveCollection(ctx, collectionID, targetWorkspaceID, nil, user.ID)
+		return s.collectionRepo.MoveCollection(ctx, collectionID, col, targetWorkspaceID, nil, user.ID)
 	}
 
 	return nil
@@ -448,7 +451,11 @@ func (s *CollectionService) CreateItem(ctx context.Context, user *domain.User, i
 	}
 
 	item.LastModifiedBy = &user.ID
-	return s.collectionRepo.CreateItem(ctx, item)
+	if err := s.collectionRepo.CreateItem(ctx, item); err != nil {
+		return err
+	}
+	MarkItemFullExamples(item)
+	return nil
 }
 
 // UpdateItem updates a request or folder with OCC validation
@@ -508,11 +515,13 @@ func (s *CollectionService) UpdateItem(ctx context.Context, user *domain.User, i
 		if errors.Is(err, postgres.ErrVersionConflict) {
 			// Re-fetch latest server item so client receives remote object for conflict resolution
 			latest, _ := s.collectionRepo.GetItemByID(ctx, item.ID)
+			MarkItemFullExamples(latest)
 			return latest, err
 		}
 		return nil, err
 	}
 
+	MarkItemFullExamples(item)
 	return item, nil
 }
 
@@ -558,6 +567,7 @@ func (s *CollectionService) GetItem(ctx context.Context, user *domain.User, id u
 		return nil, err
 	}
 
+	MarkItemFullExamples(item)
 	return item, nil
 }
 
@@ -591,7 +601,12 @@ func (s *CollectionService) ReorderItems(ctx context.Context, user *domain.User,
 		return nil, err
 	}
 
-	return s.collectionRepo.ListActiveItemsByCollection(ctx, collectionID)
+	reordered, err := s.collectionRepo.ListActiveItemsByCollection(ctx, collectionID)
+	if err != nil {
+		return nil, err
+	}
+	ApplySummaryModeToItems(reordered)
+	return reordered, nil
 }
 
 // CheckOperationPermission applies the operation map in addition to scope ownership.

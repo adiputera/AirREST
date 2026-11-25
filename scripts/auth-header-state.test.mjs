@@ -66,9 +66,14 @@ function setupStoreHarness({ fetchImpl, preScriptImpl }) {
   const authHeaders = transpileRun('../packages/common/src/lib/authHeaders.ts', (id) => require(id));
   const urlParams = transpileRun('../packages/common/src/lib/urlParams.ts', (id) => require(id));
   const formatters = transpileRun('../packages/common/src/lib/formatters.ts', (id) => require(id));
-  const requestDiff = transpileRun('../packages/common/src/lib/requestDiff.ts', (id) => require(id));
+  const examples = transpileRun('../packages/common/src/lib/examples.ts', (id) => require(id));
+  const requestDiff = transpileRun('../packages/common/src/lib/requestDiff.ts', (id) => {
+    if (id.includes('examples')) return examples;
+    return require(id);
+  });
   const postman = transpileRun('../packages/common/src/lib/postman.ts', (id) => {
     if (id.includes('urlParams')) return urlParams;
+    if (id.includes('examples')) return examples;
     return require(id);
   });
   const fetcher = transpileRun('../packages/common/src/lib/fetcher.ts', (id) => {
@@ -86,6 +91,7 @@ function setupStoreHarness({ fetchImpl, preScriptImpl }) {
     fetcher,
     authHeaders,
     postman,
+    examples,
     urlParams,
     requestDiff,
     scriptRunner: {

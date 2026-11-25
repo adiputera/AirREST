@@ -106,6 +106,8 @@ import {
   Environment,
   FeaturePolicy,
   ProjectRole,
+  SavedExample,
+  SavedExampleSummary,
 } from '../types/api';
 
 export interface TokenRefreshCallback {
@@ -226,7 +228,8 @@ function supportsGzipRequest(endpoint: string): boolean {
   return (
     path === '/api/v1/sync/push' ||
     path === '/api/v1/sync/import-batch' ||
-    path === '/api/v1/collections/import-duplicate'
+    path === '/api/v1/collections/import-duplicate' ||
+    /^\/api\/v1\/collections\/[^/]+\/replace$/.test(path)
   );
 }
 
@@ -324,12 +327,14 @@ function extractErrorCode(json: unknown): string | undefined {
 export class CloudApiError extends Error {
   readonly code?: string;
   readonly status: number;
+  readonly data?: unknown;
 
-  constructor(message: string, status: number, code?: string) {
+  constructor(message: string, status: number, code?: string, data?: unknown) {
     super(message);
     this.name = 'CloudApiError';
     this.status = status;
     this.code = code;
+    this.data = data;
   }
 }
 
@@ -841,6 +846,7 @@ export async function batchImportToScope(
   refreshToken?: string,
   signal?: AbortSignal,
   client = defaultCloudClientState,
+  options?: { includeExamples?: boolean },
 ) {
   if (collections.some((collection) => collection._needsMoveReconciliation)) {
     throw new Error('Refresh collections to confirm the previous move before uploading changes.');
@@ -854,11 +860,12 @@ export async function batchImportToScope(
     for (const item of items) checkItems(item.items, depth + 1);
   };
   for (const collection of collections) checkItems(collection.items, 1);
+  const includeExamples = options?.includeExamples !== false;
   const formattedCollections = collections.map((c) => ({
     id: c.id,
     name: c.name,
     description: c.description || '',
-    items: (c.items || []).map(formatImportItem),
+    items: (c.items || []).map((item) => formatImportItem(item, includeExamples)),
   }));
 
   const payload: any = {
@@ -884,7 +891,12 @@ export async function batchImportToScope(
 
   const json = await safeJson(res);
   if (!res.ok) {
-    throw new Error(extractError(json, 'Batch import failed', res.status));
+    throw new CloudApiError(
+      extractError(json, 'Batch import failed', res.status),
+      res.status,
+      extractErrorCode(json),
+      json?.data,
+    );
   }
   return unwrapData<any>(json);
 }
@@ -1104,8 +1116,8 @@ export async function reorderCollectionItems(
   return unwrapData<any>(json);
 }
 
-function formatImportItem(item: any): any {
-  return {
+function formatImportItem(item: any, includeExamples = true): any {
+  const formatted: any = {
     id: item.id,
     type: item.type || 'request',
     name: item.name,
@@ -1125,8 +1137,185 @@ function formatImportItem(item: any): any {
       : item.request?.bodyFormData || [],
     pre_request_script: item.request?.preRequestScript || '',
     post_response_script: item.request?.postResponseScript || '',
-    items: (item.items || []).map(formatImportItem),
+    items: (item.items || []).map((child: any) => formatImportItem(child, includeExamples)),
   };
+  if (
+    includeExamples &&
+    formatted.type === 'request' &&
+    Array.isArray(item.examples) &&
+    item.examplesLoaded !== false
+  ) {
+    formatted.examples = item.examples;
+  }
+  return formatted;
+}
+
+export interface PatchItemExamplesPayload {
+  operation_id: string;
+  op: 'add' | 'rename' | 'delete';
+  base_version: number;
+  example?: SavedExample;
+  example_id?: string;
+  base_example_revision?: number;
+  name?: string;
+}
+
+export async function patchScopeItemExamples(
+  apiUrl: string,
+  token: string | undefined,
+  itemId: string,
+  payload: PatchItemExamplesPayload,
+  refreshToken?: string,
+  signal?: AbortSignal,
+  client = defaultCloudClientState,
+): Promise<any> {
+  const res = await fetchWithAuth(`/api/v1/items/${itemId}/examples`, {
+    method: 'PATCH',
+    apiUrl,
+    token,
+    refreshToken,
+    signal,
+    body: JSON.stringify(payload),
+  }, client);
+
+  const json = res.ok ? await readSuccessfulJson(res) : await safeJson(res);
+  if (!res.ok) {
+    throw new CloudApiError(
+      extractError(json, 'Failed to update saved examples', res.status),
+      res.status,
+      extractErrorCode(json),
+      (json as any)?.data,
+    );
+  }
+  return unwrapData<any>(json);
+}
+
+export async function fetchScopeItem(
+  apiUrl: string,
+  token: string | undefined,
+  itemId: string,
+  refreshToken?: string,
+  signal?: AbortSignal,
+  client = defaultCloudClientState,
+): Promise<any> {
+  const res = await fetchWithAuth(`/api/v1/items/${itemId}`, {
+    apiUrl,
+    token,
+    refreshToken,
+    signal,
+  }, client);
+
+  const json = res.ok ? await readSuccessfulJson(res) : await safeJson(res);
+  if (!res.ok) {
+    throw new CloudApiError(
+      extractError(json, 'Failed to fetch item', res.status),
+      res.status,
+      extractErrorCode(json),
+      (json as any)?.data,
+    );
+  }
+  return unwrapData<any>(json);
+}
+
+export interface CollectionExamplesPageItem {
+  item_id: string;
+  item_version: number;
+  example_count: number;
+  examples_loaded: boolean;
+  example_summaries?: SavedExampleSummary[];
+  examples?: SavedExample[];
+}
+
+export interface CollectionExamplesPageResponse {
+  collection_id: string;
+  collection_version: number;
+  items: CollectionExamplesPageItem[];
+  next_cursor?: string;
+  has_more: boolean;
+}
+
+export async function fetchScopeCollectionExamples(
+  apiUrl: string,
+  token: string | undefined,
+  collectionId: string,
+  options: { cursor?: string; limit?: number; includeBody?: boolean } = {},
+  refreshToken?: string,
+  signal?: AbortSignal,
+  client = defaultCloudClientState,
+): Promise<CollectionExamplesPageResponse> {
+  const query = new URLSearchParams();
+  if (options.cursor) query.set('cursor', options.cursor);
+  if (typeof options.limit === 'number' && options.limit > 0) query.set('limit', String(options.limit));
+  query.set('include_body', options.includeBody ? 'true' : 'false');
+
+  const res = await fetchWithAuth(`/api/v1/collections/${collectionId}/examples?${query.toString()}`, {
+    apiUrl,
+    token,
+    refreshToken,
+    signal,
+  }, client);
+
+  const json = res.ok ? await readSuccessfulJson(res) : await safeJson(res);
+  if (!res.ok) {
+    throw new CloudApiError(
+      extractError(json, 'Failed to fetch collection examples', res.status),
+      res.status,
+      extractErrorCode(json),
+      (json as any)?.data,
+    );
+  }
+  return unwrapData<CollectionExamplesPageResponse>(json);
+}
+
+export interface ReplaceCollectionReceipt {
+  operation_id: string;
+  status: 'committed';
+  collection_id: string;
+  version: number;
+  item_count: number;
+}
+
+export async function replaceScopeCollection(
+  apiUrl: string,
+  token: string | undefined,
+  collectionId: string,
+  collection: Collection,
+  baseVersion: number,
+  operationId: string,
+  refreshToken?: string,
+  signal?: AbortSignal,
+  client = defaultCloudClientState,
+): Promise<ReplaceCollectionReceipt> {
+  const payload = {
+    operation_id: operationId,
+    base_version: baseVersion,
+    collection: {
+      name: collection.name,
+      description: collection.description || '',
+      ...(collection.minRole ? { min_role: collection.minRole } : {}),
+      items: (collection.items || []).map((item) => formatImportItem(item, true)),
+    },
+  };
+
+  const res = await fetchWithAuth(`/api/v1/collections/${collectionId}/replace`, {
+    method: 'POST',
+    apiUrl,
+    token,
+    refreshToken,
+    signal,
+    body: JSON.stringify(payload),
+  }, client);
+
+  const json = await safeJson(res);
+  if (!res.ok) {
+    throw new CloudApiError(
+      extractError(json, 'Failed to replace collection', res.status),
+      res.status,
+      extractErrorCode(json),
+      json?.data,
+    );
+  }
+  return unwrapData<ReplaceCollectionReceipt>(json);
 }
 
 // ----------------- Environment Endpoints -----------------
@@ -1448,8 +1637,16 @@ export function createCloudClient(config: CloudClientConfig = {}) {
       fetchCollectionById(apiUrl, token, collectionId, refreshToken, signal, state),
     fetchScopeEnvironments: (apiUrl: string, token: string | undefined, scope: ActiveScope, refreshToken?: string, signal?: AbortSignal) =>
       fetchScopeEnvironments(apiUrl, token, scope, refreshToken, signal, state),
-    batchImportToScope: (apiUrl: string, token: string | undefined, scope: ActiveScope | { id: string; type: 'workspace' | 'project' } | string, collections: Collection[], refreshToken?: string, signal?: AbortSignal) =>
-      batchImportToScope(apiUrl, token, scope, collections, refreshToken, signal, state),
+    batchImportToScope: (apiUrl: string, token: string | undefined, scope: ActiveScope | { id: string; type: 'workspace' | 'project' } | string, collections: Collection[], refreshToken?: string, signal?: AbortSignal, options?: { includeExamples?: boolean }) =>
+      batchImportToScope(apiUrl, token, scope, collections, refreshToken, signal, state, options),
+    replaceScopeCollection: (apiUrl: string, token: string | undefined, collectionId: string, collection: Collection, baseVersion: number, operationId: string, refreshToken?: string, signal?: AbortSignal) =>
+      replaceScopeCollection(apiUrl, token, collectionId, collection, baseVersion, operationId, refreshToken, signal, state),
+    patchScopeItemExamples: (apiUrl: string, token: string | undefined, itemId: string, payload: PatchItemExamplesPayload, refreshToken?: string, signal?: AbortSignal) =>
+      patchScopeItemExamples(apiUrl, token, itemId, payload, refreshToken, signal, state),
+    fetchScopeItem: (apiUrl: string, token: string | undefined, itemId: string, refreshToken?: string, signal?: AbortSignal) =>
+      fetchScopeItem(apiUrl, token, itemId, refreshToken, signal, state),
+    fetchScopeCollectionExamples: (apiUrl: string, token: string | undefined, collectionId: string, options?: { cursor?: string; limit?: number; includeBody?: boolean }, refreshToken?: string, signal?: AbortSignal) =>
+      fetchScopeCollectionExamples(apiUrl, token, collectionId, options, refreshToken, signal, state),
     moveScopeCollection: (apiUrl: string, token: string | undefined, collectionId: string, targetScope: ActiveScope, refreshToken?: string, signal?: AbortSignal) =>
       moveScopeCollection(apiUrl, token, collectionId, targetScope, refreshToken, signal, state),
     duplicateScopeCollection: (apiUrl: string, token: string | undefined, collectionId: string, targetScope: ActiveScope, operationId: string, refreshToken?: string, signal?: AbortSignal) =>

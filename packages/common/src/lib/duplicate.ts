@@ -2,11 +2,18 @@ import {
   ApiRequest,
   AuthConfig,
   BinaryFileData,
+  CloudConfig,
   Collection,
   CollectionItem,
   FormDataItem,
   KeyValuePair,
+  PendingDuplicateIntent,
 } from '../types/api';
+import {
+  buildExampleSummariesFromExamples,
+  cloneSavedExamplesList,
+  hasUnloadedCollectionExamples,
+} from './examples';
 
 export const MAX_DUPLICATE_NAME_RUNES = 150;
 export const MAX_DUPLICATE_ITEMS = 5000;
@@ -443,11 +450,19 @@ function cloneItemNode(
     updatedAt: timestamp,
   };
 
+  const clonedExamples = Array.isArray(item.examples)
+    ? cloneSavedExamplesList(item.examples, true)
+    : [];
+
   return {
     id: newItemId,
     name: finalName,
     type: 'request',
     request: cloneApiRequest(sourceReq, newItemId, finalName, timestamp, generateId, sanitizeForCloud),
+    examples: clonedExamples,
+    exampleSummaries: buildExampleSummariesFromExamples(clonedExamples),
+    exampleCount: clonedExamples?.length ?? 0,
+    examplesLoaded: true,
   };
 }
 
@@ -575,6 +590,116 @@ export function insertItemIntoCollectionTree(
 }
 
 /**
+ * Removes only the matching item node (by ID) from a collection item tree,
+ * leaving all sibling and unrelated changes intact.
+ */
+export function removeItemFromCollectionTree(
+  items: CollectionItem[],
+  targetItemId: string,
+): { items: CollectionItem[]; removed: boolean } {
+  let removed = false;
+
+  const walk = (list: CollectionItem[]): CollectionItem[] => {
+    const next: CollectionItem[] = [];
+    let changed = false;
+
+    for (const it of list) {
+      if (it.id === targetItemId) {
+        removed = true;
+        changed = true;
+        continue;
+      }
+      if (it.type === 'folder' && Array.isArray(it.items) && it.items.length > 0) {
+        const sub = walk(it.items);
+        if (sub !== it.items) {
+          changed = true;
+          next.push({ ...it, items: sub });
+          continue;
+        }
+      }
+      next.push(it);
+    }
+
+    return changed ? next : list;
+  };
+
+  return { items: walk(items || []), removed };
+}
+
+function normalizePendingDuplicateApiUrl(rawUrl?: string): string {
+  const trimmed = (rawUrl || '').trim().replace(/\/+$/, '');
+  if (!trimmed) return 'http://localhost:8080';
+  const hasExplicitScheme = /^https?:\/\//i.test(trimmed);
+  const candidate = hasExplicitScheme ? trimmed : `http://${trimmed}`;
+  try {
+    const parsed = new URL(candidate);
+    const hostname = parsed.hostname.toLowerCase();
+    const isLoopback =
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname === '[::1]' ||
+      hostname === '::1';
+    if (!hasExplicitScheme) {
+      parsed.protocol = isLoopback ? 'http:' : 'https:';
+    }
+    const pathname = parsed.pathname.replace(/\/+$/, '');
+    return `${parsed.protocol}//${parsed.host}${pathname}`;
+  } catch {
+    return trimmed;
+  }
+}
+
+/**
+ * Computes the canonical owner key for the active cloud session, or null when signed out.
+ */
+export function getPendingDuplicateOwnerKey(
+  cloudConfig?: Pick<CloudConfig, 'apiUrl' | 'user' | 'token' | 'sessionKind'> | null,
+): string | null {
+  if (!cloudConfig) return null;
+  const sessionActive = Boolean(
+    cloudConfig.token ||
+      (cloudConfig.sessionKind === 'provider' &&
+        typeof cloudConfig.user?.id === 'string' &&
+        cloudConfig.user.id.trim()),
+  );
+  const userId = cloudConfig.user?.id;
+  if (!sessionActive || !userId || !cloudConfig.apiUrl) return null;
+  const apiUrl = normalizePendingDuplicateApiUrl(cloudConfig.apiUrl);
+  if (!apiUrl) return null;
+  try {
+    const parsed = new URL(apiUrl);
+    if (
+      !['http:', 'https:'].includes(parsed.protocol) ||
+      parsed.username ||
+      parsed.password ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  return JSON.stringify([apiUrl, userId]);
+}
+
+/**
+ * Returns only pending duplicate intents owned by the active cloud session.
+ */
+export function getOwnedPendingDuplicateIntents(
+  intents: Record<string, PendingDuplicateIntent> | undefined | null,
+  cloudConfig?: Pick<CloudConfig, 'apiUrl' | 'user' | 'token' | 'sessionKind'> | null,
+  isOfflineOnly = false,
+): PendingDuplicateIntent[] {
+  if (isOfflineOnly) return [];
+  const ownerKey = getPendingDuplicateOwnerKey(cloudConfig);
+  if (!ownerKey || !intents) return [];
+  return Object.values(intents)
+    .filter((intent): intent is PendingDuplicateIntent => Boolean(intent && intent.ownerKey === ownerKey))
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+}
+
+/**
  * Formats a cloned collection into the deterministic payload expected by POST /api/v1/collections/import-duplicate.
  */
 export function formatImportDuplicateCollectionPayload(col: Collection): {
@@ -614,6 +739,9 @@ export function formatImportDuplicateCollectionPayload(col: Collection): {
           : req?.bodyFormData || [],
       pre_request_script: req?.preRequestScript || '',
       post_response_script: req?.postResponseScript || '',
+      ...(Array.isArray(item.examples) && item.examplesLoaded !== false
+        ? { examples: cloneSavedExamplesList(item.examples, false) }
+        : {}),
       items: [],
     };
   };

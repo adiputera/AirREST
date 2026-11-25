@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
+import yaml from 'js-yaml';
 
 const normalizePath = (path) => path
   .replace(/\{\{[^}]+\}\}|\{[^}]+\}/g, '{}')
@@ -13,6 +14,15 @@ function collectRequests(items, output = []) {
   }
   return output;
 }
+
+test('OpenAPI YAML and JSON have no duplicate mapping keys and are deeply identical', () => {
+  const yamlText = fs.readFileSync(new URL('../backend/openapi.yaml', import.meta.url), 'utf8');
+  const jsonText = fs.readFileSync(new URL('../backend/openapi.json', import.meta.url), 'utf8');
+  JSON.parse(jsonText);
+  const parsedYaml = yaml.load(yamlText, { json: false });
+  const parsedJson = yaml.load(jsonText, { json: false });
+  assert.deepEqual(parsedYaml, parsedJson);
+});
 
 test('Postman collection contains every documented OpenAPI operation exactly as a method/path pair', () => {
   const openapi = JSON.parse(fs.readFileSync(new URL('../backend/openapi.json', import.meta.url), 'utf8'));

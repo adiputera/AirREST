@@ -18,10 +18,12 @@ export interface AutocompletePortalProps {
   activeIndex: number;
   onSelectIndex: (index: number) => void;
   onHighlightIndex: (index: number) => void;
+  onDismiss?: () => void;
   anchorRect: AutocompleteAnchorRect | null;
   query: string;
   kind: 'header' | 'variable';
   listboxId?: string;
+  maskValues?: boolean;
 }
 
 function renderHighlightedMatch(text: string, query: string): React.ReactNode {
@@ -54,12 +56,17 @@ export const AutocompletePortal: React.FC<AutocompletePortalProps> = ({
   activeIndex,
   onSelectIndex,
   onHighlightIndex,
+  onDismiss,
   anchorRect,
   query,
   kind,
   listboxId = 'airrest-autocomplete-listbox',
+  maskValues = false,
 }) => {
+  const portalRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const touchMovedRef = useRef(false);
+  const touchStartYRef = useRef(0);
 
   useEffect(() => {
     if (!isOpen || !listRef.current) return;
@@ -68,6 +75,32 @@ export const AutocompletePortal: React.FC<AutocompletePortalProps> = ({
       activeEl.scrollIntoView({ block: 'nearest' });
     }
   }, [isOpen, activeIndex]);
+
+  // Dismiss orphaned portals when focus was moved into the listbox (e.g. touch-scroll)
+  // and the user taps outside on a non-focusable element.
+  useEffect(() => {
+    if (!isOpen || !onDismiss || typeof document === 'undefined') return;
+    const handleOutsidePointerDown = (e: PointerEvent) => {
+      const target = e.target as Node | null;
+      if (!target) return;
+      if (portalRef.current?.contains(target)) return;
+      if (
+        target instanceof Element &&
+        target.closest('[data-autocomplete-keep-open="true"]')
+      ) {
+        return;
+      }
+      if (
+        portalRef.current &&
+        typeof document.activeElement !== 'undefined' &&
+        (document.activeElement === portalRef.current || portalRef.current.contains(document.activeElement))
+      ) {
+        onDismiss();
+      }
+    };
+    document.addEventListener('pointerdown', handleOutsidePointerDown, true);
+    return () => document.removeEventListener('pointerdown', handleOutsidePointerDown, true);
+  }, [isOpen, onDismiss]);
 
   if (!isOpen || !anchorRect || items.length === 0 || typeof document === 'undefined') {
     return null;
@@ -85,23 +118,38 @@ export const AutocompletePortal: React.FC<AutocompletePortalProps> = ({
 
   const maxListHeight = Math.max(120, Math.min(248, (placement === 'bottom' ? spaceBelow : spaceAbove) - 36));
   const left = Math.max(8, Math.min(anchorRect.left, viewportWidth - menuMinWidth - 8));
+  const clampedMaxWidth = Math.min(menuMaxWidth, Math.max(menuMinWidth, viewportWidth - left - 8));
   const top = placement === 'bottom' ? anchorRect.bottom + 4 : anchorRect.top - 4;
 
   return createPortal(
     <div
+      ref={portalRef}
       id={listboxId}
       role="listbox"
+      tabIndex={-1}
       aria-label={kind === 'header' ? 'HTTP Header Suggestions' : 'Environment Variable Suggestions'}
+      onBlur={(e) => {
+        const related = e.relatedTarget as Node | null;
+        if (related && portalRef.current?.contains(related)) {
+          return;
+        }
+        onDismiss?.();
+      }}
       onMouseDown={(e) => {
         // Prevent focus loss on the underlying input/editor when clicking inside the dropdown
         e.preventDefault();
+      }}
+      onPointerDown={(e) => {
+        if (e.pointerType !== 'touch') {
+          e.preventDefault();
+        }
       }}
       style={{
         position: 'fixed',
         left: `${left}px`,
         top: `${top}px`,
         minWidth: `${menuMinWidth}px`,
-        maxWidth: `${menuMaxWidth}px`,
+        maxWidth: `${clampedMaxWidth}px`,
         transform: placement === 'top' ? 'translateY(-100%)' : 'none',
         zIndex: 10000,
       }}
@@ -150,6 +198,20 @@ export const AutocompletePortal: React.FC<AutocompletePortalProps> = ({
                 data-autocomplete-idx={idx}
                 onMouseEnter={() => onHighlightIndex(idx)}
                 onClick={() => onSelectIndex(idx)}
+                onTouchStart={(e) => {
+                  touchMovedRef.current = false;
+                  touchStartYRef.current = e.touches[0]?.clientY ?? 0;
+                }}
+                onTouchMove={(e) => {
+                  const dy = Math.abs((e.touches[0]?.clientY ?? 0) - touchStartYRef.current);
+                  if (dy > 8) touchMovedRef.current = true;
+                }}
+                onTouchEnd={(e) => {
+                  if (!touchMovedRef.current) {
+                    e.preventDefault();
+                    onSelectIndex(idx);
+                  }
+                }}
                 className={`flex flex-col gap-0.5 rounded-lg px-2.5 py-1.5 cursor-pointer transition ${
                   isSelected
                     ? 'bg-sky-500/15 text-tx-primary ring-1 ring-sky-500/30'
@@ -181,6 +243,20 @@ export const AutocompletePortal: React.FC<AutocompletePortalProps> = ({
               data-autocomplete-idx={idx}
               onMouseEnter={() => onHighlightIndex(idx)}
               onClick={() => onSelectIndex(idx)}
+              onTouchStart={(e) => {
+                touchMovedRef.current = false;
+                touchStartYRef.current = e.touches[0]?.clientY ?? 0;
+              }}
+              onTouchMove={(e) => {
+                const dy = Math.abs((e.touches[0]?.clientY ?? 0) - touchStartYRef.current);
+                if (dy > 8) touchMovedRef.current = true;
+              }}
+              onTouchEnd={(e) => {
+                if (!touchMovedRef.current) {
+                  e.preventDefault();
+                  onSelectIndex(idx);
+                }
+              }}
               className={`flex items-center justify-between gap-2.5 rounded-lg px-2.5 py-1.5 cursor-pointer transition ${
                 isSelected
                   ? 'bg-amber-500/15 text-tx-primary ring-1 ring-amber-500/30'
@@ -224,7 +300,7 @@ export const AutocompletePortal: React.FC<AutocompletePortalProps> = ({
                     </span>
                   </div>
                   <span className="font-mono text-[10.5px] text-tx-muted truncate">
-                    {item.resolvedValue || '(empty string)'}
+                    {maskValues && !item.isBuiltin ? '••••••••' : item.resolvedValue || '(empty string)'}
                   </span>
                 </div>
               </div>

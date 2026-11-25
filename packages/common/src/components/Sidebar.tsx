@@ -29,11 +29,19 @@ import {
   AlertTriangle,
   GripVertical,
   Copy,
+  BookOpen,
 } from 'lucide-react';
-import { useApiStore } from '../store/useApiStore';
+import { useApiStore, type SelectedSavedExample } from '../store/useApiStore';
 import { CollectionItem, ApiRequest, Collection } from '../types/api';
 import { MethodBadge } from './MethodBadge';
 import { exportPostmanCollection } from '../lib/postman';
+import {
+  getDisplayExampleSummaries,
+  getItemExampleCount,
+  hasUnloadedCollectionExamples,
+  MAX_SAVED_EXAMPLE_NAME_RUNES,
+  validateSavedExampleName,
+} from '../lib/examples';
 import { ConfirmModal } from './ConfirmModal';
 import { MoveCollectionModal } from './MoveCollectionModal';
 import { CollectionPermissionModal } from './CollectionPermissionModal';
@@ -41,6 +49,7 @@ import { MoveRequestModal } from './MoveRequestModal';
 import { MoveFolderModal } from './MoveFolderModal';
 import { DuplicateCollectionModal } from './DuplicateCollectionModal';
 import { DuplicateItemModal } from './DuplicateItemModal';
+import { PendingDuplicateRecovery } from './PendingDuplicateRecovery';
 import { ImportModal } from './ImportModal';
 import { findRequestAncestorIds, isDescendantOf } from '../lib/treeHelper';
 import { canModifyCollection, hasScopePermission } from '../lib/jwt';
@@ -72,7 +81,8 @@ function filterCollectionItems(items: CollectionItem[], query: string): Collecti
         return null;
       }
       if (item.type === 'request') {
-        const fullText = `${item.name || ''} ${item.request?.method || ''} ${item.request?.url || ''}`.toLowerCase();
+        const exampleNames = getDisplayExampleSummaries(item).map((ex) => ex.name || '').join(' ');
+        const fullText = `${item.name || ''} ${item.request?.method || ''} ${item.request?.url || ''} ${exampleNames}`.toLowerCase();
         const matches = tokens.every((token) => fullText.includes(token));
         return matches ? item : null;
       }
@@ -161,6 +171,13 @@ interface FolderItemProps {
   onExpandAllInFolder: (item: CollectionItem) => void;
   onCollapseAllInFolder: (item: CollectionItem) => void;
   isSearching: boolean;
+  searchQuery?: string;
+  expandedExampleItems?: Record<string, boolean>;
+  onToggleExampleItem?: (collectionId: string, item: CollectionItem) => void;
+  selectedExample?: SelectedSavedExample | null;
+  onSelectExample?: (selection: SelectedSavedExample) => void;
+  onRenameExample?: (collectionId: string, itemId: string, exampleId: string, name: string) => Promise<void> | void;
+  onDeleteExample?: (collectionId: string, itemId: string, exampleId: string, name: string) => void;
   onSelectRequest: (req: ApiRequest) => void;
   onRequestDelete: (item: CollectionItem) => void;
   onRequestMove: (item: CollectionItem, collectionId: string) => void;
@@ -187,6 +204,13 @@ const FolderItem: React.FC<FolderItemProps> = ({
   onExpandAllInFolder,
   onCollapseAllInFolder,
   isSearching,
+  searchQuery = '',
+  expandedExampleItems = {},
+  onToggleExampleItem,
+  selectedExample,
+  onSelectExample,
+  onRenameExample,
+  onDeleteExample,
   onSelectRequest,
   onRequestDelete,
   onRequestMove,
@@ -228,6 +252,16 @@ const FolderItem: React.FC<FolderItemProps> = ({
   const createFolder = useApiStore((state) => state.createFolder);
   const createRequestInCollection = useApiStore((state) => state.createRequestInCollection);
   const renameCollectionItem = useApiStore((state) => state.renameCollectionItem);
+  const [editingExampleId, setEditingExampleId] = useState<string | null>(null);
+  const [editingExampleName, setEditingExampleName] = useState('');
+
+  const handleConfirmRenameExample = async (exampleId: string, originalName: string) => {
+    const validation = validateSavedExampleName(editingExampleName);
+    if (validation.valid && validation.name !== originalName && onRenameExample) {
+      await onRenameExample(collectionId, item.id, exampleId, validation.name);
+    }
+    setEditingExampleId(null);
+  };
 
   useEffect(() => {
     if (!isEditing) {
@@ -339,6 +373,11 @@ const FolderItem: React.FC<FolderItemProps> = ({
   };
 
   const handleDrop = (e: React.DragEvent) => {
+    if (!draggedItem) {
+      if (dropPosition !== null) setDropPosition(null);
+      if (isForbidden) setIsForbidden(false);
+      return;
+    }
     e.preventDefault();
     e.stopPropagation();
     if (!canEdit) return;
@@ -348,7 +387,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
     setDropPosition(null);
     setIsForbidden(false);
 
-    if (!draggedItem || forbidden || !currentPos) {
+    if (forbidden || !currentPos) {
       return;
     }
 
@@ -676,7 +715,8 @@ const FolderItem: React.FC<FolderItemProps> = ({
         {isOpen && (!item.items || item.items.length === 0) && !isCreatingSubfolder && (
           <div
             onDragOver={(e) => {
-              if (!draggedItem || draggedItem.collectionId !== collectionId) {
+              if (!draggedItem) return;
+              if (draggedItem.collectionId !== collectionId) {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = 'none';
                 return;
@@ -693,9 +733,10 @@ const FolderItem: React.FC<FolderItemProps> = ({
               e.dataTransfer.dropEffect = 'move';
             }}
             onDrop={(e) => {
+              if (!draggedItem) return;
               e.preventDefault();
               e.stopPropagation();
-              if (!draggedItem || draggedItem.collectionId !== collectionId || draggedItem.id === item.id) return;
+              if (draggedItem.collectionId !== collectionId || draggedItem.id === item.id) return;
               if (draggedItem.type === 'folder' && isDescendantOf(collectionItems, draggedItem.id, item.id)) return;
               onReorderItem(collectionId, draggedItem.id, item.id, 'inside');
               setDraggedItem(null);
@@ -720,6 +761,13 @@ const FolderItem: React.FC<FolderItemProps> = ({
                 onExpandAllInFolder={onExpandAllInFolder}
                 onCollapseAllInFolder={onCollapseAllInFolder}
                 isSearching={isSearching}
+                searchQuery={searchQuery}
+                expandedExampleItems={expandedExampleItems}
+                onToggleExampleItem={onToggleExampleItem}
+                selectedExample={selectedExample}
+                onSelectExample={onSelectExample}
+                onRenameExample={onRenameExample}
+                onDeleteExample={onDeleteExample}
                 onSelectRequest={onSelectRequest}
                 onRequestDelete={onRequestDelete}
                 onRequestMove={onRequestMove}
@@ -785,7 +833,20 @@ const FolderItem: React.FC<FolderItemProps> = ({
     );
   }
 
+  const exampleCount = getItemExampleCount(item);
+  const displaySummaries = getDisplayExampleSummaries(item);
+  const searchTokens = searchQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const hasMatchingExample =
+    isSearching &&
+    searchTokens.length > 0 &&
+    displaySummaries.some((ex) => {
+      const exText = `${ex.name || ''} ${ex.code} ${ex.status || ''}`.toLowerCase();
+      return searchTokens.every((tok) => exText.includes(tok));
+    });
+  const isExamplesExpanded = exampleCount > 0 && (hasMatchingExample || !!expandedExampleItems[item.id]);
+
   return (
+    <div className="select-none">
     <div
       draggable={canEdit}
       onDragStart={handleDragStart}
@@ -801,7 +862,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
           name: item.name || item.request?.name || 'Untitled Request',
         });
       }}
-      className={`group relative flex items-center gap-2 py-1.5 px-2 rounded-md transition text-xs ${
+      className={`group relative flex items-center gap-1.5 py-1.5 px-2 rounded-md transition text-xs ${
         isForbidden
           ? 'cursor-not-allowed bg-rose-500/10 text-rose-500 dark:text-rose-300'
           : isBeingDragged
@@ -819,6 +880,24 @@ const FolderItem: React.FC<FolderItemProps> = ({
         <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-sky-400 z-30 shadow-[0_0_8px_rgba(56,189,248,0.9)] pointer-events-none flex items-center">
           <div className="w-1.5 h-1.5 rounded-full bg-sky-400 -ml-0.5" />
         </div>
+      )}
+      {exampleCount > 0 && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleExampleItem?.(collectionId, item);
+          }}
+          className="rounded p-0.5 text-tx-faint hover:bg-hover hover:text-tx-primary transition shrink-0"
+          aria-label={isExamplesExpanded ? 'Collapse saved examples' : 'Expand saved examples'}
+          title={`${exampleCount} saved example${exampleCount === 1 ? '' : 's'}`}
+        >
+          {isExamplesExpanded ? (
+            <ChevronDown className="h-3 w-3" />
+          ) : (
+            <ChevronRight className="h-3 w-3" />
+          )}
+        </button>
       )}
       <MethodBadge method={item.request.method} size="sm" />
       <span
@@ -930,6 +1009,142 @@ const FolderItem: React.FC<FolderItemProps> = ({
       </div>
       )}
     </div>
+    {isExamplesExpanded && (
+      <div
+        className="border-l border-line ml-4 mt-0.5 space-y-0.5"
+        draggable={false}
+        onDragStart={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (e.dataTransfer) e.dataTransfer.dropEffect = 'none';
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+      >
+        {displaySummaries.length === 0 ? (
+          <div className="px-2 py-1 text-[10px] text-tx-muted italic" style={{ paddingLeft: `${Math.max((level + 1) * 12, 12)}px` }}>
+            Loading saved examples...
+          </div>
+        ) : (
+          displaySummaries.map((ex) => {
+            const isSelected =
+              selectedExample?.collectionId === collectionId &&
+              selectedExample?.itemId === item.id &&
+              selectedExample?.exampleId === ex.id;
+            if (editingExampleId === ex.id) {
+              return (
+                <div
+                  key={ex.id}
+                  draggable={false}
+                  onClick={(e) => e.stopPropagation()}
+                  className="flex items-center gap-1 py-1 px-2 rounded bg-card border border-sky-500/40 text-[11px]"
+                  style={{ paddingLeft: `${Math.max((level + 1) * 12, 10)}px` }}
+                >
+                  <BookOpen className="h-3 w-3 shrink-0 text-sky-500" />
+                  <input
+                    type="text"
+                    autoFocus
+                    maxLength={MAX_SAVED_EXAMPLE_NAME_RUNES}
+                    value={editingExampleName}
+                    onChange={(e) => setEditingExampleName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void handleConfirmRenameExample(ex.id, ex.name);
+                      else if (e.key === 'Escape') setEditingExampleId(null);
+                    }}
+                    className="flex-1 min-w-0 rounded bg-element px-1.5 py-0.5 text-[11px] text-tx-primary focus:outline-none focus:ring-1 focus:ring-sky-400"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void handleConfirmRenameExample(ex.id, ex.name)}
+                    className="p-0.5 text-emerald-500"
+                    title="Save name"
+                  >
+                    <Check className="h-3 w-3" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditingExampleId(null)}
+                    className="p-0.5 text-tx-muted hover:text-tx-primary"
+                    title="Cancel"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              );
+            }
+            return (
+              <div
+                key={ex.id}
+                draggable={false}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectExample?.({
+                    collectionId,
+                    itemId: item.id,
+                    exampleId: ex.id,
+                  });
+                }}
+                className={`group/ex flex items-center gap-1.5 py-1 px-2 rounded-md text-[11px] cursor-pointer transition ${
+                  isSelected
+                    ? 'bg-sky-500/15 text-sky-600 dark:text-sky-300 font-medium'
+                    : 'text-tx-muted hover:bg-hover hover:text-tx-primary'
+                }`}
+                style={{ paddingLeft: `${Math.max((level + 1) * 12, 10)}px` }}
+                title={`${ex.code} ${ex.status} — ${ex.name}`}
+              >
+                <BookOpen className="h-3 w-3 shrink-0 text-sky-500/80" />
+                <span className="font-mono text-[10px] text-tx-faint shrink-0">{ex.code}</span>
+                <span
+                  className="truncate flex-1"
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    if (!canEdit) return;
+                    setEditingExampleId(ex.id);
+                    setEditingExampleName(ex.name);
+                  }}
+                >
+                  {ex.name}
+                </span>
+                {canEdit && (
+                  <div className="hidden group-hover/ex:flex max-md:flex items-center gap-0.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingExampleId(ex.id);
+                        setEditingExampleName(ex.name);
+                      }}
+                      className="rounded p-0.5 text-tx-muted hover:text-sky-500"
+                      title="Rename example"
+                    >
+                      <Pencil className="h-2.5 w-2.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteExample?.(collectionId, item.id, ex.id, ex.name);
+                      }}
+                      className="rounded p-0.5 text-tx-muted hover:text-rose-500"
+                      title="Delete example"
+                    >
+                      <Trash2 className="h-2.5 w-2.5" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+    )}
+    </div>
   );
 };
 
@@ -961,6 +1176,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
   const featurePolicyStatus = useApiStore((state) => state.featurePolicyStatus);
   const refreshFeaturePolicy = useApiStore((state) => state.refreshFeaturePolicy);
   const pullCloudDelta = useApiStore((state) => state.pullCloudDelta);
+  const loadCollectionDetails = useApiStore((state) => state.loadCollectionDetails);
+  const selectedExample = useApiStore((state) => state.selectedExample);
+  const selectSavedExample = useApiStore((state) => state.selectSavedExample);
+  const loadItemExamples = useApiStore((state) => state.loadItemExamples);
+  const hydrateCollectionExamples = useApiStore((state) => state.hydrateCollectionExamples);
+  const renameSavedExample = useApiStore((state) => state.renameSavedExample);
+  const deleteSavedExample = useApiStore((state) => state.deleteSavedExample);
   const syncStatus = useApiStore((state) => state.syncStatus);
   const lastDuplicateReveal = useApiStore((state) => state.lastDuplicateReveal);
 
@@ -997,12 +1219,34 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
   const [showClearHistoryConfirm, setShowClearHistoryConfirm] = useState(false);
   const [collapsedCollections, setCollapsedCollections] = useState<Record<string, boolean>>({});
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({});
+  const [expandedExampleItems, setExpandedExampleItems] = useState<Record<string, boolean>>({});
+  const [exampleToDelete, setExampleToDelete] = useState<{
+    collectionId: string;
+    itemId: string;
+    exampleId: string;
+    name: string;
+  } | null>(null);
   const lastRevealedPath = useRef<string | null>(null);
   const lastRevealedDuplicateRevision = useRef<number>(0);
   const workspaceKey = JSON.stringify(workspaceMode === 'offline'
     ? [workspaceMode, activeOfflineWorkspaceId]
     : [workspaceMode, cloudConfig.apiUrl, cloudConfig.user?.id,
       cloudConfig.activeScope?.type, cloudConfig.activeScope?.id]);
+
+  useEffect(() => {
+    setCollectionToMove(null);
+    setRequestToMove(null);
+    setFolderToMove(null);
+    setExpandedExampleItems({});
+    setExampleToDelete(null);
+  }, [workspaceKey]);
+
+  useEffect(() => {
+    if (!selectedExample?.itemId) return;
+    setExpandedExampleItems((prev) =>
+      prev[selectedExample.itemId] ? prev : { ...prev, [selectedExample.itemId]: true },
+    );
+  }, [selectedExample?.itemId]);
 
   useEffect(() => {
     const [collectionId, ...folderIds] = findRequestAncestorIds(collections, activeTabId);
@@ -1224,6 +1468,21 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
     }));
   };
 
+  const handleToggleExampleItem = (colId: string, item: CollectionItem) => {
+    const isCurrentlyOpen = !!expandedExampleItems[item.id];
+    setExpandedExampleItems((prev) => ({
+      ...prev,
+      [item.id]: !isCurrentlyOpen,
+    }));
+    if (
+      !isCurrentlyOpen &&
+      workspaceMode === 'cloud' &&
+      (item.exampleSummariesTruncated || (item.examplesLoaded === false && getDisplayExampleSummaries(item).length === 0))
+    ) {
+      void loadItemExamples(colId, item.id);
+    }
+  };
+
   const handleExpandAllInFolder = (item: CollectionItem) => {
     const ids = getAllFolderIds(item);
     setOpenFolders((prev) => {
@@ -1338,6 +1597,32 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
         return queryTokens.every((token) => fullText.includes(token));
       });
 
+  const resolveUnprunedCollection = (colId: string, fallback: Collection): Collection =>
+    (collections || []).find((c) => c.id === colId) || fallback;
+
+  const findUnprunedCollectionItem = (
+    items: CollectionItem[],
+    itemId: string
+  ): CollectionItem | null => {
+    for (const it of items) {
+      if (it.id === itemId) return it;
+      if (it.type === 'folder' && it.items) {
+        const found = findUnprunedCollectionItem(it.items, itemId);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+
+  const resolveUnprunedItem = (
+    colId: string,
+    fallback: CollectionItem
+  ): CollectionItem => {
+    const fullCol = (collections || []).find((c) => c.id === colId);
+    if (!fullCol) return fallback;
+    return findUnprunedCollectionItem(fullCol.items || [], fallback.id) || fallback;
+  };
+
   const handleExportCollection = async (e: React.MouseEvent, col: Collection) => {
     e.stopPropagation();
     try {
@@ -1348,8 +1633,34 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
           return;
         }
       }
-      const json = exportPostmanCollection(col);
-      const filename = `${col.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-postman-v2.1.json`;
+      let exportTarget = resolveUnprunedCollection(col.id, col);
+      if (exportTarget.isPartial) {
+        if (workspaceMode === 'cloud') {
+          const detailResult = await loadCollectionDetails(exportTarget.id);
+          if (!detailResult.success || !detailResult.collection) {
+            setCollectionActionError(
+              detailResult.error || 'Cannot export collection: failed to load full collection details.'
+            );
+            return;
+          }
+          exportTarget = detailResult.collection;
+        } else {
+          setCollectionActionError('Cannot export a partially loaded collection.');
+          return;
+        }
+      }
+      if (workspaceMode === 'cloud' && hasUnloadedCollectionExamples(exportTarget)) {
+        const hydrated = await hydrateCollectionExamples(exportTarget.id, { includeBody: true });
+        if (!hydrated.success || !hydrated.collection) {
+          setCollectionActionError(
+            hydrated.error || 'Cannot export collection: failed to load saved examples.'
+          );
+          return;
+        }
+        exportTarget = hydrated.collection;
+      }
+      const json = exportPostmanCollection(exportTarget);
+      const filename = `${exportTarget.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-postman-v2.1.json`;
       const adapter = runtimeAdapter;
 
       if (adapter?.saveFile) {
@@ -1369,6 +1680,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (err) {
       console.error('Failed to export collection', err);
+      setCollectionActionError(
+        err instanceof Error ? err.message : 'Failed to export collection.'
+      );
     }
   };
 
@@ -1552,6 +1866,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
           </div>
         )}
       </div>
+
+      {/* Pending Duplicate Recovery Banner */}
+      <PendingDuplicateRecovery />
 
       {/* Content Area */}
       <div className="flex-1 overflow-y-auto p-2 space-y-2">
@@ -1790,7 +2107,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
                                           onClick={() => {
                                             const trigger = colButtonRef.current;
                                             setActiveAddMenuColId(null);
-                                            setCollectionToDuplicate({ collection: col, trigger });
+                                            setCollectionToDuplicate({
+                                              collection: resolveUnprunedCollection(col.id, col),
+                                              trigger,
+                                            });
                                           }}
                                           className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-tx-secondary hover:bg-hover hover:text-sky-500 dark:hover:text-sky-400 transition"
                                         >
@@ -1956,6 +2276,23 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
                                 onExpandAllInFolder={handleExpandAllInFolder}
                                 onCollapseAllInFolder={handleCollapseAllInFolder}
                                 isSearching={!!trimmedQuery}
+                                searchQuery={searchQuery}
+                                expandedExampleItems={expandedExampleItems}
+                                onToggleExampleItem={handleToggleExampleItem}
+                                selectedExample={selectedExample}
+                                onSelectExample={(selection) => {
+                                  selectSavedExample(selection);
+                                  onClose?.();
+                                }}
+                                onRenameExample={async (colId, itemId, exampleId, nextName) => {
+                                  const res = await renameSavedExample({ collectionId: colId, itemId, exampleId, name: nextName });
+                                  if (!res.success && !res.reconcilePending && res.error) {
+                                    setCollectionActionError(res.error);
+                                  }
+                                }}
+                                onDeleteExample={(colId, itemId, exampleId, name) =>
+                                  setExampleToDelete({ collectionId: colId, itemId, exampleId, name })
+                                }
                                 onSelectRequest={openRequestInTab}
                                 onRequestDelete={(targetItem) =>
                                   setItemToDelete({
@@ -1967,19 +2304,19 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
                                 }
                                 onRequestMove={(targetItem, colId) =>
                                   setRequestToMove({
-                                    item: targetItem,
+                                    item: resolveUnprunedItem(colId, targetItem),
                                     collectionId: colId,
                                   })
                                 }
                                 onRequestMoveFolder={(targetItem, colId) =>
                                   setFolderToMove({
-                                    item: targetItem,
+                                    item: resolveUnprunedItem(colId, targetItem),
                                     collectionId: colId,
                                   })
                                 }
                                 onRequestDuplicateItem={(targetItem, colId, trigger) =>
                                   setItemToDuplicate({
-                                    item: targetItem,
+                                    item: resolveUnprunedItem(colId, targetItem),
                                     collectionId: colId,
                                     trigger,
                                   })
@@ -2189,6 +2526,31 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
       <ImportModal
         isOpen={isImportOpen}
         onClose={() => setIsImportOpen(false)}
+      />
+
+      <ConfirmModal
+        isOpen={!!exampleToDelete}
+        onClose={() => setExampleToDelete(null)}
+        onConfirm={async () => {
+          if (!exampleToDelete) return;
+          const target = exampleToDelete;
+          setExampleToDelete(null);
+          const res = await deleteSavedExample({
+            collectionId: target.collectionId,
+            itemId: target.itemId,
+            exampleId: target.exampleId,
+          });
+          if (!res.success && !res.reconcilePending && res.error) {
+            setCollectionActionError(res.error);
+          }
+        }}
+        title="Delete Saved Example"
+        message={
+          exampleToDelete
+            ? `Are you sure you want to delete saved example "${exampleToDelete.name}"?`
+            : ''
+        }
+        confirmText="Delete"
       />
 
       {!isOfflineOnly && (

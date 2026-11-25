@@ -96,6 +96,7 @@ type DuplicateImportItem struct {
 	BodyFormData       *json.RawMessage
 	PreRequestScript   *string
 	PostResponseScript *string
+	Examples           domain.OptionalRawJSON
 	Items              []DuplicateImportItem
 }
 
@@ -1055,7 +1056,7 @@ func loadActiveCollectionItemsInTx(ctx context.Context, tx pgx.Tx, collectionID 
 		SELECT id, collection_id, parent_id, type, name, sort_order,
 		       method, url, params, path_variables, headers, auth, body_type, raw_type,
 		       body_content, graphql_query, graphql_variables, body_form_data,
-		       pre_request_script, post_response_script
+		       pre_request_script, post_response_script, examples
 		FROM collection_items
 		WHERE collection_id = $1 AND deleted_at IS NULL
 		ORDER BY sort_order ASC, created_at ASC
@@ -1073,7 +1074,7 @@ func loadActiveCollectionItemsInTx(ctx context.Context, tx pgx.Tx, collectionID 
 			&it.ID, &it.CollectionID, &it.ParentID, &typeStr, &it.Name, &it.SortOrder,
 			&it.Method, &it.URL, &it.Params, &it.PathVariables, &it.Headers, &it.Auth, &it.BodyType, &it.RawType,
 			&it.BodyContent, &it.GraphQLQuery, &it.GraphQLVariables, &it.BodyFormData,
-			&it.PreRequestScript, &it.PostResponseScript,
+			&it.PreRequestScript, &it.PostResponseScript, &it.Examples,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan collection item: %w", err)
 		}
@@ -1146,6 +1147,26 @@ type clonedItemRow struct {
 	bodyFormData       *json.RawMessage
 	preRequestScript   *string
 	postResponseScript *string
+	examples           json.RawMessage
+}
+
+func regenerateExamplesForDuplicate(raw domain.OptionalRawJSON, itemType domain.ItemType) json.RawMessage {
+	if itemType == domain.ItemTypeFolder || !raw.Present || raw.IsNull || len(raw.Raw) == 0 {
+		return json.RawMessage("[]")
+	}
+	var list []domain.SavedExample
+	if err := json.Unmarshal(raw.Raw, &list); err != nil || len(list) == 0 {
+		return json.RawMessage("[]")
+	}
+	for i := range list {
+		list[i].ID = uuid.NewString()
+		list[i].Revision = 1
+	}
+	encoded, err := json.Marshal(list)
+	if err != nil {
+		return json.RawMessage("[]")
+	}
+	return json.RawMessage(encoded)
 }
 
 func buildClonedCollectionTree(
@@ -1211,6 +1232,7 @@ func buildClonedCollectionTree(
 				bodyFormData:       ch.BodyFormData,
 				preRequestScript:   ch.PreRequestScript,
 				postResponseScript: ch.PostResponseScript,
+				examples:           regenerateExamplesForDuplicate(ch.Examples, ch.Type),
 			})
 			if ch.Type == domain.ItemTypeFolder {
 				pid := newID
@@ -1268,6 +1290,7 @@ func buildClonedSubtree(
 		bodyFormData:       rootItem.BodyFormData,
 		preRequestScript:   rootItem.PreRequestScript,
 		postResponseScript: rootItem.PostResponseScript,
+		examples:           regenerateExamplesForDuplicate(rootItem.Examples, rootItem.Type),
 	}}
 
 	var walk func(oldParentID, newParentID uuid.UUID, depth int) error
@@ -1313,6 +1336,7 @@ func buildClonedSubtree(
 				bodyFormData:       ch.BodyFormData,
 				preRequestScript:   ch.PreRequestScript,
 				postResponseScript: ch.PostResponseScript,
+				examples:           regenerateExamplesForDuplicate(ch.Examples, ch.Type),
 			})
 			if ch.Type == domain.ItemTypeFolder {
 				if err := walk(ch.ID, newID, depth+1); err != nil {
@@ -1378,6 +1402,7 @@ func flattenImportDuplicateItems(items []DuplicateImportItem) ([]clonedItemRow, 
 				bodyFormData:       it.BodyFormData,
 				preRequestScript:   it.PreRequestScript,
 				postResponseScript: it.PostResponseScript,
+				examples:           regenerateExamplesForDuplicate(it.Examples, itemType),
 			})
 			if itemType == domain.ItemTypeFolder && len(it.Items) > 0 {
 				pid := newID
@@ -1410,22 +1435,26 @@ func insertClonedItemsInTx(
 			id, collection_id, parent_id, type, name, sort_order,
 			method, url, params, path_variables, headers, auth, body_type, raw_type,
 			body_content, graphql_query, graphql_variables, body_form_data,
-			pre_request_script, post_response_script, version, last_modified_by,
+			pre_request_script, post_response_script, examples, version, last_modified_by,
 			created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
 			$7, $8, $9, $10, $11, $12, $13, $14,
 			$15, $16, $17, $18,
-			$19, $20, 1, $21,
-			$22, $22
+			$19, $20, $21::jsonb, 1, $22,
+			$23, $23
 		)
 	`
 	for _, row := range rows {
+		exArg := "[]"
+		if row.itemType == domain.ItemTypeRequest && len(row.examples) > 0 {
+			exArg = string(row.examples)
+		}
 		if _, err := tx.Exec(ctx, insertQuery,
 			row.newID, collectionID, row.newParentID, string(row.itemType), row.name, row.sortOrder,
 			row.method, row.url, row.params, row.pathVariables, row.headers, row.auth, row.bodyType, row.rawType,
 			row.bodyContent, row.graphqlQuery, row.graphqlVariables, row.bodyFormData,
-			row.preRequestScript, row.postResponseScript, userID, now,
+			row.preRequestScript, row.postResponseScript, exArg, userID, now,
 		); err != nil {
 			return fmt.Errorf("failed to insert duplicated item %s: %w", row.name, err)
 		}

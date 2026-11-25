@@ -19,7 +19,7 @@ export const EnvironmentOccModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+    <div data-modal="true" className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
       <div role="dialog" aria-modal="true" aria-labelledby="occ-title" className="w-full max-w-4xl rounded-2xl border border-amber-500/30 bg-surface shadow-2xl">
         <div className="border-b border-line p-5">
           <div className="flex items-start gap-3">

@@ -83,7 +83,7 @@ function createStoreHarness({ cloudClientOverrides = {}, storage: customStorageO
   modules.theme = { applyTheme: noop };
   modules.fetcher = { executeApiRequest: async () => ({ status: 200, statusText: 'OK', data: '{}', timeMs: 1, sizeBytes: 2, headers: {} }) };
   modules.blobManager = { revokeBlobUrl: noop, revokeBlobUrls: noop, releaseRawBody: noop, releaseRawBodies: noop, evictRawBodiesToBudget: () => [] };
-  modules.postman = { importPostmanCollection: noop, importPostmanEnvironment: noop, detectPostmanJsonType: noop };
+  modules.postman = { importPostmanCollection: noop, importPostmanEnvironment: noop, detectPostmanJsonType: noop, buildPostmanUrl: (url) => ({ raw: String(url || '') }) };
   modules.scriptRunner = { executePreRequestScript: async () => ({ success: true, environment: {}, variables: {} }), executePostResponseScript: async () => ({ success: true, environment: {}, variables: {} }) };
   modules.urlParams = loadTsModule('../packages/common/src/lib/urlParams.ts');
   modules.productPolicy = loadTsModule('../packages/common/src/productPolicy.ts');
@@ -858,4 +858,631 @@ test('Regression (Codex Review): provider-session pendingDuplicateIntents surviv
     assert.equal(s.getState().collections.some((c) => c.id === 'moved-copy'), false);
     assert.equal(retry.targetScope.id, 'ws-b');
   }
+});
+
+test('V1, V2, V3: entity-level offline rollback preserves concurrent edits across same-workspace, target-entry, and A->B->A switches', async () => {
+  const deferred = () => {
+    let resolve, reject;
+    const promise = new Promise((a, b) => { resolve = a; reject = b; });
+    return { promise, resolve, reject };
+  };
+  const col = (id = 'c1', name = 'Source') => ({
+    id,
+    name,
+    items: [{ id: `r-${id}`, name: 'Request', type: 'request', request: makeSampleRequest(`r-${id}`, 'Request') }],
+    createdAt: 1,
+    updatedAt: 1,
+    _origin: 'offline',
+  });
+  const baseOffline = () => ({
+    workspaceMode: 'offline',
+    activeOfflineWorkspaceId: 'a',
+    offlineWorkspaces: [
+      { id: 'a', name: 'A', createdAt: 1, updatedAt: 1 },
+      { id: 'b', name: 'B', createdAt: 1, updatedAt: 1 },
+    ],
+    collections: [col()],
+    offlineScopeCache: {},
+  });
+
+  // V1: Concurrent rename during flush failure in same workspace preserves rename and removes only the clone (collection, item, and createCollectionAsync)
+  for (const kind of ['collection', 'item', 'create']) {
+    const h = createStoreHarness();
+    const s = await h.createStore();
+    const flush = deferred();
+    s.setState({ ...baseOffline(), persistNativeCredentialState: () => flush.promise });
+
+    const op = kind === 'collection'
+      ? s.getState().duplicateCollection('c1', { id: 'a', name: 'A', type: 'offline_workspace' })
+      : kind === 'item'
+        ? s.getState().duplicateCollectionItem('c1', 'r-c1', 'c1', null)
+        : s.getState().createCollectionAsync('Transient Col');
+
+    s.getState().renameCollection('c1', 'New saved name');
+    assert.equal(s.getState().collections.find((c) => c.id === 'c1').name, 'New saved name');
+
+    flush.reject(new Error('storage failed'));
+    const res = await op;
+    assert.equal(res.success, false);
+    assert.equal(s.getState().collections.length, 1);
+    assert.equal(s.getState().collections[0].id, 'c1');
+    assert.equal(s.getState().collections[0].name, 'New saved name');
+    assert.equal(s.getState().collections[0].items.length, 1);
+    assert.equal(s.getState().collections[0].items[0].id, 'r-c1');
+  }
+
+  // V2: Duplicate A -> B while B is inactive, switch into B before flush rejects -> active B and cache B have no failed copy
+  {
+    const h = createStoreHarness();
+    const s = await h.createStore();
+    const flush = deferred();
+    s.setState({ ...baseOffline(), persistNativeCredentialState: () => flush.promise });
+
+    const op = s.getState().duplicateCollection('c1', { id: 'b', name: 'B', type: 'offline_workspace' });
+    s.getState().switchOfflineWorkspace('b');
+    assert.equal(s.getState().collections.length, 1);
+
+    flush.reject(new Error('storage failed'));
+    const res = await op;
+    assert.equal(res.success, false);
+    assert.equal(s.getState().activeOfflineWorkspaceId, 'b');
+    assert.equal(s.getState().collections.length, 0);
+    assert.equal((s.getState().offlineScopeCache.b?.collections || []).length, 0);
+    await s.getState().persistNativeCredentialState().catch(() => {});
+    const reloaded = await h.createStore();
+    assert.equal(reloaded.getState().collections.length, 0);
+  }
+
+  // V3: Duplicate locally, switch A -> B -> A and edit in A while flush is pending -> edits survive rollback
+  {
+    const h = createStoreHarness();
+    const s = await h.createStore();
+    const flush = deferred();
+    s.setState({ ...baseOffline(), persistNativeCredentialState: () => flush.promise });
+
+    const op = s.getState().duplicateCollection('c1', { id: 'a', name: 'A', type: 'offline_workspace' });
+    s.getState().switchOfflineWorkspace('b');
+    s.getState().switchOfflineWorkspace('a');
+    s.getState().renameCollection('c1', 'Edited after return');
+
+    flush.reject(new Error('storage failed'));
+    const res = await op;
+    assert.equal(res.success, false);
+    assert.equal(s.getState().collections.length, 1);
+    assert.equal(s.getState().collections[0].name, 'Edited after return');
+    assert.equal(s.getState().offlineScopeCache.a.collections.length, 1);
+  }
+});
+
+test('V4, V5, V6: atomic per-operation pendingDuplicateIntents preserve concurrent operations across GET completion, early finish, and persist rollback', async () => {
+  const deferred = () => {
+    let resolve, reject;
+    const promise = new Promise((a, b) => { resolve = a; reject = b; });
+    return { promise, resolve, reject };
+  };
+  const cfg = () => ({
+    apiUrl: 'https://api.example.com',
+    token: 'tok',
+    user: { id: 'alice', email: 'alice@example.com', name: 'Alice', role: 'user' },
+    activeScope: { id: 'ws-a', name: 'A', type: 'workspace' },
+  });
+  const col = (id) => ({
+    id,
+    name: `Col ${id}`,
+    minRole: 'reader',
+    version: 1,
+    createdAt: 1,
+    updatedAt: 1,
+    _origin: 'cloud',
+    items: [{ id: `r-${id}`, name: `Req ${id}`, type: 'request', request: makeSampleRequest(`r-${id}`, `Req ${id}`) }],
+  });
+
+  // V4: Hold GET A while B becomes uncertain on a different collection -> A finishes -> B intent survives in memory & storage and replays once
+  for (const kind of ['collection', 'item']) {
+    const getAStarted = deferred();
+    const getA = deferred();
+    let failBPostOnce = true;
+    let bCommits = 0;
+    const h = createStoreHarness({
+      cloudClientOverrides: {
+        duplicateScopeCollection: async (_url, _tok, source, _scope, op) => {
+          if (source === 'c2') {
+            bCommits++;
+            if (failBPostOnce) {
+              failBPostOnce = false;
+              throw new Error('reply lost after commit');
+            }
+            return { operation_id: op, status: 'committed', collection_id: 'copy-c2', workspace_id: 'ws-a', name: 'Col c2 copy', min_role: 'reader', version: 1, item_count: 1 };
+          }
+          return { operation_id: op, status: 'committed', collection_id: 'copy-c1', workspace_id: 'ws-a', name: 'Col c1 copy', min_role: 'reader', version: 1, item_count: 1 };
+        },
+        duplicateScopeItem: async (_url, _tok, _item, source, target, parent, op) => {
+          if (source === 'c2') {
+            bCommits++;
+            if (failBPostOnce) {
+              failBPostOnce = false;
+              throw new Error('reply lost after commit');
+            }
+            return { operation_id: op, status: 'committed', root_item_id: 'copy-r2', target_collection_id: target, target_parent_id: parent, target_collection_version: 2, name: 'Req c2 copy', item_count: 1 };
+          }
+          return { operation_id: op, status: 'committed', root_item_id: 'copy-r1', target_collection_id: target, target_parent_id: parent, target_collection_version: 2, name: 'Req c1 copy', item_count: 1 };
+        },
+        fetchCollectionById: async (_url, _tok, colId) => {
+          if (colId === 'copy-c1' || colId === 'c1') {
+            getAStarted.resolve();
+            return getA.promise;
+          }
+          return { id: colId, workspace_id: 'ws-a', name: 'Refreshed', min_role: 'reader', version: 2, items: [] };
+        },
+      },
+    });
+    const s = await h.createStore();
+    s.setState({ workspaceMode: 'cloud', cloudConfig: cfg(), collections: [col('c1'), col('c2')] });
+    const runDup = (id) => kind === 'collection'
+      ? s.getState().duplicateCollection(id, cfg().activeScope)
+      : s.getState().duplicateCollectionItem(id, `r-${id}`, id, null);
+
+    const opA = runDup('c1');
+    await getAStarted.promise;
+    const opB = await runDup('c2');
+    assert.equal(opB.reconcilePending, true);
+    assert.ok(s.getState().pendingDuplicateIntents[opB.operationId]);
+
+    getA.resolve({ id: kind === 'collection' ? 'copy-c1' : 'c1', workspace_id: 'ws-a', name: 'Col c1 copy', min_role: 'reader', version: 2, items: [] });
+    assert.equal((await opA).success, true);
+
+    assert.ok(s.getState().pendingDuplicateIntents[opB.operationId], 'B intent must remain in memory after A finishes');
+    await s.getState().persistNativeCredentialState();
+    const persisted = JSON.parse(await h.storage.getItem('air-rest-storage')).state;
+    assert.ok(persisted.pendingDuplicateIntents[opB.operationId], 'B intent must remain in storage after A finishes');
+
+    const replayB = await s.getState().retryPendingDuplicateIntent(opB.operationId);
+    assert.equal(replayB.success, true);
+    assert.equal(replayB.operationId, opB.operationId);
+    assert.equal(bCommits, 2);
+    assert.deepEqual(toPlain(s.getState().pendingDuplicateIntents), {});
+  }
+
+  // V5: B completes completely BEFORE GET A resolves -> A resolving does not resurrect B's cleared intent
+  {
+    const getAStarted = deferred();
+    const getA = deferred();
+    const h = createStoreHarness({
+      cloudClientOverrides: {
+        duplicateScopeCollection: async (_url, _tok, source, _scope, op) => ({
+          operation_id: op,
+          status: 'committed',
+          collection_id: `copy-${source}`,
+          workspace_id: 'ws-a',
+          name: `Copy ${source}`,
+          min_role: 'reader',
+          version: 1,
+          item_count: 1,
+        }),
+        fetchCollectionById: async (_url, _tok, colId) => {
+          if (colId === 'copy-c1') {
+            getAStarted.resolve();
+            return getA.promise;
+          }
+          return { id: colId, workspace_id: 'ws-a', name: 'Copy c2', min_role: 'reader', version: 1, items: [] };
+        },
+      },
+    });
+    const s = await h.createStore();
+    s.setState({ workspaceMode: 'cloud', cloudConfig: cfg(), collections: [col('c1'), col('c2')] });
+    const opA = s.getState().duplicateCollection('c1', cfg().activeScope);
+    await getAStarted.promise;
+    const opB = await s.getState().duplicateCollection('c2', cfg().activeScope);
+    assert.equal(opB.success, true);
+    assert.equal(s.getState().pendingDuplicateIntents[opB.operationId], undefined);
+
+    getA.resolve({ id: 'copy-c1', workspace_id: 'ws-a', name: 'Copy c1', min_role: 'reader', version: 1, items: [] });
+    assert.equal((await opA).success, true);
+    assert.deepEqual(toPlain(s.getState().pendingDuplicateIntents), {});
+  }
+
+  // V6: Persist intent A fails AFTER B starts -> only A is removed, B survives
+  {
+    let flushCalls = 0;
+    const flushA = deferred();
+    const flushB = deferred();
+    const postBStarted = deferred();
+    const postB = deferred();
+    const h = createStoreHarness({
+      cloudClientOverrides: {
+        duplicateScopeCollection: async (_url, _tok, source, _scope, op) => {
+          postBStarted.resolve();
+          await postB.promise;
+          return { operation_id: op, status: 'committed', collection_id: `copy-${source}`, workspace_id: 'ws-a', name: 'Copy B', min_role: 'reader', version: 1, item_count: 1 };
+        },
+        fetchCollectionById: async (_url, _tok, colId) => ({ id: colId, workspace_id: 'ws-a', name: 'Copy B', min_role: 'reader', version: 1, items: [] }),
+      },
+    });
+    const s = await h.createStore();
+    s.setState({
+      workspaceMode: 'cloud',
+      cloudConfig: cfg(),
+      collections: [col('c1'), col('c2')],
+      persistNativeCredentialState: () => (++flushCalls === 1 ? flushA.promise : flushB.promise),
+    });
+
+    const opA = s.getState().duplicateCollection('c1', cfg().activeScope, { operationId: 'op-a' });
+    await Promise.resolve();
+    const opB = s.getState().duplicateCollection('c2', cfg().activeScope, { operationId: 'op-b' });
+    flushB.resolve();
+    await postBStarted.promise;
+    assert.ok(s.getState().pendingDuplicateIntents['op-a']);
+    assert.ok(s.getState().pendingDuplicateIntents['op-b']);
+
+    flushA.reject(new Error('storage write failed for A'));
+    const resA = await opA;
+    assert.equal(resA.success, false);
+    assert.equal(s.getState().pendingDuplicateIntents['op-a'], undefined);
+    assert.ok(s.getState().pendingDuplicateIntents['op-b'], 'B intent must survive A persist rollback');
+
+    postB.resolve();
+    const resB = await opB;
+    assert.equal(resB.success, true);
+  }
+});
+
+test('V8, V9, V10: post-commit GET 403/404/413/network marks detailsUnavailable without duplicate retry, and 401 on replay keeps intent for re-auth', async () => {
+  for (const failure of [
+    { label: '403', makeErr: (CloudApiError) => new CloudApiError('forbidden', 403, 'FORBIDDEN') },
+    { label: '404', makeErr: (CloudApiError) => new CloudApiError('not found', 404, 'NOT_FOUND') },
+    { label: '413', makeErr: (CloudApiError) => new CloudApiError('too large', 413, 'TOO_LARGE') },
+    { label: 'network', makeErr: () => new Error('socket hang up') },
+  ]) {
+    let postCalls = 0;
+    const h = createStoreHarness({
+      cloudClientOverrides: {
+        duplicateScopeCollection: async (_url, _tok, _src, _scope, op) => {
+          postCalls++;
+          return { operation_id: op, status: 'committed', collection_id: 'copy-col', workspace_id: 'ws-a', name: 'Copy', min_role: 'reader', version: 1, item_count: 1 };
+        },
+        fetchCollectionById: async () => { throw failure.makeErr(h.cloudApiMod.CloudApiError); },
+      },
+    });
+    const s = await h.createStore();
+    const activeScope = { id: 'ws-a', name: 'A', type: 'workspace' };
+    s.setState({
+      workspaceMode: 'cloud',
+      cloudConfig: { apiUrl: 'https://api.example.com', token: 'tok', user: { id: 'alice', email: 'alice@example.com', name: 'Alice', role: 'user' }, activeScope },
+      collections: [{ id: 'c1', name: 'Source', minRole: 'reader', version: 1, createdAt: 1, updatedAt: 1, _origin: 'cloud', items: [] }],
+    });
+    const res = await s.getState().duplicateCollection('c1', activeScope);
+    assert.equal(res.success, true, `GET ${failure.label} must not fail committed duplicate`);
+    assert.equal(res.detailsUnavailable, true);
+    assert.ok(res.detailsError);
+    assert.equal(postCalls, 1);
+    assert.deepEqual(toPlain(s.getState().pendingDuplicateIntents), {});
+    assert.equal(s.getState().collections.find((c) => c.id === 'copy-col')?.isPartial, true);
+  }
+
+  // Replay hitting 401 keeps intent durable for re-authentication and blocks wrong owner
+  {
+    let attempt = 0;
+    const h = createStoreHarness({
+      cloudClientOverrides: {
+        duplicateScopeCollection: async (_url, _tok, _src, _scope, op) => {
+          attempt++;
+          if (attempt === 1) throw new Error('network drop');
+          if (attempt === 2) throw new h.cloudApiMod.CloudApiError('expired', 401, 'UNAUTHORIZED');
+          return { operation_id: op, status: 'committed', collection_id: 'copy-col', workspace_id: 'ws-a', name: 'Copy', min_role: 'reader', version: 1, item_count: 0 };
+        },
+        fetchCollectionById: async () => ({ id: 'copy-col', workspace_id: 'ws-a', name: 'Copy', min_role: 'reader', version: 1, items: [] }),
+      },
+    });
+    const s = await h.createStore();
+    const activeScope = { id: 'ws-a', name: 'A', type: 'workspace' };
+    s.setState({
+      workspaceMode: 'cloud',
+      cloudConfig: { apiUrl: 'https://api.example.com', token: 'tok-alice', sessionKind: 'provider', user: { id: 'alice', email: 'alice@example.com', name: 'Alice', role: 'user' }, activeScope },
+      collections: [{ id: 'c1', name: 'Source', minRole: 'reader', version: 1, createdAt: 1, updatedAt: 1, _origin: 'cloud', items: [] }],
+    });
+
+    const first = await s.getState().duplicateCollection('c1', activeScope);
+    assert.equal(first.reconcilePending, true);
+
+    const unauthorizedRetry = await s.getState().retryPendingDuplicateIntent(first.operationId);
+    assert.equal(unauthorizedRetry.success, false);
+    assert.equal(unauthorizedRetry.reconcilePending, true);
+    assert.ok(s.getState().pendingDuplicateIntents[first.operationId], '401 on replay must keep intent durable');
+
+    // Account switch to Bob blocks replay
+    s.getState().setCloudConfig({ apiUrl: 'https://api.example.com', sessionKind: 'provider', user: { id: 'bob', email: 'bob@example.com', name: 'Bob', role: 'user' }, activeScope });
+    const bobRetry = await s.getState().retryPendingDuplicateIntent(first.operationId);
+    assert.equal(bobRetry.success, false);
+    assert.match(bobRetry.error, /different cloud account/);
+    assert.ok(s.getState().pendingDuplicateIntents[first.operationId]);
+
+    // Re-auth as Alice succeeds with same operationId even if source was deleted locally
+    s.getState().setCloudConfig({ apiUrl: 'https://api.example.com', sessionKind: 'provider', user: { id: 'alice', email: 'alice@example.com', name: 'Alice', role: 'user' }, activeScope });
+    s.setState({ collections: [] });
+    const aliceRetry = await s.getState().retryPendingDuplicateIntent(first.operationId);
+    assert.equal(aliceRetry.success, true);
+    assert.equal(aliceRetry.operationId, first.operationId);
+    assert.deepEqual(toPlain(s.getState().pendingDuplicateIntents), {});
+  }
+});
+
+test('Follow-up P2: in-flight pending duplicate blocks clear/retry, while persisted pending intent survives restart and recovers with original ID', async () => {
+  const deferred = () => {
+    let resolve, reject;
+    const promise = new Promise((a, b) => { resolve = a; reject = b; });
+    return { promise, resolve, reject };
+  };
+
+  for (const kind of ['collection', 'item']) {
+    let postStarted = deferred();
+    let postGate = deferred();
+    let postCalls = 0;
+    const h = createStoreHarness({
+      cloudClientOverrides: {
+        duplicateScopeCollection: async (_url, _tok, _src, _scope, opId) => {
+          postCalls++;
+          postStarted.resolve();
+          if (postCalls === 1) {
+            await postGate.promise;
+          }
+          return {
+            operation_id: opId,
+            status: 'committed',
+            collection_id: 'copy-col-1',
+            workspace_id: 'ws-a',
+            name: 'Source copy',
+            min_role: 'reader',
+            version: 1,
+            item_count: 1,
+          };
+        },
+        duplicateScopeItem: async (_url, _tok, _item, _src, target, parent, opId) => {
+          postCalls++;
+          postStarted.resolve();
+          if (postCalls === 1) {
+            await postGate.promise;
+          }
+          return {
+            operation_id: opId,
+            status: 'committed',
+            root_item_id: 'copy-item-1',
+            target_collection_id: target,
+            target_parent_id: parent,
+            target_collection_version: 2,
+            name: 'Req copy',
+            item_count: 1,
+          };
+        },
+        fetchCollectionById: async (_url, _tok, colId) => ({
+          id: colId,
+          workspace_id: 'ws-a',
+          name: 'Refreshed',
+          min_role: 'reader',
+          version: 2,
+          items: [],
+        }),
+      },
+    });
+
+    const s = await h.createStore();
+    const activeScope = { id: 'ws-a', name: 'A', type: 'workspace' };
+    s.setState({
+      workspaceMode: 'cloud',
+      cloudCacheOwner: JSON.stringify(['https://api.example.com', 'alice']),
+      cloudConfig: {
+        apiUrl: 'https://api.example.com',
+        token: 'tok-alice',
+        user: { id: 'alice', email: 'alice@example.com', name: 'Alice', role: 'user' },
+        activeScope,
+      },
+      collections: [{
+        id: 'c1',
+        name: 'Source',
+        minRole: 'reader',
+        version: 1,
+        createdAt: 1,
+        updatedAt: 1,
+        _origin: 'cloud',
+        items: [{ id: 'r1', name: 'Req', type: 'request', request: makeSampleRequest('r1', 'Req') }],
+      }],
+    });
+
+    const opId = `op-${kind}-inflight`;
+    const firstAttempt = kind === 'collection'
+      ? s.getState().duplicateCollection('c1', activeScope, { operationId: opId })
+      : s.getState().duplicateCollectionItem('c1', 'r1', 'c1', null, { operationId: opId });
+
+    await postStarted.promise;
+
+    // While first POST is in-flight: status is 'pending', activeDuplicateOperationIds marks it active,
+    // and clearPendingDuplicateIntent / retryPendingDuplicateIntent are both blocked.
+    assert.equal(s.getState().pendingDuplicateIntents[opId]?.status, 'pending');
+    assert.equal(s.getState().activeDuplicateOperationIds[opId], true);
+
+    s.getState().clearPendingDuplicateIntent(opId);
+    assert.ok(s.getState().pendingDuplicateIntents[opId], 'In-flight intent must not be cleared');
+
+    const concurrentRetry = await s.getState().retryPendingDuplicateIntent(opId);
+    assert.equal(concurrentRetry.success, false);
+    assert.equal(concurrentRetry.reconcilePending, true);
+    assert.equal(postCalls, 1, 'In-flight retry must not issue a second POST');
+
+    // Persist storage before first POST finishes (crash/restart simulation)
+    await s.getState().persistNativeCredentialState();
+
+    // Restarted store loads persisted status === 'pending' with empty runtime activeDuplicateOperationIds
+    const restarted = await h.createStore();
+    assert.equal(restarted.getState().pendingDuplicateIntents[opId]?.status, 'pending');
+    assert.deepEqual(toPlain(restarted.getState().activeDuplicateOperationIds), {});
+
+    const recovered = await restarted.getState().retryPendingDuplicateIntent(opId);
+    assert.equal(recovered.success, true);
+    assert.equal(recovered.operationId, opId);
+    assert.equal(postCalls, 2);
+    assert.deepEqual(toPlain(restarted.getState().pendingDuplicateIntents), {});
+
+    // Settle the orphaned first-session promise cleanly
+    postGate.resolve();
+    await firstAttempt;
+  }
+});
+
+test('Follow-up P2 (upload-session-flush): offline->cloud upload cancels with zero upload calls and intact replacement cache when ABA session switch occurs during pre-upload flush', async () => {
+  let releaseFlush;
+  let flushEntered;
+  const flushGate = new Promise((resolve) => { releaseFlush = resolve; });
+  const enteredPromise = new Promise((resolve) => { flushEntered = resolve; });
+  let uploadCalls = 0;
+  let holdFirstFlush = true;
+
+  const h = createStoreHarness({
+    cloudClientOverrides: {
+      importDuplicateCollection: async (...args) => {
+        uploadCalls++;
+        return {
+          operation_id: args[4],
+          status: 'committed',
+          collection_id: 'copy-col',
+          workspace_id: 'ws-a',
+          name: 'Source',
+          min_role: 'reader',
+          version: 1,
+          item_count: 0,
+        };
+      },
+    },
+  });
+
+  const s = await h.createStore();
+  const aliceCfg = {
+    apiUrl: 'https://api.example.com',
+    token: 'tok-alice-1',
+    user: { id: 'alice', email: 'alice@example.com', name: 'Alice', role: 'user' },
+  };
+  s.setState({
+    workspaceMode: 'offline',
+    cloudConfig: aliceCfg,
+    collections: [{ id: 'c1', name: 'Source', items: [], createdAt: 1, updatedAt: 1, _origin: 'offline' }],
+    persistNativeCredentialState: async () => {
+      if (holdFirstFlush) {
+        holdFirstFlush = false;
+        flushEntered();
+        await flushGate;
+      }
+    },
+  });
+
+  const op = s.getState().duplicateCollection('c1', { type: 'workspace', id: 'ws-a', name: 'Workspace A' }, { operationId: 'op-flush-aba' });
+  await enteredPromise;
+
+  // Logout and re-login same owner Alice (ABA) while flush is still pending, and populate fresh replacement cache
+  await s.getState().logoutCloud();
+  s.getState().setCloudConfig({ ...aliceCfg, token: 'tok-alice-2' });
+  s.setState({
+    scopeCache: {
+      'workspace:ws-a': {
+        collections: [{ id: 'fresh-col', name: 'Fresh Session Col', items: [], createdAt: 1, updatedAt: 1 }],
+        environments: [],
+        activeEnvironmentId: null,
+        tabs: [],
+        history: [],
+      },
+    },
+  });
+
+  releaseFlush();
+  const res = await op;
+
+  assert.equal(res.success, false);
+  assert.match(res.error, /Session or scope changed/);
+  assert.equal(uploadCalls, 0, 'Must not call importDuplicateCollection after origin session ended during flush');
+  assert.equal(s.getState().pendingDuplicateIntents['op-flush-aba'], undefined);
+  assert.equal(s.getState().activeDuplicateOperationIds['op-flush-aba'], undefined);
+  assert.equal(s.getState().scopeCache['workspace:ws-a'].collections[0].id, 'fresh-col');
+});
+
+test('C8 (P3): same-session scope switch during post-commit duplicate GET clears pendingDuplicateIntents and invalidates affected scopeCache', async () => {
+  let releaseCollectionFetch;
+  let fetchEntered;
+  const fetchGate = new Promise((resolve) => { releaseCollectionFetch = resolve; });
+  const enteredPromise = new Promise((resolve) => { fetchEntered = resolve; });
+
+  const h = createStoreHarness({
+    cloudClientOverrides: {
+      duplicateScopeCollection: async (...args) => ({
+        operation_id: args[4],
+        status: 'committed',
+        collection_id: 'copy-c8',
+        workspace_id: 'ws-a',
+        name: 'Source Copy',
+        min_role: 'reader',
+        version: 1,
+        item_count: 0,
+      }),
+      fetchCollectionById: async () => {
+        fetchEntered();
+        await fetchGate;
+        return {
+          id: 'copy-c8',
+          name: 'Source Copy',
+          workspace_id: 'ws-a',
+          min_role: 'reader',
+          version: 1,
+          items: [],
+          created_at: 1,
+          updated_at: 1,
+        };
+      },
+      fetchScopeCollections: async () => [],
+      fetchScopeEnvironments: async () => [],
+    },
+  });
+
+  const s = await h.createStore();
+  s.setState({
+    workspaceMode: 'cloud',
+    cloudConfig: {
+      apiUrl: 'https://api.example.com',
+      token: 'tok-c8',
+      user: { id: 'alice', email: 'alice@example.com', name: 'Alice', role: 'owner' },
+      activeScope: { type: 'workspace', id: 'ws-a', name: 'WS A', role: 'owner' },
+    },
+    collections: [{ id: 'c1', name: 'Source', items: [], createdAt: 1, updatedAt: 1 }],
+    scopeCache: {
+      'workspace:ws-a': {
+        collections: [{ id: 'c1', name: 'Source', items: [], createdAt: 1, updatedAt: 1 }],
+        environments: [],
+        activeEnvironmentId: null,
+        tabs: [],
+        history: [],
+      },
+    },
+  });
+
+  const op = s.getState().duplicateCollection(
+    'c1',
+    { type: 'workspace', id: 'ws-a', name: 'WS A', role: 'owner' },
+    { operationId: 'op-c8-switch' },
+  );
+  await enteredPromise;
+
+  // Switch scope within same cloud session while post-commit fetchCollectionById is in flight
+  await s.getState().setActiveScope({ type: 'workspace', id: 'ws-b', name: 'WS B', role: 'owner' });
+
+  releaseCollectionFetch();
+  const res = await op;
+
+  assert.equal(res.success, false);
+  assert.match(res.error, /Session or scope changed/);
+  assert.equal(
+    s.getState().pendingDuplicateIntents['op-c8-switch'],
+    undefined,
+    'Same-session post-commit scope switch must clear pendingDuplicateIntents[opId]',
+  );
+  assert.equal(
+    s.getState().scopeCache['workspace:ws-a'],
+    undefined,
+    'Same-session post-commit scope switch must invalidate stale scopeCache[ws-a]',
+  );
+  s.dispose();
 });

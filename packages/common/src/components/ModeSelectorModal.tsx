@@ -35,7 +35,7 @@ export const ModeSelectorModal: React.FC<ModeSelectorModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-4 animate-in fade-in duration-150">
+    <div data-modal="true" role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-4 animate-in fade-in duration-150">
       <div className="relative max-h-[90dvh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-line-strong bg-card p-4 shadow-2xl shadow-black/80 md:p-6">
         {/* Close Button */}
         <button

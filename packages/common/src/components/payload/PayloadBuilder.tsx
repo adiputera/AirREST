@@ -133,6 +133,7 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
   useEffect(() => {
     if (!isExpandedModalOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
       if (e.key === 'Escape') {
         e.preventDefault();
         setIsExpandedModalOpen(false);

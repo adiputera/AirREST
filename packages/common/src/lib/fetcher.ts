@@ -5,6 +5,71 @@ import { createTrackedBlobUrl, createTrackedRawBody } from './blobManager';
 import { compileEffectiveJsonPayload } from './formatters';
 import { substitutePathVariables } from './urlParams';
 
+const STANDARD_HTTP_REASON_PHRASES: Record<number, string> = {
+  100: 'Continue', 101: 'Switching Protocols', 102: 'Processing', 103: 'Early Hints',
+  200: 'OK', 201: 'Created', 202: 'Accepted', 203: 'Non-Authoritative Information',
+  204: 'No Content', 205: 'Reset Content', 206: 'Partial Content', 207: 'Multi-Status',
+  208: 'Already Reported', 226: 'IM Used',
+  300: 'Multiple Choices', 301: 'Moved Permanently', 302: 'Found', 303: 'See Other',
+  304: 'Not Modified', 307: 'Temporary Redirect', 308: 'Permanent Redirect',
+  400: 'Bad Request', 401: 'Unauthorized', 402: 'Payment Required', 403: 'Forbidden',
+  404: 'Not Found', 405: 'Method Not Allowed', 406: 'Not Acceptable',
+  407: 'Proxy Authentication Required', 408: 'Request Timeout', 409: 'Conflict',
+  410: 'Gone', 411: 'Length Required', 412: 'Precondition Failed', 413: 'Payload Too Large',
+  414: 'URI Too Long', 415: 'Unsupported Media Type', 416: 'Range Not Satisfiable',
+  417: 'Expectation Failed', 418: "I'm a teapot", 421: 'Misdirected Request',
+  422: 'Unprocessable Content', 423: 'Locked', 424: 'Failed Dependency', 425: 'Too Early',
+  426: 'Upgrade Required', 428: 'Precondition Required', 429: 'Too Many Requests',
+  431: 'Request Header Fields Too Large', 451: 'Unavailable For Legal Reasons',
+  500: 'Internal Server Error', 501: 'Not Implemented', 502: 'Bad Gateway',
+  503: 'Service Unavailable', 504: 'Gateway Timeout', 505: 'HTTP Version Not Supported',
+  506: 'Variant Also Negotiates', 507: 'Insufficient Storage', 508: 'Loop Detected',
+  510: 'Not Extended', 511: 'Network Authentication Required',
+};
+
+function resolveContentTypeCharset(rawHeader: string | undefined | null): { charset: string; conflict: boolean } {
+  if (!rawHeader || typeof rawHeader !== 'string') return { charset: 'utf-8', conflict: false };
+  let resolved: string | undefined;
+  let current = '';
+  let inQuotes = false;
+  let escaped = false;
+  const entries: string[] = [];
+  for (let i = 0; i < rawHeader.length; i++) {
+    const ch = rawHeader[i];
+    if (escaped) {
+      current += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\' && inQuotes) {
+      current += ch;
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+      current += ch;
+      continue;
+    }
+    if (ch === ',' && !inQuotes) {
+      entries.push(current);
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  entries.push(current);
+
+  for (const entry of entries) {
+    const match = entry.match(/;\s*charset\s*=\s*(?:"([^"]*)"|([^;,\s]*))/i);
+    const cs = (match?.[1] ?? match?.[2] ?? '').trim().toLowerCase();
+    if (!cs) continue;
+    if (!resolved) resolved = cs;
+    else if (resolved !== cs) return { charset: resolved, conflict: true };
+  }
+  return { charset: resolved || 'utf-8', conflict: false };
+}
+
 export const RESPONSE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024; // 10 MiB
 export const MAX_OUTBOUND_ATTACHMENT_BYTES = 25 * 1024 * 1024; // 25 MiB
 export const REQUEST_TIMEOUT_MS = 300_000; // 300 seconds (5 minutes)
@@ -145,11 +210,19 @@ export function prepareRequest(
   // Append query params
   try {
     const parsedUrl = new URL(rawUrl);
-    const activeParams = (request.params || []).filter((p) => p && p.enabled && String(p.key || '').trim() !== '');
-    for (const p of activeParams) {
-      const paramKey = interpolateVariables(String(p.key).trim(), variables);
-      const paramVal = interpolateVariables(String(p.value ?? ''), variables);
-      parsedUrl.searchParams.set(paramKey, paramVal);
+    const clearedKeys = new Set<string>();
+    for (const p of request.params || []) {
+      if (!p) continue;
+      const paramKey = interpolateVariables(String(p.key || '').trim(), variables);
+      if (!paramKey) continue;
+      if (!clearedKeys.has(paramKey)) {
+        clearedKeys.add(paramKey);
+        parsedUrl.searchParams.delete(paramKey);
+      }
+      if (p.enabled) {
+        const paramVal = interpolateVariables(String(p.value ?? ''), variables);
+        parsedUrl.searchParams.append(paramKey, paramVal);
+      }
     }
     rawUrl = parsedUrl.toString();
   } catch {
@@ -171,6 +244,15 @@ export function prepareRequest(
 
   const headers: Record<string, string> = {};
   for (const h of resolvedManualHeaders) {
+    if (h.key.trim().toLowerCase() === 'cookie') {
+      const existingCookieKey = Object.keys(headers).find((k) => k.toLowerCase() === 'cookie');
+      if (existingCookieKey) {
+        headers[existingCookieKey] = headers[existingCookieKey]
+          ? `${headers[existingCookieKey]}; ${h.value}`
+          : h.value;
+        continue;
+      }
+    }
     headers[h.key] = h.value;
   }
 
@@ -618,6 +700,7 @@ export async function executeApiRequest(
 
     let textData = '';
     let blobUrl: string | undefined = undefined;
+    let hasDecodingError = false;
 
     if (isImage) {
       const blob = new Blob([uint8 as unknown as BlobPart], { type: mimeType });
@@ -632,13 +715,26 @@ export async function executeApiRequest(
         textData = isImage ? `[Binary Image: ${mimeType}]` : `[Binary File: ${mimeType}]`;
       }
     } else {
-      const decoder = new TextDecoder('utf-8', { fatal: false });
-      textData = decoder.decode(uint8);
+      const { charset, conflict } = resolveContentTypeCharset(rawContentType);
+      if (conflict) {
+        hasDecodingError = true;
+      } else {
+        try {
+          const strictDecoder = new TextDecoder(charset, { fatal: true });
+          textData = strictDecoder.decode(uint8);
+        } catch {
+          hasDecodingError = true;
+        }
+      }
+      if (hasDecodingError) {
+        const fallbackDecoder = new TextDecoder('utf-8', { fatal: false });
+        textData = fallbackDecoder.decode(uint8);
+      }
     }
 
     return {
       status: response.status,
-      statusText: response.statusText || (response.ok ? 'OK' : 'Error'),
+      statusText: response.statusText || STANDARD_HTTP_REASON_PHRASES[response.status] || (response.ok ? 'OK' : 'Error'),
       timeMs,
       sizeBytes,
       headers: responseHeaders,
@@ -646,6 +742,8 @@ export async function executeApiRequest(
       isError: !response.ok,
       timestamp: Date.now(),
       contentType: mimeType || undefined,
+      ...(rawContentType ? { rawContentType } : {}),
+      ...(hasDecodingError ? { hasDecodingError: true } : {}),
       isBinary,
       isImage,
       blobUrl,

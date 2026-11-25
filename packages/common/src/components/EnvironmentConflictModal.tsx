@@ -3,6 +3,7 @@
 import React, { useEffect } from 'react';
 import {
   AlertTriangle,
+  AlertCircle,
   X,
   Copy,
   RefreshCw,
@@ -26,6 +27,7 @@ export interface EnvironmentConflictModalProps {
   onImportAsCopy: () => void;
   onReplace: () => void;
   isResolving?: boolean;
+  errorMsg?: string | null;
 }
 
 export const EnvironmentConflictModal: React.FC<EnvironmentConflictModalProps> = ({
@@ -37,6 +39,7 @@ export const EnvironmentConflictModal: React.FC<EnvironmentConflictModalProps> =
   onImportAsCopy,
   onReplace,
   isResolving = false,
+  errorMsg = null,
 }) => {
   const environments = useApiStore((state) => state.environments);
   useBackHandler(isOpen, () => { if (!isResolving) onClose(); }, 30);
@@ -46,6 +49,8 @@ export const EnvironmentConflictModal: React.FC<EnvironmentConflictModalProps> =
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && !isResolving) {
+        e.preventDefault();
+        e.stopPropagation();
         onClose();
       }
     };
@@ -67,6 +72,9 @@ export const EnvironmentConflictModal: React.FC<EnvironmentConflictModalProps> =
           onClose();
         }
       }}
+      data-modal="true"
+      role="dialog"
+      aria-modal="true"
       className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
     >
       <div className="w-full max-w-2xl rounded-2xl border border-line-strong bg-card p-6 shadow-2xl">
@@ -244,6 +252,13 @@ export const EnvironmentConflictModal: React.FC<EnvironmentConflictModalProps> =
             </p>
           </div>
         </div>
+
+        {errorMsg && (
+          <div className="mt-4 flex items-center gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 p-2.5 text-xs text-rose-600 dark:text-rose-300">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            <span>{errorMsg}</span>
+          </div>
+        )}
 
         {/* Footer Actions */}
         <div className="mt-6 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5">

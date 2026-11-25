@@ -1,4 +1,5 @@
 import type { Collection } from '../types/api';
+import { preserveHydratedItemExamples } from '../lib/examples';
 import {
   createPartialCloudCollection,
   isPendingCloudCollection,
@@ -82,7 +83,12 @@ export async function pullCloudCollections<Detail extends CloudCollectionDetail>
       const detail = await input.fetchDetail(collectionMetadata.id);
       if (!input.isCurrent()) return { status: 'cancelled' };
       if (detail && !detail.deleted_at) {
-        collections.push({ ...input.buildCollection(detail), _syncStatus: 'synced' });
+        const built = { ...input.buildCollection(detail), _syncStatus: 'synced' as const };
+        collections.push(
+          existing
+            ? { ...built, items: preserveHydratedItemExamples(built.items || [], existing.items || []) }
+            : built,
+        );
       }
     } catch (error) {
       if (!input.isCurrent()) return { status: 'cancelled' };

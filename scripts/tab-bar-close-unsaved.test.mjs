@@ -106,7 +106,7 @@ test('TabBar routes all close actions through unsaved-change confirmation queuei
   assert.equal(closeAllMatches.length, 2, 'Both tab and bar context menus must route Close All through handleRequestCloseScope');
   assert.doesNotMatch(source, /onClick=\{\(\) => \{\s*close(?:AllTabs|OtherTabs|TabsToRight)\(/);
   assert.match(source, /useBackHandler\(Boolean\(unsavedConfirmTab\), handleCancelClose, 30\)/);
-  assert.match(source, /if \(e\.key === 'Escape'\)\s*\{\s*handleCancelClose\(\);/);
+  assert.match(source, /if \(e\.key === 'Escape'\)\s*\{[\s\S]*?handleCancelClose\(\);/);
   assert.match(source, /advanceCloseQueue\(\);/);
   assert.match(source, /clearPendingCloseQueue\(\);/);
   assert.match(source, /key=\{unsavedConfirmTab\.id\}/);

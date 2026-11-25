@@ -383,14 +383,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -438,14 +448,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -491,14 +511,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -526,14 +556,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -569,14 +609,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -614,6 +664,9 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "404": {
             "description": "Workspace not found.",
             "content": {
@@ -627,11 +680,18 @@
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -677,14 +737,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -721,14 +791,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -756,14 +836,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -799,6 +889,9 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "403": {
             "description": "Superadmin privileges required.",
             "content": {
@@ -812,11 +905,18 @@
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -854,14 +954,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -908,14 +1018,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -952,14 +1072,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -997,14 +1127,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -1051,14 +1191,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1106,14 +1256,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1152,14 +1312,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -1206,14 +1376,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1252,14 +1432,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -1306,14 +1496,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -1350,14 +1550,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1395,14 +1605,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -1449,14 +1669,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1503,14 +1733,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1578,17 +1818,27 @@
               }
             }
           },
-          "413": {
-            "$ref": "#/components/responses/ResponsePayloadTooLarge"
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           },
           "406": {
             "$ref": "#/components/responses/NotAcceptable"
           },
+          "413": {
+            "$ref": "#/components/responses/ResponsePayloadTooLarge"
+          },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -1624,14 +1874,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1681,17 +1941,27 @@
               }
             }
           },
-          "413": {
-            "$ref": "#/components/responses/ResponsePayloadTooLarge"
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           },
           "406": {
             "$ref": "#/components/responses/NotAcceptable"
           },
+          "413": {
+            "$ref": "#/components/responses/ResponsePayloadTooLarge"
+          },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -1748,6 +2018,9 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "404": {
             "description": "Collection not found or deleted.",
             "content": {
@@ -1771,11 +2044,18 @@
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -1812,15 +2092,8 @@
               }
             }
           },
-          "404": {
-            "description": "Collection not found or deleted.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           },
           "403": {
             "description": "Permission denied or `FEATURE_DISABLED` when the global collection delete control is off.",
@@ -1832,14 +2105,31 @@
               }
             }
           },
+          "404": {
+            "description": "Collection not found or deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1888,8 +2178,41 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid move request (missing/conflicting target scope, same source and destination, or cross-team project move).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "403": {
             "description": "Permission denied or `FEATURE_DISABLED` when the global collection move control is off.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Source collection or destination workspace/project not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Concurrent modification or scope state conflict during collection move.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1901,11 +2224,18 @@
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -2115,6 +2445,213 @@
         }
       }
     },
+    "/api/v1/collections/{id}/examples": {
+      "get": {
+        "tags": [
+          "Collections"
+        ],
+        "summary": "Paginated saved examples metadata or full payloads for a collection",
+        "description": "Cursor-paginated endpoint returning active request items' `example_count`, `example_summaries`, and optionally full `examples` (`include_body=true`) with `collection_version` snapshot consistency.",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_body",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of collection item saved examples retrieved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionExamplesPageEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid collection id, cursor, or limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden for user's role or scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found or deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/collections/{id}/replace": {
+      "post": {
+        "tags": [
+          "Collections"
+        ],
+        "summary": "Atomically replace collection hierarchy and items (OCC + idempotent receipt)",
+        "description": "Accepts gzip or identity JSON (4 MiB identity / 3,000,000 byte gzip / 16 MiB decoded, single JSON document), validates `base_version`, replaces items in one ACID transaction with `(actor_id, operation_id)` receipt idempotency.",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplaceCollectionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Collection replaced atomically (or receipt replayed).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReplaceCollectionReceiptEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error or malformed payload.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Write access denied for scope or min_role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found or deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Optimistic concurrency conflict or operation_id reused with different payload.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "description": "Unsupported Content-Encoding.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
     "/api/v1/collections/{id}/reorder": {
       "put": {
         "tags": [
@@ -2169,6 +2706,9 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "404": {
             "description": "Collection not found or deleted.",
             "content": {
@@ -2182,11 +2722,18 @@
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -2245,6 +2792,9 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "404": {
             "description": "Collection not found or deleted.",
             "content": {
@@ -2258,11 +2808,18 @@
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -2310,6 +2867,9 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "404": {
             "description": "Target collection or parent folder not found or deleted.",
             "content": {
@@ -2323,11 +2883,114 @@
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/items/{id}/examples": {
+      "patch": {
+        "tags": [
+          "Collection Items"
+        ],
+        "summary": "Mutate a single saved example (add/rename/delete) with OCC and receipt idempotency",
+        "description": "Applies `add`, `rename`, or `delete` on `examples` using `(actor_id, operation_id)` receipt ledger and `base_version` + `base_example_revision` concurrency checks without overwriting sibling request fields.",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchItemExamplesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved example mutation committed (or idempotent receipt replayed).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionItemEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload, format, MIME, or folder item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Write access denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Item, collection, or saved example not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version conflict or example revision conflict; includes latest server item in `data`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
           }
         }
       }
@@ -2377,7 +3040,7 @@
             }
           },
           "400": {
-            "description": "Invalid UUID, missing collection ID, destination folder, cycle, or different scope.",
+            "description": "Invalid UUID, missing collection ID, destination folder, cycle, exceeding max nesting depth (32), or different scope.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2385,6 +3048,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           },
           "403": {
             "description": "Write access or collection min_role requirement failed on either side.",
@@ -2416,6 +3082,9 @@
               }
             }
           },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "500": {
             "description": "Move transaction failed.",
             "content": {
@@ -2425,12 +3094,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "413": {
-            "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
@@ -2574,6 +3237,19 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied to parent collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Item or parent collection not found or deleted.",
             "content": {
@@ -2587,11 +3263,18 @@
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -2648,6 +3331,9 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "404": {
             "description": "Item, collection, or parent folder not found or deleted.",
             "content": {
@@ -2671,11 +3357,18 @@
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -2712,6 +3405,9 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "404": {
             "description": "Item or parent collection not found or deleted.",
             "content": {
@@ -2725,11 +3421,18 @@
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -2775,14 +3478,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -2817,14 +3530,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -2862,14 +3585,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -2916,6 +3649,9 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "409": {
             "description": "Optimistic concurrency conflict.",
             "content": {
@@ -2929,11 +3665,18 @@
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -2969,14 +3712,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         },
         "description": "Requires env:delete (maintainer/admin), scope access, and min_role. Workspace owners and superadmins retain access. Contributors cannot delete environments."
@@ -3043,18 +3796,6 @@
               }
             }
           },
-          "413": {
-            "$ref": "#/components/responses/ResponsePayloadTooLarge"
-          },
-          "406": {
-            "$ref": "#/components/responses/NotAcceptable"
-          },
-          "503": {
-            "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
           "400": {
             "description": "Exactly one valid scope is required.",
             "content": {
@@ -3064,6 +3805,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           },
           "403": {
             "description": "Scope access, operation permission, or min_role denied.",
@@ -3075,6 +3819,12 @@
               }
             }
           },
+          "406": {
+            "$ref": "#/components/responses/NotAcceptable"
+          },
+          "413": {
+            "$ref": "#/components/responses/ResponsePayloadTooLarge"
+          },
           "500": {
             "description": "Database/query failure; no successful partial delta is returned.",
             "content": {
@@ -3084,6 +3834,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
           }
         }
       }
@@ -3121,25 +3874,6 @@
               }
             }
           },
-          "413": {
-            "$ref": "#/components/responses/PayloadTooLarge"
-          },
-          "415": {
-            "description": "Unsupported request content encoding.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
           "400": {
             "description": "Exactly one valid scope is required, or the request contains malformed gzip or anything other than one JSON document.",
             "content": {
@@ -3150,8 +3884,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "403": {
             "description": "Scope access, operation permission, or min_role denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "description": "Unsupported request content encoding.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3169,6 +3919,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
           }
         }
       }
@@ -3201,29 +3954,10 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MessageEnvelope"
+                  "$ref": "#/components/schemas/ImportBatchResponseEnvelope"
                 }
               }
             }
-          },
-          "413": {
-            "$ref": "#/components/responses/PayloadTooLarge"
-          },
-          "415": {
-            "description": "Unsupported request content encoding.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           },
           "400": {
             "description": "Exactly one valid scope is required, or the request contains malformed gzip or anything other than one JSON document.",
@@ -3235,8 +3969,34 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "403": {
             "description": "Scope access, operation permission, or min_role denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Concurrent import collision; retry complete import.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "description": "Unsupported request content encoding.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3255,15 +4015,8 @@
               }
             }
           },
-          "409": {
-            "description": "Concurrent import collision; retry complete import.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
           }
         }
       }
@@ -3449,6 +4202,9 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "403": {
             "description": "Superadmin access required.",
             "content": {
@@ -3462,11 +4218,18 @@
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -3502,6 +4265,9 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "409": {
             "description": "User with this email already exists.",
             "content": {
@@ -3515,11 +4281,18 @@
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -3568,14 +4341,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "description": "Internal server error while moving the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -3987,6 +4770,15 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "capabilities": {
+            "type": "object",
+            "properties": {
+              "saved_examples": {
+                "type": "boolean",
+                "example": true
+              }
+            }
           }
         }
       },
@@ -4947,6 +5739,27 @@
             "type": "string",
             "nullable": true
           },
+          "examples": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedExample"
+            }
+          },
+          "example_summaries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedExampleSummary"
+            }
+          },
+          "example_count": {
+            "type": "integer"
+          },
+          "example_summaries_truncated": {
+            "type": "boolean"
+          },
+          "examples_loaded": {
+            "type": "boolean"
+          },
           "version": {
             "type": "integer",
             "format": "int64",
@@ -5384,6 +6197,12 @@
           },
           "post_response_script": {
             "type": "string"
+          },
+          "examples": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedExample"
+            }
           },
           "items": {
             "type": "array",
@@ -5928,6 +6747,368 @@
           },
           "data": {
             "$ref": "#/components/schemas/DuplicateCollectionReceipt"
+          }
+        }
+      },
+      "SavedExampleHeader": {
+        "type": "object",
+        "required": [
+          "key",
+          "value"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "disabled": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "SavedExample": {
+        "type": "object",
+        "required": [
+          "id",
+          "revision",
+          "name",
+          "status",
+          "code",
+          "header",
+          "body"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 150
+          },
+          "originalRequest": {
+            "type": "object",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "code": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 599
+          },
+          "header": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedExampleHeader"
+            }
+          },
+          "cookie": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "body": {
+            "type": "string"
+          },
+          "_postman_previewlanguage": {
+            "type": "string",
+            "enum": [
+              "json",
+              "xml",
+              "html"
+            ],
+            "nullable": true
+          }
+        }
+      },
+      "SavedExampleSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "revision",
+          "name",
+          "code",
+          "status",
+          "body_size_bytes"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "name": {
+            "type": "string"
+          },
+          "code": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "_postman_previewlanguage": {
+            "type": "string",
+            "enum": [
+              "json",
+              "xml",
+              "html"
+            ],
+            "nullable": true
+          },
+          "body_size_bytes": {
+            "type": "integer"
+          }
+        }
+      },
+      "PatchItemExamplesRequest": {
+        "type": "object",
+        "required": [
+          "operation_id",
+          "op",
+          "base_version"
+        ],
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "op": {
+            "type": "string",
+            "enum": [
+              "add",
+              "rename",
+              "delete"
+            ]
+          },
+          "base_version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "example": {
+            "$ref": "#/components/schemas/SavedExample"
+          },
+          "example_id": {
+            "type": "string"
+          },
+          "base_example_revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 150
+          }
+        }
+      },
+      "CollectionExamplePageItem": {
+        "type": "object",
+        "required": [
+          "item_id",
+          "item_version",
+          "example_count",
+          "examples_loaded"
+        ],
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "item_version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "example_count": {
+            "type": "integer"
+          },
+          "examples_loaded": {
+            "type": "boolean"
+          },
+          "example_summaries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedExampleSummary"
+            }
+          },
+          "examples": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedExample"
+            }
+          }
+        }
+      },
+      "CollectionExamplesPage": {
+        "type": "object",
+        "required": [
+          "collection_id",
+          "collection_version",
+          "items",
+          "has_more"
+        ],
+        "properties": {
+          "collection_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "collection_version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CollectionExamplePageItem"
+            }
+          },
+          "next_cursor": {
+            "type": "string"
+          },
+          "has_more": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CollectionExamplesPageEnvelope": {
+        "type": "object",
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/CollectionExamplesPage"
+          }
+        }
+      },
+      "ReplaceCollectionRequest": {
+        "type": "object",
+        "required": [
+          "operation_id",
+          "base_version",
+          "collection"
+        ],
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "base_version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "collection": {
+            "$ref": "#/components/schemas/ImportCollectionRequest"
+          }
+        }
+      },
+      "ReplaceCollectionReceipt": {
+        "type": "object",
+        "required": [
+          "operation_id",
+          "status",
+          "collection_id",
+          "version",
+          "item_count"
+        ],
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "committed"
+            ]
+          },
+          "collection_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "item_count": {
+            "type": "integer"
+          }
+        }
+      },
+      "ReplaceCollectionReceiptEnvelope": {
+        "type": "object",
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/ReplaceCollectionReceipt"
+          }
+        }
+      },
+      "ImportBatchResult": {
+        "type": "object",
+        "required": [
+          "message",
+          "imported_examples",
+          "item_versions"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "imported_examples": {
+            "type": "integer"
+          },
+          "item_versions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        }
+      },
+      "ImportBatchResponseEnvelope": {
+        "type": "object",
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/ImportBatchResult"
           }
         }
       },

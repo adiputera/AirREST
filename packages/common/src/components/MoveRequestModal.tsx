@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   FolderInput,
   Folder,
@@ -31,14 +31,38 @@ export const MoveRequestModal: React.FC<MoveRequestModalProps> = ({
 }) => {
   const collections = useApiStore((state) => state.collections);
   const moveRequest = useApiStore((state) => state.moveRequest);
+  const loadCollectionDetails = useApiStore((state) => state.loadCollectionDetails);
   const workspaceMode = useApiStore((state) => state.workspaceMode);
   const cloudConfig = useApiStore((state) => state.cloudConfig);
 
   const [selectedCollectionId, setSelectedCollectionId] = useState<string>(sourceCollectionId);
   const [selectedFolderId, setSelectedFolderId] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLoadingDetails, setIsLoadingDetails] = useState(false);
+  const isMountedRef = useRef(true);
+  const contextGenRef = useRef(0);
   useBackHandler(isOpen && Boolean(item), () => { if (!isSubmitting) onClose(); }, 20);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !isSubmitting) {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [isOpen, isSubmitting, onClose]);
 
   // Retrieve current source collection & folder information
   const sourceCollection = useMemo(
@@ -75,12 +99,18 @@ export const MoveRequestModal: React.FC<MoveRequestModalProps> = ({
 
   // Reset state when modal opens
   useEffect(() => {
+    contextGenRef.current += 1;
     if (isOpen && item) {
       setSelectedCollectionId(sourceCollectionId);
       const info = findSavedRequestInCollections(collections, item.id || item.request?.id || '');
       setSelectedFolderId(info?.folderId || '');
       setErrorMsg(null);
       setIsSubmitting(false);
+      setIsLoadingDetails(false);
+    } else if (!isOpen) {
+      setIsSubmitting(false);
+      setIsLoadingDetails(false);
+      setErrorMsg(null);
     }
   }, [isOpen, item?.id, sourceCollectionId]);
 
@@ -89,6 +119,44 @@ export const MoveRequestModal: React.FC<MoveRequestModalProps> = ({
     () => collections.find((c) => c.id === selectedCollectionId),
     [collections, selectedCollectionId]
   );
+
+  const isSourcePartial = Boolean(sourceCollection?.isPartial);
+  const isTargetPartial = Boolean(targetCollection?.isPartial);
+
+  useEffect(() => {
+    if (!isOpen || workspaceMode !== 'cloud') {
+      setIsLoadingDetails(false);
+      return;
+    }
+    const idsToLoad: string[] = [];
+    if (sourceCollection?.isPartial) idsToLoad.push(sourceCollection.id);
+    if (targetCollection?.isPartial && !idsToLoad.includes(targetCollection.id)) {
+      idsToLoad.push(targetCollection.id);
+    }
+    if (idsToLoad.length === 0) {
+      setIsLoadingDetails(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingDetails(true);
+    Promise.all(idsToLoad.map((id) => loadCollectionDetails(id)))
+      .then((results) => {
+        if (cancelled) return;
+        const failed = results.find((r) => !r.success);
+        if (failed) {
+          setErrorMsg(failed.error || 'Failed to load full collection details.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingDetails(false);
+      });
+
+    return () => {
+      cancelled = true;
+      setIsLoadingDetails(false);
+    };
+  }, [isOpen, workspaceMode, sourceCollection?.id, sourceCollection?.isPartial, targetCollection?.id, targetCollection?.isPartial, loadCollectionDetails]);
 
   const canEditSource = canModifyCollection(sourceCollection?.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role);
   const canEditTarget = canModifyCollection(targetCollection?.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role);
@@ -120,6 +188,10 @@ export const MoveRequestModal: React.FC<MoveRequestModalProps> = ({
     (selectedFolderId || '') === (currentFolderId || '');
 
   const handleMove = async () => {
+    if (isSourcePartial || isTargetPartial || isLoadingDetails) {
+      setErrorMsg('Cannot move request while source or target collection is only partially loaded.');
+      return;
+    }
     if (!canEditSource) {
       setErrorMsg('Cannot move request: source collection is read-only for your role.');
       return;
@@ -129,6 +201,7 @@ export const MoveRequestModal: React.FC<MoveRequestModalProps> = ({
       return;
     }
     if (isSameLocation || isSubmitting) return;
+    const submitGen = contextGenRef.current;
     setIsSubmitting(true);
     setErrorMsg(null);
 
@@ -138,6 +211,7 @@ export const MoveRequestModal: React.FC<MoveRequestModalProps> = ({
       selectedCollectionId,
       selectedFolderId ? selectedFolderId : null
     );
+    if (!isMountedRef.current || contextGenRef.current !== submitGen) return;
 
     if (res && !res.success) {
       setErrorMsg(res.error || 'Failed to move request');
@@ -151,7 +225,17 @@ export const MoveRequestModal: React.FC<MoveRequestModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+    <div
+      data-modal="true"
+      role="dialog"
+      aria-modal="true"
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !isSubmitting) {
+          onClose();
+        }
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"
+    >
       <div className="w-full max-w-md rounded-2xl border border-line-strong bg-card p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-line pb-4">
@@ -210,7 +294,7 @@ export const MoveRequestModal: React.FC<MoveRequestModalProps> = ({
                 const isTargetEditable = canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role);
                 return (
                   <option key={col.id} value={col.id} disabled={!isTargetEditable}>
-                    {col.name} {col.id === sourceCollectionId ? '(Current Collection)' : ''} {!isTargetEditable ? '(Read-only)' : ''}
+                    {col.name} {col.id === sourceCollectionId ? '(Current Collection)' : ''} {col.isPartial ? '(Partially loaded)' : ''} {!isTargetEditable ? '(Read-only)' : ''}
                   </option>
                 );
               })}
@@ -240,6 +324,21 @@ export const MoveRequestModal: React.FC<MoveRequestModalProps> = ({
               })}
             </select>
           </div>
+
+          {(isSourcePartial || isTargetPartial) && (
+            <div className="flex items-center gap-2 rounded-xl border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-300 animate-in fade-in">
+              {isLoadingDetails ? (
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-amber-400" />
+              ) : (
+                <AlertCircle className="h-4 w-4 shrink-0 text-amber-400" />
+              )}
+              <span>
+                {isLoadingDetails
+                  ? 'Loading full collection folders before moving...'
+                  : 'Source or target collection is only partially loaded. Sync before moving.'}
+              </span>
+            </div>
+          )}
 
           {/* Read-Only Notice */}
           {!canEditSource && (
@@ -271,7 +370,7 @@ export const MoveRequestModal: React.FC<MoveRequestModalProps> = ({
           <button
             type="button"
             onClick={handleMove}
-            disabled={isSubmitting || isSameLocation || !canEditSource || !canEditTarget}
+            disabled={isSubmitting || isSameLocation || !canEditSource || !canEditTarget || isSourcePartial || isTargetPartial || isLoadingDetails}
             className="flex items-center gap-1.5 rounded-xl bg-sky-500 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-sky-500/20 hover:bg-sky-400 transition disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {isSubmitting ? (

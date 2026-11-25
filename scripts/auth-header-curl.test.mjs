@@ -379,3 +379,259 @@ test('parseCurlCommand handles escaped quotes, ANSI-C $ quotes, attached/= flags
   assert.equal(headReq.headers[0].key, '');
 });
 
+test('F03: parseCurlCommand -> prepareRequest preserves percent-encoding, literal plus, fragments, templates, and mixed form bodies', () => {
+  // 1. Pre-encoded query param ?q=a%2Fb must be encoded once so receiver decodes 'a/b'
+  const encodedQueryReq = curl.tryParseCurlCommand('curl "https://api.example.com/search?q=a%2Fb"');
+  assert.ok(encodedQueryReq);
+  assert.equal(encodedQueryReq.params.find((p) => p.key === 'q')?.value, 'a/b');
+  const preparedEncoded = fetcher.prepareRequest({ ...baseRequest, ...encodedQueryReq }, {});
+  const parsedEncodedUrl = new URL(preparedEncoded.finalUrl);
+  assert.equal(parsedEncodedUrl.searchParams.get('q'), 'a/b');
+
+  // 2. -G --data-urlencode 'q=a&b' produces exactly one 'q' param with value 'a&b'
+  const getUrlencode = curl.tryParseCurlCommand(
+    `curl -G 'https://api.example.com/search' --data-urlencode 'q=a&b'`
+  );
+  assert.ok(getUrlencode);
+  assert.equal(getUrlencode.method, 'GET');
+  assert.equal(getUrlencode.params.filter((p) => p.key).length, 1);
+  assert.equal(getUrlencode.params[0].key, 'q');
+  assert.equal(getUrlencode.params[0].value, 'a&b');
+  const preparedGetUrlencode = fetcher.prepareRequest({ ...baseRequest, ...getUrlencode }, {});
+  const parsedGetUrl = new URL(preparedGetUrlencode.finalUrl);
+  assert.deepEqual([...parsedGetUrl.searchParams.keys()], ['q']);
+  assert.equal(parsedGetUrl.searchParams.get('q'), 'a&b');
+
+  // 3. Literal plus (+), pre-existing query, and #fragment with -G --data-urlencode
+  const plusFragReq = curl.tryParseCurlCommand(
+    `curl -G 'https://api.example.com/search?x=1&space=a+b#sec' --data-urlencode 'q=a+b' --data-urlencode 'tpl={{tok}}'`
+  );
+  assert.ok(plusFragReq);
+  assert.equal(plusFragReq.params.find((p) => p.key === 'x')?.value, '1');
+  assert.equal(plusFragReq.params.find((p) => p.key === 'space')?.value, 'a b');
+  assert.equal(plusFragReq.params.find((p) => p.key === 'q')?.value, 'a+b');
+  assert.equal(plusFragReq.params.find((p) => p.key === 'tpl')?.value, '{{tok}}');
+  const preparedPlusFrag = fetcher.prepareRequest(
+    { ...baseRequest, ...plusFragReq },
+    { tok: 'v+1&2' }
+  );
+  const parsedPlusFrag = new URL(preparedPlusFrag.finalUrl);
+  assert.equal(parsedPlusFrag.hash, '#sec');
+  assert.equal(parsedPlusFrag.searchParams.get('x'), '1');
+  assert.equal(parsedPlusFrag.searchParams.get('space'), 'a b');
+  assert.equal(parsedPlusFrag.searchParams.get('q'), 'a+b');
+  assert.equal(parsedPlusFrag.searchParams.get('tpl'), 'v+1&2');
+
+  // 4. POST -d 'a=1' --data-urlencode 'q=a&b' preserves both in order
+  const mixedFormPost = curl.tryParseCurlCommand(
+    `curl -X POST 'https://api.example.com/form' -d 'a=1' --data-urlencode 'q=a&b'`
+  );
+  assert.ok(mixedFormPost);
+  assert.equal(mixedFormPost.bodyType, 'x-www-form-urlencoded');
+  const preparedMixedForm = fetcher.prepareRequest({ ...baseRequest, ...mixedFormPost }, {});
+  assert.equal(preparedMixedForm.finalBody, 'a=1&q=a%26b');
+
+  // 5. POST with Content-Type: application/x-www-form-urlencoded and pre-encoded -d body does not double-encode
+  const encodedFormPost = curl.tryParseCurlCommand(
+    `curl -X POST 'https://api.example.com/form' -H 'Content-Type: application/x-www-form-urlencoded' -d 'path=a%2Fb&msg=hello+world&plus=a%2Bb'`
+  );
+  assert.ok(encodedFormPost);
+  assert.equal(encodedFormPost.bodyType, 'x-www-form-urlencoded');
+  const preparedEncodedForm = fetcher.prepareRequest({ ...baseRequest, ...encodedFormPost }, {});
+  const formParams = new URLSearchParams(String(preparedEncodedForm.finalBody));
+  assert.equal(formParams.get('path'), 'a/b');
+  assert.equal(formParams.get('msg'), 'hello world');
+  assert.equal(formParams.get('plus'), 'a+b');
+});
+
+test('F04: parseCurlCommand preserves literal option-like operands without truncating while still supporting attached/equals flags', () => {
+  const dashDebug = curl.tryParseCurlCommand(`curl https://api.example.com/items -d '-debug'`);
+  assert.ok(dashDebug);
+  assert.equal(dashDebug.method, 'POST');
+  assert.equal(dashDebug.bodyContent, '-debug');
+
+  const longFlagLike = curl.tryParseCurlCommand(
+    `curl https://api.example.com/items --data-raw '--header=value'`
+  );
+  assert.ok(longFlagLike);
+  assert.equal(longFlagLike.method, 'POST');
+  assert.equal(longFlagLike.bodyContent, '--header=value');
+
+  const realFlags = curl.tryParseCurlCommand(
+    `curl -XPOST -H'X-Test: ok' --url=https://api.example.com/items -d '-value'`
+  );
+  assert.ok(realFlags);
+  assert.equal(realFlags.method, 'POST');
+  assert.equal(realFlags.url, 'https://api.example.com/items');
+  assert.ok(realFlags.headers.some((h) => h.key === 'X-Test' && h.value === 'ok'));
+  assert.equal(realFlags.bodyContent, '-value');
+
+  // generateCurlCommand preserves duplicate keys, omits disabled params, and preserves #fragment
+  const generated = curl.generateCurlCommand({
+    id: 'req-curl-gen',
+    name: 'Test',
+    method: 'GET',
+    url: 'https://api.example.com/search?tag=old&drop=1#frag',
+    headers: [],
+    params: [
+      { id: 'p1', key: 'tag', value: 'a/b', enabled: true },
+      { id: 'p2', key: 'tag', value: 'c+d', enabled: true },
+      { id: 'p3', key: 'drop', value: '1', enabled: false },
+    ],
+    bodyType: 'none',
+    bodyContent: '',
+    auth: { type: 'none' },
+  });
+  assert.match(generated, /tag=a%2Fb&tag=c%2Bd#frag/);
+  assert.doesNotMatch(generated, /drop=1/);
+});
+
+test('C1 & C2: generateCurlCommand safely quotes shell metacharacters and preserves template/schemeless URLs', () => {
+  const maliciousCmd = curl.generateCurlCommand({
+    ...baseRequest,
+    method: 'POST',
+    url: 'https://example.com/test?q=$(whoami)',
+    params: [{ id: 'p0', key: '', value: '', enabled: true }],
+    headers: [{ id: 'h1', key: 'If-None-Match', value: '"etag-123"', enabled: true }],
+    auth: { type: 'basic', basicUsername: 'admin', basicPassword: 'p$ss"word`id`' },
+    bodyType: 'x-www-form-urlencoded',
+    bodyUrlEncoded: [{ id: 'u1', key: 'a', value: '$(whoami)', enabled: true }],
+  });
+
+  // All shell-active values must be single-quoted rather than double-quoted
+  assert.ok(maliciousCmd.includes(`'https://example.com/test?q=$(whoami)'`), `URL must be single-quoted: ${maliciousCmd}`);
+  assert.ok(maliciousCmd.includes(`-H 'If-None-Match: "etag-123"'`), `Quoted header must be single-quoted: ${maliciousCmd}`);
+  assert.ok(maliciousCmd.includes(`-u 'admin:p$ss"word\`id\`'`), `Basic password with $/"/\` must be single-quoted: ${maliciousCmd}`);
+  assert.ok(maliciousCmd.includes(`--data-urlencode 'a=$(whoami)'`), `Form param with $(...) must be single-quoted: ${maliciousCmd}`);
+
+  // Round-trip through parseCurlCommand preserves exact values
+  const reparsed = curl.parseCurlCommand(maliciousCmd);
+  assert.equal(reparsed.headers.find((h) => h.key === 'If-None-Match')?.value, '"etag-123"');
+  assert.equal(reparsed.auth.basicPassword, 'p$ss"word`id`');
+
+  // C2: Unresolved {{baseUrl}} and schemeless localhost:8080/users with default empty param row must not be mangled
+  const unresolvedCmd = curl.generateCurlCommand({
+    ...baseRequest,
+    url: '{{baseUrl}}/api/v1/users',
+    params: [{ id: 'p0', key: '', value: '', enabled: true }],
+    headers: [],
+    auth: { type: 'none' },
+  });
+  assert.ok(unresolvedCmd.includes('"{{baseUrl}}/api/v1/users"'), `Unresolved {{baseUrl}} corrupted: ${unresolvedCmd}`);
+
+  const localhostCmd = curl.generateCurlCommand({
+    ...baseRequest,
+    url: 'localhost:8080/users',
+    params: [{ id: 'p0', key: '', value: '', enabled: true }],
+    headers: [],
+    auth: { type: 'none' },
+  });
+  assert.ok(localhostCmd.includes('"localhost:8080/users"'), `Schemeless localhost URL corrupted: ${localhostCmd}`);
+
+  const templateWithParams = curl.generateCurlCommand({
+    ...baseRequest,
+    url: '{{baseUrl}}/items#sec',
+    params: [{ id: 'p1', key: 'page', value: '2', enabled: true }],
+    headers: [],
+    auth: { type: 'none' },
+  });
+  assert.ok(templateWithParams.includes('"{{baseUrl}}/items?page=2#sec"'), `Template URL + params corrupted: ${templateWithParams}`);
+});
+
+test('C4-C7: form-data file @filename, API key #fragment, cURL parser (-d/-b/--json), async copy & paste scoping', () => {
+  // C4: form-data file without File blob still emits -F "key=@filename" & API Key query stays before #fragment
+  const fileAndApiKeyCmd = curl.generateCurlCommand({
+    ...baseRequest,
+    method: 'POST',
+    url: '{{baseUrl}}/upload#done',
+    params: [],
+    headers: [],
+    auth: { type: 'apikey', apiKeyIn: 'query', apiKeyKey: 'k', apiKeyValue: '123' },
+    bodyType: 'form-data',
+    bodyFormData: [{ id: 'f1', key: 'doc', value: 'report.pdf', fileName: 'report.pdf', type: 'file', enabled: true }],
+  });
+  assert.ok(fileAndApiKeyCmd.includes('"{{baseUrl}}/upload?k=123#done"'), `API key must stay before #fragment: ${fileAndApiKeyCmd}`);
+  assert.ok(fileAndApiKeyCmd.includes('-F "doc=@report.pdf"'), `File form-data must emit @filename even without File blob: ${fileAndApiKeyCmd}`);
+
+  // C6: -d "a=1&b=2" defaults to x-www-form-urlencoded; multi -b joins Cookies; --json respects custom Content-Type
+  const urlEncodedCurl = curl.tryParseCurlCommand('curl -X POST https://example.com/form -d "a=1&b=2"');
+  assert.equal(urlEncodedCurl.bodyType, 'x-www-form-urlencoded');
+  assert.deepEqual(
+    Array.from(urlEncodedCurl.bodyUrlEncoded.map((x) => [x.key, x.value])),
+    [['a', '1'], ['b', '2']]
+  );
+
+  const multiCookieCurl = curl.tryParseCurlCommand('curl -b "a=1" -b "b=2" https://example.com');
+  const cookieHeaders = multiCookieCurl.headers.filter((h) => h.key.toLowerCase() === 'cookie');
+  assert.equal(cookieHeaders.length, 1);
+  assert.equal(cookieHeaders[0].value, 'a=1; b=2');
+  const preparedMultiCookie = fetcher.prepareRequest(
+    {
+      ...baseRequest,
+      headers: [
+        { id: 'c1', key: 'Cookie', value: 'a=1', enabled: true },
+        { id: 'c2', key: 'cookie', value: 'b=2', enabled: true },
+      ],
+    },
+    {}
+  );
+  assert.equal(preparedMultiCookie.finalHeaders.Cookie, 'a=1; b=2');
+
+  const jsonCustomCt = curl.tryParseCurlCommand(
+    `curl --json '{"a":1}' -H 'Content-Type: application/vnd.api+json' https://example.com`
+  );
+  const ctHeaders = jsonCustomCt.headers.filter((h) => h.key.toLowerCase() === 'content-type');
+  assert.equal(ctHeaders.length, 1, 'Custom Content-Type must not be duplicated by --json');
+  assert.equal(ctHeaders[0].value, 'application/vnd.api+json');
+
+  // C5 & C7 source contracts
+  const reqEditorSrc = fs.readFileSync(new URL('../packages/common/src/components/RequestEditor.tsx', import.meta.url), 'utf8');
+  const appSrc = fs.readFileSync(new URL('../packages/common/src/App.tsx', import.meta.url), 'utf8');
+  assert.match(reqEditorSrc, /const handleCopyCurl = async \(\) =>/);
+  assert.match(reqEditorSrc, /await navigator\.clipboard\.writeText\(curlCmd\)/);
+  assert.match(reqEditorSrc, /execCommand\('copy'\)/);
+  assert.match(reqEditorSrc, /copyCurlError/);
+  assert.match(appSrc, /if \(!isEditing\)\s*\{\s*const parsedCurl = tryParseCurlCommand/);
+
+  // C-R2: @-prefixed form-data text values emit --form-string (and round-trip as text) & @-prefixed raw body emits --data-raw
+  const atFormCmd = curl.generateCurlCommand({
+    ...baseRequest,
+    method: 'POST',
+    url: 'https://example.com/post',
+    headers: [],
+    auth: { type: 'none' },
+    bodyType: 'form-data',
+    bodyFormData: [{ id: 'f1', key: 'handle', value: '@alice', type: 'text', enabled: true }],
+  });
+  assert.ok(atFormCmd.includes('--form-string "handle=@alice"'), `Expected --form-string for @-prefixed text field: ${atFormCmd}`);
+  const atFormParsed = curl.tryParseCurlCommand(atFormCmd);
+  assert.equal(atFormParsed.bodyType, 'form-data');
+  assert.equal(atFormParsed.bodyFormData[0].type, 'text');
+  assert.equal(atFormParsed.bodyFormData[0].value, '@alice');
+
+  const atRawCmd = curl.generateCurlCommand({
+    ...baseRequest,
+    method: 'POST',
+    url: 'https://example.com/raw',
+    headers: [],
+    auth: { type: 'none' },
+    bodyType: 'raw',
+    rawType: 'text',
+    bodyContent: '@alice',
+  });
+  assert.ok(atRawCmd.includes('--data-raw "@alice"') || atRawCmd.includes("--data-raw '@alice'"), `Expected --data-raw for @-prefixed raw body: ${atRawCmd}`);
+
+  // C-R4: substitutePathVariables preserves $-sequences such as $100 / $2b$10$hash literally
+  const substitutedPriceUrl = urlParams.substitutePathVariables(
+    'https://example.com/items/:price/users/:hash',
+    [
+      { id: 'p1', key: 'price', value: '$100', enabled: true },
+      { id: 'p2', key: 'hash', value: '$2b$10$hash', enabled: true },
+    ]
+  );
+  assert.equal(
+    substitutedPriceUrl,
+    'https://example.com/items/$100/users/$2b$10$hash',
+  );
+});
+

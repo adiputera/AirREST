@@ -11,7 +11,21 @@ import {
   BodyType,
   RawType,
   FormDataItem,
+  SavedExample,
+  SavedExampleHeader,
 } from '../types/api';
+import {
+  evaluateExamplePayloadEligibility,
+  getExampleUtf8ByteLength,
+  hasUnloadedCollectionExamples,
+  MAX_SAVED_EXAMPLES_PER_ITEM,
+  MAX_SAVED_EXAMPLES_TOTAL_BYTES_PER_ITEM,
+  MAX_SAVED_EXAMPLE_BYTES,
+  resolveHttpReasonPhrase,
+  sanitizeJsonValue,
+  stripInternalExampleFieldsForPostman,
+  validateSavedExampleName,
+} from './examples';
 import { parseQueryParamsFromUrl, parsePathVariablesFromUrl } from './urlParams';
 
 export interface PostmanHeader {
@@ -123,6 +137,13 @@ interface PostmanRawItem {
   request?: PostmanRequestObject | string;
   event?: PostmanEvent[];
   auth?: PostmanAuth;
+  response?: unknown;
+}
+
+export interface PostmanExampleImportSummary {
+  imported: number;
+  skipped: number;
+  skippedReasons: string[];
 }
 
 interface PostmanCollectionSchema {
@@ -436,7 +457,183 @@ export function extractAuthFromHeaders(headers: KeyValuePair[]): AuthConfig | nu
   return null;
 }
 
-export function convertPostmanItem(item: PostmanRawItem, inheritedAuth?: AuthConfig, depth: number = 0): CollectionItem {
+const KNOWN_POSTMAN_RESPONSE_KEYS = new Set([
+  'id',
+  'revision',
+  'name',
+  'originalRequest',
+  'status',
+  'code',
+  'header',
+  'cookie',
+  'body',
+  '_postman_previewlanguage',
+]);
+
+function recordSkippedExample(
+  summary: PostmanExampleImportSummary | undefined,
+  reason: string,
+  count = 1,
+): void {
+  if (!summary || count <= 0) return;
+  summary.skipped += count;
+  if (reason && !summary.skippedReasons.includes(reason) && summary.skippedReasons.length < 10) {
+    summary.skippedReasons.push(reason);
+  }
+}
+
+function parsePostmanResponseHeaders(rawHeader: unknown): SavedExampleHeader[] {
+  if (Array.isArray(rawHeader)) {
+    const out: SavedExampleHeader[] = [];
+    for (const h of rawHeader) {
+      if (!h || typeof h !== 'object' || Array.isArray(h)) continue;
+      const obj = h as Record<string, unknown>;
+      out.push({
+        key: String(obj.key ?? ''),
+        value: String(obj.value ?? ''),
+        ...(obj.disabled === true ? { disabled: true } : {}),
+        ...(typeof obj.description === 'string' && obj.description ? { description: obj.description } : {}),
+      });
+    }
+    return out;
+  }
+  if (typeof rawHeader === 'string' && rawHeader.trim()) {
+    const out: SavedExampleHeader[] = [];
+    for (const line of rawHeader.split(/\r?\n/)) {
+      const idx = line.indexOf(':');
+      if (idx > 0) {
+        out.push({
+          key: line.slice(0, idx).trim(),
+          value: line.slice(idx + 1).trim(),
+        });
+      }
+    }
+    return out;
+  }
+  return [];
+}
+
+function parsePostmanItemExamples(
+  rawResponses: unknown,
+  summary?: PostmanExampleImportSummary,
+): SavedExample[] {
+  if (rawResponses === undefined || rawResponses === null) {
+    return [];
+  }
+  if (!Array.isArray(rawResponses)) {
+    recordSkippedExample(summary, 'Invalid example list format (expected an array).');
+    return [];
+  }
+
+  const examples: SavedExample[] = [];
+  let totalBytes = 0;
+
+  for (const rawEntry of rawResponses) {
+    if (!rawEntry || typeof rawEntry !== 'object' || Array.isArray(rawEntry)) {
+      recordSkippedExample(summary, 'Malformed saved example entry.');
+      continue;
+    }
+    const rawObj = rawEntry as Record<string, unknown>;
+    const code = typeof rawObj.code === 'number' ? rawObj.code : Number(rawObj.code);
+    const headers = parsePostmanResponseHeaders(rawObj.header);
+    const body = rawObj.body;
+
+    const eligibility = evaluateExamplePayloadEligibility({
+      code,
+      body,
+      headers,
+    });
+    if (!eligibility.eligible) {
+      recordSkippedExample(summary, eligibility.reason);
+      continue;
+    }
+
+    if (examples.length >= MAX_SAVED_EXAMPLES_PER_ITEM) {
+      recordSkippedExample(summary, `Exceeded maximum of ${MAX_SAVED_EXAMPLES_PER_ITEM} saved examples per request.`);
+      continue;
+    }
+
+    const status =
+      typeof rawObj.status === 'string' && rawObj.status.trim()
+        ? rawObj.status
+        : resolveHttpReasonPhrase(code);
+
+    const rawName = typeof rawObj.name === 'string' ? rawObj.name : '';
+    const candidateName = rawName.trim() ? rawName : `${code} ${status}`.trim();
+    const nameCheck = validateSavedExampleName(candidateName);
+    if (!nameCheck.valid) {
+      recordSkippedExample(summary, nameCheck.error);
+      continue;
+    }
+
+    const cookie = Array.isArray(rawObj.cookie)
+      ? rawObj.cookie
+          .filter((c): c is Record<string, unknown> => Boolean(c && typeof c === 'object' && !Array.isArray(c)))
+          .map((c) => sanitizeJsonValue({ ...c }))
+      : [];
+
+    const extraFields: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(rawObj)) {
+      if (KNOWN_POSTMAN_RESPONSE_KEYS.has(k) || k === '__proto__' || k === 'constructor' || k === 'prototype') {
+        continue;
+      }
+      if (v !== undefined) {
+        extraFields[k] = sanitizeJsonValue(v);
+      }
+    }
+
+    let originalRequest: Record<string, unknown> | undefined;
+    if (rawObj.originalRequest && typeof rawObj.originalRequest === 'object' && !Array.isArray(rawObj.originalRequest)) {
+      originalRequest = sanitizeJsonValue(rawObj.originalRequest as Record<string, unknown>);
+    }
+
+    const savedExample: SavedExample = {
+      ...extraFields,
+      id: generateId(),
+      revision: 1,
+      name: nameCheck.name,
+      ...(originalRequest ? { originalRequest } : {}),
+      status,
+      code,
+      header: headers,
+      cookie,
+      body: body as string,
+      ...('_postman_previewlanguage' in rawObj
+        ? {
+            _postman_previewlanguage:
+              rawObj._postman_previewlanguage === null
+                ? null
+                : typeof rawObj._postman_previewlanguage === 'string'
+                ? rawObj._postman_previewlanguage
+                : undefined,
+          }
+        : {}),
+    };
+
+    const serializedBytes = getExampleUtf8ByteLength(JSON.stringify(savedExample));
+    if (serializedBytes > MAX_SAVED_EXAMPLE_BYTES) {
+      recordSkippedExample(summary, `Example exceeded the ${MAX_SAVED_EXAMPLE_BYTES / 1024} KiB size limit.`);
+      continue;
+    }
+    if (totalBytes + serializedBytes > MAX_SAVED_EXAMPLES_TOTAL_BYTES_PER_ITEM) {
+      recordSkippedExample(summary, 'Exceeded total saved examples size limit for a single request.');
+      continue;
+    }
+
+    totalBytes += serializedBytes;
+    examples.push(savedExample);
+    if (summary) summary.imported += 1;
+  }
+
+  return examples;
+}
+
+export function convertPostmanItem(
+  item: PostmanRawItem,
+  inheritedAuth?: AuthConfig,
+  depth: number = 0,
+  exampleImportSummary?: PostmanExampleImportSummary,
+): CollectionItem {
   if (depth >= 32) {
     return {
       id: item.id || generateId(),
@@ -452,11 +649,16 @@ export function convertPostmanItem(item: PostmanRawItem, inheritedAuth?: AuthCon
   const folderAuth = parsePostmanAuth(item.auth) || inheritedAuth || { type: 'none' };
 
   if (isFolder) {
+    if (Array.isArray(item.response) && item.response.length > 0) {
+      recordSkippedExample(exampleImportSummary, 'Folders cannot contain saved examples.', item.response.length);
+    } else if (item.response !== undefined && item.response !== null && !Array.isArray(item.response)) {
+      recordSkippedExample(exampleImportSummary, 'Folders cannot contain saved examples.');
+    }
     return {
       id: item.id || generateId(),
       name: item.name || 'Unnamed Folder',
       type: 'folder',
-      items: (item.item || []).map((child) => convertPostmanItem(child, folderAuth, depth + 1)),
+      items: (item.item || []).map((child) => convertPostmanItem(child, folderAuth, depth + 1, exampleImportSummary)),
     };
   }
 
@@ -680,18 +882,27 @@ export function convertPostmanItem(item: PostmanRawItem, inheritedAuth?: AuthCon
     updatedAt: Date.now(),
   };
 
+  const examples = parsePostmanItemExamples(item.response, exampleImportSummary);
+
   return {
     id: item.id || generateId(),
     name: item.name || 'Untitled Request',
     type: 'request',
     request: apiRequest,
+    examples,
+    examplesLoaded: true,
+    exampleCount: examples.length,
   };
 }
 
 /**
- * Imports a Postman v2.0 or v2.1 collection JSON string into a Collection object.
+ * Imports a Postman v2.0 or v2.1 collection JSON string into a Collection object
+ * along with a summary of imported and skipped saved examples.
  */
-export function importPostmanCollection(jsonString: string): Collection {
+export function importPostmanCollectionWithSummary(jsonString: string): {
+  collection: Collection;
+  exampleImportSummary: PostmanExampleImportSummary;
+} {
   const parsed = JSON.parse(jsonString) as PostmanCollectionSchema;
 
   if (!parsed || typeof parsed !== 'object') {
@@ -704,17 +915,34 @@ export function importPostmanCollection(jsonString: string): Collection {
 
   // Parse collection-level authorization
   const collectionAuth = parsePostmanAuth(parsed.auth) || { type: 'none' };
+  const exampleImportSummary: PostmanExampleImportSummary = {
+    imported: 0,
+    skipped: 0,
+    skippedReasons: [],
+  };
 
-  const items: CollectionItem[] = rawItems.map((item) => convertPostmanItem(item, collectionAuth));
+  const items: CollectionItem[] = rawItems.map((item) =>
+    convertPostmanItem(item, collectionAuth, 0, exampleImportSummary),
+  );
 
   return {
-    id: generateId(),
-    name,
-    description,
-    items,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
+    collection: {
+      id: generateId(),
+      name,
+      description,
+      items,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    },
+    exampleImportSummary,
   };
+}
+
+/**
+ * Imports a Postman v2.0 or v2.1 collection JSON string into a Collection object.
+ */
+export function importPostmanCollection(jsonString: string): Collection {
+  return importPostmanCollectionWithSummary(jsonString).collection;
 }
 
 function itemToPostmanJson(item: CollectionItem): PostmanRawItem {
@@ -900,7 +1128,12 @@ function itemToPostmanJson(item: CollectionItem): PostmanRawItem {
     };
   }
 
+  if (item.examplesLoaded === false && (item.exampleCount ?? 0) > 0) {
+    throw new Error(`Cannot export collection: saved examples for "${item.name}" are not fully loaded.`);
+  }
+
   const postmanUrl = buildPostmanUrl(req.url, req.params, req.pathVariables);
+  const exportedExamples = (item.examples || []).map(stripInternalExampleFieldsForPostman);
 
   return {
     name: req.name || item.name,
@@ -911,6 +1144,7 @@ function itemToPostmanJson(item: CollectionItem): PostmanRawItem {
       body,
       auth,
     },
+    response: exportedExamples,
     event: event.length > 0 ? event : undefined,
   };
 }
@@ -1069,6 +1303,9 @@ export function buildPostmanUrl(
  * Exports an internal Collection object to standard Postman Collection v2.1.0 format.
  */
 export function exportPostmanCollection(collection: Collection): string {
+  if (hasUnloadedCollectionExamples(collection)) {
+    throw new Error('Cannot export collection before all saved examples are loaded from cloud.');
+  }
   const postmanFormat: PostmanCollectionSchema = {
     info: {
       _postman_id: collection.id,
@@ -1124,7 +1361,6 @@ export function detectPostmanJsonType(jsonString: string): 'collection' | 'envir
 
     // Secondary heuristics
     if (Array.isArray(parsed.values)) return 'environment';
-    if (Array.isArray(parsed.items) || Array.isArray(parsed.item)) return 'collection';
 
     return 'unknown';
   } catch {

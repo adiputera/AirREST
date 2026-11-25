@@ -24,14 +24,26 @@ import {
   Maximize2,
   Minimize2,
   GripHorizontal,
+  BookmarkPlus,
+  Loader2,
   X,
 } from 'lucide-react';
-import { useApiStore } from '../store/useApiStore';
+import { useApiStore, type SaveRequestToCollectionResult } from '../store/useApiStore';
 import { requestHostPermission } from '../lib/hostPermissions';
 import { usePlatformAdapter } from '../context';
 import { getTrackedBlob, getTrackedRawBody } from '../lib/blobManager';
 import { useBackHandler } from '../lib/backNavigation';
 import { CodeEditor, CodeEditorHandle } from './editor/CodeEditor';
+import { SaveToCollectionModal } from './SaveToCollectionModal';
+import { findSavedRequestInCollections } from '../lib/requestDiff';
+import { canModifyCollection, hasScopePermission } from '../lib/jwt';
+import {
+  buildDefaultExampleName,
+  evaluateResponseExampleEligibility,
+  MAX_SAVED_EXAMPLE_NAME_RUNES,
+  validateSavedExampleName,
+} from '../lib/examples';
+import type { ApiRequest, ApiResponse } from '../types/api';
 
 const EXACT_MIME_EXTENSIONS: Record<string, string> = {
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
@@ -270,6 +282,11 @@ export const ResponseViewer: React.FC = () => {
   const isLoading = useApiStore((state) => state.isLoading);
   const updateActiveRequest = useApiStore((state) => state.updateActiveRequest);
   const sendRequest = useApiStore((state) => state.sendRequest);
+  const collections = useApiStore((state) => state.collections);
+  const workspaceMode = useApiStore((state) => state.workspaceMode);
+  const cloudConfig = useApiStore((state) => state.cloudConfig);
+  const saveResponseAsExample = useApiStore((state) => state.saveResponseAsExample);
+  const selectSavedExample = useApiStore((state) => state.selectSavedExample);
   const activeTabRequest = useApiStore((state) => state.tabs.find((t) => t.id === state.activeTabId));
 
   const targetUrl = activeResponse?.requestUrl || activeTabRequest?.url || '';
@@ -286,6 +303,16 @@ export const ResponseViewer: React.FC = () => {
   const [permissionMessage, setPermissionMessage] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [isExpandedModalOpen, setIsExpandedModalOpen] = useState(false);
+  const [isExampleNameModalOpen, setIsExampleNameModalOpen] = useState(false);
+  const [exampleNameInput, setExampleNameInput] = useState('');
+  const [exampleSaveError, setExampleSaveError] = useState<string | null>(null);
+  const [isSavingExample, setIsSavingExample] = useState(false);
+  const [saveToCollectionModalRequest, setSaveToCollectionModalRequest] = useState<ApiRequest | null>(null);
+  const pendingExampleDraftRef = React.useRef<{
+    name: string;
+    response: ApiResponse;
+    fallbackRequest?: ApiRequest;
+  } | null>(null);
 
   // Drag-to-resize response height (persisted in localStorage)
   const [responseHeight, setResponseHeight] = useState<number>(() => {
@@ -315,6 +342,118 @@ export const ResponseViewer: React.FC = () => {
       activeResponse.status === 0 &&
       (activeResponse.isError || activeResponse.failureKind || activeResponse.scriptErrorStage === 'pre-request')
   );
+
+  const savedInfo = activeTabRequest ? findSavedRequestInCollections(collections, activeTabRequest.id) : null;
+  const exampleEligibility = activeResponse ? evaluateResponseExampleEligibility(activeResponse) : null;
+  const canWriteScope = hasScopePermission(
+    cloudConfig.activeScope,
+    'collection:write',
+    workspaceMode,
+    cloudConfig.user?.role,
+  );
+  const saveExampleDisabledReason: string | null = (() => {
+    if (!activeResponse || !exampleEligibility) return 'Send a request first';
+    if (!exampleEligibility.eligible) return exampleEligibility.reason;
+    if (savedInfo && !activeTabRequest?.deletedFromCollection) {
+      if (savedInfo.collection.isPartial) return 'Wait for collection details to finish loading before saving examples.';
+      if (savedInfo.collection._needsMoveReconciliation) return 'Sync workspace to confirm previous move before saving examples.';
+      if (!canModifyCollection(savedInfo.collection.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+        return `Collection "${savedInfo.collection.name}" is read-only for your role.`;
+      }
+      return null;
+    }
+    if (!canWriteScope) {
+      return 'Write permission (collection:write) is required to save examples.';
+    }
+    return null;
+  })();
+
+  const handleOpenSaveExample = () => {
+    if (!activeResponse || saveExampleDisabledReason) return;
+    setExampleNameInput(buildDefaultExampleName(activeResponse.status, activeResponse.statusText));
+    setExampleSaveError(null);
+    setIsExampleNameModalOpen(true);
+  };
+
+  const handleConfirmSaveExample = async () => {
+    if (!activeResponse) return;
+    const validation = validateSavedExampleName(exampleNameInput);
+    if (!validation.valid) {
+      setExampleSaveError(validation.error);
+      return;
+    }
+    const snapshotResponse = activeResponse;
+    const snapshotRequest = activeResponse.capturedRequest || activeTabRequest;
+
+    if (savedInfo && !activeTabRequest?.deletedFromCollection) {
+      setIsSavingExample(true);
+      setExampleSaveError(null);
+      try {
+        const res = await saveResponseAsExample({
+          collectionId: savedInfo.collection.id,
+          itemId: savedInfo.savedRequest.id,
+          name: validation.name,
+          response: snapshotResponse,
+          fallbackRequest: snapshotRequest,
+        });
+        if (!res.success && !res.reconcilePending) {
+          setExampleSaveError(res.error || 'Failed to save response as example.');
+          return;
+        }
+        setIsExampleNameModalOpen(false);
+        setIsExpandedModalOpen(false);
+        if (res.example) {
+          selectSavedExample({
+            collectionId: savedInfo.collection.id,
+            itemId: savedInfo.savedRequest.id,
+            exampleId: res.example.id,
+          });
+        }
+      } finally {
+        setIsSavingExample(false);
+      }
+      return;
+    }
+
+    if (!snapshotRequest) {
+      setExampleSaveError('Missing request snapshot to save.');
+      return;
+    }
+    pendingExampleDraftRef.current = {
+      name: validation.name,
+      response: snapshotResponse,
+      fallbackRequest: snapshotRequest,
+    };
+    setIsExampleNameModalOpen(false);
+    setSaveToCollectionModalRequest(snapshotRequest);
+  };
+
+  const handleSaveToCollectionCommitted = async (result: SaveRequestToCollectionResult) => {
+    const draft = pendingExampleDraftRef.current;
+    pendingExampleDraftRef.current = null;
+    if (!draft || !result.success || !result.savedRequestId) return;
+    const latestSaved = findSavedRequestInCollections(useApiStore.getState().collections, result.savedRequestId);
+    if (!latestSaved) return;
+    const res = await saveResponseAsExample({
+      collectionId: latestSaved.collection.id,
+      itemId: latestSaved.savedRequest.id,
+      name: draft.name,
+      response: draft.response,
+      fallbackRequest: draft.fallbackRequest,
+    });
+    if (res.example) {
+      setIsExpandedModalOpen(false);
+      selectSavedExample({
+        collectionId: latestSaved.collection.id,
+        itemId: latestSaved.savedRequest.id,
+        exampleId: res.example.id,
+      });
+    } else if (!res.success && res.error) {
+      setDownloadError(res.error);
+    }
+  };
+
+  useBackHandler(isExampleNameModalOpen, () => setIsExampleNameModalOpen(false), 30);
 
   // Register back navigation handler for expanded response modal
   useBackHandler(isExpandedModalOpen, () => setIsExpandedModalOpen(false), 25);
@@ -624,6 +763,19 @@ export const ResponseViewer: React.FC = () => {
                 <span className="rounded-full border border-rose-500/20 bg-rose-500/10 px-1.5 text-[10px] text-rose-600 dark:text-rose-300">
                   failed
                 </span>
+              </button>
+            )}
+
+            {exampleEligibility?.eligible && (
+              <button
+                type="button"
+                onClick={handleOpenSaveExample}
+                disabled={Boolean(saveExampleDisabledReason) || isSavingExample}
+                className="flex items-center gap-1 rounded-lg border border-line bg-card px-2.5 py-1 text-xs text-tx-secondary hover:bg-hover hover:text-tx-primary transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-card disabled:hover:text-tx-secondary"
+                title={saveExampleDisabledReason || 'Save this response as a reusable Postman example'}
+              >
+                <BookmarkPlus className="h-3.5 w-3.5 text-sky-500 dark:text-sky-400" />
+                <span>Save as Example</span>
               </button>
             )}
 
@@ -1213,6 +1365,7 @@ export const ResponseViewer: React.FC = () => {
                   <code className="text-tx-secondary font-mono">{activeResponse.contentType || 'application/octet-stream'}</code>
                   , {formatBytes(activeResponse.sizeBytes)}).
                 </p>
+
                 <button
                   type="button"
                   onClick={handleDownload}
@@ -1287,7 +1440,7 @@ export const ResponseViewer: React.FC = () => {
 
       {/* EXPANDED FULL-SCREEN / LARGE RESPONSE MODAL */}
       {isExpandedModalOpen && activeResponse && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-3 md:p-6 animate-in fade-in duration-150">
+        <div data-modal="true" role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-3 md:p-6 animate-in fade-in duration-150">
           <div className="flex flex-col w-full max-w-6xl h-[92vh] max-h-[960px] rounded-2xl border border-line bg-surface shadow-2xl overflow-hidden">
             {/* Modal Header */}
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-3 bg-element/40 shrink-0">
@@ -1384,6 +1537,19 @@ export const ResponseViewer: React.FC = () => {
                     </>
                   )}
                 </button>
+
+                {exampleEligibility?.eligible && (
+                  <button
+                    type="button"
+                    onClick={handleOpenSaveExample}
+                    disabled={Boolean(saveExampleDisabledReason) || isSavingExample}
+                    className="flex items-center gap-1 rounded-lg border border-line bg-card px-2.5 py-1.5 text-xs text-tx-secondary hover:bg-hover hover:text-tx-primary transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-card disabled:hover:text-tx-secondary"
+                    title={saveExampleDisabledReason || 'Save this response as a reusable Postman example'}
+                  >
+                    <BookmarkPlus className="h-3.5 w-3.5 text-sky-500 dark:text-sky-400" />
+                    <span>Save as Example</span>
+                  </button>
+                )}
 
                 <button
                   type="button"
@@ -1492,6 +1658,87 @@ export const ResponseViewer: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {isExampleNameModalOpen && (
+        <div
+          data-modal="true"
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-line bg-surface p-5 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-line pb-3">
+              <div className="flex items-center gap-2">
+                <BookmarkPlus className="h-4 w-4 text-sky-500" />
+                <h3 className="text-sm font-semibold text-tx-primary">Save as Example</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsExampleNameModalOpen(false)}
+                className="rounded p-1 text-tx-muted hover:bg-hover hover:text-tx-primary"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="mt-4 space-y-3">
+              <label className="block text-xs font-medium text-tx-secondary">
+                Example Name
+              </label>
+              <input
+                type="text"
+                autoFocus
+                maxLength={MAX_SAVED_EXAMPLE_NAME_RUNES}
+                value={exampleNameInput}
+                onChange={(e) => setExampleNameInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !isSavingExample) {
+                    void handleConfirmSaveExample();
+                  } else if (e.key === 'Escape') {
+                    setIsExampleNameModalOpen(false);
+                  }
+                }}
+                placeholder="e.g. 200 OK"
+                className="w-full rounded-lg border border-line bg-card px-3 py-2 text-xs text-tx-primary focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+              />
+              {exampleSaveError && (
+                <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-600 dark:text-rose-300">
+                  {exampleSaveError}
+                </div>
+              )}
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsExampleNameModalOpen(false)}
+                className="rounded-lg border border-line bg-card px-3 py-1.5 text-xs font-medium text-tx-secondary hover:bg-hover transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isSavingExample}
+                onClick={() => void handleConfirmSaveExample()}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-sky-500 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-sky-600 transition disabled:opacity-50"
+              >
+                {isSavingExample && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                <span>Save Example</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {saveToCollectionModalRequest && (
+        <SaveToCollectionModal
+          isOpen
+          onClose={() => {
+            setSaveToCollectionModalRequest(null);
+            pendingExampleDraftRef.current = null;
+          }}
+          request={saveToCollectionModalRequest}
+          onSaveCommitted={(res) => void handleSaveToCollectionCommitted(res)}
+        />
       )}
     </div>
   );

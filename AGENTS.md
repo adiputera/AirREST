@@ -35,16 +35,36 @@ Whenever asked to perform a code audit, security scan, reliability scan, or arch
 
 Whenever changes, features, refactors, or bug fixes are made to the codebase:
 
-1. **Dual Changelog Synchronization**:
-   - `CHANGELOG.md`: Always update for any changes across the entire repository (extension, native app, hub, backend, shared libraries).
-   - `CHROMEWEBSTORE.md`: Update **ONLY** for changes affecting the browser extension (`apps/extension` and extension-facing shared modules). Strictly exclude backend, hub, or desktop-only changes.
+1. **Unified Semantic Versioning (`MAJOR.MINOR.PATCH`)**:
+   - This repository uses a **single unified version** across all apps, shared packages, native manifests, and release metadata, adhering to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) (`X.Y.Z` or `X.Y.Z-prerelease.N`, without a leading `v` in manifest files).
+   - **Never bump version files manually in isolation.** Always use the official repository version-bumper script:
+     ```bash
+     npm run version:desktop -- <version>
+     # or: npm run version:native -- <version>
+     ```
+   - `scripts/bump-desktop-version.mjs` atomically synchronizes all unified version targets:
+     - `package.json` (root)
+     - `apps/extension/package.json` & `apps/extension/public/manifest.json`
+     - `apps/hub/package.json`
+     - `apps/native/package.json`, `apps/native/src-tauri/tauri.conf.json`, & `apps/native/src-tauri/Cargo.toml`
+     - `apps/native/src-tauri/gen/android/app/tauri.properties` (if Android is initialized; computes `tauri.android.versionCode` as `major * 1000000 + minor * 1000 + patch`)
+     - `packages/common/package.json` & `packages/common/src/lib/postman.ts` (`_postman_exported_using: 'AirREST/<version>'`)
+     - `README.md` (Version shield badge)
+   - After running the script, keep workspace versions in `package-lock.json` synchronized (e.g., via `npm install --package-lock-only`) and verify with `npm run test:version-bumper` and `npm run test:release-notes`.
 
-2. **Git Commit and Tag Decision Rules**:
-   - **Uncommitted Version**: If the latest version in `package.json`/`manifest.json` is still uncommitted in the working tree, append the new changes under that version's section in the changelogs.
+2. **Dual Changelog Synchronization**:
+   - `CHANGELOG.md`: Always update for any changes across the entire repository (extension, native app, hub, backend, shared libraries) following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) (`## [<version>] - YYYY-MM-DD` with `Added`, `Changed`, `Fixed`, etc.).
+   - `CHROMEWEBSTORE.md`: Update **ONLY** for changes affecting the browser extension (`apps/extension` and extension-facing shared modules). Update `> Last Updated: YYYY-MM-DD` and strictly exclude backend, hub, or desktop-only changes. `CHROMEWEBSTORE.md` maintains **two separate release-note sections** for the two extension editions, so update both when applicable:
+     - **Full Edition (Online & Offline)** (`npm run build:full` → `dist/`, top release-notes block under `# Chrome Web Store Listings — AirREST`): Add/append the `> <version>: ...` entry covering all extension-facing changes (both local and cloud/online features).
+     - **Offline Edition (100% Offline & Local-Only)** (`npm run build:offline` → `dist-offline/`, under `# 2. Offline Edition (100% Offline & Local-Only)` → `### Release Notes`): Add/append the `> <version>: ...` entry **only** with changes that apply to the 100% offline/local-only edition; strictly exclude cloud-only or online-only features (such as cloud sync, cloud auth/accounts, or cloud project/team operations).
+
+3. **Git Commit and Tag Decision Rules**:
+   - **Uncommitted Version**: If the latest version bump in `package.json`/`apps/extension/public/manifest.json` is still uncommitted in the working tree, append the new changes under that version's section in `CHANGELOG.md` (and `CHROMEWEBSTORE.md` if extension-facing) without bumping again.
    - **Committed Version & Tag Equality**: If the latest version has already been committed:
-     - Check the latest commit against the latest Git tag.
-     - **If Latest Commit == Latest Tag**: The previous release is finalized. Bump the version number (e.g., in `package.json`, `apps/extension/package.json`, `apps/extension/public/manifest.json`) and initialize a new version entry in `CHANGELOG.md` and `CHROMEWEBSTORE.md`.
-     - **If Latest Commit is Ahead of Latest Tag**: There are un-tagged commits ahead of the last release tag. **Explicitly ask the user for confirmation** whether the version needs to be bumped or if the new changes should be added to the current unreleased version before updating.
+     - Compare `HEAD` against the latest Git tag (e.g., `git describe --tags --abbrev=0` and `git rev-list <latest-tag>..HEAD --count`).
+     - **If `HEAD` == Latest Tag (`0` commits ahead)**: The previous release is finalized. Bump the version number using `npm run version:desktop -- <new-version>` (choosing `PATCH` for bug fixes/refactors, `MINOR` for backward-compatible features, `MAJOR` for breaking changes) and initialize a new version entry in `CHANGELOG.md` and `CHROMEWEBSTORE.md` (if applicable).
+     - **If `HEAD` is Ahead of Latest Tag (`> 0` commits ahead)**: There are un-tagged commits ahead of the last release tag (for example, when `package.json` was already bumped in an earlier un-tagged commit). **Explicitly ask the user for confirmation** whether the version needs to be bumped again or if the new changes should be added to the current unreleased version before updating.
+   - **Tagging Convention**: Release tags use `v<version>` for unified releases (or `desktop-v<version>` / `android-v<version>` when triggering target-specific workflows in `.github/workflows/desktop-release.yml`, whose notes are extracted from `CHANGELOG.md` by `scripts/extract-release-notes.mjs`). Never create or push Git tags unless explicitly requested by the user.
 
 
 

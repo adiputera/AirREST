@@ -12,6 +12,8 @@ import (
 
 var ErrInvalidItemMove = errors.New("invalid item move destination or source")
 
+const maxItemMoveDepth = 32
+
 // MoveItem preserves IDs and changes the entire subtree in one transaction.
 // The authorized collection snapshots are checked again under ordered locks.
 func (r *CollectionRepository) MoveItem(ctx context.Context, id uuid.UUID, source, target *domain.Collection, parentID *uuid.UUID, userID uuid.UUID) error {
@@ -91,6 +93,35 @@ func (r *CollectionRepository) MoveItem(ctx context.Context, id uuid.UUID, sourc
 			return ErrInvalidItemMove
 		}
 	}
+	parentDepth := 0
+	if parentID != nil {
+		err = tx.QueryRow(ctx, `WITH RECURSIVE ancestors AS (
+			SELECT id, parent_id, 1 AS depth FROM collection_items
+			WHERE id=$1 AND collection_id=$2 AND deleted_at IS NULL
+			UNION ALL
+			SELECT ci.id, ci.parent_id, a.depth + 1 FROM collection_items ci
+			JOIN ancestors a ON ci.id = a.parent_id
+			WHERE ci.collection_id=$2 AND ci.deleted_at IS NULL AND a.depth < $3 + 2
+		) SELECT COALESCE(MAX(depth), 0) FROM ancestors`, parentID, target.ID, maxItemMoveDepth).Scan(&parentDepth)
+		if err != nil {
+			return err
+		}
+	}
+	var subtreeHeight int
+	err = tx.QueryRow(ctx, `WITH RECURSIVE subtree AS (
+		SELECT id, 1 AS height FROM collection_items
+		WHERE id=$1 AND collection_id=$2 AND deleted_at IS NULL
+		UNION ALL
+		SELECT ci.id, s.height + 1 FROM collection_items ci
+		JOIN subtree s ON ci.parent_id = s.id
+		WHERE ci.collection_id=$2 AND ci.deleted_at IS NULL AND s.height < $3 + 2
+	) SELECT COALESCE(MAX(height), 1) FROM subtree`, id, source.ID, maxItemMoveDepth).Scan(&subtreeHeight)
+	if err != nil {
+		return err
+	}
+	if exceedsItemMoveDepth(parentDepth, subtreeHeight) {
+		return ErrInvalidItemMove
+	}
 	now := time.Now().UTC()
 	_, err = tx.Exec(ctx, `WITH RECURSIVE subtree AS (
 		SELECT id FROM collection_items WHERE id=$1
@@ -108,6 +139,10 @@ func (r *CollectionRepository) MoveItem(ctx context.Context, id uuid.UUID, sourc
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+func exceedsItemMoveDepth(parentDepth, subtreeHeight int) bool {
+	return parentDepth+subtreeHeight > maxItemMoveDepth
 }
 
 func sameOptionalUUID(a, b *uuid.UUID) bool {

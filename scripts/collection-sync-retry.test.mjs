@@ -26,18 +26,22 @@ test('Collection Sync & Retry: replaceCollection tags pending and rethrows on cl
   // Verify replaceCollection sets pending status and rethrows on failure
   assert.match(
     content,
-    /replaceCollection:\s*async[\s\S]*?batchImportToScope[\s\S]*?catch\s*\(err:\s*any\)[\s\S]*?_syncStatus:\s*'pending'[\s\S]*?throw err;/
+    /replaceCollection:\s*async[\s\S]*?replaceScopeCollection[\s\S]*?catch\s*\(err:\s*any\)[\s\S]*?_syncStatus:\s*'pending'[\s\S]*?throw err;/
   );
 });
 
-test('Collection Sync & Retry: ImportModal does not falsely conflict on pending unsynced collections and handles errors without closing', () => {
-  const content = fs.readFileSync(new URL('../packages/common/src/components/ImportModal.tsx', import.meta.url), 'utf8');
+test('Collection Sync & Retry: ImportModal protects pending collections with conflict checks and explicit retry tracking', () => {
+  const modalContent = fs.readFileSync(new URL('../packages/common/src/components/ImportModal.tsx', import.meta.url), 'utf8');
+  const storeContent = fs.readFileSync(new URL('../packages/common/src/store/useApiStore.ts', import.meta.url), 'utf8');
 
-  // Verify existingPendingCol is checked
-  assert.match(content, /c\._syncStatus\s*===\s*'pending'/);
+  // Verify ImportModal tracks explicit retryCollectionId per item and checks _syncStatus === 'pending' only for explicit retry
+  assert.match(modalContent, /item\.retryCollectionId/);
+  assert.match(modalContent, /c\._syncStatus\s*===\s*'pending'/);
+  assert.doesNotMatch(modalContent, /const existingPendingCol =/);
 
-  // Verify conflict check excludes pending collections
-  assert.match(content, /c\._syncStatus\s*!==\s*'pending'/);
+  // Verify store checks target scope on retry before re-uploading
+  assert.match(storeContent, /options\?\.isRetry/);
+  assert.match(storeContent, /fetchScopeCollectionsForRuntime/);
 });
 
 test('Collection Sync & Retry: Sidebar displays pending sync indicator for un-synced collections', () => {

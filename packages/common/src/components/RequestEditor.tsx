@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Send,
   Lock,
+  AlertCircle,
   Code2,
   Sliders,
   AlignLeft,
@@ -29,6 +30,7 @@ import {
   Redo2,
 } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
+import { useStoreContext } from '../store/storeContext';
 import { HttpMethod, BodyType, RawType, KeyValuePair } from '../types/api';
 import { KeyValueEditor, ReadonlyKeyValueRow } from './KeyValueEditor';
 import { METHOD_COLORS } from './MethodBadge';
@@ -72,6 +74,7 @@ export interface RequestEditorProps {
 }
 
 export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, mobileScrollContent }) => {
+  const activeStore = useStoreContext() || useApiStore;
   const tabs = useApiStore((state) => state.tabs);
   const activeTabId = useApiStore((state) => state.activeTabId);
   const createTab = useApiStore((state) => state.createTab);
@@ -165,6 +168,8 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, 
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
   const [isSaveAsMode, setIsSaveAsMode] = useState(false);
   const [copiedCurl, setCopiedCurl] = useState(false);
+  const [copyCurlError, setCopyCurlError] = useState<string | null>(null);
+  const copiedCurlTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isUrlEncodedBulkEdit, setIsUrlEncodedBulkEdit] = useState(false);
   const [urlEncodedBulkText, setUrlEncodedBulkText] = useState('');
   const [justSaved, setJustSaved] = useState(false);
@@ -480,14 +485,64 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, 
     });
   }
 
-  const handleCopyCurl = () => {
+  const handleCopyCurl = async () => {
+    if (copiedCurlTimerRef.current) {
+      clearTimeout(copiedCurlTimerRef.current);
+      copiedCurlTimerRef.current = null;
+    }
+    setCopyCurlError(null);
+    setCopiedCurl(false);
     try {
       const curlCmd = generateCurlCommand(currentTab, envVarsMap);
-      navigator.clipboard.writeText(curlCmd);
-      setCopiedCurl(true);
-      setTimeout(() => setCopiedCurl(false), 2000);
+      let copied = false;
+
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(curlCmd);
+          copied = true;
+        } catch {
+          copied = false;
+        }
+      }
+
+      if (!copied && typeof document !== 'undefined' && typeof document.execCommand === 'function') {
+        const ta = document.createElement('textarea');
+        ta.value = curlCmd;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+          copied = document.execCommand('copy');
+        } catch {
+          copied = false;
+        } finally {
+          document.body.removeChild(ta);
+        }
+      }
+
+      if (copied) {
+        setCopiedCurl(true);
+        copiedCurlTimerRef.current = setTimeout(() => {
+          setCopiedCurl(false);
+          copiedCurlTimerRef.current = null;
+        }, 2000);
+      } else {
+        setCopyCurlError('Clipboard unavailable');
+        copiedCurlTimerRef.current = setTimeout(() => {
+          setCopyCurlError(null);
+          copiedCurlTimerRef.current = null;
+        }, 2400);
+      }
     } catch (e) {
       console.error('Failed to generate cURL command', e);
+      setCopyCurlError('Failed to copy cURL');
+      copiedCurlTimerRef.current = setTimeout(() => {
+        setCopyCurlError(null);
+        copiedCurlTimerRef.current = null;
+      }, 2400);
     }
   };
 
@@ -769,14 +824,21 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, 
 
                 <button
                   type="button"
-                  onClick={handleCopyCurl}
+                  onClick={() => {
+                    void handleCopyCurl();
+                  }}
                   className="flex items-center gap-1.5 rounded-md border border-line bg-card px-2 py-0.5 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition"
-                  title="Copy active request as cURL command"
+                  title={copyCurlError || 'Copy active request as cURL command'}
                 >
                   {copiedCurl ? (
                     <>
                       <Check className="h-3 w-3 text-emerald-500 dark:text-emerald-400" />
                       <span className="text-emerald-600 dark:text-emerald-400">Copied!</span>
+                    </>
+                  ) : copyCurlError ? (
+                    <>
+                      <AlertCircle className="h-3 w-3 text-rose-500 dark:text-rose-400" />
+                      <span className="text-rose-600 dark:text-rose-400">{copyCurlError}</span>
                     </>
                   ) : (
                     <>
@@ -860,7 +922,7 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, 
                 e.stopPropagation();
                 const targetSection = resolveInitialCurlSection(parsedCurl);
                 createTab(parsedCurl);
-                const newTabId = useApiStore.getState().activeTabId;
+                const newTabId = activeStore.getState().activeTabId;
                 if (newTabId) {
                   queueInitialRequestEditorSection(newTabId, targetSection);
                   setSectionsByRequestId((sections) =>
@@ -1515,7 +1577,26 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, 
                   </div>
                 ) : currentTab.bodyType === 'binary' ? (
                   /* Direct Raw Binary File Upload */
-                  <div className="space-y-3">
+                  <div
+                    className="space-y-3"
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const file = e.dataTransfer.files?.[0];
+                      if (file) {
+                        setBodyBinaryFile({
+                          name: file.name,
+                          size: file.size,
+                          type: file.type || 'application/octet-stream',
+                          file,
+                        });
+                      }
+                    }}
+                  >
                     {currentTab.bodyBinaryFile?.file || currentTab.bodyBinaryFile?.name ? (
                       <div className="rounded-xl border border-sky-500/30 bg-sky-500/10 dark:bg-sky-950/20 p-4">
                         <div className="flex items-start justify-between gap-4">

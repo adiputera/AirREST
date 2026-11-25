@@ -1,5 +1,6 @@
 import { Collection, CollectionItem } from '../types/api';
 import { ReorderItemPayload } from './cloudApi';
+import { cloneSavedExamplesList, cloneSavedExampleSummaries } from './examples';
 
 /** Collection and ancestor folder IDs needed to reveal a saved request. */
 export function findRequestAncestorIds(collections: Collection[], requestId: string): string[] {
@@ -38,6 +39,8 @@ function cloneItemsPreservingAttachments(items: CollectionItem[]): CollectionIte
       bodyUrlEncoded: item.request.bodyUrlEncoded?.map((pair) => ({ ...pair })),
       bodyBinaryFile: item.request.bodyBinaryFile ? { ...item.request.bodyBinaryFile } : undefined,
     } : undefined,
+    examples: cloneSavedExamplesList(item.examples),
+    exampleSummaries: cloneSavedExampleSummaries(item.exampleSummaries),
     items: item.items ? cloneItemsPreservingAttachments(item.items) : undefined,
   }));
 }

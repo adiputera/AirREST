@@ -9,6 +9,7 @@ import {
   Environment,
   EnvironmentVariable,
 } from '../types/api';
+import { cloneSavedExamplesList, cloneSavedExampleSummaries } from './examples';
 
 /**
  * Normalizes a list of key-value pairs by ignoring rows that have both empty key and empty value.
@@ -444,6 +445,9 @@ export function cloneCollectionWithNewIds(col: Collection, newName: string): Col
         ...item,
         id: newItemId,
         request: reqClone,
+        examples: cloneSavedExamplesList(item.examples, true),
+        exampleSummaries: cloneSavedExampleSummaries(item.exampleSummaries),
+        version: undefined,
       };
     });
   };
@@ -460,26 +464,79 @@ export function cloneCollectionWithNewIds(col: Collection, newName: string): Col
   };
 }
 
+export function collectAllItemIds(items: CollectionItem[]): string[] {
+  const ids: string[] = [];
+  const walk = (list: CollectionItem[]) => {
+    for (const item of list) {
+      if (item.id) ids.push(item.id);
+      if (item.type === 'folder' && item.items) {
+        walk(item.items);
+      }
+    }
+  };
+  walk(items);
+  return ids;
+}
+
 export function alignCollectionItemIds(
   existingItems: CollectionItem[],
   incomingItems: CollectionItem[]
 ): CollectionItem[] {
   const existingFlat = flattenCollectionRequests(existingItems);
+  const existingFolders: { id: string; path: string }[] = [];
+  const collectFolders = (items: CollectionItem[], prefix = '') => {
+    for (const item of items) {
+      if (item.type === 'folder') {
+        const currentPath = prefix ? `${prefix} / ${item.name}` : item.name;
+        if (item.id) existingFolders.push({ id: item.id, path: currentPath });
+        if (item.items) collectFolders(item.items, currentPath);
+      }
+    }
+  };
+  collectFolders(existingItems);
+  const matchedFolderIds = new Set<string>();
+  const matchedRequestIds = new Set<string>();
 
   const alignList = (items: CollectionItem[], prefix = ''): CollectionItem[] => {
     return items.map((item) => {
       const currentPath = prefix ? `${prefix} / ${item.name}` : item.name;
       if (item.type === 'folder') {
+        const folderMatch = existingFolders.find(
+          (f) =>
+            !matchedFolderIds.has(f.id) &&
+            ((item.id && f.id === item.id) || f.path.toLowerCase() === currentPath.toLowerCase())
+        );
+        const isValidUUID =
+          item.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.id);
+        const resolvedFolderId = folderMatch
+          ? folderMatch.id
+          : isValidUUID
+            ? item.id
+            : makeUUID();
+        if (folderMatch) matchedFolderIds.add(folderMatch.id);
         return {
           ...item,
-          id: item.id || makeUUID(),
+          id: resolvedFolderId,
           items: alignList(item.items || [], currentPath),
         };
       }
 
-      const match = existingFlat.find(
-        (ex) => (ex.id && item.id && ex.id === item.id) || ex.path.toLowerCase() === currentPath.toLowerCase()
-      );
+      const itemMethod = (item.request?.method || 'GET').toUpperCase();
+      const lowerPath = currentPath.toLowerCase();
+      const match =
+        (item.id
+          ? existingFlat.find((ex) => !matchedRequestIds.has(ex.id) && ex.id === item.id)
+          : undefined) ||
+        existingFlat.find(
+          (ex) =>
+            !matchedRequestIds.has(ex.id) &&
+            ex.path.toLowerCase() === lowerPath &&
+            ex.method === itemMethod
+        ) ||
+        existingFlat.find(
+          (ex) => !matchedRequestIds.has(ex.id) && ex.path.toLowerCase() === lowerPath
+        );
+      if (match) matchedRequestIds.add(match.id);
 
       const isValidUUID = item.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.id);
       const resolvedId = match ? match.id : (isValidUUID ? item.id : makeUUID());

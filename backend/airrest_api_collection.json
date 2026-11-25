@@ -1397,6 +1397,107 @@
             }
           },
           {
+            "name": "Get Collection Examples (Paginated)",
+            "request": {
+              "method": "GET",
+              "header": [
+                {
+                  "key": "Authorization",
+                  "value": "Bearer {{token}}"
+                }
+              ],
+              "url": {
+                "raw": "{{baseUrl}}/api/v1/collections/{{collectionId}}/examples?include_body=false&limit=50",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "api",
+                  "v1",
+                  "collections",
+                  "{{collectionId}}",
+                  "examples"
+                ],
+                "query": [
+                  {
+                    "key": "include_body",
+                    "value": "false"
+                  },
+                  {
+                    "key": "limit",
+                    "value": "50"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "name": "Replace Collection (Atomic)",
+            "request": {
+              "method": "POST",
+              "header": [
+                {
+                  "key": "Authorization",
+                  "value": "Bearer {{token}}"
+                },
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": {
+                "mode": "raw",
+                "raw": "{\n  \"operation_id\": \"{{$guid}}\",\n  \"base_version\": 1,\n  \"collection\": {\n    \"id\": \"{{collectionId}}\",\n    \"name\": \"Replaced API Collection\",\n    \"items\": [\n      {\n        \"id\": \"{{itemId}}\",\n        \"type\": \"request\",\n        \"name\": \"Get example\",\n        \"method\": \"GET\",\n        \"url\": \"https://httpbin.org/get?user=tester&tag=api\",\n        \"examples\": []\n      }\n    ]\n  }\n}"
+              },
+              "url": {
+                "raw": "{{baseUrl}}/api/v1/collections/{{collectionId}}/replace",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "api",
+                  "v1",
+                  "collections",
+                  "{{collectionId}}",
+                  "replace"
+                ]
+              }
+            }
+          },
+          {
+            "name": "Patch Item Saved Examples (Add/Rename/Delete)",
+            "request": {
+              "method": "PATCH",
+              "header": [
+                {
+                  "key": "Authorization",
+                  "value": "Bearer {{token}}"
+                },
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": {
+                "mode": "raw",
+                "raw": "{\n  \"operation_id\": \"{{$guid}}\",\n  \"op\": \"add\",\n  \"base_version\": 1,\n  \"example\": {\n    \"id\": \"{{$guid}}\",\n    \"revision\": 1,\n    \"name\": \"200 OK\",\n    \"status\": \"OK\",\n    \"code\": 200,\n    \"header\": [\n      {\n        \"key\": \"Content-Type\",\n        \"value\": \"application/json\"\n      }\n    ],\n    \"cookie\": [],\n    \"body\": \"{\\\"ok\\\":true}\",\n    \"_postman_previewlanguage\": \"json\"\n  }\n}"
+              },
+              "url": {
+                "raw": "{{baseUrl}}/api/v1/items/{{itemId}}/examples",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "api",
+                  "v1",
+                  "items",
+                  "{{itemId}}",
+                  "examples"
+                ]
+              }
+            }
+          },
+          {
             "name": "Move Request or Folder",
             "request": {
               "method": "POST",

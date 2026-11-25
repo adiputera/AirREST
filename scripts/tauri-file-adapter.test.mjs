@@ -171,7 +171,9 @@ test('openFiles supports desktop multi-select, Android content URIs, cancellatio
 
   // Cancelled multi-select returns empty array
   const cancelled = loadAdapter(false, null);
-  assert.deepEqual(await cancelled.adapter.openFiles(), []);
+  const cancelledResults = await cancelled.adapter.openFiles();
+  assert.equal(Array.isArray(cancelledResults), true);
+  assert.equal(cancelledResults.length, 0);
 
   // Oversized file in batch reports per-file error without failing valid siblings
   const mixed = loadAdapter(false, ['/tmp/oversized.json', '/tmp/valid.json'], {
@@ -188,5 +190,52 @@ test('openFiles supports desktop multi-select, Android content URIs, cancellatio
   assert.equal(mixedResults[1].filename, 'valid.json');
   assert.equal(mixedResults[1].error, undefined);
   assert.match(mixedResults[1].content, /Valid/);
+});
+
+test('F09: Tauri desktop window disables native dragDrop interception so HTML5 drag-and-drop works on Windows', () => {
+  const tauriConf = JSON.parse(
+    fs.readFileSync(new URL('../apps/native/src-tauri/tauri.conf.json', import.meta.url), 'utf8')
+  );
+  assert.ok(Array.isArray(tauriConf.app?.windows) && tauriConf.app.windows.length > 0);
+  assert.equal(tauriConf.app.windows[0].dragDropEnabled, false);
+});
+
+test('I5 & I6: Android SAF extractFilename ignores authority provider and enforces 16 MiB UTF-8 byte limit', async () => {
+  const android = loadAdapter(true, [
+    'content://com.android.providers.downloads.documents/document/msf%3A100001234',
+    'content://com.android.externalstorage.documents/document/primary%3ADownload%2Fteam-api.json',
+  ]);
+  const res = await android.adapter.openFiles();
+  assert.equal(res[0].filename, 'import.json', 'Must not return Android provider authority as filename');
+  assert.equal(res[1].filename, 'team-api.json');
+
+  // UTF-16 length < 16 MiB (6M CJK chars) but UTF-8 byte length is 18 MiB (> 16 MiB)
+  const sixMillionCjk = '中'.repeat(6 * 1024 * 1024);
+  const utf8Test = loadAdapter(false, ['/tmp/cjk-big.json'], {
+    stat: async () => null,
+    readTextFile: async () => sixMillionCjk,
+  });
+  const utf8Res = await utf8Test.adapter.openFiles();
+  assert.match(utf8Res[0].error, /16 MB/i);
+});
+
+test('I-R4: tauriAdapter.openFiles enforces 50-file and 64 MiB aggregate batch caps', async () => {
+  const manyPaths = Array.from({ length: 51 }, (_, i) => `/tmp/file-${i}.json`);
+  const overCount = loadAdapter(false, manyPaths);
+  const overCountRes = await overCount.adapter.openFiles();
+  assert.equal(overCountRes.length, 1);
+  assert.match(overCountRes[0].error || '', /50 files/i);
+
+  // 5 files x 14 MiB = 70 MiB total (> 64 MiB batch limit, each under 16 MiB per-file limit)
+  const fivePaths = Array.from({ length: 5 }, (_, i) => `/tmp/big-${i}.json`);
+  const overBatch = loadAdapter(false, fivePaths, {
+    stat: async () => ({ size: 14 * 1024 * 1024, isFile: true }),
+    readTextFile: async () => 'a'.repeat(14 * 1024 * 1024),
+  });
+  const overBatchRes = await overBatch.adapter.openFiles();
+  assert.equal(overBatchRes.length, 5);
+  assert.equal(overBatchRes[0].error, undefined);
+  assert.equal(overBatchRes[3].error, undefined);
+  assert.match(overBatchRes[4].error || '', /64 MB/i);
 });
 

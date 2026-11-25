@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   FolderInput,
   Folder,
@@ -57,8 +57,20 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
   const [targetOptions, setTargetOptions] = useState<TargetOption[]>([]);
   const [selectedTargetScope, setSelectedTargetScope] = useState<ActiveScope | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [targetFetchError, setTargetFetchError] = useState<string | null>(null);
+  const [retryCounter, setRetryCounter] = useState(0);
+  const isMountedRef = useRef(true);
+  const contextGenRef = useRef(0);
+  const targetsLoadGenRef = useRef(0);
   useBackHandler(isOpen && Boolean(collection), () => { if (!isSubmitting) onClose(); }, 20);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const activeScope = cloudConfig.activeScope;
   const isSourceProject = workspaceMode === 'cloud' && activeScope?.type === 'project';
@@ -68,154 +80,253 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
     hasScopePermission(activeScope, 'collection:move', workspaceMode, cloudConfig.user?.role) &&
     canModifyCollection(collection?.minRole, activeScope, workspaceMode, cloudConfig.user?.role);
 
-  // Load eligible target workspaces / projects
   useEffect(() => {
-    if (!isOpen) {
-      setTargetOptions([]);
-      setSelectedTargetScope(null);
-      setErrorMsg(null);
-      return;
-    }
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !isSubmitting) {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [isOpen, isSubmitting, onClose]);
 
-    let isMounted = true;
-    const controller = new AbortController();
+  const hasCloudSession = isCloudSessionActive(cloudConfig);
+  const cloudApiUrl = cloudConfig.apiUrl;
+  const cloudUserId = cloudConfig.user?.id;
+  const cloudUserRole = cloudConfig.user?.role;
+  const activeScopeId = activeScope?.id;
+  const activeScopeType = activeScope?.type;
+  const activeScopeTeamId = activeScope?.teamId;
+
+  const loadTargets = useCallback(async (signal?: AbortSignal) => {
+    const gen = ++targetsLoadGenRef.current;
     setIsLoadingTargets(true);
     setErrorMsg(null);
+    setTargetFetchError(null);
 
-    const loadTargets = async () => {
-      try {
-        const options: TargetOption[] = [];
+    try {
+      const options: TargetOption[] = [];
+      const liveState = useApiStore.getState();
+      const liveCloudConfig = liveState.cloudConfig;
+      const liveOfflineWorkspaces = liveState.offlineWorkspaces || [];
 
-        // 1. Offline Workspaces (available in all editions)
-        const otherOfflineWorkspaces = isSourceProject || productPolicy.workspace.offline === false
+      // 1. Offline Workspaces (only available when source itself is in Offline mode)
+      const otherOfflineWorkspaces =
+        workspaceMode !== 'offline' || productPolicy.workspace.offline === false
           ? []
-          : (offlineWorkspaces || []).filter(
-            (w) => !(workspaceMode === 'offline' && w.id === activeOfflineWorkspaceId)
-          );
+          : liveOfflineWorkspaces.filter(
+              (w) => !(workspaceMode === 'offline' && w.id === activeOfflineWorkspaceId)
+            );
 
-        for (const ws of otherOfflineWorkspaces) {
-          options.push({
-            scope: {
-              id: ws.id,
-              name: ws.name,
-              type: 'offline_workspace',
-            },
-            label: ws.name,
-            subLabel: 'Offline Workspace (Local Storage)',
-            role: 'Local',
-          });
+      for (const ws of otherOfflineWorkspaces) {
+        options.push({
+          scope: {
+            id: ws.id,
+            name: ws.name,
+            type: 'offline_workspace',
+          },
+          label: ws.name,
+          subLabel: 'Offline Workspace (Local Storage)',
+          role: 'Local',
+        });
+      }
+
+      // 2. Cloud Workspaces & Projects (Full edition only, if authenticated)
+      let hadFetchFailure = false;
+      let firstFetchError: string | null = null;
+      const captureFailure = (err: unknown) => {
+        if (signal?.aborted) return;
+        hadFetchFailure = true;
+        if (!firstFetchError) {
+          firstFetchError = err instanceof Error ? err.message : 'Failed to load destination workspaces';
+        }
+      };
+
+      if (!isOfflineOnly && isCloudSessionActive(liveCloudConfig)) {
+        const effectiveUserRole = (liveCloudConfig.user?.role || getRoleFromJwt(liveCloudConfig.token) || '').toLowerCase();
+        const isSuperadmin = effectiveUserRole === 'superadmin';
+
+        const [workspaces, teams] = await Promise.all([
+          (cloudClient?.fetchUserWorkspaces ?? fetchUserWorkspaces)(
+            liveCloudConfig.apiUrl,
+            liveCloudConfig.token,
+            liveCloudConfig.refreshToken,
+            signal
+          ).catch((err) => {
+            captureFailure(err);
+            return [] as Awaited<ReturnType<typeof fetchUserWorkspaces>>;
+          }),
+          (cloudClient?.fetchUserTeams ?? fetchUserTeams)(
+            liveCloudConfig.apiUrl,
+            liveCloudConfig.token,
+            liveCloudConfig.refreshToken,
+            signal
+          ).catch((err) => {
+            captureFailure(err);
+            return [] as Awaited<ReturnType<typeof fetchUserTeams>>;
+          }),
+        ]);
+
+        const teamProjects = await Promise.all(
+          teams.map(async (t) => {
+            const projs = await (cloudClient?.fetchTeamProjects ?? fetchTeamProjects)(
+              liveCloudConfig.apiUrl,
+              t.id,
+              liveCloudConfig.token,
+              liveCloudConfig.refreshToken,
+              signal,
+            ).catch((err) => {
+              captureFailure(err);
+              return [] as Awaited<ReturnType<typeof fetchTeamProjects>>;
+            });
+            return { team: t, projects: projs };
+          })
+        );
+
+        // Personal Cloud Workspace Option
+        for (const ws of workspaces) {
+          const isCurrentWs = workspaceMode === 'cloud' && activeScopeType === 'workspace' && activeScopeId === ws.id;
+          if (!isCurrentWs && !isSourceProject) {
+            options.push({
+              scope: {
+                id: ws.id,
+                name: ws.name || 'Default Workspace',
+                type: 'workspace',
+              },
+              label: ws.name || 'Default Workspace',
+              subLabel: 'Private Cloud Workspace',
+              role: 'Owner',
+            });
+          }
         }
 
-        // 2. Cloud Workspaces & Projects (Full edition only, if authenticated)
-        if (!isOfflineOnly && isCloudSessionActive(cloudConfig)) {
-          const effectiveUserRole = (cloudConfig.user?.role || getRoleFromJwt(cloudConfig.token) || '').toLowerCase();
-          const isSuperadmin = effectiveUserRole === 'superadmin';
+        // Team Projects Options
+        for (const tp of teamProjects) {
+          const isTeamAdmin =
+            isSuperadmin ||
+            tp.team.role === 'admin' ||
+            tp.team.role === 'owner' ||
+            (tp.team as any).user_role === 'admin' ||
+            (tp.team as any).user_role === 'owner';
 
-          const [workspaces, teams] = await Promise.all([
-            (cloudClient?.fetchUserWorkspaces ?? fetchUserWorkspaces)(cloudConfig.apiUrl, cloudConfig.token, cloudConfig.refreshToken, controller.signal).catch(() => []),
-            (cloudClient?.fetchUserTeams ?? fetchUserTeams)(cloudConfig.apiUrl, cloudConfig.token, cloudConfig.refreshToken, controller.signal).catch(() => []),
-          ]);
-
-          const teamProjects = await Promise.all(
-            teams.map(async (t) => {
-              const projs = await (cloudClient?.fetchTeamProjects ?? fetchTeamProjects)(
-                cloudConfig.apiUrl,
-                t.id,
-                cloudConfig.token,
-                cloudConfig.refreshToken,
-                controller.signal,
-              ).catch(() => []);
-              return { team: t, projects: projs };
-            })
-          );
-
-          // Personal Cloud Workspace Option
-          for (const ws of workspaces) {
-            const isCurrentWs = workspaceMode === 'cloud' && activeScope?.type === 'workspace' && activeScope.id === ws.id;
-            if (!isCurrentWs && !isSourceProject) {
-              options.push({
-                scope: {
-                  id: ws.id,
-                  name: ws.name || 'Default Workspace',
-                  type: 'workspace',
-                },
-                label: ws.name || 'Default Workspace',
-                subLabel: 'Private Cloud Workspace',
-                role: 'Owner',
-              });
-            }
+          if (isSourceProject && sourceTeamId && tp.team.id !== sourceTeamId) {
+            continue;
           }
 
-          // Team Projects Options
-          for (const tp of teamProjects) {
-            const isTeamAdmin =
-              isSuperadmin ||
-              tp.team.role === 'admin' ||
-              tp.team.role === 'owner' ||
-              (tp.team as any).user_role === 'admin' ||
-              (tp.team as any).user_role === 'owner';
-
-            if (isSourceProject && sourceTeamId && tp.team.id !== sourceTeamId) {
+          for (const proj of tp.projects) {
+            if (isSourceProject && proj.id === activeScopeId) {
               continue;
             }
 
-            for (const proj of tp.projects) {
-              if (isSourceProject && proj.id === activeScope?.id) {
-                continue;
-              }
+            const effectiveRole = isTeamAdmin ? 'admin' : proj.user_role;
+            const targetProjectScope: ActiveScope = {
+              type: 'project',
+              id: proj.id,
+              name: proj.name,
+              teamId: tp.team.id,
+              teamName: tp.team.name,
+              role: effectiveRole,
+              permissions: proj.permissions,
+            };
+            const isEligible =
+              isSuperadmin ||
+              isTeamAdmin ||
+              (hasScopePermission(targetProjectScope, 'collection:move', 'cloud', liveCloudConfig.user?.role) &&
+                canModifyCollection(collection?.minRole, targetProjectScope, 'cloud', liveCloudConfig.user?.role));
 
-              const effectiveRole = isTeamAdmin ? 'admin' : proj.user_role;
-              const isEligible =
-                isSuperadmin ||
-                isTeamAdmin ||
-                hasScopePermission(
-                  { type: 'project', role: effectiveRole, permissions: proj.permissions },
-                  'collection:move',
-                  'cloud',
-                  cloudConfig.user?.role
-                );
-
-              if (isEligible) {
-                options.push({
-                  scope: {
-                    id: proj.id,
-                    name: proj.name,
-                    type: 'project',
-                    teamId: tp.team.id,
-                    teamName: tp.team.name,
-                    role: effectiveRole,
-                    permissions: proj.permissions,
-                  },
-                  label: `${tp.team.name} / ${proj.name}`,
-                  subLabel: `Team: ${tp.team.name}`,
-                  role: effectiveRole ? effectiveRole.toUpperCase() : undefined,
-                });
-              }
+            if (isEligible) {
+              options.push({
+                scope: targetProjectScope,
+                label: `${tp.team.name} / ${proj.name}`,
+                subLabel: `Team: ${tp.team.name}`,
+                role: effectiveRole ? effectiveRole.toUpperCase() : undefined,
+              });
             }
           }
         }
-
-        if (!isMounted) return;
-
-        setTargetOptions(options);
-        if (options.length > 0) {
-          setSelectedTargetScope(options[0].scope);
-        }
-      } catch (err: any) {
-        if (!isMounted) return;
-        setErrorMsg(err.message || 'Failed to load destination workspaces');
-      } finally {
-        if (isMounted) setIsLoadingTargets(false);
       }
-    };
 
-    loadTargets();
+      if (!isMountedRef.current || targetsLoadGenRef.current !== gen || signal?.aborted) return;
+
+      if (hadFetchFailure) {
+        setTargetFetchError(firstFetchError || 'Failed to load destination workspaces');
+      }
+      setTargetOptions(options);
+      setSelectedTargetScope(options.length > 0 ? options[0].scope : null);
+    } catch (err: any) {
+      if (!isMountedRef.current || targetsLoadGenRef.current !== gen || signal?.aborted) return;
+      setTargetFetchError(err.message || 'Failed to load destination workspaces');
+      setErrorMsg(err.message || 'Failed to load destination workspaces');
+      setTargetOptions([]);
+      setSelectedTargetScope(null);
+    } finally {
+      if (isMountedRef.current && targetsLoadGenRef.current === gen && !signal?.aborted) {
+        setIsLoadingTargets(false);
+      }
+    }
+  }, [
+    workspaceMode,
+    productPolicy.workspace.offline,
+    activeOfflineWorkspaceId,
+    isOfflineOnly,
+    hasCloudSession,
+    cloudApiUrl,
+    cloudUserId,
+    cloudUserRole,
+    cloudClient,
+    activeScopeId,
+    activeScopeType,
+    isSourceProject,
+    sourceTeamId,
+    collection?.minRole,
+  ]);
+
+  // Reset modal context & submit state when open/collection/scope changes
+  useEffect(() => {
+    contextGenRef.current += 1;
+    setIsSubmitting(false);
+    if (!isOpen) {
+      targetsLoadGenRef.current += 1;
+      setTargetOptions([]);
+      setSelectedTargetScope(null);
+      setErrorMsg(null);
+      setTargetFetchError(null);
+      setIsLoadingTargets(false);
+    }
+    return () => {
+      contextGenRef.current += 1;
+    };
+  }, [
+    isOpen,
+    collection?.id,
+    workspaceMode,
+    activeOfflineWorkspaceId,
+    activeScopeType,
+    activeScopeId,
+    activeScopeTeamId,
+    cloudUserId,
+  ]);
+
+  // Load eligible target workspaces / projects
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const controller = new AbortController();
+    void loadTargets(controller.signal);
 
     return () => {
-      isMounted = false;
+      targetsLoadGenRef.current += 1;
       controller.abort();
     };
-  }, [isOpen, cloudClient, productPolicy, cloudConfig.apiUrl, cloudConfig.token, cloudConfig.sessionKind, cloudConfig.user?.id, cloudConfig.refreshToken, workspaceMode, activeOfflineWorkspaceId, offlineWorkspaces]);
+  }, [
+    isOpen,
+    retryCounter,
+    loadTargets,
+    collection?.id,
+  ]);
 
   if (!isOpen || !collection) return null;
 
@@ -225,10 +336,12 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
       return;
     }
     if (!selectedTargetScope) return;
+    const submitGen = contextGenRef.current;
     setIsSubmitting(true);
     setErrorMsg(null);
 
     const result = await moveCollection(collection.id, selectedTargetScope);
+    if (!isMountedRef.current || contextGenRef.current !== submitGen) return;
     setIsSubmitting(false);
 
     if (result.success) {
@@ -270,6 +383,9 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
           onClose();
         }
       }}
+      data-modal="true"
+      role="dialog"
+      aria-modal="true"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150 select-none"
     >
       <div className="w-full max-w-lg rounded-2xl border border-line bg-surface p-6 shadow-2xl">
@@ -323,6 +439,23 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
               <Loader2 className="h-4 w-4 animate-spin text-sky-500 dark:text-sky-400" />
               <span className="text-xs">Loading available workspaces...</span>
             </div>
+          ) : targetFetchError && targetOptions.length === 0 ? (
+            <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-center">
+              <AlertCircle className="h-6 w-6 text-rose-500 dark:text-rose-400 mx-auto" />
+              <div className="text-xs font-bold text-rose-500 dark:text-rose-300 mt-2">
+                Failed to Load Destination Workspaces
+              </div>
+              <p className="text-[11px] text-tx-muted mt-1 leading-relaxed">
+                {targetFetchError}
+              </p>
+              <button
+                type="button"
+                onClick={() => setRetryCounter((n) => n + 1)}
+                className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-[11px] font-semibold text-rose-500 dark:text-rose-300 hover:bg-rose-500/20 transition"
+              >
+                Retry
+              </button>
+            </div>
           ) : targetOptions.length === 0 ? (
             <div className="rounded-xl border border-line bg-card/30 p-4 text-center">
               <AlertCircle className="h-6 w-6 text-tx-muted mx-auto" />
@@ -342,7 +475,9 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
                 return (
                   <div
                     key={opt.scope.id}
-                    onClick={() => setSelectedTargetScope(opt.scope)}
+                    onClick={() => {
+                      if (!isSubmitting) setSelectedTargetScope(opt.scope);
+                    }}
                     className={`flex items-center justify-between p-2.5 rounded-xl border cursor-pointer transition ${
                       isSelected
                         ? isOfflineTarget
@@ -387,6 +522,23 @@ export const MoveCollectionModal: React.FC<MoveCollectionModalProps> = ({
             </div>
           )}
         </div>
+
+        {targetFetchError && targetOptions.length > 0 && (
+          <div className="mt-3.5 flex items-center justify-between gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-500 dark:text-amber-300">
+            <div className="flex items-center gap-2 min-w-0">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              <span className="truncate">Some destination workspaces failed to load: {targetFetchError}</span>
+            </div>
+            <button
+              type="button"
+              disabled={isSubmitting}
+              onClick={() => setRetryCounter((n) => n + 1)}
+              className="shrink-0 rounded-md border border-amber-500/30 px-2 py-0.5 text-[11px] font-semibold hover:bg-amber-500/20 disabled:opacity-40 disabled:pointer-events-none"
+            >
+              Retry
+            </button>
+          </div>
+        )}
 
         {/* Error notice */}
         {!canMove && (

@@ -117,21 +117,20 @@ func (h *SyncHandler) ImportBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.syncService.ImportBatch(r.Context(), user, wsID, projID, req.Collections); err != nil {
+	result, err := h.syncService.ImportBatchWithSummary(r.Context(), user, wsID, projID, req.Collections)
+	if err != nil {
 		writeSyncError(w, err)
 		return
 	}
 
-	response.JSON(w, http.StatusOK, map[string]string{
-		"message": "collections successfully imported into cloud scope",
-	})
+	response.JSON(w, http.StatusOK, result)
 }
 
 func writeSyncError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, service.ErrInvalidItemPayload):
 		response.Error(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST")
-	case errors.Is(err, service.ErrBatchLimit):
+	case errors.Is(err, service.ErrBatchLimit), errors.Is(err, service.ErrExampleLimitExceeded):
 		response.Error(w, http.StatusRequestEntityTooLarge, err.Error(), "BATCH_LIMIT_EXCEEDED")
 	case errors.Is(err, service.ErrInvalidScope):
 		response.Error(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST")

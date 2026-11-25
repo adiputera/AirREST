@@ -26,6 +26,7 @@ export const VariableTextarea: React.FC<VariableTextareaProps> = ({
   onKeyUp,
   onClick,
   onBlur,
+  onSelect,
   readOnly,
   disabled,
   ...rest
@@ -41,6 +42,28 @@ export const VariableTextarea: React.FC<VariableTextareaProps> = ({
   const [acAnchorRect, setAcAnchorRect] = useState<AutocompleteAnchorRect | null>(null);
 
   const safeValue = typeof value === 'string' ? value : '';
+  const lastInternalValueRef = useRef(safeValue);
+  const acHasNavigatedRef = useRef(false);
+
+  useEffect(() => {
+    if (safeValue !== lastInternalValueRef.current) {
+      lastInternalValueRef.current = safeValue;
+      setAcContext(null);
+    }
+  }, [safeValue]);
+
+  useEffect(() => {
+    if (!enableVariableAutocomplete || readOnly || disabled) {
+      setAcContext(null);
+    }
+  }, [enableVariableAutocomplete, readOnly, disabled]);
+
+  const isAnchorRectVisible = useCallback((rect: { left: number; right: number; top: number; bottom: number }) => {
+    if (typeof window === 'undefined' || typeof window.innerHeight !== 'number' || typeof window.innerWidth !== 'number') {
+      return true;
+    }
+    return !(rect.bottom < 0 || rect.top > window.innerHeight || rect.right < 0 || rect.left > window.innerWidth);
+  }, []);
 
   const measureAnchorRect = useCallback((): AutocompleteAnchorRect | null => {
     const el = textareaRef.current;
@@ -72,8 +95,12 @@ export const VariableTextarea: React.FC<VariableTextareaProps> = ({
   }, []);
 
   const updateAutocomplete = useCallback(
-    (nextText: string, cursorPos: number | null) => {
+    (nextText: string, cursorPos: number | null, selectionEnd?: number | null) => {
       if (!enableVariableAutocomplete || readOnly || disabled) {
+        setAcContext(null);
+        return;
+      }
+      if (selectionEnd !== undefined && selectionEnd !== null && cursorPos !== null && selectionEnd !== cursorPos) {
         setAcContext(null);
         return;
       }
@@ -83,15 +110,21 @@ export const VariableTextarea: React.FC<VariableTextareaProps> = ({
         setAcContext(null);
         return;
       }
+      const el = textareaRef.current;
+      if (el && !isAnchorRectVisible(el.getBoundingClientRect())) {
+        setAcContext(null);
+        return;
+      }
       setAcContext((prev) => {
         if (!prev || prev.query !== detected.query) {
           setAcActiveIndex(0);
+          acHasNavigatedRef.current = false;
         }
         return detected;
       });
       setAcAnchorRect(measureAnchorRect());
     },
-    [enableVariableAutocomplete, readOnly, disabled, measureAnchorRect]
+    [enableVariableAutocomplete, readOnly, disabled, measureAnchorRect, isAnchorRectVisible]
   );
 
   const acSuggestions: AutocompleteSuggestionItem[] = useMemo(() => {
@@ -114,6 +147,7 @@ export const VariableTextarea: React.FC<VariableTextareaProps> = ({
       if (!acContext || index < 0 || index >= acSuggestions.length) return;
       const chosen = acSuggestions[index];
       const { nextText, nextCursorPos } = applyAutocompleteSuggestion(safeValue, acContext, chosen);
+      lastInternalValueRef.current = nextText;
       setAcContext(null);
       onValueChange(nextText);
 
@@ -137,8 +171,14 @@ export const VariableTextarea: React.FC<VariableTextareaProps> = ({
   useEffect(() => {
     if (!isAutocompleteOpen) return;
     const handleScrollOrResize = (e: Event) => {
-      const target = e.target as HTMLElement | null;
-      if (target && target.closest?.(`#${CSS.escape(listboxId)}`)) {
+      const target = e.target as Node | null;
+      const listboxEl = typeof document !== 'undefined' ? document.getElementById(listboxId) : null;
+      if (target && listboxEl?.contains(target)) {
+        return;
+      }
+      const el = textareaRef.current;
+      if (el && !isAnchorRectVisible(el.getBoundingClientRect())) {
+        setAcContext(null);
         return;
       }
       setAcAnchorRect(measureAnchorRect());
@@ -149,7 +189,7 @@ export const VariableTextarea: React.FC<VariableTextareaProps> = ({
       window.removeEventListener('scroll', handleScrollOrResize, true);
       window.removeEventListener('resize', handleScrollOrResize);
     };
-  }, [isAutocompleteOpen, listboxId, measureAnchorRect]);
+  }, [isAutocompleteOpen, listboxId, measureAnchorRect, isAnchorRectVisible]);
 
   return (
     <>
@@ -158,7 +198,9 @@ export const VariableTextarea: React.FC<VariableTextareaProps> = ({
         value={safeValue}
         readOnly={readOnly}
         disabled={disabled}
-        aria-expanded={isAutocompleteOpen || undefined}
+        role={!readOnly && enableVariableAutocomplete ? 'combobox' : undefined}
+        aria-autocomplete={!readOnly && enableVariableAutocomplete ? 'list' : undefined}
+        aria-expanded={!readOnly && enableVariableAutocomplete ? isAutocompleteOpen : undefined}
         aria-controls={isAutocompleteOpen ? listboxId : undefined}
         aria-activedescendant={
           isAutocompleteOpen ? `${listboxId}-item-${acActiveIndex}` : undefined
@@ -166,8 +208,9 @@ export const VariableTextarea: React.FC<VariableTextareaProps> = ({
         onChange={(e) => {
           onChange?.(e);
           if (!e.defaultPrevented && !readOnly) {
+            lastInternalValueRef.current = e.target.value;
             onValueChange(e.target.value);
-            updateAutocomplete(e.target.value, e.target.selectionStart);
+            updateAutocomplete(e.target.value, e.target.selectionStart, e.target.selectionEnd);
           }
         }}
         onKeyUp={(e) => {
@@ -175,31 +218,47 @@ export const VariableTextarea: React.FC<VariableTextareaProps> = ({
           if (
             e.key === 'ArrowLeft' ||
             e.key === 'ArrowRight' ||
+            e.key === 'ArrowUp' ||
+            e.key === 'ArrowDown' ||
+            e.key === 'PageUp' ||
+            e.key === 'PageDown' ||
             e.key === 'Home' ||
             e.key === 'End'
           ) {
-            updateAutocomplete(e.currentTarget.value, e.currentTarget.selectionStart);
+            if (!isAutocompleteOpen || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) {
+              updateAutocomplete(e.currentTarget.value, e.currentTarget.selectionStart, e.currentTarget.selectionEnd);
+            }
           }
         }}
         onKeyDown={(e) => {
+          if (e.nativeEvent?.isComposing || e.keyCode === 229) {
+            onKeyDown?.(e);
+            return;
+          }
           if (isAutocompleteOpen) {
             if (e.key === 'ArrowDown') {
               e.preventDefault();
               e.stopPropagation();
+              acHasNavigatedRef.current = true;
               setAcActiveIndex((prev) => (prev + 1) % acSuggestions.length);
               return;
             }
             if (e.key === 'ArrowUp') {
               e.preventDefault();
               e.stopPropagation();
+              acHasNavigatedRef.current = true;
               setAcActiveIndex((prev) => (prev - 1 + acSuggestions.length) % acSuggestions.length);
               return;
             }
             if (e.key === 'Enter' || e.key === 'Tab') {
-              e.preventDefault();
-              e.stopPropagation();
-              handleSelectSuggestion(acActiveIndex);
-              return;
+              if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) {
+                setAcContext(null);
+              } else {
+                e.preventDefault();
+                e.stopPropagation();
+                handleSelectSuggestion(acActiveIndex);
+                return;
+              }
             }
             if (e.key === 'Escape') {
               e.preventDefault();
@@ -207,14 +266,33 @@ export const VariableTextarea: React.FC<VariableTextareaProps> = ({
               setAcContext(null);
               return;
             }
+          } else if (enableVariableAutocomplete && !readOnly && !disabled) {
+            if (e.ctrlKey && !e.altKey && !e.metaKey && e.key === ' ') {
+              e.preventDefault();
+              updateAutocomplete(e.currentTarget.value, e.currentTarget.selectionStart, e.currentTarget.selectionEnd);
+              return;
+            }
           }
           onKeyDown?.(e);
         }}
         onClick={(e) => {
           onClick?.(e);
-          updateAutocomplete(e.currentTarget.value, e.currentTarget.selectionStart);
+          updateAutocomplete(e.currentTarget.value, e.currentTarget.selectionStart, e.currentTarget.selectionEnd);
+        }}
+        onSelect={(e) => {
+          onSelect?.(e);
+          const start = e.currentTarget.selectionStart;
+          const end = e.currentTarget.selectionEnd;
+          if (start !== null && end !== null && start !== end) {
+            setAcContext(null);
+          }
         }}
         onBlur={(e) => {
+          const listboxEl = typeof document !== 'undefined' ? document.getElementById(listboxId) : null;
+          const related = e.relatedTarget as Node | null;
+          if (related && listboxEl?.contains(related)) {
+            return;
+          }
           setAcContext(null);
           onBlur?.(e);
         }}
@@ -226,6 +304,7 @@ export const VariableTextarea: React.FC<VariableTextareaProps> = ({
         activeIndex={acActiveIndex}
         onSelectIndex={handleSelectSuggestion}
         onHighlightIndex={setAcActiveIndex}
+        onDismiss={() => setAcContext(null)}
         anchorRect={acAnchorRect}
         query={acContext?.query || ''}
         kind="variable"

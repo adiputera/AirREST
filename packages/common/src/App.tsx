@@ -5,6 +5,7 @@ import { Sidebar } from './components/Sidebar';
 import { TabBar } from './components/TabBar';
 import { RequestEditor } from './components/RequestEditor';
 import { ResponseViewer } from './components/ResponseViewer';
+import { SavedExampleViewer } from './components/SavedExampleViewer';
 import { EmptyStudioView } from './components/EmptyStudioView';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ImportModal } from './components/ImportModal';
@@ -17,6 +18,7 @@ import { applyTheme, subscribeToSystemTheme } from './lib/theme';
 import { tryParseCurlCommand } from './lib/curl';
 import { OpenedFileResult } from './types/platform';
 import {
+  evaluateWindowFileDrop,
   isEditableTarget,
   isJsonCandidateFile,
   isStrictPostmanImportJson,
@@ -26,6 +28,7 @@ import {
   queueInitialRequestEditorSection,
   resolveInitialCurlSection,
 } from './components/requestEditorSectionState';
+import { hasOpenBlockingModal } from './components/tabBarShortcuts';
 
 export const DEFAULT_REQUEST_PANE_HEIGHT = 320;
 export const MIN_REQUEST_PANE_HEIGHT = 150;
@@ -39,15 +42,6 @@ export function clampRequestPaneHeight(
   return Math.max(MIN_REQUEST_PANE_HEIGHT, Math.min(maxAllowed, Math.round(height)));
 }
 
-function isBlockingDialogOpen(): boolean {
-  return (
-    typeof document !== 'undefined' &&
-    Boolean(
-      document.querySelector('[data-modal="true"], [role="dialog"]:not([data-payload-modal="true"])')
-    )
-  );
-}
-
 export const App: React.FC = () => {
   const contextStore = useStoreContext();
   const activeStore = contextStore || useApiStore;
@@ -58,6 +52,7 @@ export const App: React.FC = () => {
   const isSwitchingWorkspace = activeStore((state) => state.isSwitchingWorkspace);
   const tabs = activeStore((state) => state.tabs);
   const activeTabId = activeStore((state) => state.activeTabId);
+  const selectedExample = activeStore((state) => state.selectedExample);
   const createTab = activeStore((state) => state.createTab);
   const workspaceMode = activeStore((state) => state.workspaceMode);
   const cloudToken = activeStore((state) => state.cloudConfig.token);
@@ -72,9 +67,23 @@ export const App: React.FC = () => {
   const [globalImportFiles, setGlobalImportFiles] = useState<OpenedFileResult[] | null>(null);
   const [isWindowFileDragActive, setIsWindowFileDragActive] = useState(false);
   const windowDragDepthRef = useRef(0);
+  useEffect(() => {
+    if (!selectedExample) return;
+    const blockExampleShortcut = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const key = e.key.toLowerCase();
+      if (key === 'enter' || key === 's') {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    window.addEventListener('keydown', blockExampleShortcut, true);
+    return () => window.removeEventListener('keydown', blockExampleShortcut, true);
+  }, [selectedExample]);
   useBackHandler(sidebarOpen, () => setSidebarOpen(false), 10);
 
   useEffect(() => {
+    let isDisposed = false;
     const showCurlToast = (method: string, url: string) => {
       if (curlPasteTimerRef.current) {
         clearTimeout(curlPasteTimerRef.current);
@@ -97,7 +106,7 @@ export const App: React.FC = () => {
       if (event.defaultPrevented || !hasHydrated || isSwitchingWorkspace) return;
 
       // Do not intercept paste when a modal dialog (e.g. ImportModal, EnvironmentModal, Auth) is open
-      if (isBlockingDialogOpen()) {
+      if (hasOpenBlockingModal()) {
         return;
       }
 
@@ -107,6 +116,7 @@ export const App: React.FC = () => {
         event.preventDefault();
         event.stopPropagation();
         void readBrowserFiles(pastedJsonFiles).then((opened) => {
+          if (isDisposed || hasOpenBlockingModal() || activeStore.getState().isSwitchingWorkspace) return;
           if (opened.length > 0) {
             setGlobalImportFiles(opened);
           }
@@ -115,38 +125,44 @@ export const App: React.FC = () => {
       }
 
       const pastedText = event.clipboardData?.getData('text/plain') || '';
+      const isEditing =
+        isEditableTarget(event.target) ||
+        isEditableTarget(typeof document !== 'undefined' ? document.activeElement : null);
 
-      // 2. Pasted cURL command
-      const parsedCurl = tryParseCurlCommand(pastedText);
-      if (parsedCurl) {
-        event.preventDefault();
-        event.stopPropagation();
+      // 2. Pasted cURL command (only outside editable fields/multiline editors; URL bar has its own handler)
+      if (!isEditing) {
+        const parsedCurl = tryParseCurlCommand(pastedText);
+        if (parsedCurl) {
+          event.preventDefault();
+          event.stopPropagation();
 
-        const targetSection = resolveInitialCurlSection(parsedCurl);
-        createTab(parsedCurl);
-        const newTabId = activeStore.getState().activeTabId;
-        if (newTabId) {
-          queueInitialRequestEditorSection(newTabId, targetSection);
+          const targetSection = resolveInitialCurlSection(parsedCurl);
+          createTab(parsedCurl);
+          const newTabId = activeStore.getState().activeTabId;
+          if (newTabId) {
+            queueInitialRequestEditorSection(newTabId, targetSection);
+          }
+          try {
+            localStorage.setItem('airrest:request_config_collapsed', 'false');
+          } catch {
+            // ignore
+          }
+          window.dispatchEvent(
+            new CustomEvent('airrest:curl-pasted', {
+              detail: {
+                tabId: newTabId,
+                section: targetSection,
+                method: parsedCurl.method || 'GET',
+                url: parsedCurl.url || '',
+              },
+            })
+          );
+          return;
         }
-        window.dispatchEvent(
-          new CustomEvent('airrest:curl-pasted', {
-            detail: {
-              tabId: newTabId,
-              section: targetSection,
-              method: parsedCurl.method || 'GET',
-              url: parsedCurl.url || '',
-            },
-          })
-        );
-        return;
       }
 
       // 3. Pasted Postman Collection or Environment JSON text (only outside editable inputs/editors)
-      if (
-        !isEditableTarget(event.target) &&
-        !isEditableTarget(typeof document !== 'undefined' ? document.activeElement : null) &&
-        isStrictPostmanImportJson(pastedText)
-      ) {
+      if (!isEditing && isStrictPostmanImportJson(pastedText)) {
         event.preventDefault();
         event.stopPropagation();
         setGlobalImportFiles([{ filename: 'pasted.json', content: pastedText }]);
@@ -156,12 +172,14 @@ export const App: React.FC = () => {
     window.addEventListener('airrest:curl-pasted', handleCurlPastedEvent);
     window.addEventListener('paste', handleGlobalPaste, true);
     return () => {
+      isDisposed = true;
       window.removeEventListener('airrest:curl-pasted', handleCurlPastedEvent);
       window.removeEventListener('paste', handleGlobalPaste, true);
     };
   }, [hasHydrated, isSwitchingWorkspace, createTab, activeStore]);
 
   useEffect(() => {
+    let isDisposed = false;
     const hasDraggedFiles = (dt: DataTransfer | null | undefined): boolean => {
       if (!dt) return false;
       if (dt.types && Array.from(dt.types).includes('Files')) return true;
@@ -174,19 +192,19 @@ export const App: React.FC = () => {
     };
 
     const handleDragEnter = (event: DragEvent) => {
-      if (!hasHydrated || isSwitchingWorkspace || isBlockingDialogOpen()) return;
+      if (!hasHydrated || isSwitchingWorkspace || hasOpenBlockingModal()) return;
       if (!hasDraggedFiles(event.dataTransfer)) return;
       windowDragDepthRef.current += 1;
       setIsWindowFileDragActive(true);
     };
 
     const handleDragOver = (event: DragEvent) => {
-      if (!hasHydrated || isSwitchingWorkspace || isBlockingDialogOpen()) return;
       if (!hasDraggedFiles(event.dataTransfer)) return;
       if (!event.defaultPrevented) {
         event.preventDefault();
         if (event.dataTransfer) {
-          event.dataTransfer.dropEffect = 'copy';
+          event.dataTransfer.dropEffect =
+            !hasHydrated || isSwitchingWorkspace || hasOpenBlockingModal() ? 'none' : 'copy';
         }
       }
     };
@@ -205,18 +223,17 @@ export const App: React.FC = () => {
 
     const handleWindowDrop = (event: DragEvent) => {
       resetDragState();
-      if (event.defaultPrevented || !hasHydrated || isSwitchingWorkspace || isBlockingDialogOpen()) {
+      const decision = evaluateWindowFileDrop(event, {
+        hasHydrated,
+        isSwitchingWorkspace: Boolean(isSwitchingWorkspace),
+        hasBlockingModal: hasOpenBlockingModal(),
+      });
+      if (!decision.shouldProcess) {
         return;
       }
-      const files = Array.from(event.dataTransfer?.files || []);
-      if (files.length === 0) return;
 
-      const hasJsonFile = files.some(isJsonCandidateFile);
-      if (!hasJsonFile) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      void readBrowserFiles(files, { requireJsonExtension: true }).then((opened) => {
+      void readBrowserFiles(decision.files, { requireJsonExtension: true }).then((opened) => {
+        if (isDisposed || hasOpenBlockingModal() || activeStore.getState().isSwitchingWorkspace) return;
         if (opened.length > 0) {
           setGlobalImportFiles(opened);
         }
@@ -231,6 +248,7 @@ export const App: React.FC = () => {
     window.addEventListener('dragend', resetDragState);
     window.addEventListener('blur', resetDragState);
     return () => {
+      isDisposed = true;
       window.removeEventListener('dragenter', handleDragEnter);
       window.removeEventListener('dragover', handleDragOver);
       window.removeEventListener('dragleave', handleDragLeave);
@@ -239,7 +257,7 @@ export const App: React.FC = () => {
       window.removeEventListener('dragend', resetDragState);
       window.removeEventListener('blur', resetDragState);
     };
-  }, [hasHydrated, isSwitchingWorkspace]);
+  }, [hasHydrated, isSwitchingWorkspace, activeStore]);
 
   useEffect(() => {
     return () => {
@@ -529,7 +547,9 @@ export const App: React.FC = () => {
           <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-app">
             <ErrorBoundary fallbackTitle="Studio Panel Error">
               <TabBar />
-              {tabs && tabs.length > 0 ? (
+              {selectedExample ? (
+                <SavedExampleViewer />
+              ) : tabs && tabs.length > 0 ? (
                 <div
                   ref={studioContainerRef}
                   className="relative flex flex-1 flex-col overflow-hidden"
@@ -604,7 +624,7 @@ export const App: React.FC = () => {
 
         {/* Workspace Switching Loading Overlay */}
         {isSwitchingWorkspace && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-[2px] animate-in fade-in duration-150">
+          <div data-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-[2px] animate-in fade-in duration-150">
             <div className="flex flex-col items-center gap-3">
               <div className="h-8 w-8 animate-spin rounded-full border-2 border-zinc-700 border-t-white" />
               <span className="text-xs font-medium text-zinc-300">Loading workspace...</span>
@@ -650,6 +670,7 @@ export const App: React.FC = () => {
         {isWindowFileDragActive && !isSwitchingWorkspace && (
           <div
             aria-hidden="true"
+            data-non-blocking-overlay="true"
             className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-[2px] p-6 animate-in fade-in duration-150"
           >
             <div className="flex max-w-md flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-sky-400/80 bg-surface/95 px-8 py-7 text-center shadow-2xl">

@@ -4,6 +4,42 @@ function generateId(): string {
   return Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
 }
 
+const TEMPLATE_SPLIT_REGEX = /(\{\{[^{}]+\}\})/g;
+const PERCENT_SEQUENCE_REGEX = /(?:%[0-9A-Fa-f]{2})+/g;
+
+/**
+ * Decodes URL query/form-encoded percent sequences and `+` spaces while leaving
+ * `{{variable}}` templates untouched and safely ignoring malformed percent bytes.
+ */
+export function decodeQueryComponentPreservingTemplates(raw: string): string {
+  if (!raw) return raw;
+  return raw
+    .split(TEMPLATE_SPLIT_REGEX)
+    .map((segment, index) => {
+      if (index % 2 === 1) return segment;
+      const withSpaces = segment.replace(/\+/g, ' ');
+      return withSpaces.replace(PERCENT_SEQUENCE_REGEX, (seq) => {
+        try {
+          return decodeURIComponent(seq);
+        } catch {
+          return seq;
+        }
+      });
+    })
+    .join('');
+}
+
+/**
+ * Percent-encodes a query/form component while keeping `{{variable}}` templates intact.
+ */
+export function encodeQueryComponentPreservingTemplates(raw: string): string {
+  if (!raw) return raw;
+  return raw
+    .split(TEMPLATE_SPLIT_REGEX)
+    .map((segment, index) => (index % 2 === 1 ? segment : encodeURIComponent(segment)))
+    .join('');
+}
+
 /**
  * Parses query parameters from a URL string and synchronizes them with existing params,
  * preserving existing row IDs, enabled flags, and descriptions.
@@ -13,7 +49,9 @@ export function parseQueryParamsFromUrl(
   existingParams: KeyValuePair[] = []
 ): KeyValuePair[] {
   const safeUrl = typeof url === 'string' ? url : '';
-  const qIndex = safeUrl.indexOf('?');
+  const hashIndex = safeUrl.indexOf('#');
+  const urlWithoutHash = hashIndex >= 0 ? safeUrl.substring(0, hashIndex) : safeUrl;
+  const qIndex = urlWithoutHash.indexOf('?');
   const disabledParams = (existingParams || []).filter((p) => !p.enabled);
 
   if (qIndex === -1) {
@@ -23,7 +61,7 @@ export function parseQueryParamsFromUrl(
     return [{ id: generateId(), key: '', value: '', enabled: true }];
   }
 
-  const queryString = safeUrl.substring(qIndex + 1);
+  const queryString = urlWithoutHash.substring(qIndex + 1);
   if (!queryString.trim()) {
     if (disabledParams.length > 0) {
       return [...disabledParams, { id: generateId(), key: '', value: '', enabled: true }];
@@ -37,8 +75,10 @@ export function parseQueryParamsFromUrl(
   for (const pair of pairs) {
     if (!pair) continue;
     const eqIdx = pair.indexOf('=');
-    const key = eqIdx >= 0 ? pair.substring(0, eqIdx) : pair;
-    const value = eqIdx >= 0 ? pair.substring(eqIdx + 1) : '';
+    const rawKey = eqIdx >= 0 ? pair.substring(0, eqIdx) : pair;
+    const rawValue = eqIdx >= 0 ? pair.substring(eqIdx + 1) : '';
+    const key = decodeQueryComponentPreservingTemplates(rawKey);
+    const value = decodeQueryComponentPreservingTemplates(rawValue);
     parsedEntries.push({ key, value });
   }
 
@@ -110,22 +150,29 @@ export function buildUrlWithParams(
   params: KeyValuePair[] = []
 ): string {
   const safeUrl = typeof currentUrl === 'string' ? currentUrl : '';
-  const qIndex = safeUrl.indexOf('?');
-  const baseUrl = qIndex >= 0 ? safeUrl.substring(0, qIndex) : safeUrl;
+  const hashIndex = safeUrl.indexOf('#');
+  const hash = hashIndex >= 0 ? safeUrl.substring(hashIndex) : '';
+  const urlWithoutHash = hashIndex >= 0 ? safeUrl.substring(0, hashIndex) : safeUrl;
+  const qIndex = urlWithoutHash.indexOf('?');
+  const baseUrl = qIndex >= 0 ? urlWithoutHash.substring(0, qIndex) : urlWithoutHash;
 
   const activeParams = (params || []).filter(
     (p) => p && p.enabled && String(p.key ?? '').trim() !== ''
   );
 
   if (activeParams.length === 0) {
-    return baseUrl;
+    return `${baseUrl}${hash}`;
   }
 
   const queryString = activeParams
-    .map((p) => (p.value !== '' ? `${p.key}=${p.value}` : p.key))
+    .map((p) => {
+      const encodedKey = encodeQueryComponentPreservingTemplates(p.key);
+      if (p.value === '') return encodedKey;
+      return `${encodedKey}=${encodeQueryComponentPreservingTemplates(p.value)}`;
+    })
     .join('&');
 
-  return `${baseUrl}?${queryString}`;
+  return `${baseUrl}?${queryString}${hash}`;
 }
 
 function escapeRegex(str: string): string {
@@ -227,7 +274,7 @@ export function substitutePathVariables(
     const key = String(pv.key).trim();
     const val = pv.value !== undefined ? String(pv.value) : '';
     const regex = new RegExp(`(^|/):${escapeRegex(key)}(?=/|\\?|#|$)`, 'g');
-    result = result.replace(regex, `$1${val}`);
+    result = result.replace(regex, (_match, prefix: string) => `${prefix}${val}`);
   }
 
   return result;

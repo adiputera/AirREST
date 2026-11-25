@@ -484,23 +484,22 @@ export function getVariableSuggestions(
   const trimmedQuery = String(query ?? '').trim().toLowerCase();
 
   const activeEnv = (environments || []).find((e) => e && e.id === activeEnvironmentId) || null;
-  const seenVarNames = new Set<string>();
-  const rawItems: Omit<VariableSuggestionItem, 'matchTier'>[] = [];
+  const builtinVarNames = new Set(BUILTIN_DYNAMIC_VARIABLES.map((b) => b.varName));
+  const activeVarItems = new Map<string, Omit<VariableSuggestionItem, 'matchTier'>>();
 
-  // 1. Active environment enabled variables (highest precedence)
+  // 1. Active environment enabled variables (highest precedence after built-in dynamic vars, last-win for duplicates)
   if (activeEnv && Array.isArray(activeEnv.variables)) {
     for (const v of activeEnv.variables) {
       if (!v || !v.enabled) continue;
       const varName = String(v.key ?? '').trim();
-      if (!varName || seenVarNames.has(varName)) continue;
-      seenVarNames.add(varName);
+      if (!varName || builtinVarNames.has(varName)) continue;
 
       const effVal =
-        v.currentValue !== undefined && v.currentValue !== ''
+        v.currentValue !== undefined && v.currentValue !== null && v.currentValue !== ''
           ? String(v.currentValue)
           : String(v.initialValue ?? v.value ?? '');
 
-      rawItems.push({
+      activeVarItems.set(varName, {
         kind: 'variable',
         key: `active:${varName}`,
         varName,
@@ -514,21 +513,24 @@ export function getVariableSuggestions(
     }
   }
 
-  // 2. Fallback variables from other environments in current workspace (helpful when no env is active yet)
+  const seenVarNames = new Set<string>(activeVarItems.keys());
+  const rawItems: Omit<VariableSuggestionItem, 'matchTier'>[] = Array.from(activeVarItems.values());
+
+  // 2. Fallback variables from other environments in current workspace (last-win within each env)
   for (const env of environments || []) {
     if (!env || env.id === activeEnvironmentId || !Array.isArray(env.variables)) continue;
+    const envItems = new Map<string, Omit<VariableSuggestionItem, 'matchTier'>>();
     for (const v of env.variables) {
       if (!v || !v.enabled) continue;
       const varName = String(v.key ?? '').trim();
-      if (!varName || seenVarNames.has(varName)) continue;
-      seenVarNames.add(varName);
+      if (!varName || builtinVarNames.has(varName) || seenVarNames.has(varName)) continue;
 
       const effVal =
-        v.currentValue !== undefined && v.currentValue !== ''
+        v.currentValue !== undefined && v.currentValue !== null && v.currentValue !== ''
           ? String(v.currentValue)
           : String(v.initialValue ?? v.value ?? '');
 
-      rawItems.push({
+      envItems.set(varName, {
         kind: 'variable',
         key: `inactive:${env.id}:${varName}`,
         varName,
@@ -539,6 +541,10 @@ export function getVariableSuggestions(
         isBuiltin: false,
         isActiveEnv: false,
       });
+    }
+    for (const [varName, item] of envItems.entries()) {
+      seenVarNames.add(varName);
+      rawItems.push(item);
     }
   }
 
@@ -620,14 +626,96 @@ export function detectInputAutocompleteContext(
     if (!/[{}\r\n]/.test(betweenOpenAndCursor)) {
       // Determine how far the replacement should extend to the right of the cursor
       const afterCursor = safeText.slice(cursor);
-      let replaceTo = cursor;
+      const lineEndOffset = afterCursor.search(/\r|\n/);
+      const afterCursorOnLine = lineEndOffset === -1 ? afterCursor : afterCursor.slice(0, lineEndOffset);
 
-      // Consume any trailing identifier characters and closing `}` or `}}` on the same line
-      // if the user is editing an existing token or has auto-paired braces
-      const trailingClosureMatch = afterCursor.match(/^([^{}\r\n]*?\}\}|\})/);
-      if (trailingClosureMatch && trailingClosureMatch[0].startsWith('}')) {
-        // Immediate `}` or `}}` right after cursor
-        replaceTo = cursor + (afterCursor.startsWith('}}') ? 2 : 1);
+      // Scan prefix before `{{` to track string literal state and unmatched outer `{` braces
+      let inDoubleQuote = false;
+      let escaped = false;
+      let unmatchedOuterBraces = 0;
+      for (let idx = 0; idx < absOpenIndex; idx++) {
+        const ch = safeText[idx];
+        if (inDoubleQuote) {
+          if (escaped) {
+            escaped = false;
+          } else if (ch === '\\') {
+            escaped = true;
+          } else if (ch === '"') {
+            inDoubleQuote = false;
+          }
+          continue;
+        }
+        if (ch === '"') {
+          inDoubleQuote = true;
+        } else if (ch === '{') {
+          unmatchedOuterBraces += 1;
+        } else if (ch === '}') {
+          unmatchedOuterBraces = Math.max(0, unmatchedOuterBraces - 1);
+        }
+      }
+
+      // Compute how many closing `}` after cursor are available for this `{{...` token
+      // without stealing outer structural JSON braces
+      let availableCloseBraces = 0;
+      if (inDoubleQuote) {
+        let strEscaped = false;
+        for (let idx = 0; idx < afterCursorOnLine.length; idx++) {
+          const ch = afterCursorOnLine[idx];
+          if (strEscaped) {
+            strEscaped = false;
+            continue;
+          }
+          if (ch === '\\') {
+            strEscaped = true;
+            continue;
+          }
+          if (ch === '"') {
+            break;
+          }
+          if (ch === '}') {
+            availableCloseBraces += 1;
+          }
+        }
+      } else {
+        let trailInString = false;
+        let trailEscaped = false;
+        let trailingOpens = 0;
+        let trailingCloses = 0;
+        for (let idx = 0; idx < afterCursor.length; idx++) {
+          const ch = afterCursor[idx];
+          if (trailInString) {
+            if (trailEscaped) {
+              trailEscaped = false;
+            } else if (ch === '\\') {
+              trailEscaped = true;
+            } else if (ch === '"') {
+              trailInString = false;
+            }
+            continue;
+          }
+          if (ch === '"') {
+            trailInString = true;
+          } else if (ch === '{') {
+            trailingOpens += 1;
+          } else if (ch === '}') {
+            trailingCloses += 1;
+          }
+        }
+        availableCloseBraces = Math.max(0, trailingCloses - trailingOpens - unmatchedOuterBraces);
+      }
+
+      const TRAILING_VAR_CHAR = '[A-Za-z0-9_$.-]';
+      const doubleBraceMatch = afterCursorOnLine.match(new RegExp(`^(${TRAILING_VAR_CHAR}*?)\\s*\\}\\}`));
+      const singleBraceMatch = afterCursorOnLine.match(new RegExp(`^(${TRAILING_VAR_CHAR}*?)\\s*\\}`));
+      const partialIdentMatch = afterCursorOnLine.match(new RegExp(`^(${TRAILING_VAR_CHAR}+)`));
+
+      let replaceTo = cursor;
+      if (doubleBraceMatch && availableCloseBraces >= 2) {
+        replaceTo = cursor + doubleBraceMatch[0].length;
+      } else if (singleBraceMatch && availableCloseBraces >= 1) {
+        replaceTo = cursor + singleBraceMatch[0].length;
+      } else if (partialIdentMatch) {
+        replaceTo = cursor + partialIdentMatch[1].length;
       }
 
       return {
@@ -660,15 +748,23 @@ export function detectInputAutocompleteContext(
   return null;
 }
 
+export interface AppliedAutocompleteResult {
+  nextText: string;
+  nextCursorPos: number;
+  replaceFrom: number;
+  replaceTo: number;
+  insertedText: string;
+}
+
 /**
  * Applies a selected autocomplete item to the input string and computes the new cursor position.
- * Prevents duplicate closing `}}` braces when inserting a variable.
+ * Replaces the single computed `[replaceFrom, replaceTo]` token range without eating surrounding braces.
  */
 export function applyAutocompleteSuggestion(
   text: string,
   context: AutocompleteContext,
   suggestion: AutocompleteSuggestionItem | string
-): { nextText: string; nextCursorPos: number } {
+): AppliedAutocompleteResult {
   const safeText = typeof text === 'string' ? text : '';
   const rawValue = typeof suggestion === 'string' ? suggestion : suggestion.insertValue;
 
@@ -677,6 +773,9 @@ export function applyAutocompleteSuggestion(
     return {
       nextText: headerName,
       nextCursorPos: headerName.length,
+      replaceFrom: context.replaceFrom,
+      replaceTo: context.replaceTo,
+      insertedText: headerName,
     };
   }
 
@@ -684,15 +783,10 @@ export function applyAutocompleteSuggestion(
   const cleanVarName = rawValue.replace(/^\{\{|\}\}$/g, '').trim();
   const formattedToken = `{{${cleanVarName}}}`;
 
-  const prefix = safeText.slice(0, context.replaceFrom);
-  let suffix = safeText.slice(context.replaceTo);
-
-  // Guard against leftover closing braces immediately following replaceTo
-  if (suffix.startsWith('}}')) {
-    suffix = suffix.slice(2);
-  } else if (suffix.startsWith('}')) {
-    suffix = suffix.slice(1);
-  }
+  const replaceFrom = Math.max(0, Math.min(context.replaceFrom, safeText.length));
+  const replaceTo = Math.max(replaceFrom, Math.min(context.replaceTo, safeText.length));
+  const prefix = safeText.slice(0, replaceFrom);
+  const suffix = safeText.slice(replaceTo);
 
   const nextText = `${prefix}${formattedToken}${suffix}`;
   const nextCursorPos = prefix.length + formattedToken.length;
@@ -700,5 +794,8 @@ export function applyAutocompleteSuggestion(
   return {
     nextText,
     nextCursorPos,
+    replaceFrom,
+    replaceTo,
+    insertedText: formattedToken,
   };
 }

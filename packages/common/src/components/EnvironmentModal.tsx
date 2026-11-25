@@ -91,10 +91,19 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
     diff: EnvironmentDiffSummary;
   } | null>(null);
   const [isResolvingConflict, setIsResolvingConflict] = useState(false);
+  const [conflictErrorMsg, setConflictErrorMsg] = useState<string | null>(null);
   const [isPermModalOpen, setIsPermModalOpen] = useState(false);
   const [isNewEnvPermModalOpen, setIsNewEnvPermModalOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const retryCopyEnvDraftRef = useRef<{ existingEnvId: string; id: string; name: string } | null>(null);
+
+  useEffect(() => {
+    if (!conflict || !isOpen) {
+      setConflictErrorMsg(null);
+      retryCopyEnvDraftRef.current = null;
+    }
+  }, [conflict, isOpen]);
 
   const currentEnv =
     (environments || []).find((e) => e.id === selectedEnvId) || (environments || [])[0];
@@ -240,6 +249,9 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && !e.defaultPrevented) {
+        if (conflict || showDeleteConfirm || isPermModalOpen || isNewEnvPermModalOpen) {
+          return;
+        }
         if (pendingExitAction) {
           e.preventDefault();
           setPendingExitAction(null);
@@ -258,7 +270,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, pendingExitAction, isPasteModalOpen, hasUnsavedDrafts, onClose]);
+  }, [isOpen, conflict, showDeleteConfirm, isPermModalOpen, isNewEnvPermModalOpen, pendingExitAction, isPasteModalOpen, hasUnsavedDrafts, onClose]);
 
   if (!isOpen) return null;
 
@@ -279,7 +291,12 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
     if (!currentEnv) return;
     try {
       const jsonStr = exportPostmanEnvironment(currentEnv);
-      const filename = `${String(currentEnv.name || 'environment').toLowerCase().replace(/\s+/g, '-')}.postman_environment.json`;
+      const safeBaseName =
+        String(currentEnv.name || 'environment')
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '') || 'environment';
+      const filename = `${safeBaseName}.postman_environment.json`;
       const adapter = runtimeAdapter;
 
       if (adapter?.saveFile) {
@@ -427,18 +444,39 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
     if (!conflict) return;
     setIsResolvingConflict(true);
     setErrorMsg(null);
+    setConflictErrorMsg(null);
     try {
-      const existingNames = environments.map((e) => e.name);
-      const copyName = generateCopyEnvironmentName(conflict.incomingEnv.name, existingNames);
-      const copyEnv = cloneEnvironmentWithNewIds(conflict.incomingEnv, copyName);
+      const existingCopyDraft =
+        retryCopyEnvDraftRef.current &&
+        retryCopyEnvDraftRef.current.existingEnvId === conflict.existingEnv.id &&
+        (environments || []).some(
+          (e) => e.id === retryCopyEnvDraftRef.current?.id && e._syncStatus === 'pending'
+        )
+          ? retryCopyEnvDraftRef.current
+          : null;
 
-      const newId = await addEnvironment(copyEnv);
+      const existingNames = environments.map((e) => e.name);
+      const copyName = existingCopyDraft
+        ? existingCopyDraft.name
+        : generateCopyEnvironmentName(conflict.incomingEnv.name, existingNames);
+      const copyEnv = cloneEnvironmentWithNewIds(conflict.incomingEnv, copyName);
+      if (existingCopyDraft) {
+        copyEnv.id = existingCopyDraft.id;
+      }
+      retryCopyEnvDraftRef.current = {
+        existingEnvId: conflict.existingEnv.id,
+        id: copyEnv.id,
+        name: copyName,
+      };
+
+      const newId = await addEnvironment(copyEnv, { isRetry: Boolean(existingCopyDraft) });
+      retryCopyEnvDraftRef.current = null;
       setSelectedEnvId(newId);
       setSuccessMsg(`Environment "${copyName}" imported as copy!`);
       setTimeout(() => setSuccessMsg(null), 3000);
       setConflict(null);
     } catch (err: unknown) {
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to import environment as copy.');
+      setConflictErrorMsg(err instanceof Error ? err.message : 'Failed to import environment as copy.');
     } finally {
       setIsResolvingConflict(false);
     }
@@ -448,6 +486,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
     if (!conflict) return;
     setIsResolvingConflict(true);
     setErrorMsg(null);
+    setConflictErrorMsg(null);
     try {
       await replaceEnvironment(conflict.existingEnv.id, conflict.incomingEnv);
       setSelectedEnvId(conflict.existingEnv.id);
@@ -455,7 +494,11 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
       setTimeout(() => setSuccessMsg(null), 3000);
       setConflict(null);
     } catch (err: unknown) {
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to replace environment.');
+      if (useApiStore.getState().environmentOccConflict) {
+        setConflict(null);
+      } else {
+        setConflictErrorMsg(err instanceof Error ? err.message : 'Failed to replace environment.');
+      }
     } finally {
       setIsResolvingConflict(false);
     }
@@ -1074,6 +1117,9 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
           onClick={(e) => {
             if (e.target === e.currentTarget) handleCancelExit();
           }}
+          data-modal="true"
+          role="dialog"
+          aria-modal="true"
           className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150 select-none"
         >
           <div className="w-full max-w-md rounded-2xl border border-line bg-surface p-6 shadow-2xl animate-in zoom-in-95 duration-150">
@@ -1188,6 +1234,7 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
           onImportAsCopy={handleConflictAsCopy}
           onReplace={handleConflictReplace}
           isResolving={isResolvingConflict}
+          errorMsg={conflictErrorMsg}
         />
       )}
 

@@ -41,6 +41,9 @@ func (h *FeaturePolicyHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "private, no-store")
 	slog.Info("get feature policy succeeded", "operation", "get_feature_policy", "duration_ms", time.Since(startedAt).Milliseconds())
+	policy.Capabilities = &domain.FeaturePolicyCapabilities{
+		SavedExamples: true,
+	}
 	response.JSON(w, http.StatusOK, policy)
 }
 

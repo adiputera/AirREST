@@ -33,7 +33,10 @@ import {
   ProjectRole,
   ThemeMode,
   PendingDuplicateIntent,
+  PendingExampleIntent,
   DuplicateActionResult,
+  SavedExample,
+  SavedExampleSummary,
 } from '../types/api';
 import { applyTheme } from '../lib/theme';
 import { executeApiRequest } from '../lib/fetcher';
@@ -47,6 +50,7 @@ import {
   revokeBlobUrls,
 } from '../lib/blobManager';
 import {
+  buildPostmanUrl,
   importPostmanCollection,
   importPostmanEnvironment,
   detectPostmanJsonType,
@@ -67,6 +71,10 @@ import {
   importDuplicateCollection as legacyImportDuplicateCollection,
   duplicateScopeItem as legacyDuplicateScopeItem,
   reorderCollectionItems as legacyReorderCollectionItems,
+  patchScopeItemExamples as legacyPatchScopeItemExamples,
+  fetchScopeItem as legacyFetchScopeItem,
+  fetchScopeCollectionExamples as legacyFetchScopeCollectionExamples,
+  replaceScopeCollection as legacyReplaceScopeCollection,
   fetchUserWorkspaces,
   createCloudWorkspace as legacyCreateCloudWorkspace,
   updateCloudWorkspace as legacyUpdateCloudWorkspace,
@@ -81,11 +89,34 @@ import {
   normalizeCloudApiUrl,
 } from '../lib/cloudApi';
 import type { CloudClient } from '../lib/cloudApi';
+import {
+  applyExampleMutationToItem,
+  applyServerItemToLocalItem,
+  buildDefaultExampleName,
+  buildExampleSummariesFromExamples,
+  buildSavedExampleFromResponse,
+  cloneSavedExamplesList,
+  cloneSavedExampleSummaries,
+  collectionHasSavedExamples,
+  countCollectionSavedExamples,
+  evaluateResponseExampleEligibility,
+  findCollectionItemById,
+  getExampleUtf8ByteLength,
+  getItemExampleCount,
+  hasUnloadedCollectionExamples,
+  MAX_SAVED_EXAMPLES_PER_ITEM,
+  MAX_SAVED_EXAMPLES_TOTAL_BYTES_PER_ITEM,
+  overlayPendingExampleIntentsOnCollections,
+  preserveHydratedItemExamples,
+  updateCollectionItemById,
+  validateSavedExampleName,
+} from '../lib/examples';
 import { reorderItemInTree, isDescendantOf, findRequestAncestorIds } from '../lib/treeHelper';
 import {
   duplicateCollectionTree,
   duplicateItemSubtree,
   insertItemIntoCollectionTree,
+  removeItemFromCollectionTree,
   formatImportDuplicateCollectionPayload,
   getTargetFolderDepth,
   validateDuplicateName,
@@ -99,11 +130,34 @@ import { validateProductPolicy, type ProductPolicy } from '../productPolicy';
 import {
   findSavedRequestInCollections,
   alignCollectionItemIds,
+  collectAllItemIds,
   flattenCollectionRequests,
   alignEnvironmentVariableIds,
 } from '../lib/requestDiff';
 import { canModifyCollection, canModifyEnvironment, hasScopePermission, getUserScopeRank } from '../lib/jwt';
 import { createAsyncOperationCoordinator, type AsyncOperation } from './asyncOperationCoordinator';
+import type { ImportTargetBinding } from '../lib/importBatch';
+
+function matchesImportTarget(
+  state: ApiStoreState,
+  target: ImportTargetBinding,
+  sessionGeneration: number,
+): boolean {
+  if (state.isSwitchingWorkspace) return false;
+  const liveMode = state.workspaceMode === 'cloud' ? 'cloud' : 'offline';
+  if (liveMode !== target.workspaceMode) return false;
+  if (sessionGeneration !== target.sessionGeneration) return false;
+  if (target.workspaceMode === 'offline') {
+    return (state.activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID) === target.offlineWorkspaceId;
+  }
+  if (!state.cloudConfig?.token) return false;
+  return (
+    state.cloudConfig?.activeScope?.type === target.scopeType &&
+    state.cloudConfig?.activeScope?.id === target.scopeId &&
+    state.cloudConfig?.user?.id === target.cloudUserId &&
+    state.cloudConfig?.apiUrl === target.cloudApiUrl
+  );
+}
 import { getScopeCacheKey } from '../workspace/scopeCache';
 import {
   createEmptyWorkspaceSnapshot,
@@ -215,6 +269,8 @@ function cloneCollectionPreservingAttachments(collection: Collection): Collectio
   const cloneItems = (items: CollectionItem[]): CollectionItem[] => items.map((item) => ({
     ...item,
     request: item.request ? cloneRequestPreservingAttachments(item.request) : undefined,
+    examples: Array.isArray(item.examples) ? cloneSavedExamplesList(item.examples, false) : undefined,
+    exampleSummaries: Array.isArray(item.exampleSummaries) ? cloneSavedExampleSummaries(item.exampleSummaries) : undefined,
     items: item.items ? cloneItems(item.items) : undefined,
   }));
   return { ...collection, items: cloneItems(collection.items || []) };
@@ -276,6 +332,8 @@ function serializeCollectionAttachments(collection: Collection): Collection {
   const serializeItems = (items: CollectionItem[]): CollectionItem[] => items.map((item) => ({
     ...item,
     request: item.request ? serializeRequestAttachments(item.request) : undefined,
+    examples: Array.isArray(item.examples) ? cloneSavedExamplesList(item.examples, false) : undefined,
+    exampleSummaries: Array.isArray(item.exampleSummaries) ? cloneSavedExampleSummaries(item.exampleSummaries) : undefined,
     items: item.items ? serializeItems(item.items) : undefined,
   }));
   return { ...collection, items: serializeItems(collection.items || []) };
@@ -284,6 +342,14 @@ function serializeCollectionAttachments(collection: Collection): Collection {
 function normalizeCollectionAttachments(collection: Collection): Collection {
   const normalizeItems = (items: CollectionItem[]): CollectionItem[] => items.map((item) => {
     const resolvedId = item.request?.id || item.id;
+    const isRequest = item.type === 'request';
+    const hasExplicitLoadedFlag = typeof item.examplesLoaded === 'boolean';
+    const clonedExamples = Array.isArray(item.examples) ? cloneSavedExamplesList(item.examples, false) : undefined;
+    const clonedSummaries = Array.isArray(item.exampleSummaries)
+      ? cloneSavedExampleSummaries(item.exampleSummaries)
+      : clonedExamples
+        ? buildExampleSummariesFromExamples(clonedExamples)
+        : undefined;
     return {
       ...item,
       request: item.request ? {
@@ -291,6 +357,21 @@ function normalizeCollectionAttachments(collection: Collection): Collection {
         id: resolvedId,
         name: item.name || item.request.name || 'Untitled Request',
       } : undefined,
+      ...(isRequest
+        ? {
+            examples: clonedExamples ?? (hasExplicitLoadedFlag && !item.examplesLoaded ? undefined : []),
+            ...(clonedSummaries ? { exampleSummaries: clonedSummaries } : {}),
+            exampleCount:
+              typeof item.exampleCount === 'number'
+                ? item.exampleCount
+                : clonedExamples
+                  ? clonedExamples.length
+                  : clonedSummaries
+                    ? clonedSummaries.length
+                    : 0,
+            examplesLoaded: hasExplicitLoadedFlag ? item.examplesLoaded : true,
+          }
+        : {}),
       items: item.items ? normalizeItems(item.items) : undefined,
     };
   });
@@ -334,7 +415,16 @@ function serializeHistoryAttachments(history: HistoryItem[]): HistoryItem[] {
   return history.map((entry) => ({
     ...entry,
     request: serializeRequestAttachments(entry.request),
-    response: entry.response ? { ...entry.response, blobUrl: undefined, rawBodyId: undefined } : undefined,
+    response: entry.response
+      ? {
+          ...entry.response,
+          blobUrl: undefined,
+          rawBodyId: undefined,
+          capturedRequest: entry.response.capturedRequest
+            ? serializeRequestAttachments(entry.response.capturedRequest)
+            : undefined,
+        }
+      : undefined,
   }));
 }
 
@@ -342,7 +432,16 @@ function normalizeHistoryAttachments(history: HistoryItem[]): HistoryItem[] {
   return history.map((entry) => ({
     ...entry,
     request: normalizePersistedRequestAttachments(entry.request),
-    response: entry.response ? { ...entry.response, blobUrl: undefined, rawBodyId: undefined } : undefined,
+    response: entry.response
+      ? {
+          ...entry.response,
+          blobUrl: undefined,
+          rawBodyId: undefined,
+          capturedRequest: entry.response.capturedRequest
+            ? normalizePersistedRequestAttachments(entry.response.capturedRequest)
+            : undefined,
+        }
+      : undefined,
   }));
 }
 
@@ -361,6 +460,34 @@ export interface SaveRequestToCollectionResult {
   sourceTabId?: string;
   savedRequestId?: string;
   cloudStatus: 'not-applicable' | 'pending';
+  error?: string;
+}
+
+export interface SelectedSavedExample {
+  collectionId: string;
+  itemId: string;
+  exampleId: string;
+}
+
+export interface SavedExampleActionResult {
+  success: boolean;
+  example?: SavedExample;
+  error?: string;
+  code?: string;
+  reconcilePending?: boolean;
+}
+
+export interface LoadItemExamplesResult {
+  success: boolean;
+  item?: CollectionItem;
+  error?: string;
+  forbidden?: boolean;
+  notFound?: boolean;
+}
+
+export interface HydrateCollectionExamplesResult {
+  success: boolean;
+  collection?: Collection;
   error?: string;
 }
 
@@ -407,8 +534,8 @@ export interface ApiStoreState {
   removeEnvironmentVariable: (envId: string, varId: string) => void;
   resetEnvironmentCurrentValues: (envId: string) => void;
   persistEnvironmentCurrentValues: (envId: string) => void;
-  addEnvironment: (env: Environment) => Promise<string>;
-  replaceEnvironment: (existingId: string, incomingEnv: Environment) => Promise<void>;
+  addEnvironment: (env: Environment, options?: { target?: ImportTargetBinding; isRetry?: boolean }) => Promise<string>;
+  replaceEnvironment: (existingId: string, incomingEnv: Environment, options?: { target?: ImportTargetBinding }) => Promise<void>;
   environmentOccConflict: EnvironmentOccConflict | null;
   discardEnvironmentOccConflict: () => void;
   overwriteEnvironmentOccConflict: () => Promise<void>;
@@ -484,8 +611,8 @@ export interface ApiStoreState {
     sourceTabId?: string,
   ) => SaveRequestToCollectionResult;
   saveActiveRequest: () => { success: boolean; isDirectSaved: boolean };
-  addCollection: (collection: Collection) => Promise<void> | void;
-  replaceCollection: (existingId: string, newCollection: Collection) => Promise<void>;
+  addCollection: (collection: Collection, options?: { target?: ImportTargetBinding; isRetry?: boolean }) => Promise<void> | void;
+  replaceCollection: (existingId: string, newCollection: Collection, options?: { target?: ImportTargetBinding }) => Promise<void>;
   importCollectionFromJson: (jsonStr: string) => Promise<{ success: boolean; error?: string }>;
   deleteCollection: (id: string) => Promise<{ success: boolean; error?: string }>;
   updateCollectionPermission: (
@@ -508,7 +635,37 @@ export interface ApiStoreState {
   loadCollectionDetails: (
     collectionId: string
   ) => Promise<{ success: boolean; collection?: Collection; error?: string }>;
+  selectedExample: SelectedSavedExample | null;
+  selectSavedExample: (selection: SelectedSavedExample | null) => void;
+  pendingExampleIntents: Record<string, PendingExampleIntent>;
+  saveResponseAsExample: (input: {
+    collectionId: string;
+    itemId: string;
+    name?: string;
+    response: ApiResponse;
+    fallbackRequest?: ApiRequest;
+  }) => Promise<SavedExampleActionResult>;
+  renameSavedExample: (input: {
+    collectionId: string;
+    itemId: string;
+    exampleId: string;
+    name: string;
+  }) => Promise<SavedExampleActionResult>;
+  deleteSavedExample: (input: {
+    collectionId: string;
+    itemId: string;
+    exampleId: string;
+  }) => Promise<SavedExampleActionResult>;
+  loadItemExamples: (collectionId: string, itemId: string) => Promise<LoadItemExamplesResult>;
+  hydrateCollectionExamples: (
+    collectionId: string,
+    options?: { includeBody?: boolean }
+  ) => Promise<HydrateCollectionExamplesResult>;
+  retryPendingExampleIntent: (operationId: string) => Promise<SavedExampleActionResult>;
+  clearPendingExampleIntent: (operationId: string) => void;
   pendingDuplicateIntents: Record<string, PendingDuplicateIntent>;
+  /** Runtime-only IDs of duplicate operations actively in flight in this session (never persisted). */
+  activeDuplicateOperationIds: Record<string, boolean>;
   lastDuplicateReveal: { pathIds: string[]; revision: number } | null;
   retryPendingDuplicateIntent: (operationId: string) => Promise<DuplicateActionResult>;
   clearPendingDuplicateIntent: (operationId: string) => void;
@@ -611,6 +768,60 @@ export interface ApiStoreState {
   deleteCloudWorkspace: (id: string) => Promise<{ success: boolean; error?: string }>;
 }
 
+const withoutPendingDuplicateIntent = (
+  intents: Record<string, PendingDuplicateIntent> | undefined,
+  targetOpId: string,
+): Record<string, PendingDuplicateIntent> => {
+  if (!intents || !(targetOpId in intents)) return intents || {};
+  const next = { ...intents };
+  delete next[targetOpId];
+  return next;
+};
+
+const withoutPendingExampleIntent = (
+  intents: Record<string, PendingExampleIntent> | undefined,
+  targetOpId: string,
+): Record<string, PendingExampleIntent> => {
+  if (!intents || !(targetOpId in intents)) return intents || {};
+  const next = { ...intents };
+  delete next[targetOpId];
+  return next;
+};
+
+const prunePendingExampleIntentsForTarget = (
+  intents: Record<string, PendingExampleIntent> | undefined,
+  collectionId: string,
+  itemIds?: Set<string>,
+): Record<string, PendingExampleIntent> => {
+  if (!intents) return {};
+  let changed = false;
+  const next: Record<string, PendingExampleIntent> = {};
+  for (const [opId, intent] of Object.entries(intents)) {
+    const matchesCol = intent.collectionId === collectionId;
+    const matchesItem = !itemIds || itemIds.has(intent.itemId);
+    if (matchesCol && matchesItem) {
+      changed = true;
+      continue;
+    }
+    next[opId] = intent;
+  }
+  return changed ? next : intents;
+};
+
+const withReconcileRequiredIntent = (
+  intents: Record<string, PendingDuplicateIntent> | undefined,
+  targetOpId: string,
+  fallbackIntent: PendingDuplicateIntent,
+  errorMessage: string,
+): Record<string, PendingDuplicateIntent> => ({
+  ...(intents || {}),
+  [targetOpId]: {
+    ...(intents?.[targetOpId] || fallbackIntent),
+    status: 'reconcile_required',
+    lastError: errorMessage,
+  },
+});
+
 export function sanitizeVariablesForUpstream(vars: EnvironmentVariable[]) {
   return (vars || []).map((v) => ({
     id: v.id,
@@ -666,7 +877,16 @@ export function createApiStore(
   const fetchScopeCollectionsForRuntime = options.cloudClient?.fetchScopeCollections ?? fetchScopeCollections;
   const fetchCollectionByIdForRuntime = options.cloudClient?.fetchCollectionById ?? fetchCollectionById;
   const fetchScopeEnvironmentsForRuntime = options.cloudClient?.fetchScopeEnvironments ?? fetchScopeEnvironments;
-  const batchImportToScope = options.cloudClient?.batchImportToScope ?? legacyBatchImportToScope;
+  const batchImportToScope = options.cloudClient?.batchImportToScope
+    ?? ((
+      apiUrl: string,
+      token: string | undefined,
+      scope: ActiveScope | { id: string; type: 'workspace' | 'project' } | string,
+      collections: Collection[],
+      refreshToken?: string,
+      signal?: AbortSignal,
+      importOptions?: { includeExamples?: boolean },
+    ) => legacyBatchImportToScope(apiUrl, token, scope, collections, refreshToken, signal, undefined, importOptions));
   const createScopeEnvironment = options.cloudClient?.createScopeEnvironment ?? legacyCreateScopeEnvironment;
   const updateScopeEnvironment = options.cloudClient?.updateScopeEnvironment ?? legacyUpdateScopeEnvironment;
   const deleteScopeEnvironment = options.cloudClient?.deleteScopeEnvironment ?? legacyDeleteScopeEnvironment;
@@ -679,6 +899,10 @@ export function createApiStore(
   const importDuplicateCollection = options.cloudClient?.importDuplicateCollection ?? legacyImportDuplicateCollection;
   const duplicateScopeItem = options.cloudClient?.duplicateScopeItem ?? legacyDuplicateScopeItem;
   const reorderCollectionItems = options.cloudClient?.reorderCollectionItems ?? legacyReorderCollectionItems;
+  const patchScopeItemExamples = options.cloudClient?.patchScopeItemExamples ?? legacyPatchScopeItemExamples;
+  const fetchScopeItem = options.cloudClient?.fetchScopeItem ?? legacyFetchScopeItem;
+  const fetchScopeCollectionExamples = options.cloudClient?.fetchScopeCollectionExamples ?? legacyFetchScopeCollectionExamples;
+  const replaceScopeCollection = options.cloudClient?.replaceScopeCollection ?? legacyReplaceScopeCollection;
   const createCloudWorkspace = options.cloudClient?.createCloudWorkspace ?? legacyCreateCloudWorkspace;
   const updateCloudWorkspace = options.cloudClient?.updateCloudWorkspace ?? legacyUpdateCloudWorkspace;
   const deleteCloudWorkspace = options.cloudClient?.deleteCloudWorkspace ?? legacyDeleteCloudWorkspace;
@@ -688,8 +912,13 @@ export function createApiStore(
   const envSyncQueued: Record<string, boolean> = {};
   const collectionSaveSyncRevisions = new Map<string, number>();
   const collectionSaveSyncQueues = new Map<string, Promise<void>>();
+  const pendingReorderBaseSnapshots = new Map<string, { items: CollectionItem[]; syncStatus?: Collection['_syncStatus'] }>();
   const movingCollections = new Map<string, symbol>();
   const duplicatingCollections = new Map<string, symbol>();
+  const inFlightDuplicateOperations = new Set<string>();
+  const inFlightExampleOperations = new Set<string>();
+  let activeFeaturePolicyPromise: Promise<FeaturePolicy | null> | null = null;
+  let activeFeaturePolicyKey: string | null = null;
   let collectionSaveSyncGeneration = 0;
   const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
   let isStoreDisposed = false;
@@ -883,15 +1112,12 @@ export function createApiStore(
     return asyncOperations.isCurrent(operation);
   }
 
-  function queueSavedCollectionSync(
-    collection: Collection,
+  function enqueueCollectionSyncTask(
+    collectionId: string,
     scope: ActiveScope,
-    cloudConfig: ApiStoreState['cloudConfig'],
-    revision: number,
-    get: () => ApiStoreState,
-    set: (fn: (state: ApiStoreState) => Partial<ApiStoreState>) => void,
-  ): void {
-    const queueKey = `${scope.type}:${scope.id}:${collection.id}`;
+    work: (operation: AsyncOperation, generation: number) => Promise<void>,
+  ): Promise<void> {
+    const queueKey = `${scope.type}:${scope.id}:${collectionId}`;
     const generation = collectionSaveSyncGeneration;
     const previous = collectionSaveSyncQueues.get(queueKey) ?? Promise.resolve();
 
@@ -900,13 +1126,41 @@ export function createApiStore(
 
       const operation = beginAsyncOperation();
       try {
+        await work(operation, generation);
+      } finally {
+        completeAsyncOperation(operation);
+      }
+    });
+
+    collectionSaveSyncQueues.set(queueKey, task);
+    void task.finally(() => {
+      if (collectionSaveSyncQueues.get(queueKey) === task) {
+        collectionSaveSyncQueues.delete(queueKey);
+      }
+    });
+    return task;
+  }
+
+  function queueSavedCollectionSync(
+    collection: Collection,
+    scope: ActiveScope,
+    cloudConfig: ApiStoreState['cloudConfig'],
+    revision: number,
+    get: () => ApiStoreState,
+    set: (fn: (state: ApiStoreState) => Partial<ApiStoreState>) => void,
+    errorPrefix = 'Failed to sync saved request to cloud',
+  ): void {
+    void enqueueCollectionSyncTask(collection.id, scope, async (operation, generation) => {
+      try {
+        const liveCloudConfig = get().cloudConfig;
         await batchImportToScope(
-          cloudConfig.apiUrl,
-          cloudConfig.token,
+          liveCloudConfig.apiUrl || cloudConfig.apiUrl,
+          liveCloudConfig.token || cloudConfig.token,
           scope,
           [collection],
-          cloudConfig.refreshToken,
+          liveCloudConfig.refreshToken ?? cloudConfig.refreshToken,
           operation.controller.signal,
+          { includeExamples: false },
         );
 
         if (
@@ -934,8 +1188,8 @@ export function createApiStore(
           return;
         }
 
-        const message = error instanceof Error ? error.message : 'Failed to sync saved request to cloud';
-        console.error('Failed to sync saved request to cloud:', error);
+        const message = error instanceof Error ? error.message : errorPrefix;
+        console.error(`${errorPrefix}:`, error);
         set((state) => ({
           collections: state.collections.map((candidate) =>
             candidate.id === collection.id ? { ...candidate, _syncStatus: 'pending' } : candidate,
@@ -943,20 +1197,14 @@ export function createApiStore(
           syncStatus: 'error',
           syncError: message,
         }));
-      } finally {
-        completeAsyncOperation(operation);
-      }
-    });
-
-    collectionSaveSyncQueues.set(queueKey, task);
-    void task.finally(() => {
-      if (collectionSaveSyncQueues.get(queueKey) === task) {
-        collectionSaveSyncQueues.delete(queueKey);
       }
     });
   }
 
   function invalidateAsyncOperations({ session = false }: { session?: boolean } = {}) {
+    collectionSaveSyncQueues.clear();
+    collectionSaveSyncRevisions.clear();
+    pendingReorderBaseSnapshots.clear();
     movingCollections.clear();
     duplicatingCollections.clear();
     collectionSaveSyncGeneration += 1;
@@ -1115,7 +1363,35 @@ export function createApiStore(
       await moveScopeItem(cloudConfig.apiUrl, cloudConfig.token, itemId, sourceCollectionId, targetCollectionId, targetParentId, cloudConfig.refreshToken, operation.controller.signal);
       if (!isAsyncOperationCurrent(operation)) return { success: false, error: 'Operation cancelled.' };
       commit();
-      store.setState((state) => ({ collections: state.collections.map((col) => ids.includes(col.id) ? { ...col, _needsMoveReconciliation: undefined } : col) }));
+      store.setState((state) => {
+        const activeScopeKey = state.cloudConfig.activeScope ? getScopeCacheKey(state.cloudConfig.activeScope) : null;
+        const updatedScopeCache = { ...(state.scopeCache || {}) };
+        if (activeScopeKey && updatedScopeCache[activeScopeKey]) {
+          updatedScopeCache[activeScopeKey] = {
+            ...updatedScopeCache[activeScopeKey],
+            lastSyncedAt: 0,
+          };
+        }
+        return {
+          collections: state.collections.map((col) =>
+            ids.includes(col.id)
+              ? {
+                  ...col,
+                  version: typeof col.version === 'number' ? col.version + 1 : col.version,
+                  _needsMoveReconciliation: undefined,
+                }
+              : col
+          ),
+          selectedExample:
+            state.selectedExample &&
+            state.selectedExample.collectionId === sourceCollectionId &&
+            state.selectedExample.itemId === itemId &&
+            sourceCollectionId !== targetCollectionId
+              ? { ...state.selectedExample, collectionId: targetCollectionId }
+              : state.selectedExample,
+          scopeCache: updatedScopeCache,
+        };
+      });
       return { success: true };
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Failed to move item to the target collection.';
@@ -1140,6 +1416,385 @@ export function createApiStore(
         if (isStoreDisposed) return;
         return (rawSet as any)(fnOrState, replace);
       }) as typeof rawSet;
+      const markDuplicateOperationInFlight = (targetOpId: string) => {
+        inFlightDuplicateOperations.add(targetOpId);
+        set((state) => ({
+          activeDuplicateOperationIds: {
+            ...(state.activeDuplicateOperationIds || {}),
+            [targetOpId]: true,
+          },
+        }));
+      };
+      const clearDuplicateOperationInFlight = (targetOpId: string) => {
+        inFlightDuplicateOperations.delete(targetOpId);
+        if (isStoreDisposed) return;
+        set((state) => {
+          if (!state.activeDuplicateOperationIds?.[targetOpId]) return state;
+          const next = { ...state.activeDuplicateOperationIds };
+          delete next[targetOpId];
+          return { activeDuplicateOperationIds: next };
+        });
+      };
+
+      const isSelectedExampleStillPresent = (
+        collections: Collection[],
+        selection: SelectedSavedExample | null | undefined,
+      ): boolean => {
+        if (!selection) return false;
+        const col = collections.find((c) => c.id === selection.collectionId);
+        if (!col) return false;
+        const item = findCollectionItemById(col.items, selection.itemId);
+        if (!item || item.type !== 'request') return false;
+        const inExamples = Array.isArray(item.examples)
+          && item.examples.some((ex) => ex.id === selection.exampleId);
+        const inSummaries = Array.isArray(item.exampleSummaries)
+          && item.exampleSummaries.some((s) => s.id === selection.exampleId);
+        return inExamples || inSummaries;
+      };
+
+      const ensureSavedExamplesCapability = async (forceCloudCheck = false): Promise<boolean> => {
+        const live = get();
+        if (isOfflineOnly) return false;
+        if (!forceCloudCheck && live.workspaceMode !== 'cloud') return true;
+        const isFresh =
+          live.featurePolicyStatus === 'ready' &&
+          live.featurePolicyFetchedAt !== null &&
+          Date.now() - live.featurePolicyFetchedAt < FEATURE_POLICY_TTL_MS;
+        let policy = live.featurePolicy;
+        if (!isFresh || policy?.capabilities?.saved_examples !== true) {
+          policy = await live.refreshFeaturePolicy(true);
+        }
+        return policy?.capabilities?.saved_examples === true;
+      };
+
+      const applyServerItemToCollectionsList = (
+        cols: Collection[],
+        collectionId: string,
+        itemId: string,
+        serverItem: any,
+      ): Collection[] =>
+        cols.map((col) => {
+          if (col.id !== collectionId) return col;
+          const updated = updateCollectionItemById(col.items || [], itemId, (item) =>
+            applyServerItemToLocalItem(item, serverItem),
+          );
+          return updated.found ? { ...col, items: updated.items } : col;
+        });
+
+      const commitServerItemToStore = (
+        collectionId: string,
+        itemId: string,
+        serverItem: any,
+        targetScope?: ActiveScope,
+        intentToRemove?: string,
+      ) => {
+        set((state) => {
+          const nextIntents = intentToRemove
+            ? withoutPendingExampleIntent(state.pendingExampleIntents, intentToRemove)
+            : state.pendingExampleIntents;
+          const isSameScope =
+            !targetScope ||
+            (state.workspaceMode === 'cloud' &&
+              state.cloudConfig.activeScope?.id === targetScope.id &&
+              state.cloudConfig.activeScope?.type === targetScope.type);
+          if (isSameScope) {
+            const nextCollections = applyServerItemToCollectionsList(
+              state.collections,
+              collectionId,
+              itemId,
+              serverItem,
+            );
+            const nextSelected =
+              state.selectedExample &&
+              !isSelectedExampleStillPresent(nextCollections, state.selectedExample)
+                ? null
+                : state.selectedExample;
+            return {
+              collections: nextCollections,
+              pendingExampleIntents: nextIntents,
+              selectedExample: nextSelected,
+            };
+          }
+          if (targetScope) {
+            const scopeKey = getScopeCacheKey(targetScope);
+            const entry = state.scopeCache?.[scopeKey];
+            if (entry) {
+              return {
+                scopeCache: {
+                  ...(state.scopeCache || {}),
+                  [scopeKey]: {
+                    ...entry,
+                    collections: applyServerItemToCollectionsList(
+                      entry.collections || [],
+                      collectionId,
+                      itemId,
+                      serverItem,
+                    ),
+                  },
+                },
+                pendingExampleIntents: nextIntents,
+              };
+            }
+          }
+          return { pendingExampleIntents: nextIntents };
+        });
+      };
+
+      const executeExampleIntent = async (
+        intent: PendingExampleIntent,
+        opts?: {
+          preMutationCollections?: Collection[];
+          apiUrl?: string;
+          token?: string;
+          refreshToken?: string;
+          signal?: AbortSignal;
+        },
+      ): Promise<SavedExampleActionResult> => {
+        if (inFlightExampleOperations.has(intent.operationId)) {
+          return {
+            success: false,
+            reconcilePending: true,
+            error: 'Saved example operation is already in progress.',
+          };
+        }
+        inFlightExampleOperations.add(intent.operationId);
+        const capturedSessionGen = cloudSessionGeneration;
+        const operation = opts?.signal ? null : beginAsyncOperation();
+        const signal = opts?.signal || operation?.controller.signal;
+        let currentBaseVersion = intent.baseVersion ?? 1;
+        const currentBaseExampleRev = intent.baseExampleRevision ?? 1;
+
+        try {
+          for (let attempt = 0; attempt < 4; attempt++) {
+            const liveConfig = get().cloudConfig;
+            const apiUrl = opts?.apiUrl || liveConfig.apiUrl;
+            const token = opts?.token || liveConfig.token;
+            const refreshToken = opts?.refreshToken ?? liveConfig.refreshToken;
+            const currentOwnerKey = cloudCacheOwnerKey(liveConfig, normalizeCloudApiUrl);
+
+            if (
+              isStoreDisposed ||
+              cloudSessionGeneration !== capturedSessionGen ||
+              (intent.ownerKey !== null && currentOwnerKey !== intent.ownerKey)
+            ) {
+              return { success: false, error: 'Session or workspace changed before sync completed.' };
+            }
+
+            try {
+              const serverItem = await patchScopeItemExamples(
+                apiUrl,
+                token,
+                intent.itemId,
+                {
+                  operation_id: intent.operationId,
+                  op: intent.op,
+                  base_version: currentBaseVersion,
+                  ...(intent.op === 'add' ? { example: intent.example } : {}),
+                  ...(intent.op === 'rename'
+                    ? {
+                        example_id: intent.exampleId,
+                        base_example_revision: currentBaseExampleRev,
+                        name: intent.name,
+                      }
+                    : {}),
+                  ...(intent.op === 'delete'
+                    ? {
+                        example_id: intent.exampleId,
+                        base_example_revision: currentBaseExampleRev,
+                      }
+                    : {}),
+                },
+                refreshToken,
+                signal,
+              );
+
+              if (
+                isStoreDisposed ||
+                cloudSessionGeneration !== capturedSessionGen ||
+                (intent.ownerKey !== null &&
+                  cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) !== intent.ownerKey)
+              ) {
+                return { success: false, error: 'Session changed before response could be applied.' };
+              }
+
+              commitServerItemToStore(
+                intent.collectionId,
+                intent.itemId,
+                serverItem,
+                intent.targetScope,
+                intent.operationId,
+              );
+              await flushStorePersistence().catch(() => undefined);
+              const matched = Array.isArray(serverItem?.examples)
+                ? serverItem.examples.find((ex: SavedExample) => ex.id === intent.exampleId)
+                : intent.example;
+              return { success: true, example: matched };
+            } catch (err: unknown) {
+              if (signal?.aborted || isStoreDisposed || cloudSessionGeneration !== capturedSessionGen) {
+                return { success: false, error: 'Operation cancelled.' };
+              }
+
+              if (err instanceof CloudApiError && err.status === 409 && attempt < 3) {
+                try {
+                  const latest = await fetchScopeItem(
+                    apiUrl,
+                    token,
+                    intent.itemId,
+                    refreshToken,
+                    signal,
+                  );
+                  if (isStoreDisposed || cloudSessionGeneration !== capturedSessionGen) {
+                    return { success: false, error: 'Operation cancelled.' };
+                  }
+                  const latestExamples: SavedExample[] = Array.isArray(latest?.examples) ? latest.examples : [];
+                  const latestSummaries: SavedExampleSummary[] = Array.isArray(latest?.example_summaries)
+                    ? latest.example_summaries
+                    : [];
+
+                  if (intent.op === 'add') {
+                    if (latestExamples.some((ex) => ex.id === intent.exampleId)) {
+                      commitServerItemToStore(intent.collectionId, intent.itemId, latest, intent.targetScope, intent.operationId);
+                      await flushStorePersistence().catch(() => undefined);
+                      return { success: true, example: latestExamples.find((ex) => ex.id === intent.exampleId) || intent.example };
+                    }
+                    const totalBytes =
+                      latestExamples.reduce((sum, ex) => sum + getExampleUtf8ByteLength(JSON.stringify(ex)), 0) +
+                      (intent.example ? getExampleUtf8ByteLength(JSON.stringify(intent.example)) : 0);
+                    if (
+                      latestExamples.length >= MAX_SAVED_EXAMPLES_PER_ITEM ||
+                      totalBytes > MAX_SAVED_EXAMPLES_TOTAL_BYTES_PER_ITEM
+                    ) {
+                      commitServerItemToStore(intent.collectionId, intent.itemId, latest, intent.targetScope, intent.operationId);
+                      await flushStorePersistence().catch(() => undefined);
+                      return {
+                        success: false,
+                        error: 'Saved example limit reached on server item.',
+                        code: 'LIMIT_EXCEEDED',
+                      };
+                    }
+                    currentBaseVersion = typeof latest?.version === 'number' ? latest.version : currentBaseVersion;
+                    continue;
+                  }
+
+                  const targetSummaryOrExample =
+                    latestExamples.find((ex) => ex.id === intent.exampleId) ||
+                    latestSummaries.find((s) => s.id === intent.exampleId);
+
+                  if (intent.op === 'delete' && !targetSummaryOrExample) {
+                    commitServerItemToStore(intent.collectionId, intent.itemId, latest, intent.targetScope, intent.operationId);
+                    await flushStorePersistence().catch(() => undefined);
+                    return { success: true };
+                  }
+
+                  if (
+                    !targetSummaryOrExample ||
+                    (typeof targetSummaryOrExample.revision === 'number' &&
+                      targetSummaryOrExample.revision !== currentBaseExampleRev)
+                  ) {
+                    commitServerItemToStore(intent.collectionId, intent.itemId, latest, intent.targetScope, intent.operationId);
+                    await flushStorePersistence().catch(() => undefined);
+                    return {
+                      success: false,
+                      error:
+                        intent.op === 'rename'
+                          ? 'This saved example was modified or deleted on the server.'
+                          : 'This saved example was modified on the server before deletion.',
+                      code: 'CONFLICT',
+                    };
+                  }
+
+                  currentBaseVersion = typeof latest?.version === 'number' ? latest.version : currentBaseVersion;
+                  continue;
+                } catch (fetchErr: unknown) {
+                  if (fetchErr instanceof CloudApiError && (fetchErr.status === 403 || fetchErr.status === 404)) {
+                    set((state) => ({
+                      pendingExampleIntents: withoutPendingExampleIntent(state.pendingExampleIntents, intent.operationId),
+                      ...(opts?.preMutationCollections && state.workspaceMode === 'cloud'
+                        ? { collections: opts.preMutationCollections }
+                        : {}),
+                      ...(fetchErr.status === 404 && state.selectedExample?.itemId === intent.itemId
+                        ? { selectedExample: null }
+                        : {}),
+                    }));
+                    await flushStorePersistence().catch(() => undefined);
+                    return {
+                      success: false,
+                      error: fetchErr.status === 404 ? 'Item unavailable or deleted.' : fetchErr.message,
+                      code: fetchErr.code,
+                    };
+                  }
+                }
+              }
+
+              if (err instanceof CloudApiError && [400, 403, 404, 409, 413].includes(err.status)) {
+                set((state) => ({
+                  pendingExampleIntents: withoutPendingExampleIntent(state.pendingExampleIntents, intent.operationId),
+                  ...(opts?.preMutationCollections ? { collections: opts.preMutationCollections } : {}),
+                  ...(err.status === 404 && state.selectedExample?.itemId === intent.itemId
+                    ? { selectedExample: null }
+                    : {}),
+                }));
+                await flushStorePersistence().catch(() => undefined);
+                return {
+                  success: false,
+                  error: err.status === 404 ? 'Item unavailable or deleted.' : err.message,
+                  code: err.code,
+                };
+              }
+
+              const msg = err instanceof Error ? err.message : 'Failed to sync saved example.';
+              set((state) => ({
+                pendingExampleIntents: {
+                  ...(state.pendingExampleIntents || {}),
+                  [intent.operationId]: {
+                    ...intent,
+                    baseVersion: currentBaseVersion,
+                    status: 'reconcile_required',
+                    lastError: msg,
+                  },
+                },
+              }));
+              await flushStorePersistence().catch(() => undefined);
+              return { success: false, reconcilePending: true, error: msg };
+            }
+          }
+
+          return {
+            success: false,
+            reconcilePending: true,
+            error: 'Saved example update conflicted repeatedly; sync to reconcile.',
+          };
+        } finally {
+          inFlightExampleOperations.delete(intent.operationId);
+          if (operation) completeAsyncOperation(operation);
+        }
+      };
+
+      const replayPendingExampleIntentsForScope = async (
+        targetScope: ActiveScope,
+        apiUrl: string,
+        token: string | undefined,
+        refreshToken: string | undefined,
+        signal: AbortSignal,
+      ) => {
+        const live = get();
+        const ownerKey = cloudCacheOwnerKey(live.cloudConfig, normalizeCloudApiUrl);
+        const pendingList = Object.values(live.pendingExampleIntents || {})
+          .filter((intent) => {
+            if (!intent) return false;
+            if (intent.ownerKey !== null && ownerKey !== null && intent.ownerKey !== ownerKey) return false;
+            if (intent.targetScope) {
+              return intent.targetScope.id === targetScope.id && intent.targetScope.type === targetScope.type;
+            }
+            return true;
+          })
+          .sort((a, b) => a.createdAt - b.createdAt);
+
+        for (const intent of pendingList) {
+          if (signal.aborted || isStoreDisposed) break;
+          await executeExampleIntent(intent, { apiUrl, token, refreshToken, signal });
+        }
+      };
       return {
       tabs: [defaultRequest],
       activeTabId: defaultRequest.id,
@@ -1191,7 +1846,10 @@ export function createApiStore(
       scopeCache: {},
       cloudCacheOwner: null,
       cloudCacheArchives: emptyCloudCacheArchives(),
+      selectedExample: null,
+      pendingExampleIntents: {},
       pendingDuplicateIntents: {},
+      activeDuplicateOperationIds: {},
       lastDuplicateReveal: null,
       scopesCache: undefined,
       isSwitchingWorkspace: false,
@@ -1774,23 +2432,39 @@ export function createApiStore(
         if (!isCloudSessionActive(cloudConfig)) return null;
         const isFresh = featurePolicyFetchedAt !== null && Date.now() - featurePolicyFetchedAt < FEATURE_POLICY_TTL_MS;
         if (!force && isFresh && featurePolicyStatus === 'ready') return state.featurePolicy;
-        if (featurePolicyStatus === 'loading') return null;
+
+        const requestKey = `${cloudSessionGeneration}:${cloudConfig.apiUrl}`;
+        if (!force && activeFeaturePolicyPromise && activeFeaturePolicyKey === requestKey) {
+          return activeFeaturePolicyPromise;
+        }
 
         const operation = sessionOperations.begin();
         set({ featurePolicyStatus: 'loading' });
-        try {
-          const policy = await fetchFeaturePolicyForRuntime(cloudConfig.apiUrl, cloudConfig.token, cloudConfig.refreshToken, operation.controller.signal);
-          if (!sessionOperations.isCurrent(operation)) return null;
-          set({ featurePolicy: policy, featurePolicyStatus: 'ready', featurePolicyFetchedAt: Date.now() });
-          return policy;
-        } catch (err) {
-          if (!sessionOperations.isCurrent(operation)) return null;
-          console.error('Failed to refresh feature policy:', err);
-          set({ featurePolicyStatus: 'error' });
-          return null;
-        } finally {
-          sessionOperations.complete(operation);
-        }
+        const policyRef: { current: Promise<FeaturePolicy | null> | null } = { current: null };
+        const fetchPromise = (async () => {
+          try {
+            const policy = await fetchFeaturePolicyForRuntime(cloudConfig.apiUrl, cloudConfig.token, cloudConfig.refreshToken, operation.controller.signal);
+            if (!sessionOperations.isCurrent(operation)) return null;
+            set({ featurePolicy: policy, featurePolicyStatus: 'ready', featurePolicyFetchedAt: Date.now() });
+            return policy;
+          } catch (err) {
+            if (!sessionOperations.isCurrent(operation)) return null;
+            console.error('Failed to refresh feature policy:', err);
+            set({ featurePolicyStatus: 'error' });
+            return null;
+          } finally {
+            if (activeFeaturePolicyPromise === policyRef.current) {
+              activeFeaturePolicyPromise = null;
+              activeFeaturePolicyKey = null;
+            }
+            sessionOperations.complete(operation);
+          }
+        })();
+        policyRef.current = fetchPromise;
+
+        activeFeaturePolicyPromise = fetchPromise;
+        activeFeaturePolicyKey = requestKey;
+        return fetchPromise;
       },
       isFeatureEnabled: (feature) => {
         const state = get();
@@ -1877,6 +2551,7 @@ export function createApiStore(
           activeTabId: transition.targetResources.activeTabId,
           activeResponse: null,
           tabResponses: {},
+          selectedExample: null,
           isLoading: false,
           history: transition.targetResources.history,
           lastSyncedAt: transition.targetCache?.lastSyncedAt || null,
@@ -1949,6 +2624,7 @@ export function createApiStore(
           activeTabId: restoredResources.activeTabId,
           activeResponse: null,
           tabResponses: {},
+          selectedExample: null,
           isLoading: false,
           history: restoredResources.history,
           scopeCache: {},
@@ -1992,6 +2668,14 @@ export function createApiStore(
         try {
           const syncResult = await synchronizeCloudWorkspace({
             currentCollections: get().collections || [],
+            replayPendingExampleIntents: () =>
+              replayPendingExampleIntentsForScope(
+                requestedScope,
+                cloudConfig.apiUrl,
+                token,
+                cloudConfig.refreshToken,
+                operation.controller.signal,
+              ),
             uploadPendingCollection: async (collection) => batchImportToScope(
               cloudConfig.apiUrl,
               token,
@@ -2043,10 +2727,17 @@ export function createApiStore(
             return;
           }
           const currentState = get();
+          const currentOwnerKey = cloudCacheOwnerKey(currentState.cloudConfig, normalizeCloudApiUrl);
+          const overlaidCollections = overlayPendingExampleIntentsOnCollections(
+            syncResult.collections,
+            currentState.pendingExampleIntents,
+            currentOwnerKey,
+            requestedScope,
+          );
           const deltaState = prepareCloudDeltaState({
             scope: requestedScope,
             scopeCache: currentState.scopeCache || {},
-            collections: syncResult.collections,
+            collections: overlaidCollections,
             currentCollections: currentState.collections,
             pulledEnvironments: syncResult.environments,
             currentEnvironments: currentState.environments || [],
@@ -2058,7 +2749,16 @@ export function createApiStore(
             syncedAt: Date.now(),
           });
 
-          set(deltaState);
+          const nextSelectedExample =
+            currentState.selectedExample &&
+            !isSelectedExampleStillPresent(deltaState.collections, currentState.selectedExample)
+              ? null
+              : currentState.selectedExample;
+
+          set({
+            ...deltaState,
+            selectedExample: nextSelectedExample,
+          });
         } catch (err: unknown) {
           if (!isAsyncOperationCurrent(operation)) return;
           const errorMsg = err instanceof Error ? err.message : String(err);
@@ -2092,6 +2792,14 @@ export function createApiStore(
         const operation = beginAsyncOperation();
         try {
           set({ syncStatus: 'syncing', syncError: null });
+          const hasAnySavedExamples = colsToImport.some((col) => collectionHasSavedExamples(col));
+          if (hasAnySavedExamples) {
+            const supported = await ensureSavedExamplesCapability();
+            if (!isAsyncOperationCurrent(operation)) return { success: false, message: 'Operation cancelled' };
+            if (!supported) {
+              throw new Error('This cloud server does not support Saved Examples. Update the server before migrating local collections with examples.');
+            }
+          }
           for (let i = 0; i < colsToImport.length; i++) {
             if (!isAsyncOperationCurrent(operation)) return { success: false, message: 'Operation cancelled' };
             const col = colsToImport[i];
@@ -2101,7 +2809,8 @@ export function createApiStore(
                 syncError: `Importing collection ${i + 1} of ${colsToImport.length} (${col.name})...`,
               });
             }
-            await batchImportToScope(
+            const expectedExamples = countCollectionSavedExamples(col);
+            const batchResult = await batchImportToScope(
               cloudConfig.apiUrl,
               cloudConfig.token,
               cloudConfig.activeScope,
@@ -2109,6 +2818,13 @@ export function createApiStore(
               cloudConfig.refreshToken,
               operation.controller.signal
             );
+            if (
+              expectedExamples > 0 &&
+              (typeof batchResult?.imported_examples !== 'number' ||
+                batchResult.imported_examples < expectedExamples)
+            ) {
+              throw new Error(`Cloud server dropped saved examples while importing "${col.name}".`);
+            }
             importedCount++;
           }
           if (!isAsyncOperationCurrent(operation)) return { success: false, message: 'Operation cancelled' };
@@ -2722,6 +3438,7 @@ export function createApiStore(
           activeTabId: restoredActiveTabId,
           activeResponse: null,
           tabResponses: {},
+          selectedExample: null,
           isLoading: false,
           history: targetEntry.history || [],
           canUndoActiveRequest: false,
@@ -3149,17 +3866,31 @@ export function createApiStore(
         scheduleEnvironmentCloudSync(envId, get, set);
       },
 
-      addEnvironment: async (env: Environment) => {
+      addEnvironment: async (env: Environment, options?: { target?: ImportTargetBinding; isRetry?: boolean }) => {
+        if (options?.target && !matchesImportTarget(get(), options.target, cloudSessionGeneration)) {
+          throw new Error('Workspace changed before environment import could be applied.');
+        }
+
         const { workspaceMode, cloudConfig } = get();
         if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
           if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
             console.warn('User lacks permission to add environment in this scope');
-            return env.id;
+            throw new Error('Insufficient permission to add environments in this scope (requires env:write).');
           }
         }
 
+        const isCloud = workspaceMode === 'cloud';
+        const taggedEnv: Environment = {
+          ...env,
+          _syncStatus: isCloud ? 'pending' : 'synced',
+          ...(isCloud ? { _pendingCreate: true } : {}),
+        };
+
         set((state) => {
-          const nextEnvironments = [...state.environments, env];
+          const exists = state.environments.some((e) => e.id === taggedEnv.id);
+          const nextEnvironments = exists
+            ? state.environments.map((e) => (e.id === taggedEnv.id ? taggedEnv : e))
+            : [...state.environments, taggedEnv];
           const localId = state.activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID;
           const nextOfflineCache =
             state.workspaceMode === 'offline'
@@ -3172,60 +3903,150 @@ export function createApiStore(
                     history: state.history,
                     ...(state.offlineScopeCache?.[localId] || {}),
                     environments: nextEnvironments,
-                    activeEnvironmentId: env.id,
+                    activeEnvironmentId: taggedEnv.id,
                   },
                 }
               : state.offlineScopeCache;
           return {
             environments: nextEnvironments,
-            activeEnvironmentId: env.id,
+            activeEnvironmentId: taggedEnv.id,
             offlineScopeCache: nextOfflineCache,
           };
         });
 
-        if (!isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && cloudConfig.activeScope) {
+        if (!isOfflineOnly && isCloud && isCloudSessionActive(cloudConfig) && cloudConfig.activeScope) {
           const operation = beginAsyncOperation();
+          const targetScope = cloudConfig.activeScope;
+          const capturedSessionGen = cloudSessionGeneration;
+          const isSameTargetScope = () => {
+            const live = get();
+            return (
+              !isStoreDisposed &&
+              cloudSessionGeneration === capturedSessionGen &&
+              live.workspaceMode === 'cloud' &&
+              live.cloudConfig.activeScope?.id === targetScope.id &&
+              live.cloudConfig.activeScope?.type === targetScope.type
+            );
+          };
+          const reconcileEnvToTargetScope = (remoteId: string, remoteVersion: number) => {
+            if (isStoreDisposed || cloudSessionGeneration !== capturedSessionGen) return;
+            if (isSameTargetScope()) {
+              set((state) => ({
+                environments: state.environments.map((e) =>
+                  e.id === taggedEnv.id
+                    ? { ...e, id: remoteId, version: remoteVersion, _syncStatus: 'synced', _pendingCreate: undefined }
+                    : e
+                ),
+                activeEnvironmentId: state.activeEnvironmentId === taggedEnv.id ? remoteId : state.activeEnvironmentId,
+              }));
+              return;
+            }
+            const targetKey = getScopeCacheKey(targetScope);
+            set((state) => {
+              const cached = state.scopeCache?.[targetKey];
+              if (!cached) return {};
+              return {
+                scopeCache: {
+                  ...state.scopeCache,
+                  [targetKey]: {
+                    ...cached,
+                    environments: (cached.environments || []).map((e) =>
+                      e.id === taggedEnv.id
+                        ? { ...e, id: remoteId, version: remoteVersion, _syncStatus: 'synced', _pendingCreate: undefined }
+                        : e
+                    ),
+                    activeEnvironmentId: cached.activeEnvironmentId === taggedEnv.id ? remoteId : cached.activeEnvironmentId,
+                  },
+                },
+              };
+            });
+          };
           try {
+            if (options?.isRetry) {
+              const remoteEnvs = await fetchScopeEnvironmentsForRuntime(
+                cloudConfig.apiUrl,
+                cloudConfig.token,
+                targetScope,
+                cloudConfig.refreshToken,
+                operation.controller.signal
+              );
+              if (isStoreDisposed || cloudSessionGeneration !== capturedSessionGen) return taggedEnv.id;
+              const normalizedName = String(taggedEnv.name ?? '').trim().toLowerCase();
+              const matchedRemote = (remoteEnvs || []).find(
+                (re) => String(re?.name ?? '').trim().toLowerCase() === normalizedName
+              );
+              if (matchedRemote?.id) {
+                const localPayload = JSON.stringify(sanitizeVariablesForUpstream(taggedEnv.variables));
+                const remotePayload = JSON.stringify(sanitizeVariablesForUpstream(matchedRemote.variables || []));
+                if (localPayload !== remotePayload) {
+                  throw new Error(
+                    `An environment named "${taggedEnv.name}" already exists on the server with different variables.`
+                  );
+                }
+                reconcileEnvToTargetScope(matchedRemote.id, matchedRemote.version || 1);
+                if (isSameTargetScope() && isAsyncOperationCurrent(operation)) {
+                  await flushStorePersistence();
+                }
+                return matchedRemote.id;
+              }
+              if (!isAsyncOperationCurrent(operation) || operation.controller.signal.aborted) {
+                if (isSameTargetScope()) {
+                  throw new Error('Import operation was cancelled before completion.');
+                }
+                return taggedEnv.id;
+              }
+            }
+
             const created = await createScopeEnvironment(
               cloudConfig.apiUrl,
               cloudConfig.token,
-              cloudConfig.activeScope,
+              targetScope,
               {
-                name: env.name,
-                variables: sanitizeVariablesForUpstream(env.variables),
-                min_role: env.minRole || 'reader',
+                name: taggedEnv.name,
+                variables: sanitizeVariablesForUpstream(taggedEnv.variables),
+                min_role: taggedEnv.minRole || 'reader',
               },
               cloudConfig.refreshToken,
               operation.controller.signal
             );
-            if (!isAsyncOperationCurrent(operation)) return env.id;
+            if (isStoreDisposed || cloudSessionGeneration !== capturedSessionGen) return taggedEnv.id;
             if (created && created.id) {
-              set((state) => {
-                if (!isAsyncOperationCurrent(operation)) return {};
-                return {
-                  environments: state.environments.map((e) =>
-                    e.id === env.id ? { ...e, id: created.id, version: created.version || 1 } : e
-                  ),
-                  activeEnvironmentId: state.activeEnvironmentId === env.id ? created.id : state.activeEnvironmentId,
-                };
-              });
-              await flushStorePersistence();
+              reconcileEnvToTargetScope(created.id, created.version || 1);
+              if (isSameTargetScope() && isAsyncOperationCurrent(operation)) {
+                await flushStorePersistence();
+              }
               return created.id;
             }
           } catch (err: any) {
-            if (!isAsyncOperationCurrent(operation)) return env.id;
+            if (!isAsyncOperationCurrent(operation) || operation.controller.signal.aborted) {
+              if (isSameTargetScope()) {
+                throw new Error('Import operation was cancelled before completion.');
+              }
+              return taggedEnv.id;
+            }
+            if (!isSameTargetScope()) return taggedEnv.id;
             console.error('Failed to sync environment to cloud:', err);
-            set({ syncStatus: 'error', syncError: err.message || 'Failed to sync environment to cloud' });
+            set((state) => ({
+              environments: state.environments.map((e) =>
+                e.id === taggedEnv.id ? { ...e, _syncStatus: 'pending', _pendingCreate: true } : e
+              ),
+              syncStatus: 'error',
+              syncError: err.message || 'Failed to sync environment to cloud',
+            }));
             throw err;
           } finally {
             completeAsyncOperation(operation);
           }
         }
         await flushStorePersistence();
-        return env.id;
+        return taggedEnv.id;
       },
 
-      replaceEnvironment: async (existingId: string, incomingEnv: Environment) => {
+      replaceEnvironment: async (existingId: string, incomingEnv: Environment, options?: { target?: ImportTargetBinding }) => {
+        if (options?.target && !matchesImportTarget(get(), options.target, cloudSessionGeneration)) {
+          throw new Error('Workspace changed before environment replacement could be applied.');
+        }
+
         const { workspaceMode, cloudConfig } = get();
         const state = get();
         const existingEnv = state.environments.find((e) => e.id === existingId);
@@ -3254,6 +4075,8 @@ export function createApiStore(
           }
         }
 
+        const wasPendingLocalCreate = Boolean(existingEnv._pendingCreate);
+        const isCloud = workspaceMode === 'cloud';
         const replacedEnv: Environment = {
           ...incomingEnv,
           id: existingId,
@@ -3261,6 +4084,8 @@ export function createApiStore(
           variables: alignedVars,
           minRole: effectiveMinRole,
           version: existingEnv.version || 1,
+          _syncStatus: isCloud ? 'pending' : 'synced',
+          _pendingCreate: isCloud && wasPendingLocalCreate ? true : undefined,
           updatedAt: Date.now(),
         };
 
@@ -3289,39 +4114,99 @@ export function createApiStore(
           };
         });
 
-        if (!isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && cloudConfig.activeScope) {
+        if (!isOfflineOnly && isCloud && isCloudSessionActive(cloudConfig) && cloudConfig.activeScope) {
           const operation = beginAsyncOperation();
-          try {
-            const res = await updateScopeEnvironment(
-              cloudConfig.apiUrl,
-              cloudConfig.token,
-              existingId,
-              {
-                name: replacedEnv.name,
-                variables: sanitizeVariablesForUpstream(replacedEnv.variables),
-                min_role: replacedEnv.minRole,
-                base_version: replacedEnv.version || 1,
-              },
-              cloudConfig.refreshToken,
-              operation.controller.signal
+          const targetScope = cloudConfig.activeScope;
+          const capturedSessionGen = cloudSessionGeneration;
+          const isSameTargetScope = () => {
+            const live = get();
+            return (
+              !isStoreDisposed &&
+              cloudSessionGeneration === capturedSessionGen &&
+              live.workspaceMode === 'cloud' &&
+              live.cloudConfig.activeScope?.id === targetScope.id &&
+              live.cloudConfig.activeScope?.type === targetScope.type
             );
-            if (!isAsyncOperationCurrent(operation)) return;
-            if (res && typeof res.version === 'number') {
+          };
+          const reconcileReplacedEnv = (remoteId: string, remoteVersion: number) => {
+            if (isStoreDisposed || cloudSessionGeneration !== capturedSessionGen) return;
+            if (isSameTargetScope()) {
+              set((s) => ({
+                environments: s.environments.map((e) =>
+                  e.id === existingId ? { ...e, id: remoteId, version: remoteVersion, _syncStatus: 'synced', _pendingCreate: undefined } : e
+                ),
+                activeEnvironmentId: s.activeEnvironmentId === existingId ? remoteId : s.activeEnvironmentId,
+              }));
+            } else {
+              const targetKey = getScopeCacheKey(targetScope);
               set((s) => {
-                if (!isAsyncOperationCurrent(operation)) return {};
+                const cached = s.scopeCache?.[targetKey];
+                if (!cached) return {};
                 return {
-                  environments: s.environments.map((e) =>
-                    e.id === existingId ? { ...e, version: res.version } : e
-                  ),
+                  scopeCache: {
+                    ...s.scopeCache,
+                    [targetKey]: {
+                      ...cached,
+                      environments: (cached.environments || []).map((e) =>
+                        e.id === existingId ? { ...e, id: remoteId, version: remoteVersion, _syncStatus: 'synced', _pendingCreate: undefined } : e
+                      ),
+                      activeEnvironmentId: cached.activeEnvironmentId === existingId ? remoteId : cached.activeEnvironmentId,
+                    },
+                  },
                 };
               });
             }
+          };
+          try {
+            if (wasPendingLocalCreate) {
+              const created = await createScopeEnvironment(
+                cloudConfig.apiUrl,
+                cloudConfig.token,
+                targetScope,
+                {
+                  name: replacedEnv.name,
+                  variables: sanitizeVariablesForUpstream(replacedEnv.variables),
+                  min_role: replacedEnv.minRole || 'reader',
+                },
+                cloudConfig.refreshToken,
+                operation.controller.signal
+              );
+              if (isStoreDisposed || cloudSessionGeneration !== capturedSessionGen) return;
+              if (created && created.id) {
+                reconcileReplacedEnv(created.id, created.version || 1);
+              }
+              if (!isSameTargetScope() || !isAsyncOperationCurrent(operation)) return;
+            } else {
+              const res = await updateScopeEnvironment(
+                cloudConfig.apiUrl,
+                cloudConfig.token,
+                existingId,
+                {
+                  name: replacedEnv.name,
+                  variables: sanitizeVariablesForUpstream(replacedEnv.variables),
+                  min_role: replacedEnv.minRole,
+                  base_version: replacedEnv.version || 1,
+                },
+                cloudConfig.refreshToken,
+                operation.controller.signal
+              );
+              if (isStoreDisposed || cloudSessionGeneration !== capturedSessionGen) return;
+              const nextVersion = res && typeof res.version === 'number' ? res.version : (replacedEnv.version || 1);
+              reconcileReplacedEnv(existingId, nextVersion);
+              if (!isSameTargetScope() || !isAsyncOperationCurrent(operation)) return;
+            }
           } catch (err: any) {
-            if (!isAsyncOperationCurrent(operation)) return;
+            if (!isAsyncOperationCurrent(operation) || operation.controller.signal.aborted) {
+              if (isSameTargetScope()) {
+                throw new Error('Import operation was cancelled before completion.');
+              }
+              return;
+            }
+            if (!isSameTargetScope()) return;
             if (err?.status === 409) {
               const remote = getRemoteEnvironment(err.data);
               set((state) => {
-                if (!isAsyncOperationCurrent(operation)) return {};
+                if (!isAsyncOperationCurrent(operation) || !isSameTargetScope()) return {};
                 return {
                   syncStatus: 'error',
                   syncError: 'Environment changes conflict with a newer server version. Review the conflict before saving again.',
@@ -3379,7 +4264,7 @@ export function createApiStore(
             if (!isAsyncOperationCurrent(operation)) return {};
             return {
               environments: current.environments.map((environment) => environment.id === conflict.local.id
-                ? { ...environment, version: response.version || conflict.remote.version }
+                ? { ...environment, version: response.version || conflict.remote.version, _syncStatus: 'synced', _pendingCreate: undefined }
                 : environment),
               environmentOccConflict: null,
               syncStatus: 'synced',
@@ -3410,6 +4295,7 @@ export function createApiStore(
         set((state) => ({
           activeTabId,
           activeResponse: state.tabResponses?.[activeTabId] || null,
+          selectedExample: null,
           tabRevealRevision: state.tabRevealRevision + 1,
           canUndoActiveRequest: (tabUndoHistory[activeTabId]?.past?.length ?? 0) > 0,
           canRedoActiveRequest: (tabUndoHistory[activeTabId]?.future?.length ?? 0) > 0,
@@ -3445,6 +4331,7 @@ export function createApiStore(
           tabs: [...state.tabs, newReq],
           activeTabId: newReq.id,
           activeResponse: null,
+          selectedExample: null,
           tabRevealRevision: state.tabRevealRevision + 1,
           canUndoActiveRequest: false,
           canRedoActiveRequest: false,
@@ -4349,6 +5236,7 @@ export function createApiStore(
         const state = get();
         const activeReq = state.tabs.find((t) => t.id === state.activeTabId);
         if (!activeReq || !activeReq.url.trim() || state.isLoading) return;
+        const capturedRequest = cloneRequestPreservingAttachments(activeReq);
 
         const operation = beginAsyncOperation();
         activeRequestOperation = operation;
@@ -4606,6 +5494,7 @@ export function createApiStore(
             scriptError,
             scriptErrorStage,
             updatedEnvVars: updatedKeys.length > 0 ? updatedKeys : undefined,
+            capturedRequest,
           };
 
           const historyEntry: HistoryItem = {
@@ -4787,34 +5676,17 @@ export function createApiStore(
         }));
 
         if (!isOfflineOnly && isCloud && isCloudSessionActive(cloudConfig) && cloudConfig.activeScope) {
-          const operation = beginAsyncOperation();
-          batchImportToScope(
-            cloudConfig.apiUrl,
-            cloudConfig.token,
+          const revision = (collectionSaveSyncRevisions.get(newCol.id) ?? 0) + 1;
+          collectionSaveSyncRevisions.set(newCol.id, revision);
+          queueSavedCollectionSync(
+            cloneCollectionPreservingAttachments(newCol),
             cloudConfig.activeScope,
-            [newCol],
-            cloudConfig.refreshToken,
-            operation.controller.signal
-          ).then(() => {
-            if (!isAsyncOperationCurrent(operation) || isStoreDisposed) return;
-            set((state) => ({
-              collections: state.collections.map((c) =>
-                c.id === newCol.id ? { ...c, _syncStatus: 'synced' } : c
-              ),
-            }));
-          }).catch((err) => {
-            if (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation)) return;
-            console.error('Failed to sync created collection to cloud:', err);
-            set((state) => ({
-              collections: state.collections.map((c) =>
-                c.id === newCol.id ? { ...c, _syncStatus: 'pending' } : c
-              ),
-              syncStatus: 'error',
-              syncError: err.message || 'Failed to sync created collection to cloud',
-            }));
-          }).finally(() => {
-            completeAsyncOperation(operation);
-          });
+            cloudConfig,
+            revision,
+            get,
+            set,
+            'Failed to sync created collection to cloud',
+          );
         }
 
         return newCol.id;
@@ -4849,35 +5721,51 @@ export function createApiStore(
 
         if (!isCloud) {
           const capturedOfflineWsId = activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID;
-          const prevCollections = get().collections;
-          const prevOfflineCache = get().offlineScopeCache || {};
-          const nextCollections = [newCol, ...prevCollections];
-          const updatedWorkspaces = (offlineWorkspaces || []).map((w) =>
-            w.id === capturedOfflineWsId ? { ...w, collections: nextCollections, updatedAt: Date.now() } : w,
-          );
-          set({ collections: nextCollections, offlineWorkspaces: updatedWorkspaces });
+          set((state) => {
+            const nextCollections = [newCol, ...state.collections];
+            return {
+              collections: nextCollections,
+              offlineWorkspaces: (state.offlineWorkspaces || []).map((w) =>
+                w.id === capturedOfflineWsId ? { ...w, collections: nextCollections, updatedAt: Date.now() } : w,
+              ),
+            };
+          });
           try {
             await get().persistNativeCredentialState();
             return { success: true, collectionId: newCol.id };
           } catch {
-            const latestState = get();
-            const isStillSameOfflineWs =
-              latestState.workspaceMode === 'offline' &&
-              latestState.activeOfflineWorkspaceId === capturedOfflineWsId;
-            if (isStillSameOfflineWs) {
-              set({ collections: prevCollections, offlineWorkspaces });
-            } else {
-              const latestCache = { ...(latestState.offlineScopeCache || {}) };
-              if (prevOfflineCache[capturedOfflineWsId]) {
-                latestCache[capturedOfflineWsId] = prevOfflineCache[capturedOfflineWsId];
-              } else if (latestCache[capturedOfflineWsId]) {
-                latestCache[capturedOfflineWsId] = {
-                  ...latestCache[capturedOfflineWsId],
-                  collections: prevCollections,
+            set((state) => {
+              const isTargetActive =
+                state.workspaceMode === 'offline' &&
+                (state.activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID) === capturedOfflineWsId;
+              const prevCache = state.offlineScopeCache || {};
+              const cachedEntry = prevCache[capturedOfflineWsId];
+              const nextOfflineCache = cachedEntry
+                ? {
+                    ...prevCache,
+                    [capturedOfflineWsId]: {
+                      ...cachedEntry,
+                      collections: (cachedEntry.collections || []).filter((c) => c.id !== newCol.id),
+                    },
+                  }
+                : prevCache;
+              const nextOfflineWorkspaces = (state.offlineWorkspaces || []).map((w) => {
+                if (w.id !== capturedOfflineWsId) return w;
+                const wsWithCols = w as typeof w & { collections?: Collection[] };
+                if (!Array.isArray(wsWithCols.collections)) return w;
+                return {
+                  ...w,
+                  collections: wsWithCols.collections.filter((c) => c.id !== newCol.id),
                 };
-              }
-              set({ offlineScopeCache: latestCache, offlineWorkspaces });
-            }
+              });
+              return {
+                ...(isTargetActive
+                  ? { collections: state.collections.filter((c) => c.id !== newCol.id) }
+                  : {}),
+                offlineScopeCache: nextOfflineCache,
+                offlineWorkspaces: nextOfflineWorkspaces,
+              };
+            });
             return { success: false, error: 'Failed to persist new collection.' };
           }
         }
@@ -4942,12 +5830,26 @@ export function createApiStore(
         if (!trimmed) return;
 
         const { workspaceMode, cloudConfig, collections } = get();
+        if (movingCollections.has(id) || duplicatingCollections.has(id)) {
+          set({ syncError: 'Wait for the collection move or duplicate to finish before renaming.' });
+          return;
+        }
         const col = collections.find((c) => c.id === id);
+        if (col?._needsMoveReconciliation) {
+          set({ syncError: 'Sync the workspace to confirm the previous move before renaming.' });
+          return;
+        }
         if (col) {
           if (!canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
             console.warn(`User lacks permission to rename collection "${col.name}"`);
             return;
           }
+        }
+
+        const shouldSync = !isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && Boolean(cloudConfig.activeScope);
+
+        if (shouldSync) {
+          pendingReorderBaseSnapshots.delete(id);
         }
 
         set((state) => ({
@@ -4957,49 +5859,41 @@ export function createApiStore(
               ...col,
               name: trimmed,
               updatedAt: Date.now(),
+              ...(shouldSync ? { _syncStatus: 'pending' as const } : {}),
             };
           }),
         }));
 
         const updatedCols = get().collections;
-        if (!isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && cloudConfig.activeScope) {
+        if (shouldSync && cloudConfig.activeScope) {
           const updatedCol = updatedCols.find((c) => c.id === id);
           if (updatedCol) {
-            const operation = beginAsyncOperation();
-            batchImportToScope(
-              cloudConfig.apiUrl,
-              cloudConfig.token,
+            const revision = (collectionSaveSyncRevisions.get(id) ?? 0) + 1;
+            collectionSaveSyncRevisions.set(id, revision);
+            queueSavedCollectionSync(
+              cloneCollectionPreservingAttachments(updatedCol),
               cloudConfig.activeScope,
-              [updatedCol],
-              cloudConfig.refreshToken,
-              operation.controller.signal
-            ).then(() => {
-              if (!isAsyncOperationCurrent(operation) || isStoreDisposed) return;
-              set((state) => ({
-                collections: state.collections.map((c) =>
-                  c.id === id ? { ...c, _syncStatus: 'synced' } : c
-                ),
-              }));
-            }).catch((err) => {
-              if (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation)) return;
-              console.error('Failed to sync renamed collection to cloud:', err);
-              set((state) => ({
-                collections: state.collections.map((c) =>
-                  c.id === id ? { ...c, _syncStatus: 'pending' } : c
-                ),
-                syncStatus: 'error',
-                syncError: err.message || 'Failed to sync renamed collection to cloud',
-              }));
-            }).finally(() => {
-              completeAsyncOperation(operation);
-            });
+              cloudConfig,
+              revision,
+              get,
+              set,
+              'Failed to sync renamed collection to cloud',
+            );
           }
         }
       },
 
       createFolder: (collectionId, parentFolderId, name) => {
         const { workspaceMode, cloudConfig, collections } = get();
+        if (movingCollections.has(collectionId) || duplicatingCollections.has(collectionId)) {
+          set({ syncError: 'Wait for the collection move or duplicate to finish before creating a folder.' });
+          return '';
+        }
         const col = collections.find((c) => c.id === collectionId);
+        if (col?._needsMoveReconciliation || col?.isPartial) {
+          set({ syncError: 'Sync the collection before creating a folder.' });
+          return '';
+        }
         if (col) {
           if (!canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
             console.warn(`User lacks permission to add folder to collection "${col.name}"`);
@@ -5015,6 +5909,11 @@ export function createApiStore(
           type: 'folder',
           items: [],
         };
+        const shouldSync = !isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && Boolean(cloudConfig.activeScope);
+
+        if (shouldSync) {
+          pendingReorderBaseSnapshots.delete(collectionId);
+        }
 
         set((state) => {
           const updateItems = (items: CollectionItem[]): CollectionItem[] => {
@@ -5044,6 +5943,7 @@ export function createApiStore(
               ...col,
               items: updateItems(col.items),
               updatedAt: Date.now(),
+              ...(shouldSync ? { _syncStatus: 'pending' as const } : {}),
             };
           });
 
@@ -5053,37 +5953,20 @@ export function createApiStore(
         });
 
         const updatedCols = get().collections;
-        if (!isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && cloudConfig.activeScope) {
+        if (shouldSync && cloudConfig.activeScope) {
           const updatedCol = updatedCols.find((c) => c.id === collectionId);
           if (updatedCol) {
-            const operation = beginAsyncOperation();
-            batchImportToScope(
-              cloudConfig.apiUrl,
-              cloudConfig.token,
+            const revision = (collectionSaveSyncRevisions.get(collectionId) ?? 0) + 1;
+            collectionSaveSyncRevisions.set(collectionId, revision);
+            queueSavedCollectionSync(
+              cloneCollectionPreservingAttachments(updatedCol),
               cloudConfig.activeScope,
-              [updatedCol],
-              cloudConfig.refreshToken,
-              operation.controller.signal
-            ).then(() => {
-              if (!isAsyncOperationCurrent(operation) || isStoreDisposed) return;
-              set((state) => ({
-                collections: state.collections.map((c) =>
-                  c.id === collectionId ? { ...c, _syncStatus: 'synced' } : c
-                ),
-              }));
-            }).catch((err) => {
-              if (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation)) return;
-              console.error('Failed to sync created folder to cloud:', err);
-              set((state) => ({
-                collections: state.collections.map((c) =>
-                  c.id === collectionId ? { ...c, _syncStatus: 'pending' } : c
-                ),
-                syncStatus: 'error',
-                syncError: err.message || 'Failed to sync created folder to cloud',
-              }));
-            }).finally(() => {
-              completeAsyncOperation(operation);
-            });
+              cloudConfig,
+              revision,
+              get,
+              set,
+              'Failed to sync created folder to cloud',
+            );
           }
         }
 
@@ -5092,7 +5975,15 @@ export function createApiStore(
 
       createRequestInCollection: (collectionId, folderId, name) => {
         const { workspaceMode, cloudConfig, collections } = get();
+        if (movingCollections.has(collectionId) || duplicatingCollections.has(collectionId)) {
+          set({ syncError: 'Wait for the collection move or duplicate to finish before creating a request.' });
+          return null;
+        }
         const col = collections.find((c) => c.id === collectionId);
+        if (col?._needsMoveReconciliation || col?.isPartial) {
+          set({ syncError: 'Sync the collection before creating a request.' });
+          return null;
+        }
         if (col) {
           if (!canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
             console.warn(`User lacks permission to add request to collection "${col.name}"`);
@@ -5129,6 +6020,11 @@ export function createApiStore(
           type: 'request',
           request: newReq,
         };
+        const shouldSync = !isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && Boolean(cloudConfig.activeScope);
+
+        if (shouldSync) {
+          pendingReorderBaseSnapshots.delete(collectionId);
+        }
 
         set((state) => {
           const updateItems = (items: CollectionItem[]): CollectionItem[] => {
@@ -5158,6 +6054,7 @@ export function createApiStore(
               ...col,
               items: updateItems(col.items),
               updatedAt: Date.now(),
+              ...(shouldSync ? { _syncStatus: 'pending' as const } : {}),
             };
           });
 
@@ -5170,37 +6067,20 @@ export function createApiStore(
         });
 
         const updatedCols = get().collections;
-        if (!isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && cloudConfig.activeScope) {
+        if (shouldSync && cloudConfig.activeScope) {
           const updatedCol = updatedCols.find((c) => c.id === collectionId);
           if (updatedCol) {
-            const operation = beginAsyncOperation();
-            batchImportToScope(
-              cloudConfig.apiUrl,
-              cloudConfig.token,
+            const revision = (collectionSaveSyncRevisions.get(collectionId) ?? 0) + 1;
+            collectionSaveSyncRevisions.set(collectionId, revision);
+            queueSavedCollectionSync(
+              cloneCollectionPreservingAttachments(updatedCol),
               cloudConfig.activeScope,
-              [updatedCol],
-              cloudConfig.refreshToken,
-              operation.controller.signal
-            ).then(() => {
-              if (!isAsyncOperationCurrent(operation) || isStoreDisposed) return;
-              set((state) => ({
-                collections: state.collections.map((c) =>
-                  c.id === collectionId ? { ...c, _syncStatus: 'synced' } : c
-                ),
-              }));
-            }).catch((err) => {
-              if (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation)) return;
-              console.error('Failed to sync created request to cloud:', err);
-              set((state) => ({
-                collections: state.collections.map((c) =>
-                  c.id === collectionId ? { ...c, _syncStatus: 'pending' } : c
-                ),
-                syncStatus: 'error',
-                syncError: err.message || 'Failed to sync created request to cloud',
-              }));
-            }).finally(() => {
-              completeAsyncOperation(operation);
-            });
+              cloudConfig,
+              revision,
+              get,
+              set,
+              'Failed to sync created request to cloud',
+            );
           }
         }
 
@@ -5209,15 +6089,50 @@ export function createApiStore(
 
       deleteCollectionItem: (collectionId, itemId) => {
         const { workspaceMode, cloudConfig, collections } = get();
+        if (movingCollections.has(collectionId) || duplicatingCollections.has(collectionId)) {
+          set({ syncError: 'Wait for the collection move or duplicate to finish before deleting items.' });
+          return;
+        }
         const col = collections.find((c) => c.id === collectionId);
+        if (col?._needsMoveReconciliation || col?.isPartial) {
+          set({ syncError: 'Sync the collection before deleting items.' });
+          return;
+        }
         if (col) {
           if (!canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
             console.warn(`User lacks permission to delete item from collection "${col.name}"`);
             return;
           }
         }
+        const shouldSync = !isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && Boolean(cloudConfig.activeScope);
+
+        if (shouldSync) {
+          pendingReorderBaseSnapshots.delete(collectionId);
+        }
 
         set((state) => {
+          const deletedIds = new Set<string>();
+          const collectTargetIds = (items: CollectionItem[]) => {
+            for (const item of items) {
+              if (!item) continue;
+              if (item.id === itemId) {
+                deletedIds.add(item.id);
+                if (item.type === 'folder' && item.items) {
+                  for (const childId of collectAllItemIds(item.items)) {
+                    deletedIds.add(childId);
+                  }
+                }
+                return;
+              }
+              if (item.type === 'folder' && item.items) {
+                collectTargetIds(item.items);
+              }
+            }
+          };
+          const targetCol = state.collections.find((c) => c.id === collectionId);
+          if (targetCol) collectTargetIds(targetCol.items || []);
+          if (deletedIds.size === 0) deletedIds.add(itemId);
+
           const filterItems = (items: CollectionItem[]): CollectionItem[] => {
             return items
               .filter((item) => item.id !== itemId)
@@ -5238,49 +6153,92 @@ export function createApiStore(
               ...col,
               items: filterItems(col.items),
               updatedAt: Date.now(),
+              ...(shouldSync ? { _syncStatus: 'pending' as const } : {}),
             };
           });
 
+          const nextSelectedExample =
+            state.selectedExample &&
+            state.selectedExample.collectionId === collectionId &&
+            deletedIds.has(state.selectedExample.itemId)
+              ? null
+              : state.selectedExample;
+
           return {
             collections,
+            selectedExample: nextSelectedExample,
+            pendingExampleIntents: prunePendingExampleIntentsForTarget(
+              state.pendingExampleIntents,
+              collectionId,
+              deletedIds,
+            ),
           };
         });
 
         const updatedCols = get().collections;
-        if (!isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && cloudConfig.activeScope) {
-          const operation = beginAsyncOperation();
-          deleteScopeItem(
-            cloudConfig.apiUrl,
-            cloudConfig.token,
-            itemId,
-            cloudConfig.refreshToken,
-            operation.controller.signal
-          ).catch((err) => {
-            if (!isAsyncOperationCurrent(operation)) return;
-            console.error('Failed to delete item from cloud:', err);
-          }).finally(() => {
-            completeAsyncOperation(operation);
-          });
-
+        if (shouldSync && cloudConfig.activeScope) {
+          const syncScope = cloudConfig.activeScope;
           const updatedCol = updatedCols.find((c) => c.id === collectionId);
-          if (updatedCol) {
-            const batchOp = beginAsyncOperation();
-            batchImportToScope(
-              cloudConfig.apiUrl,
-              cloudConfig.token,
-              cloudConfig.activeScope,
-              [updatedCol],
-              cloudConfig.refreshToken,
-              batchOp.controller.signal
-            ).then(() => {
-              if (!isAsyncOperationCurrent(batchOp) || isStoreDisposed) return;
-              set((state) => ({
-                collections: state.collections.map((c) =>
-                  c.id === collectionId ? { ...c, _syncStatus: 'synced' } : c
-                ),
-              }));
-            }).catch((err) => {
-              if (!isAsyncOperationCurrent(batchOp)) return;
+          const snapshotCol = updatedCol ? cloneCollectionPreservingAttachments(updatedCol) : null;
+          const revision = (collectionSaveSyncRevisions.get(collectionId) ?? 0) + 1;
+          collectionSaveSyncRevisions.set(collectionId, revision);
+          void enqueueCollectionSyncTask(collectionId, syncScope, async (operation, generation) => {
+            try {
+              const liveCloudConfig = get().cloudConfig;
+              const activeApiUrl = liveCloudConfig.apiUrl || cloudConfig.apiUrl;
+              const activeToken = liveCloudConfig.token || cloudConfig.token;
+              const activeRefreshToken = liveCloudConfig.refreshToken ?? cloudConfig.refreshToken;
+              await deleteScopeItem(
+                activeApiUrl,
+                activeToken,
+                itemId,
+                activeRefreshToken,
+                operation.controller.signal
+              ).catch((err) => {
+                if (!isAsyncOperationCurrent(operation)) return;
+                console.error('Failed to delete item from cloud:', err);
+              });
+              if (
+                !isAsyncOperationCurrent(operation) ||
+                generation !== collectionSaveSyncGeneration ||
+                isStoreDisposed
+              ) {
+                return;
+              }
+              if (snapshotCol) {
+                await batchImportToScope(
+                  activeApiUrl,
+                  activeToken,
+                  syncScope,
+                  [snapshotCol],
+                  activeRefreshToken,
+                  operation.controller.signal,
+                  { includeExamples: false },
+                );
+                if (
+                  !isAsyncOperationCurrent(operation) ||
+                  generation !== collectionSaveSyncGeneration ||
+                  collectionSaveSyncRevisions.get(collectionId) !== revision ||
+                  get().cloudConfig.activeScope?.id !== syncScope.id ||
+                  get().cloudConfig.activeScope?.type !== syncScope.type
+                ) {
+                  return;
+                }
+                set((state) => ({
+                  collections: state.collections.map((c) =>
+                    c.id === collectionId ? { ...c, _syncStatus: 'synced' } : c
+                  ),
+                }));
+              }
+            } catch (err: any) {
+              if (
+                operation.controller.signal.aborted ||
+                !isAsyncOperationCurrent(operation) ||
+                generation !== collectionSaveSyncGeneration ||
+                collectionSaveSyncRevisions.get(collectionId) !== revision
+              ) {
+                return;
+              }
               console.error('Failed to sync item deletion to cloud:', err);
               set((state) => ({
                 collections: state.collections.map((c) =>
@@ -5289,10 +6247,8 @@ export function createApiStore(
                 syncStatus: 'error',
                 syncError: err.message || 'Failed to sync item deletion to cloud',
               }));
-            }).finally(() => {
-              completeAsyncOperation(batchOp);
-            });
-          }
+            }
+          });
         }
       },
 
@@ -5301,12 +6257,25 @@ export function createApiStore(
         if (!trimmed) return;
 
         const { workspaceMode, cloudConfig, collections } = get();
+        if (movingCollections.has(collectionId) || duplicatingCollections.has(collectionId)) {
+          set({ syncError: 'Wait for the collection move or duplicate to finish before renaming items.' });
+          return;
+        }
         const col = collections.find((c) => c.id === collectionId);
+        if (col?._needsMoveReconciliation || col?.isPartial) {
+          set({ syncError: 'Sync the collection before renaming items.' });
+          return;
+        }
         if (col) {
           if (!canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
             console.warn(`User lacks permission to rename item in collection "${col.name}"`);
             return;
           }
+        }
+        const shouldSync = !isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && Boolean(cloudConfig.activeScope);
+
+        if (shouldSync) {
+          pendingReorderBaseSnapshots.delete(collectionId);
         }
 
         set((state) => {
@@ -5341,6 +6310,7 @@ export function createApiStore(
               ...col,
               items: updateItems(col.items),
               updatedAt: Date.now(),
+              ...(shouldSync ? { _syncStatus: 'pending' as const } : {}),
             };
           });
 
@@ -5362,37 +6332,20 @@ export function createApiStore(
         });
 
         const updatedCols = get().collections;
-        if (!isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && cloudConfig.activeScope) {
+        if (shouldSync && cloudConfig.activeScope) {
           const updatedCol = updatedCols.find((c) => c.id === collectionId);
           if (updatedCol) {
-            const operation = beginAsyncOperation();
-            batchImportToScope(
-              cloudConfig.apiUrl,
-              cloudConfig.token,
+            const revision = (collectionSaveSyncRevisions.get(collectionId) ?? 0) + 1;
+            collectionSaveSyncRevisions.set(collectionId, revision);
+            queueSavedCollectionSync(
+              cloneCollectionPreservingAttachments(updatedCol),
               cloudConfig.activeScope,
-              [updatedCol],
-              cloudConfig.refreshToken,
-              operation.controller.signal
-            ).then(() => {
-              if (!isAsyncOperationCurrent(operation) || isStoreDisposed) return;
-              set((state) => ({
-                collections: state.collections.map((c) =>
-                  c.id === collectionId ? { ...c, _syncStatus: 'synced' } : c
-                ),
-              }));
-            }).catch((err) => {
-              if (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation)) return;
-              console.error('Failed to sync renamed item to cloud:', err);
-              set((state) => ({
-                collections: state.collections.map((c) =>
-                  c.id === collectionId ? { ...c, _syncStatus: 'pending' } : c
-                ),
-                syncStatus: 'error',
-                syncError: err.message || 'Failed to sync renamed item to cloud',
-              }));
-            }).finally(() => {
-              completeAsyncOperation(operation);
-            });
+              cloudConfig,
+              revision,
+              get,
+              set,
+              'Failed to sync renamed item to cloud',
+            );
           }
         }
       },
@@ -5408,6 +6361,9 @@ export function createApiStore(
         }
         if (collection._needsMoveReconciliation) {
           return { success: false, cloudStatus: 'not-applicable', error: 'Sync the workspace to confirm the previous move before saving.' };
+        }
+        if (collection.isPartial) {
+          return { success: false, cloudStatus: 'not-applicable', error: 'Wait for collection details to finish loading before saving.' };
         }
         if (!canModifyCollection(collection.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
           return { success: false, cloudStatus: 'not-applicable', error: `Collection "${collection.name}" is read-only.` };
@@ -5445,6 +6401,9 @@ export function createApiStore(
         }
 
         const shouldSync = !isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && cloudConfig.activeScope;
+        if (shouldSync) {
+          pendingReorderBaseSnapshots.delete(collectionId);
+        }
         const cleanRequest: RequestTab = cloneRequestPreservingAttachments({ ...request, id: savedRequestId });
         delete cleanRequest.deletedFromCollection;
 
@@ -5458,7 +6417,16 @@ export function createApiStore(
               updated[existingIndex] = { ...updated[existingIndex], name: cleanRequest.name, request: cleanRequest };
               return updated;
             }
-            return [...items, { id: savedRequestId, name: cleanRequest.name || 'Untitled Request', type: 'request', request: cleanRequest }];
+            return [...items, {
+              id: savedRequestId,
+              name: cleanRequest.name || 'Untitled Request',
+              type: 'request',
+              request: cleanRequest,
+              examples: [],
+              exampleSummaries: [],
+              exampleCount: 0,
+              examplesLoaded: true,
+            }];
           };
           const updateFolderItems = (items: CollectionItem[]): CollectionItem[] => items.map((item) => {
             if (item.type !== 'folder') return item;
@@ -5557,7 +6525,11 @@ export function createApiStore(
         return { success: false, isDirectSaved: false };
       },
 
-      addCollection: async (collection) => {
+      addCollection: async (collection, options?: { target?: ImportTargetBinding; isRetry?: boolean }) => {
+        if (options?.target && !matchesImportTarget(get(), options.target, cloudSessionGeneration)) {
+          throw new Error('Workspace changed before collection import could be applied.');
+        }
+
         const { workspaceMode, cloudConfig } = get();
         if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
           if (!hasScopePermission(cloudConfig.activeScope, 'collection:write', workspaceMode, cloudConfig.user?.role)) {
@@ -5600,32 +6572,143 @@ export function createApiStore(
         });
 
         if (!isOfflineOnly && isCloud && isCloudSessionActive(cloudConfig) && cloudConfig.activeScope) {
+          const expectedExamples = countCollectionSavedExamples(collection);
+          if (expectedExamples > 0) {
+            const supported = await ensureSavedExamplesCapability();
+            if (!supported) {
+              throw new Error('This cloud server does not support Saved Examples. Update the server or remove examples before uploading.');
+            }
+          }
           const operation = beginAsyncOperation();
           const targetScope = cloudConfig.activeScope;
+          const capturedSessionGen = cloudSessionGeneration;
+          let uploadSucceeded = false;
+          const isSameTargetScope = () => {
+            const live = get();
+            return (
+              !isStoreDisposed &&
+              cloudSessionGeneration === capturedSessionGen &&
+              live.workspaceMode === 'cloud' &&
+              live.cloudConfig.activeScope?.id === targetScope.id &&
+              live.cloudConfig.activeScope?.type === targetScope.type
+            );
+          };
+          const markCollectionSyncedInTargetScope = (remoteVersion?: number) => {
+            if (isStoreDisposed || cloudSessionGeneration !== capturedSessionGen) return;
+            const applySynced = (c: Collection): Collection =>
+              c.id === taggedCol.id
+                ? {
+                    ...c,
+                    _syncStatus: 'synced',
+                    ...(typeof remoteVersion === 'number' ? { version: remoteVersion } : {}),
+                  }
+                : c;
+            if (isSameTargetScope()) {
+              set((state) => ({
+                collections: state.collections.map(applySynced),
+              }));
+              return;
+            }
+            const targetKey = getScopeCacheKey(targetScope);
+            set((state) => {
+              const cached = state.scopeCache?.[targetKey];
+              if (!cached) return {};
+              return {
+                scopeCache: {
+                  ...state.scopeCache,
+                  [targetKey]: {
+                    ...cached,
+                    collections: (cached.collections || []).map(applySynced),
+                  },
+                },
+              };
+            });
+          };
           try {
             set({ syncStatus: 'syncing', syncError: null });
-            await batchImportToScope(
-              cloudConfig.apiUrl,
-              cloudConfig.token,
-              targetScope,
-              [collection],
-              cloudConfig.refreshToken,
-              operation.controller.signal
-            );
-            if (!isAsyncOperationCurrent(operation) || isStoreDisposed) return;
-            if (get().cloudConfig.activeScope?.id !== targetScope.id) return;
-            set((state) => ({
-              collections: state.collections.map((c) =>
-                c.id === taggedCol.id ? { ...c, _syncStatus: 'synced' } : c
-              ),
-            }));
+            let alreadyOnServer = false;
+            let matchedRemoteVersion: number | undefined = undefined;
+            if (options?.isRetry) {
+              const remoteCols = await fetchScopeCollectionsForRuntime(
+                cloudConfig.apiUrl,
+                cloudConfig.token,
+                targetScope,
+                cloudConfig.refreshToken,
+                operation.controller.signal
+              );
+              if (isStoreDisposed || cloudSessionGeneration !== capturedSessionGen) return;
+              const matchedRemote = Array.isArray(remoteCols)
+                ? remoteCols.find((rc) => rc.id === taggedCol.id)
+                : undefined;
+              alreadyOnServer = Boolean(matchedRemote);
+              if (matchedRemote) {
+                if (expectedExamples > 0) {
+                  try {
+                    const detailRaw = await fetchCollectionByIdForRuntime(
+                      cloudConfig.apiUrl,
+                      cloudConfig.token,
+                      taggedCol.id,
+                      cloudConfig.refreshToken,
+                      operation.controller.signal,
+                    );
+                    const detailCol = detailRaw ? buildCollectionFromDetails(detailRaw) : null;
+                    const remoteExampleCount = countCollectionSavedExamples(detailCol);
+                    alreadyOnServer = remoteExampleCount >= expectedExamples;
+                  } catch {
+                    alreadyOnServer = false;
+                  }
+                } else {
+                  alreadyOnServer = true;
+                }
+                if (alreadyOnServer) {
+                  matchedRemoteVersion =
+                    typeof matchedRemote.version === 'number' ? matchedRemote.version : 1;
+                }
+              }
+              if (!alreadyOnServer && (!isAsyncOperationCurrent(operation) || operation.controller.signal.aborted)) {
+                if (isSameTargetScope()) {
+                  throw new Error('Import operation was cancelled before completion.');
+                }
+                return;
+              }
+            }
+
+            if (!alreadyOnServer) {
+              const batchResult = await batchImportToScope(
+                cloudConfig.apiUrl,
+                cloudConfig.token,
+                targetScope,
+                [collection],
+                cloudConfig.refreshToken,
+                operation.controller.signal
+              );
+              if (
+                expectedExamples > 0 &&
+                (typeof batchResult?.imported_examples !== 'number' ||
+                  batchResult.imported_examples < expectedExamples)
+              ) {
+                throw new Error(`Cloud server did not confirm saved examples during import of "${collection.name}".`);
+              }
+            }
+            uploadSucceeded = true;
+            if (isStoreDisposed || cloudSessionGeneration !== capturedSessionGen) return;
+            markCollectionSyncedInTargetScope(matchedRemoteVersion);
+            if (!isSameTargetScope() || !isAsyncOperationCurrent(operation)) return;
             await get().pullCloudDelta();
           } catch (err: any) {
-            if (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation) || isStoreDisposed) return;
+            if (!uploadSucceeded && (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation))) {
+              if (!isStoreDisposed && isSameTargetScope()) {
+                throw new Error('Import operation was cancelled before completion.');
+              }
+              return;
+            }
+            if (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation) || isStoreDisposed || !isSameTargetScope()) return;
             set((state) => ({
-              collections: state.collections.map((c) =>
-                c.id === taggedCol.id ? { ...c, _syncStatus: 'pending' } : c
-              ),
+              collections: uploadSucceeded
+                ? state.collections
+                : state.collections.map((c) =>
+                    c.id === taggedCol.id ? { ...c, _syncStatus: 'pending' } : c
+                  ),
               syncStatus: 'error',
               syncError: err.message || 'Failed to sync collection to cloud',
             }));
@@ -5638,30 +6721,54 @@ export function createApiStore(
         }
       },
 
-      replaceCollection: async (existingId: string, newCollection: Collection) => {
+      replaceCollection: async (existingId: string, newCollection: Collection, options?: { target?: ImportTargetBinding }) => {
+        if (options?.target && !matchesImportTarget(get(), options.target, cloudSessionGeneration)) {
+          throw new Error('Workspace changed before collection replacement could be applied.');
+        }
+
         const state = get();
+        if (movingCollections.has(existingId) || duplicatingCollections.has(existingId)) {
+          throw new Error('Wait for the collection move or duplicate to finish before replacing.');
+        }
         const existingCol = state.collections.find((c) => c.id === existingId);
         if (!existingCol) {
           throw new Error('Existing collection not found');
+        }
+        if (existingCol._needsMoveReconciliation) {
+          throw new Error('Sync the workspace to confirm the previous move before replacing.');
         }
 
         if (!canModifyCollection(existingCol.minRole, state.cloudConfig.activeScope, state.workspaceMode, state.cloudConfig.user?.role)) {
           throw new Error(`Insufficient permissions to replace collection "${existingCol.name}"`);
         }
 
-        const alignedItems = alignCollectionItemIds(existingCol.items || [], newCollection.items || []);
-        const existingFlat = flattenCollectionRequests(existingCol.items || []);
-        const newFlat = flattenCollectionRequests(alignedItems);
-        const newIds = new Set(newFlat.map((i) => i.id).filter(Boolean));
-        const removedItemIds = existingFlat
-          .map((i) => i.id)
-          .filter((id) => id && !newIds.has(id));
-
         const isCloud = state.workspaceMode === 'cloud';
+        let resolvedExistingCol = existingCol;
+        if (!isOfflineOnly && isCloud && isCloudSessionActive(state.cloudConfig) && state.cloudConfig.activeScope) {
+          if (collectionHasSavedExamples(newCollection)) {
+            const supported = await ensureSavedExamplesCapability();
+            if (!supported) {
+              throw new Error('This cloud server does not support Saved Examples. Update the server or remove examples before replacing.');
+            }
+          }
+          if (resolvedExistingCol.isPartial) {
+            const loaded = await get().loadCollectionDetails(existingId);
+            if (!loaded.success || !loaded.collection) {
+              throw new Error(loaded.error || 'Failed to load collection details before replacing.');
+            }
+            resolvedExistingCol = loaded.collection;
+          }
+        }
+
+        const alignedItems = alignCollectionItemIds(resolvedExistingCol.items || [], newCollection.items || []);
+        const baseVersion = typeof resolvedExistingCol.version === 'number' ? resolvedExistingCol.version : 1;
+
         const replacedCol: Collection = {
           ...newCollection,
           id: existingId,
           name: newCollection.name,
+          minRole: newCollection.minRole || resolvedExistingCol.minRole,
+          version: baseVersion,
           items: alignedItems,
           updatedAt: Date.now(),
           _origin: isCloud ? 'cloud' : 'offline',
@@ -5686,54 +6793,101 @@ export function createApiStore(
                   },
                 }
               : s.offlineScopeCache;
+          const nextSelectedExample =
+            s.selectedExample &&
+            s.selectedExample.collectionId === existingId &&
+            !isSelectedExampleStillPresent(nextCollections, s.selectedExample)
+              ? null
+              : s.selectedExample;
           return {
             collections: nextCollections,
             offlineScopeCache: nextOfflineCache,
+            selectedExample: nextSelectedExample,
           };
         });
 
         const { workspaceMode, cloudConfig } = get();
         if (!isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && cloudConfig.activeScope) {
           const operation = beginAsyncOperation();
+          const targetScope = cloudConfig.activeScope;
+          const capturedSessionGen = cloudSessionGeneration;
+          const replaceOperationId = crypto.randomUUID();
+          let uploadSucceeded = false;
+          const isSameTargetScope = () => {
+            const live = get();
+            return (
+              !isStoreDisposed &&
+              cloudSessionGeneration === capturedSessionGen &&
+              live.workspaceMode === 'cloud' &&
+              live.cloudConfig.activeScope?.id === targetScope.id &&
+              live.cloudConfig.activeScope?.type === targetScope.type
+            );
+          };
           try {
             set({ syncStatus: 'syncing', syncError: null });
 
-            for (const remId of removedItemIds) {
-              if (!isAsyncOperationCurrent(operation)) return;
-              await deleteScopeItem(
-                cloudConfig.apiUrl,
-                cloudConfig.token,
-                remId,
-                cloudConfig.refreshToken,
-                operation.controller.signal
-              ).catch((err) => {
-                if (!isAsyncOperationCurrent(operation)) return;
-                console.error('Failed to delete removed item from cloud:', err);
-              });
+            if (!isAsyncOperationCurrent(operation) || operation.controller.signal.aborted) {
+              if (!isStoreDisposed && isSameTargetScope()) {
+                throw new Error('Import operation was cancelled before completion.');
+              }
+              return;
             }
-
-            if (!isAsyncOperationCurrent(operation)) return;
-            await batchImportToScope(
+            if (!isSameTargetScope()) return;
+            const receipt = await replaceScopeCollection(
               cloudConfig.apiUrl,
               cloudConfig.token,
-              cloudConfig.activeScope,
-              [replacedCol],
+              existingId,
+              replacedCol,
+              baseVersion,
+              replaceOperationId,
               cloudConfig.refreshToken,
-              operation.controller.signal
+              operation.controller.signal,
             );
-            if (!isAsyncOperationCurrent(operation)) return;
-            set((state) => ({
-              collections: state.collections.map((c) =>
-                c.id === existingId ? { ...c, _syncStatus: 'synced' } : c
-              ),
-            }));
-            await get().pullCloudDelta();
+            uploadSucceeded = true;
+            if (isStoreDisposed || cloudSessionGeneration !== capturedSessionGen) return;
+            const nextVersion = typeof receipt?.version === 'number' ? receipt.version : baseVersion + 1;
+            if (isSameTargetScope()) {
+              set((state) => ({
+                collections: state.collections.map((c) =>
+                  c.id === existingId ? { ...c, version: nextVersion, _syncStatus: 'synced' } : c
+                ),
+              }));
+              if (isAsyncOperationCurrent(operation)) {
+                await get().pullCloudDelta();
+              }
+            } else {
+              const targetKey = getScopeCacheKey(targetScope);
+              set((state) => {
+                const cached = state.scopeCache?.[targetKey];
+                if (!cached) return {};
+                return {
+                  scopeCache: {
+                    ...state.scopeCache,
+                    [targetKey]: {
+                      ...cached,
+                      collections: (cached.collections || []).map((c) =>
+                        c.id === existingId ? { ...c, version: nextVersion, _syncStatus: 'synced' } : c
+                      ),
+                    },
+                  },
+                };
+              });
+              return;
+            }
           } catch (err: any) {
-            if (!isAsyncOperationCurrent(operation)) return;
+            if (!uploadSucceeded && (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation))) {
+              if (!isStoreDisposed && isSameTargetScope()) {
+                throw new Error('Import operation was cancelled before completion.');
+              }
+              return;
+            }
+            if (operation.controller.signal.aborted || !isAsyncOperationCurrent(operation) || isStoreDisposed || !isSameTargetScope()) return;
             set((state) => ({
-              collections: state.collections.map((c) =>
-                c.id === existingId ? { ...c, _syncStatus: 'pending' } : c
-              ),
+              collections: uploadSucceeded
+                ? state.collections
+                : state.collections.map((c) =>
+                    c.id === existingId ? { ...c, _syncStatus: 'pending' } : c
+                  ),
               syncStatus: 'error',
               syncError: err.message || 'Failed to sync replaced collection',
             }));
@@ -5867,6 +7021,9 @@ export function createApiStore(
 
       deleteCollection: async (id) => {
         const { workspaceMode, cloudConfig, collections } = get();
+        if (movingCollections.has(id) || duplicatingCollections.has(id)) {
+          return { success: false, error: 'A move or duplicate operation is already in progress for this collection.' };
+        }
         const col = collections.find((c) => c.id === id);
         if (workspaceMode === 'cloud' && !get().isFeatureEnabled('collection.delete')) {
           void get().refreshFeaturePolicy(true);
@@ -5894,7 +7051,11 @@ export function createApiStore(
               operation.controller.signal
             );
             if (!isAsyncOperationCurrent(operation)) return { success: false, error: 'Operation cancelled.' };
-            set((state) => ({ collections: state.collections.filter((c) => c.id !== id) }));
+            set((state) => ({
+              collections: state.collections.filter((c) => c.id !== id),
+              selectedExample: state.selectedExample?.collectionId === id ? null : state.selectedExample,
+              pendingExampleIntents: prunePendingExampleIntentsForTarget(state.pendingExampleIntents, id),
+            }));
             return { success: true };
           } catch (err) {
             if (err instanceof CloudApiError && err.code === 'FEATURE_DISABLED') {
@@ -5907,7 +7068,11 @@ export function createApiStore(
             completeAsyncOperation(operation);
           }
         }
-        set((state) => ({ collections: state.collections.filter((c) => c.id !== id) }));
+        set((state) => ({
+          collections: state.collections.filter((c) => c.id !== id),
+          selectedExample: state.selectedExample?.collectionId === id ? null : state.selectedExample,
+          pendingExampleIntents: prunePendingExampleIntentsForTarget(state.pendingExampleIntents, id),
+        }));
         return { success: true };
       },
 
@@ -5983,6 +7148,12 @@ export function createApiStore(
         if (!targetCol) {
           return { success: false, error: 'Target collection not found' };
         }
+        if (sourceCol.isPartial) {
+          return { success: false, error: 'Source collection is only partially loaded. Sync or reload details before moving items.' };
+        }
+        if (targetCol.isPartial) {
+          return { success: false, error: 'Target collection is only partially loaded. Sync or reload details before moving items.' };
+        }
 
         if (!canModifyCollection(sourceCol.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
           return { success: false, error: 'Cannot move request: source collection is read-only' };
@@ -5991,98 +7162,125 @@ export function createApiStore(
           return { success: false, error: 'Cannot move request: target collection is read-only' };
         }
 
-        // 1. Locate and extract the item from source collection
-        let itemToMove: CollectionItem | null = null;
-
-        const removeItem = (items: CollectionItem[]): CollectionItem[] => {
-          const result: CollectionItem[] = [];
-          for (const it of items) {
-            if (it.type === 'request' && (it.id === requestId || it.request?.id === requestId)) {
-              itemToMove = it;
-              continue;
-            }
-            if (it.type === 'folder') {
-              result.push({
-                ...it,
-                items: removeItem(it.items || []),
-              });
-              continue;
-            }
-            result.push(it);
+        const applyRequestMove = (cols: Collection[]): {
+          foundItem: CollectionItem | null;
+          targetFolderFound: boolean;
+          nextCollections: Collection[];
+        } => {
+          const curSource = cols.find((c) => c.id === sourceCollectionId);
+          const curTarget = cols.find((c) => c.id === targetCollectionId);
+          if (!curSource || !curTarget) {
+            return { foundItem: null, targetFolderFound: false, nextCollections: cols };
           }
-          return result;
-        };
 
-        const updatedSourceItems = removeItem(sourceCol.items);
+          let itemToMove: CollectionItem | null = null;
+          const removeItem = (items: CollectionItem[]): CollectionItem[] => {
+            const result: CollectionItem[] = [];
+            for (const it of items) {
+              if (!itemToMove && it.type === 'request' && (it.id === requestId || it.request?.id === requestId)) {
+                itemToMove = it;
+                continue;
+              }
+              if (it.type === 'folder') {
+                result.push({
+                  ...it,
+                  items: removeItem(it.items || []),
+                });
+                continue;
+              }
+              result.push(it);
+            }
+            return result;
+          };
 
-        if (!itemToMove) {
-          return { success: false, error: 'Request not found in source collection' };
-        }
-
-        // 2. Insert item into target collection
-        let targetFolderFound = !targetFolderId;
-        const insertItem = (items: CollectionItem[]): CollectionItem[] => {
-          if (!targetFolderId) {
-            return [...items, itemToMove!];
+          const updatedSourceItems = removeItem(curSource.items || []);
+          if (!itemToMove) {
+            return { foundItem: null, targetFolderFound: false, nextCollections: cols };
           }
-          return items.map((it) => {
-            if (it.type === 'folder') {
-              if (it.id === targetFolderId) {
-                targetFolderFound = true;
+
+          let targetFolderFound = !targetFolderId;
+          const insertItem = (items: CollectionItem[]): CollectionItem[] => {
+            if (!targetFolderId) {
+              return [...items, itemToMove!];
+            }
+            return items.map((it) => {
+              if (it.type === 'folder') {
+                if (it.id === targetFolderId) {
+                  targetFolderFound = true;
+                  return {
+                    ...it,
+                    items: [...(it.items || []), itemToMove!],
+                  };
+                }
                 return {
                   ...it,
-                  items: [...(it.items || []), itemToMove!],
+                  items: insertItem(it.items || []),
                 };
               }
-              return {
-                ...it,
-                items: insertItem(it.items || []),
-              };
+              return it;
+            });
+          };
+
+          const updatedTargetItems = insertItem(
+            sourceCollectionId === targetCollectionId ? updatedSourceItems : (curTarget.items || [])
+          );
+          if (!targetFolderFound) {
+            return { foundItem: itemToMove, targetFolderFound: false, nextCollections: cols };
+          }
+
+          const now = Date.now();
+          const nextCollections = cols.map((col) => {
+            if (sourceCollectionId === targetCollectionId && col.id === sourceCollectionId) {
+              return { ...col, items: updatedTargetItems, updatedAt: now };
             }
-            return it;
+            if (col.id === sourceCollectionId) {
+              return { ...col, items: updatedSourceItems, updatedAt: now };
+            }
+            if (col.id === targetCollectionId) {
+              return { ...col, items: updatedTargetItems, updatedAt: now };
+            }
+            return col;
           });
+
+          return { foundItem: itemToMove, targetFolderFound: true, nextCollections };
         };
 
-        const updatedTargetItems = insertItem(sourceCollectionId === targetCollectionId ? updatedSourceItems : targetCol.items);
-        if (!targetFolderFound) return { success: false, error: 'Target folder not found in target collection' };
-
-        return commitItemMove((itemToMove as CollectionItem).id, sourceCollectionId, targetCollectionId, targetFolderId, () => {
-          set((state) => {
-            let newCollections: Collection[];
-
-            if (sourceCollectionId === targetCollectionId) {
-              // Move within the same collection
-              const updatedItemsWithInsert = updatedTargetItems;
-              newCollections = state.collections.map((col) => {
-                if (col.id !== sourceCollectionId) return col;
-                return {
-                  ...col,
-                  items: updatedItemsWithInsert,
-                  updatedAt: Date.now(),
-                };
-              });
-            } else {
-              // Move across different collections
-              newCollections = state.collections.map((col) => {
-                if (col.id === sourceCollectionId) {
-                  return {
-                    ...col,
-                    items: updatedSourceItems,
-                    updatedAt: Date.now(),
-                  };
-                }
-                if (col.id === targetCollectionId) {
-                  return {
-                    ...col,
-                    items: updatedTargetItems,
-                    updatedAt: Date.now(),
-                  };
-                }
-                return col;
-              });
+        const findCurrentRequestFolderId = (items: CollectionItem[], parentId: string | null = null): string | null | undefined => {
+          for (const it of items) {
+            if (it.type === 'request' && (it.id === requestId || it.request?.id === requestId)) {
+              return parentId;
             }
+            if (it.type === 'folder' && it.items) {
+              const found = findCurrentRequestFolderId(it.items, it.id);
+              if (found !== undefined) return found;
+            }
+          }
+          return undefined;
+        };
+        const currentFolderId = findCurrentRequestFolderId(sourceCol.items || []);
+        if (
+          currentFolderId !== undefined &&
+          sourceCollectionId === targetCollectionId &&
+          currentFolderId === (targetFolderId || null)
+        ) {
+          return { success: true };
+        }
 
-            return { collections: newCollections };
+        const preview = applyRequestMove(collections);
+        if (!preview.foundItem) {
+          return { success: false, error: 'Request not found in source collection' };
+        }
+        if (!preview.targetFolderFound) {
+          return { success: false, error: 'Target folder not found in target collection' };
+        }
+
+        return commitItemMove(preview.foundItem.id, sourceCollectionId, targetCollectionId, targetFolderId, () => {
+          set((state) => {
+            const committed = applyRequestMove(state.collections);
+            if (!committed.foundItem || !committed.targetFolderFound) {
+              return state;
+            }
+            return { collections: committed.nextCollections };
           });
         });
       },
@@ -6098,6 +7296,12 @@ export function createApiStore(
         if (!targetCol) {
           return { success: false, error: 'Target collection not found' };
         }
+        if (sourceCol.isPartial) {
+          return { success: false, error: 'Source collection is only partially loaded. Sync or reload details before moving items.' };
+        }
+        if (targetCol.isPartial) {
+          return { success: false, error: 'Target collection is only partially loaded. Sync or reload details before moving items.' };
+        }
 
         if (!canModifyCollection(sourceCol.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
           return { success: false, error: 'Cannot move folder: source collection is read-only' };
@@ -6111,127 +7315,170 @@ export function createApiStore(
           return { success: false, error: 'Cannot move folder into itself' };
         }
 
-        // 1. Locate and extract the folder item from source collection
-        let folderToMove: CollectionItem | null = null;
-
-        const removeFolder = (items: CollectionItem[]): CollectionItem[] => {
-          const result: CollectionItem[] = [];
-          for (const it of items) {
-            if (it.type === 'folder' && it.id === folderId) {
-              folderToMove = it;
-              continue;
-            }
-            if (it.type === 'folder') {
-              result.push({
-                ...it,
-                items: removeFolder(it.items || []),
-              });
-              continue;
-            }
-            result.push(it);
+        const applyFolderMove = (cols: Collection[]): {
+          folderToMove: CollectionItem | null;
+          isCycle: boolean;
+          targetFolderFound: boolean;
+          nextCollections: Collection[];
+        } => {
+          const curSource = cols.find((c) => c.id === sourceCollectionId);
+          const curTarget = cols.find((c) => c.id === targetCollectionId);
+          if (!curSource || !curTarget) {
+            return { folderToMove: null, isCycle: false, targetFolderFound: false, nextCollections: cols };
           }
-          return result;
+
+          let folderToMove: CollectionItem | null = null;
+          const removeFolder = (items: CollectionItem[]): CollectionItem[] => {
+            const result: CollectionItem[] = [];
+            for (const it of items) {
+              if (!folderToMove && it.type === 'folder' && it.id === folderId) {
+                folderToMove = it;
+                continue;
+              }
+              if (it.type === 'folder') {
+                result.push({
+                  ...it,
+                  items: removeFolder(it.items || []),
+                });
+                continue;
+              }
+              result.push(it);
+            }
+            return result;
+          };
+
+          const updatedSourceItems = removeFolder(curSource.items || []);
+          if (!folderToMove) {
+            return { folderToMove: null, isCycle: false, targetFolderFound: false, nextCollections: cols };
+          }
+
+          // Circular check: if target is in the same collection, cannot move folder into any of its own subfolders
+          if (sourceCollectionId === targetCollectionId && targetFolderId) {
+            if (isDescendantOf([folderToMove], folderId, targetFolderId)) {
+              return { folderToMove, isCycle: true, targetFolderFound: false, nextCollections: cols };
+            }
+          }
+
+          let targetFolderFound = !targetFolderId;
+          const insertFolder = (items: CollectionItem[]): CollectionItem[] => {
+            if (!targetFolderId) {
+              return [...items, folderToMove!];
+            }
+            return items.map((it) => {
+              if (it.type === 'folder') {
+                if (it.id === targetFolderId) {
+                  targetFolderFound = true;
+                  return {
+                    ...it,
+                    items: [...(it.items || []), folderToMove!],
+                  };
+                }
+                return {
+                  ...it,
+                  items: insertFolder(it.items || []),
+                };
+              }
+              return it;
+            });
+          };
+
+          const updatedTargetItems = insertFolder(
+            sourceCollectionId === targetCollectionId ? updatedSourceItems : (curTarget.items || [])
+          );
+          if (targetFolderId && !targetFolderFound) {
+            return { folderToMove, isCycle: false, targetFolderFound: false, nextCollections: cols };
+          }
+
+          const now = Date.now();
+          const nextCollections = cols.map((col) => {
+            if (sourceCollectionId === targetCollectionId && col.id === sourceCollectionId) {
+              return { ...col, items: updatedTargetItems, updatedAt: now };
+            }
+            if (col.id === sourceCollectionId) {
+              return { ...col, items: updatedSourceItems, updatedAt: now };
+            }
+            if (col.id === targetCollectionId) {
+              return { ...col, items: updatedTargetItems, updatedAt: now };
+            }
+            return col;
+          });
+
+          return { folderToMove, isCycle: false, targetFolderFound: true, nextCollections };
         };
 
-        const updatedSourceItems = removeFolder(sourceCol.items);
+        const findCurrentParentFolderId = (items: CollectionItem[], parentId: string | null = null): string | null | undefined => {
+          for (const it of items) {
+            if (it.type === 'folder') {
+              if (it.id === folderId) return parentId;
+              if (it.items) {
+                const found = findCurrentParentFolderId(it.items, it.id);
+                if (found !== undefined) return found;
+              }
+            }
+          }
+          return undefined;
+        };
+        const currentParentId = findCurrentParentFolderId(sourceCol.items || []);
+        if (
+          currentParentId !== undefined &&
+          sourceCollectionId === targetCollectionId &&
+          currentParentId === (targetFolderId || null)
+        ) {
+          return { success: true };
+        }
 
+        const preview = applyFolderMove(collections);
+        const folderToMove = preview.folderToMove;
         if (!folderToMove) {
           return { success: false, error: 'Folder not found in source collection' };
         }
-
-        // Circular check: if target is in the same collection, cannot move folder into any of its own subfolders
-        if (sourceCollectionId === targetCollectionId && targetFolderId) {
-          if (isDescendantOf([folderToMove], folderId, targetFolderId)) {
-            return { success: false, error: 'Cannot move folder into one of its subfolders' };
-          }
+        if (preview.isCycle) {
+          return { success: false, error: 'Cannot move folder into one of its subfolders' };
         }
-
-        // 2. Insert folder into target collection
-        let targetFolderFound = !targetFolderId;
-        const insertFolder = (items: CollectionItem[]): CollectionItem[] => {
-          if (!targetFolderId) {
-            return [...items, folderToMove!];
-          }
-          return items.map((it) => {
-            if (it.type === 'folder') {
-              if (it.id === targetFolderId) {
-                targetFolderFound = true;
-                return {
-                  ...it,
-                  items: [...(it.items || []), folderToMove!],
-                };
-              }
-              return {
-                ...it,
-                items: insertFolder(it.items || []),
-              };
-            }
-            return it;
-          });
-        };
-
-        let updatedTargetItems: CollectionItem[] | null = null;
-        if (sourceCollectionId === targetCollectionId) {
-          updatedTargetItems = insertFolder(updatedSourceItems);
-        } else {
-          updatedTargetItems = insertFolder(targetCol.items);
-        }
-
-        if (targetFolderId && !targetFolderFound) {
+        if (targetFolderId && !preview.targetFolderFound) {
           return { success: false, error: 'Target folder not found in target collection' };
         }
 
         return commitItemMove((folderToMove as CollectionItem).id, sourceCollectionId, targetCollectionId, targetFolderId, () => {
           set((state) => {
-            let newCollections: Collection[];
-
-            if (sourceCollectionId === targetCollectionId) {
-              newCollections = state.collections.map((col) => {
-                if (col.id !== sourceCollectionId) return col;
-                return {
-                  ...col,
-                  items: updatedTargetItems!,
-                  updatedAt: Date.now(),
-                };
-              });
-            } else {
-              newCollections = state.collections.map((col) => {
-                if (col.id === sourceCollectionId) {
-                  return {
-                    ...col,
-                    items: updatedSourceItems,
-                    updatedAt: Date.now(),
-                  };
-                }
-                if (col.id === targetCollectionId) {
-                  return {
-                    ...col,
-                    items: updatedTargetItems!,
-                    updatedAt: Date.now(),
-                  };
-                }
-                return col;
-              });
+            const committed = applyFolderMove(state.collections);
+            if (!committed.folderToMove || committed.isCycle || (targetFolderId && !committed.targetFolderFound)) {
+              return state;
             }
-
-            return { collections: newCollections };
+            return { collections: committed.nextCollections };
           });
         });
       },
 
       reorderItem: async (collectionId, activeId, targetId, position) => {
         const { collections, workspaceMode, cloudConfig } = get();
+        if (movingCollections.has(collectionId) || duplicatingCollections.has(collectionId)) {
+          return { success: false, error: 'A move or duplicate operation is already in progress for this collection.' };
+        }
         const col = collections.find((c) => c.id === collectionId);
         if (!col) return { success: false, error: 'Collection not found' };
+        if (col._needsMoveReconciliation || col.isPartial) {
+          return { success: false, error: 'Sync the collection before reordering items.' };
+        }
 
         if (!canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
           return { success: false, error: 'User lacks permission to reorder items in this collection' };
         }
 
+        const previousItems = col.items;
+        const previousSyncStatus = col._syncStatus;
         const result = reorderItemInTree(col.items, activeId, targetId, position);
         if (!result) return { success: false, error: 'Invalid reorder operation' };
 
         const { updatedItems, payload } = result;
+        const shouldSync = !isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && Boolean(cloudConfig.activeScope);
+
+        if (shouldSync && !pendingReorderBaseSnapshots.has(collectionId)) {
+          pendingReorderBaseSnapshots.set(collectionId, {
+            items: previousItems,
+            syncStatus: previousSyncStatus,
+          });
+        }
 
         set((state) => ({
           collections: state.collections.map((c) => {
@@ -6240,55 +7487,110 @@ export function createApiStore(
               ...c,
               items: updatedItems,
               updatedAt: Date.now(),
+              ...(shouldSync ? { _syncStatus: 'pending' as const } : {}),
             };
           }),
         }));
 
         const token = cloudConfig.token;
-        if (!isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig)) {
-          const sendReorder = async () => {
-            const operation = beginAsyncOperation();
-            try {
+        if (shouldSync && cloudConfig.activeScope) {
+          const syncScope = cloudConfig.activeScope;
+          const revision = (collectionSaveSyncRevisions.get(collectionId) ?? 0) + 1;
+          collectionSaveSyncRevisions.set(collectionId, revision);
+          void enqueueCollectionSyncTask(collectionId, syncScope, async (operation, generation) => {
+            const send = async () => {
+              const liveCloudConfig = get().cloudConfig;
               await reorderCollectionItems(
-                cloudConfig.apiUrl,
-                token,
+                liveCloudConfig.apiUrl || cloudConfig.apiUrl,
+                liveCloudConfig.token || token,
                 collectionId,
                 payload,
-                cloudConfig.refreshToken,
-                operation.controller.signal
+                liveCloudConfig.refreshToken ?? cloudConfig.refreshToken,
+                operation.controller.signal,
               );
-              if (!isAsyncOperationCurrent(operation)) return;
-              if (get().syncStatus === 'error') {
-                set({ syncStatus: 'idle', syncError: null });
-              }
-            } catch (err: any) {
-              if (!isAsyncOperationCurrent(operation)) return;
-              // Retry once after 250ms for transient race condition or network glitch
-              await new Promise((r) => setTimeout(r, 250));
-              if (!isAsyncOperationCurrent(operation)) return;
+            };
+            try {
               try {
-                await reorderCollectionItems(
-                  cloudConfig.apiUrl,
-                  token,
-                  collectionId,
-                  payload,
-                  cloudConfig.refreshToken,
-                  operation.controller.signal
-                );
-                if (!isAsyncOperationCurrent(operation)) return;
-                if (get().syncStatus === 'error') {
-                  set({ syncStatus: 'idle', syncError: null });
+                await send();
+              } catch {
+                if (
+                  operation.controller.signal.aborted ||
+                  !isAsyncOperationCurrent(operation) ||
+                  generation !== collectionSaveSyncGeneration
+                ) {
+                  return;
                 }
-              } catch (retryErr: any) {
-                if (!isAsyncOperationCurrent(operation)) return;
-                console.error('Failed to sync reordered items to cloud:', retryErr);
-                set({ syncStatus: 'error', syncError: retryErr.message || 'Failed to sync reordered items to cloud' });
+                // Retry once after 250ms for transient race condition or network glitch
+                await new Promise((r) => setTimeout(r, 250));
+                if (
+                  operation.controller.signal.aborted ||
+                  !isAsyncOperationCurrent(operation) ||
+                  generation !== collectionSaveSyncGeneration
+                ) {
+                  return;
+                }
+                await send();
               }
-            } finally {
-              completeAsyncOperation(operation);
+              if (
+                !isAsyncOperationCurrent(operation) ||
+                generation !== collectionSaveSyncGeneration ||
+                collectionSaveSyncRevisions.get(collectionId) !== revision ||
+                get().cloudConfig.activeScope?.id !== syncScope.id ||
+                get().cloudConfig.activeScope?.type !== syncScope.type
+              ) {
+                return;
+              }
+              pendingReorderBaseSnapshots.delete(collectionId);
+              set((state) => {
+                const activeScopeKey = state.cloudConfig.activeScope ? getScopeCacheKey(state.cloudConfig.activeScope) : null;
+                const updatedScopeCache = { ...(state.scopeCache || {}) };
+                if (activeScopeKey && updatedScopeCache[activeScopeKey]) {
+                  updatedScopeCache[activeScopeKey] = {
+                    ...updatedScopeCache[activeScopeKey],
+                    lastSyncedAt: 0,
+                  };
+                }
+                return {
+                  collections: state.collections.map((c) =>
+                    c.id === collectionId
+                      ? {
+                          ...c,
+                          version: typeof c.version === 'number' ? c.version + 1 : c.version,
+                          _syncStatus: 'synced',
+                        }
+                      : c
+                  ),
+                  scopeCache: updatedScopeCache,
+                  ...(state.syncStatus === 'error' ? { syncStatus: 'idle', syncError: null } : {}),
+                };
+              });
+            } catch (retryErr: any) {
+              if (
+                operation.controller.signal.aborted ||
+                !isAsyncOperationCurrent(operation) ||
+                generation !== collectionSaveSyncGeneration ||
+                collectionSaveSyncRevisions.get(collectionId) !== revision
+              ) {
+                return;
+              }
+              console.error('Failed to sync reordered items to cloud:', retryErr);
+              const rejected = retryErr instanceof CloudApiError && [400, 403, 404, 409].includes(retryErr.status);
+              const rollbackBase = rejected ? pendingReorderBaseSnapshots.get(collectionId) : undefined;
+              if (rejected) {
+                pendingReorderBaseSnapshots.delete(collectionId);
+              }
+              set((state) => ({
+                collections: state.collections.map((c) => {
+                  if (c.id !== collectionId) return c;
+                  return rejected && rollbackBase
+                    ? { ...c, items: rollbackBase.items, _syncStatus: rollbackBase.syncStatus ?? 'synced', updatedAt: Date.now() }
+                    : { ...c, _syncStatus: 'pending' };
+                }),
+                syncStatus: 'error',
+                syncError: retryErr.message || 'Failed to sync reordered items to cloud',
+              }));
             }
-          };
-          sendReorder();
+          });
         }
 
         return { success: true };
@@ -6300,9 +7602,11 @@ export function createApiStore(
           collections,
           cloudConfig,
           activeOfflineWorkspaceId,
-          offlineScopeCache,
-          scopeCache,
         } = get();
+
+        if (movingCollections.has(collectionId) || duplicatingCollections.has(collectionId)) {
+          return { success: false, error: 'A move or duplicate operation is already in progress for this collection.' };
+        }
 
         // 1. Target is an offline workspace
         if (targetScope.type === 'offline_workspace') {
@@ -6310,6 +7614,9 @@ export function createApiStore(
           const col = collections.find((c) => c.id === collectionId);
           if (!col) {
             return { success: false, error: 'Collection not found' };
+          }
+          if (col._needsMoveReconciliation) {
+            return { success: false, error: 'Sync the workspace to confirm the previous move before moving this collection.' };
           }
 
           if (workspaceMode === 'cloud') {
@@ -6327,39 +7634,50 @@ export function createApiStore(
           if (workspaceMode === 'offline' && targetScope.id === activeOfflineWorkspaceId) {
             return { success: false, error: 'Cannot move to the current active workspace' };
           }
-
-          const remainingActive = collections.filter((c) => c.id !== collectionId);
-          const updatedOfflineCache = { ...(offlineScopeCache || {}) };
-
-          if (workspaceMode === 'offline' && activeOfflineWorkspaceId) {
-            updatedOfflineCache[activeOfflineWorkspaceId] = {
-              ...(updatedOfflineCache[activeOfflineWorkspaceId] || {}),
-              collections: remainingActive,
-              environments: get().environments,
-              activeEnvironmentId: get().activeEnvironmentId,
-              tabs: get().tabs,
-              activeTabId: get().activeTabId,
-              history: get().history,
-            };
+          if (!get().offlineWorkspaces?.some((w) => w.id === targetScope.id)) {
+            return { success: false, error: 'Target offline workspace not found.' };
           }
 
-          const targetEntry = updatedOfflineCache[targetScope.id] || {
-            collections: [],
-            environments: [],
-            tabs: [createInitialTab()],
-            history: [],
-          };
+          set((state) => {
+            const latestCol = state.collections.find((c) => c.id === collectionId);
+            if (!latestCol) return {};
+            const remainingActive = state.collections.filter((c) => c.id !== collectionId);
+            const updatedOfflineCache = { ...(state.offlineScopeCache || {}) };
 
-          updatedOfflineCache[targetScope.id] = {
-            ...targetEntry,
-            collections: [...(targetEntry.collections || []), { ...col, _origin: 'offline' }],
-          };
+            if (state.workspaceMode === 'offline' && state.activeOfflineWorkspaceId) {
+              updatedOfflineCache[state.activeOfflineWorkspaceId] = {
+                ...(updatedOfflineCache[state.activeOfflineWorkspaceId] || {}),
+                collections: remainingActive,
+                environments: state.environments,
+                activeEnvironmentId: state.activeEnvironmentId,
+                tabs: state.tabs,
+                activeTabId: state.activeTabId,
+                history: state.history,
+              };
+            }
 
-          set({
-            collections: remainingActive,
-            offlineScopeCache: updatedOfflineCache,
+            const targetEntry = updatedOfflineCache[targetScope.id] || {
+              collections: [],
+              environments: [],
+              tabs: [createInitialTab()],
+              history: [],
+            };
+
+            const existingTargetCols = (targetEntry.collections || []).filter((c) => c.id !== collectionId);
+            updatedOfflineCache[targetScope.id] = {
+              ...targetEntry,
+              collections: [...existingTargetCols, { ...latestCol, _origin: 'offline' }],
+            };
+
+            return {
+              collections: remainingActive,
+              offlineScopeCache: updatedOfflineCache,
+              selectedExample:
+                state.selectedExample?.collectionId === collectionId ? null : state.selectedExample,
+            };
           });
 
+          await flushStorePersistence();
           return { success: true };
         }
 
@@ -6377,51 +7695,90 @@ export function createApiStore(
             return { success: false, error: 'Cloud authentication required to move collection to an online workspace' };
           }
 
-          const policy = await get().refreshFeaturePolicy();
-          if (!policy?.flags['collection.move']) {
-            return { success: false, error: 'Collection move is disabled or feature policy is unavailable.' };
-          }
-
+          const sourceOfflineWorkspaceId = activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID;
+          const capturedSessionGen = cloudSessionGeneration;
+          const lock = Symbol('collection move offline-to-cloud');
+          movingCollections.set(collectionId, lock);
           const operation = beginAsyncOperation();
+
           try {
+            const policy = await get().refreshFeaturePolicy();
+            if (
+              !isAsyncOperationCurrent(operation) ||
+              isStoreDisposed ||
+              cloudSessionGeneration !== capturedSessionGen ||
+              get().workspaceMode !== 'offline' ||
+              (get().activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID) !== sourceOfflineWorkspaceId
+            ) {
+              return { success: false, error: 'Operation cancelled' };
+            }
+            if (!policy?.flags['collection.move']) {
+              return { success: false, error: 'Collection move is disabled or feature policy is unavailable.' };
+            }
+
+            const latestCol = get().collections.find((c) => c.id === collectionId);
+            if (!latestCol) {
+              return { success: false, error: 'Collection not found' };
+            }
+            if (
+              collectionHasSavedExamples(latestCol) &&
+              policy?.capabilities?.saved_examples !== true
+            ) {
+              return {
+                success: false,
+                error: 'This cloud server does not support Saved Examples. Update the server before moving collections with examples.',
+              };
+            }
+
             set({ syncStatus: 'syncing', syncError: null });
             await batchImportToScope(
               cloudConfig.apiUrl,
               cloudConfig.token,
               targetScope,
-              [col],
+              [latestCol],
               cloudConfig.refreshToken,
               operation.controller.signal
             );
-            if (!isAsyncOperationCurrent(operation)) return { success: false, error: 'Operation cancelled' };
-
-            // Remove from active offline workspace cache
-            const remainingActive = collections.filter((c) => c.id !== collectionId);
-
-            const updatedOfflineCache = { ...(offlineScopeCache || {}) };
-            if (activeOfflineWorkspaceId && updatedOfflineCache[activeOfflineWorkspaceId]) {
-              updatedOfflineCache[activeOfflineWorkspaceId] = {
-                ...updatedOfflineCache[activeOfflineWorkspaceId],
-                collections: remainingActive,
-              };
+            if (
+              !isAsyncOperationCurrent(operation) ||
+              isStoreDisposed ||
+              cloudSessionGeneration !== capturedSessionGen
+            ) {
+              return { success: false, error: 'Operation cancelled' };
             }
 
-            // Update target scope cache if present
             const targetKey = getScopeCacheKey(targetScope);
-            const updatedScopeCache = { ...(get().scopeCache || {}) };
-            if (updatedScopeCache[targetKey]) {
-              const existingInTarget = updatedScopeCache[targetKey].collections || [];
-              updatedScopeCache[targetKey] = {
-                ...updatedScopeCache[targetKey],
-                collections: [...existingInTarget, { ...col, _origin: 'cloud' }],
-              };
-            }
+            set((state) => {
+              const remainingActive = state.collections.filter((c) => c.id !== collectionId);
+              const updatedOfflineCache = { ...(state.offlineScopeCache || {}) };
+              if (updatedOfflineCache[sourceOfflineWorkspaceId]) {
+                updatedOfflineCache[sourceOfflineWorkspaceId] = {
+                  ...updatedOfflineCache[sourceOfflineWorkspaceId],
+                  collections: (updatedOfflineCache[sourceOfflineWorkspaceId].collections || []).filter(
+                    (c) => c.id !== collectionId
+                  ),
+                };
+              }
 
-            set({
-              collections: remainingActive,
-              offlineScopeCache: updatedOfflineCache,
-              scopeCache: updatedScopeCache,
-              syncStatus: 'idle',
+              // Invalidate target scope cache freshness without inserting an unversioned _origin:'cloud'
+              // stub (which would otherwise trigger a duplicate pending re-upload on scope switch)
+              const updatedScopeCache = { ...(state.scopeCache || {}) };
+              if (updatedScopeCache[targetKey]) {
+                updatedScopeCache[targetKey] = {
+                  ...updatedScopeCache[targetKey],
+                  collections: (updatedScopeCache[targetKey].collections || []).filter(
+                    (c) => c.id !== collectionId
+                  ),
+                  lastSyncedAt: 0,
+                };
+              }
+
+              return {
+                collections: remainingActive,
+                offlineScopeCache: updatedOfflineCache,
+                scopeCache: updatedScopeCache,
+                syncStatus: 'idle',
+              };
             });
 
             return { success: true };
@@ -6431,6 +7788,7 @@ export function createApiStore(
             return { success: false, error: err.message || 'Failed to move collection' };
           } finally {
             completeAsyncOperation(operation);
+            if (movingCollections.get(collectionId) === lock) movingCollections.delete(collectionId);
           }
         } else {
           // Moving from an online scope to another online scope
@@ -6438,12 +7796,17 @@ export function createApiStore(
           if (!col) {
             return { success: false, error: 'Collection not found' };
           }
+          if (col._needsMoveReconciliation) {
+            return { success: false, error: 'Sync the workspace to confirm the previous move before moving this collection.' };
+          }
+          if (col._syncStatus === 'pending') {
+            return { success: false, error: 'Sync pending changes in this collection before moving it.' };
+          }
           if (!isCloudSessionActive(cloudConfig) || !cloudConfig.activeScope) {
             return { success: false, error: 'Not connected to cloud' };
           }
-          if (!get().isFeatureEnabled('collection.move')) {
-            void get().refreshFeaturePolicy(true);
-            return { success: false, error: 'Collection move is disabled or feature policy is unavailable.' };
+          if (activePullOperation && isAsyncOperationCurrent(activePullOperation)) {
+            return { success: false, error: 'Wait for workspace sync to finish before moving collections.' };
           }
           if (workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
             if (!hasScopePermission(cloudConfig.activeScope, 'collection:move', workspaceMode, cloudConfig.user?.role) ||
@@ -6452,9 +7815,39 @@ export function createApiStore(
             }
           }
 
+          const sourceScope = cloudConfig.activeScope;
+          const lock = Symbol('collection move cloud-to-cloud');
+          movingCollections.set(collectionId, lock);
           const operation = beginAsyncOperation();
           try {
-            set({ syncStatus: 'syncing', syncError: null });
+            if (!get().isFeatureEnabled('collection.move')) {
+              const policy = await get().refreshFeaturePolicy();
+              if (!isAsyncOperationCurrent(operation)) return { success: false, error: 'Operation cancelled' };
+              if (!policy?.flags['collection.move']) {
+                return { success: false, error: 'Collection move is disabled or feature policy is unavailable.' };
+              }
+            }
+
+            await collectionSaveSyncQueues.get(`${sourceScope.type}:${sourceScope.id}:${collectionId}`);
+            if (!isAsyncOperationCurrent(operation)) return { success: false, error: 'Operation cancelled' };
+
+            const latestCol = get().collections.find((c) => c.id === collectionId);
+            if (!latestCol) {
+              return { success: false, error: 'Collection not found' };
+            }
+            if (latestCol._syncStatus === 'pending') {
+              return { success: false, error: 'Sync pending changes in this collection before moving it.' };
+            }
+
+            // Persist reconciliation flag before sending: after a lost reply, prevent local saves
+            // from re-importing this collection into the source scope until cloud sync reconciles.
+            set((state) => ({
+              syncStatus: 'syncing',
+              syncError: null,
+              collections: state.collections.map((c) =>
+                c.id === collectionId ? { ...c, _needsMoveReconciliation: true } : c
+              ),
+            }));
             await moveScopeCollection(
               cloudConfig.apiUrl,
               cloudConfig.token,
@@ -6465,30 +7858,41 @@ export function createApiStore(
             );
             if (!isAsyncOperationCurrent(operation)) return { success: false, error: 'Operation cancelled' };
 
-            // Remove from current scope
-            const remainingCols = collections.filter((c) => c.id !== collectionId);
-            const currentScopeKey = getScopeCacheKey(cloudConfig.activeScope);
+            const currentScopeKey = getScopeCacheKey(sourceScope);
             const targetScopeKey = getScopeCacheKey(targetScope);
-            const updatedScopeCache = { ...(get().scopeCache || {}) };
+            set((state) => {
+              const remainingCols = state.collections.filter((c) => c.id !== collectionId);
+              const updatedScopeCache = { ...(state.scopeCache || {}) };
 
-            if (updatedScopeCache[currentScopeKey]) {
-              updatedScopeCache[currentScopeKey] = {
-                ...updatedScopeCache[currentScopeKey],
-                collections: (updatedScopeCache[currentScopeKey].collections || []).filter((c) => c.id !== collectionId),
+              if (updatedScopeCache[currentScopeKey]) {
+                updatedScopeCache[currentScopeKey] = {
+                  ...updatedScopeCache[currentScopeKey],
+                  collections: (updatedScopeCache[currentScopeKey].collections || []).filter((c) => c.id !== collectionId),
+                };
+              }
+
+              if (updatedScopeCache[targetScopeKey]) {
+                const movedEntry: Collection = {
+                  ...latestCol,
+                  version: typeof latestCol.version === 'number' ? latestCol.version + 1 : 2,
+                  _syncStatus: 'synced',
+                  _needsMoveReconciliation: undefined,
+                };
+                updatedScopeCache[targetScopeKey] = {
+                  ...updatedScopeCache[targetScopeKey],
+                  collections: [
+                    ...(updatedScopeCache[targetScopeKey].collections || []).filter((c) => c.id !== collectionId),
+                    movedEntry,
+                  ],
+                  lastSyncedAt: 0,
+                };
+              }
+
+              return {
+                collections: remainingCols,
+                scopeCache: updatedScopeCache,
+                syncStatus: 'idle',
               };
-            }
-
-            if (updatedScopeCache[targetScopeKey]) {
-              updatedScopeCache[targetScopeKey] = {
-                ...updatedScopeCache[targetScopeKey],
-                collections: [...(updatedScopeCache[targetScopeKey].collections || []), col],
-              };
-            }
-
-            set({
-              collections: remainingCols,
-              scopeCache: updatedScopeCache,
-              syncStatus: 'idle',
             });
 
             return { success: true };
@@ -6497,10 +7901,20 @@ export function createApiStore(
             if (err instanceof CloudApiError && err.code === 'FEATURE_DISABLED') {
               void get().refreshFeaturePolicy(true);
             }
-            set({ syncStatus: 'error', syncError: err.message || 'Failed to move collection' });
+            const rejected = err instanceof CloudApiError && [400, 403, 404, 409].includes(err.status);
+            set((state) => ({
+              syncStatus: 'error',
+              syncError: err.message || 'Failed to move collection',
+              collections: rejected
+                ? state.collections.map((c) =>
+                    c.id === collectionId ? { ...c, _needsMoveReconciliation: undefined } : c
+                  )
+                : state.collections,
+            }));
             return { success: false, error: err.message || 'Failed to move collection' };
           } finally {
             completeAsyncOperation(operation);
+            if (movingCollections.get(collectionId) === lock) movingCollections.delete(collectionId);
           }
         }
       },
@@ -6525,6 +7939,7 @@ export function createApiStore(
           if (!isAsyncOperationCurrent(operation)) {
             return { success: false, error: 'Session or scope changed.' };
           }
+          const currentOwnerKey = cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl);
           const built = buildCollectionFromDetails(raw);
           set((state) => {
             const exists = state.collections.some((c) => c.id === built.id);
@@ -6532,13 +7947,21 @@ export function createApiStore(
               ? state.collections.map((c) => {
                   if (c.id !== built.id) return c;
                   if (c._syncStatus === 'pending') return c;
+                  const hydratedItems = preserveHydratedItemExamples(built.items || [], c.items || []);
                   return {
                     ...built,
+                    items: hydratedItems,
                     ...(c._needsMoveReconciliation ? { _needsMoveReconciliation: true } : {}),
                   };
                 })
               : [...state.collections, built];
-            return { collections: nextCollections };
+            const overlaid = overlayPendingExampleIntentsOnCollections(
+              nextCollections,
+              state.pendingExampleIntents,
+              currentOwnerKey,
+              state.cloudConfig.activeScope,
+            );
+            return { collections: overlaid };
           });
           return { success: true, collection: built };
         } catch (err: unknown) {
@@ -6551,16 +7974,573 @@ export function createApiStore(
         }
       },
 
+      selectSavedExample: (selection) => {
+        set({ selectedExample: selection });
+      },
+
+      saveResponseAsExample: async ({ collectionId, itemId, name, response, fallbackRequest }) => {
+        const { workspaceMode, cloudConfig, collections } = get();
+        if (movingCollections.has(collectionId) || duplicatingCollections.has(collectionId)) {
+          return { success: false, error: 'Wait for the collection move or duplicate to finish first.' };
+        }
+        const col = collections.find((c) => c.id === collectionId);
+        if (!col) {
+          return { success: false, error: 'Target collection no longer exists.' };
+        }
+        if (col._needsMoveReconciliation) {
+          return { success: false, error: 'Sync the workspace to confirm the previous move before saving examples.' };
+        }
+        if (col.isPartial) {
+          return { success: false, error: 'Wait for collection details to finish loading before saving examples.' };
+        }
+        if (!canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+          return { success: false, error: `Collection "${col.name}" is read-only.`, code: 'FORBIDDEN' };
+        }
+
+        const targetItem = findCollectionItemById(col.items, itemId);
+        if (!targetItem || targetItem.type !== 'request') {
+          return { success: false, error: 'Target request item not found.' };
+        }
+
+        const eligibility = evaluateResponseExampleEligibility(response);
+        if (!eligibility.eligible) {
+          return { success: false, error: eligibility.reason };
+        }
+
+        const existingCount = getItemExampleCount(targetItem);
+        if (existingCount >= MAX_SAVED_EXAMPLES_PER_ITEM) {
+          return {
+            success: false,
+            error: `A request can have at most ${MAX_SAVED_EXAMPLES_PER_ITEM} saved examples.`,
+            code: 'LIMIT_EXCEEDED',
+          };
+        }
+
+        const sourceRequest = response.capturedRequest || fallbackRequest || targetItem.request;
+        if (!sourceRequest) {
+          return { success: false, error: 'Missing request snapshot for saved example.' };
+        }
+        const resolvedName = (name && name.trim())
+          ? name.trim()
+          : buildDefaultExampleName(response.status, response.statusText);
+        const buildResult = buildSavedExampleFromResponse({
+          id: generateId(),
+          name: resolvedName,
+          response,
+          requestSnapshot: sourceRequest,
+          buildUrlObj: buildPostmanUrl,
+        });
+        if (!buildResult.ok) {
+          return { success: false, error: buildResult.error };
+        }
+        const builtExample = buildResult.example;
+
+        if (Array.isArray(targetItem.examples) && targetItem.examplesLoaded !== false) {
+          const totalBytes =
+            targetItem.examples.reduce((sum, ex) => sum + getExampleUtf8ByteLength(JSON.stringify(ex)), 0) +
+            getExampleUtf8ByteLength(JSON.stringify(builtExample));
+          if (totalBytes > MAX_SAVED_EXAMPLES_TOTAL_BYTES_PER_ITEM) {
+            return {
+              success: false,
+              error: 'Total saved examples size limit (2 MiB) exceeded for this request.',
+              code: 'LIMIT_EXCEEDED',
+            };
+          }
+        }
+
+        const isCloud = !isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && Boolean(cloudConfig.activeScope);
+        if (isCloud) {
+          const supported = await ensureSavedExamplesCapability();
+          if (!supported) {
+            return {
+              success: false,
+              error: 'This cloud server does not support Saved Examples. Update the server to save examples in cloud mode.',
+            };
+          }
+        }
+
+        const preMutationCollections = get().collections;
+        const applyLocalAdd = (cols: Collection[]): Collection[] =>
+          cols.map((c) => {
+            if (c.id !== collectionId) return c;
+            const res = updateCollectionItemById(c.items || [], itemId, (item) =>
+              applyExampleMutationToItem(item, { op: 'add', example: builtExample }),
+            );
+            return res.found ? { ...c, items: res.items, updatedAt: Date.now() } : c;
+          });
+
+        const opId = generateId();
+        const ownerKey = isCloud ? cloudCacheOwnerKey(cloudConfig, normalizeCloudApiUrl) : null;
+        const intent: PendingExampleIntent | null = isCloud
+          ? {
+              operationId: opId,
+              ownerKey,
+              op: 'add',
+              collectionId,
+              itemId,
+              exampleId: builtExample.id,
+              baseVersion: typeof targetItem.version === 'number' ? targetItem.version : 1,
+              example: builtExample,
+              targetScope: cloudConfig.activeScope,
+              createdAt: Date.now(),
+              status: 'pending',
+            }
+          : null;
+
+        set((state) => ({
+          collections: applyLocalAdd(state.collections),
+          ...(intent
+            ? {
+                pendingExampleIntents: {
+                  ...(state.pendingExampleIntents || {}),
+                  [opId]: intent,
+                },
+              }
+            : {}),
+        }));
+
+        try {
+          await flushStorePersistence();
+        } catch (storageErr: unknown) {
+          set((state) => ({
+            collections: preMutationCollections,
+            pendingExampleIntents: intent
+              ? withoutPendingExampleIntent(state.pendingExampleIntents, opId)
+              : state.pendingExampleIntents,
+          }));
+          const isQuota =
+            storageErr instanceof Error &&
+            (storageErr.name === 'QuotaExceededError' || /quota/i.test(storageErr.message));
+          return {
+            success: false,
+            error: isQuota
+              ? 'Browser storage quota exceeded while saving example. Free local storage space and try again.'
+              : 'Failed to persist saved example.',
+          };
+        }
+
+        if (!intent) {
+          return { success: true, example: builtExample };
+        }
+        return await executeExampleIntent(intent, { preMutationCollections });
+      },
+
+      renameSavedExample: async ({ collectionId, itemId, exampleId, name }) => {
+        const validation = validateSavedExampleName(name);
+        if (!validation.valid) {
+          return { success: false, error: validation.error };
+        }
+        const trimmedName = validation.name;
+        const { workspaceMode, cloudConfig, collections } = get();
+        if (movingCollections.has(collectionId) || duplicatingCollections.has(collectionId)) {
+          return { success: false, error: 'Wait for the collection move or duplicate to finish first.' };
+        }
+        const col = collections.find((c) => c.id === collectionId);
+        if (!col) return { success: false, error: 'Target collection not found.' };
+        if (col._needsMoveReconciliation || col.isPartial) {
+          return { success: false, error: 'Wait for collection sync to finish before renaming examples.' };
+        }
+        if (!canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+          return { success: false, error: `Collection "${col.name}" is read-only.`, code: 'FORBIDDEN' };
+        }
+
+        const targetItem = findCollectionItemById(col.items, itemId);
+        if (!targetItem || targetItem.type !== 'request') {
+          return { success: false, error: 'Target request item not found.' };
+        }
+
+        const existingTarget =
+          targetItem.examples?.find((ex) => ex.id === exampleId) ||
+          targetItem.exampleSummaries?.find((s) => s.id === exampleId);
+        if (!existingTarget) {
+          return { success: false, error: 'Saved example not found.' };
+        }
+
+        const isCloud = !isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && Boolean(cloudConfig.activeScope);
+        if (isCloud) {
+          const supported = await ensureSavedExamplesCapability();
+          if (!supported) {
+            return { success: false, error: 'This cloud server does not support Saved Examples.' };
+          }
+        }
+
+        const preMutationCollections = get().collections;
+        const opId = generateId();
+        const baseRevision = typeof existingTarget.revision === 'number' ? existingTarget.revision : 1;
+        const nextRevision = baseRevision + 1;
+        const ownerKey = isCloud ? cloudCacheOwnerKey(cloudConfig, normalizeCloudApiUrl) : null;
+        const intent: PendingExampleIntent | null = isCloud
+          ? {
+              operationId: opId,
+              ownerKey,
+              op: 'rename',
+              collectionId,
+              itemId,
+              exampleId,
+              baseVersion: typeof targetItem.version === 'number' ? targetItem.version : 1,
+              baseExampleRevision: baseRevision,
+              name: trimmedName,
+              targetScope: cloudConfig.activeScope,
+              createdAt: Date.now(),
+              status: 'pending',
+            }
+          : null;
+
+        set((state) => ({
+          collections: state.collections.map((c) => {
+            if (c.id !== collectionId) return c;
+            const res = updateCollectionItemById(c.items || [], itemId, (item) =>
+              applyExampleMutationToItem(item, {
+                op: 'rename',
+                exampleId,
+                name: trimmedName,
+                nextExampleRevision: nextRevision,
+              }),
+            );
+            return res.found ? { ...c, items: res.items, updatedAt: Date.now() } : c;
+          }),
+          ...(intent
+            ? {
+                pendingExampleIntents: {
+                  ...(state.pendingExampleIntents || {}),
+                  [opId]: intent,
+                },
+              }
+            : {}),
+        }));
+
+        try {
+          await flushStorePersistence();
+        } catch (storageErr: unknown) {
+          set((state) => ({
+            collections: preMutationCollections,
+            pendingExampleIntents: intent
+              ? withoutPendingExampleIntent(state.pendingExampleIntents, opId)
+              : state.pendingExampleIntents,
+          }));
+          const isQuota =
+            storageErr instanceof Error &&
+            (storageErr.name === 'QuotaExceededError' || /quota/i.test(storageErr.message));
+          return {
+            success: false,
+            error: isQuota ? 'Browser storage quota exceeded.' : 'Failed to persist renamed example.',
+          };
+        }
+
+        if (!intent) return { success: true };
+        return await executeExampleIntent(intent, { preMutationCollections });
+      },
+
+      deleteSavedExample: async ({ collectionId, itemId, exampleId }) => {
+        const { workspaceMode, cloudConfig, collections } = get();
+        if (movingCollections.has(collectionId) || duplicatingCollections.has(collectionId)) {
+          return { success: false, error: 'Wait for the collection move or duplicate to finish first.' };
+        }
+        const col = collections.find((c) => c.id === collectionId);
+        if (!col) return { success: false, error: 'Target collection not found.' };
+        if (col._needsMoveReconciliation || col.isPartial) {
+          return { success: false, error: 'Wait for collection sync to finish before deleting examples.' };
+        }
+        if (!canModifyCollection(col.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
+          return { success: false, error: `Collection "${col.name}" is read-only.`, code: 'FORBIDDEN' };
+        }
+
+        const targetItem = findCollectionItemById(col.items, itemId);
+        if (!targetItem || targetItem.type !== 'request') {
+          return { success: false, error: 'Target request item not found.' };
+        }
+        const existingTarget =
+          targetItem.examples?.find((ex) => ex.id === exampleId) ||
+          targetItem.exampleSummaries?.find((s) => s.id === exampleId);
+        if (!existingTarget) {
+          return { success: false, error: 'Saved example not found.' };
+        }
+
+        const isCloud = !isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && Boolean(cloudConfig.activeScope);
+        if (isCloud) {
+          const supported = await ensureSavedExamplesCapability();
+          if (!supported) {
+            return { success: false, error: 'This cloud server does not support Saved Examples.' };
+          }
+        }
+
+        const preMutationCollections = get().collections;
+        const prevSelectedExample = get().selectedExample;
+        const opId = generateId();
+        const baseRevision = typeof existingTarget.revision === 'number' ? existingTarget.revision : 1;
+        const ownerKey = isCloud ? cloudCacheOwnerKey(cloudConfig, normalizeCloudApiUrl) : null;
+        const intent: PendingExampleIntent | null = isCloud
+          ? {
+              operationId: opId,
+              ownerKey,
+              op: 'delete',
+              collectionId,
+              itemId,
+              exampleId,
+              baseVersion: typeof targetItem.version === 'number' ? targetItem.version : 1,
+              baseExampleRevision: baseRevision,
+              targetScope: cloudConfig.activeScope,
+              createdAt: Date.now(),
+              status: 'pending',
+            }
+          : null;
+
+        set((state) => ({
+          collections: state.collections.map((c) => {
+            if (c.id !== collectionId) return c;
+            const res = updateCollectionItemById(c.items || [], itemId, (item) =>
+              applyExampleMutationToItem(item, { op: 'delete', exampleId }),
+            );
+            return res.found ? { ...c, items: res.items, updatedAt: Date.now() } : c;
+          }),
+          selectedExample:
+            state.selectedExample?.collectionId === collectionId &&
+            state.selectedExample?.itemId === itemId &&
+            state.selectedExample?.exampleId === exampleId
+              ? null
+              : state.selectedExample,
+          ...(intent
+            ? {
+                pendingExampleIntents: {
+                  ...(state.pendingExampleIntents || {}),
+                  [opId]: intent,
+                },
+              }
+            : {}),
+        }));
+
+        try {
+          await flushStorePersistence();
+        } catch (storageErr: unknown) {
+          set((state) => ({
+            collections: preMutationCollections,
+            selectedExample: prevSelectedExample,
+            pendingExampleIntents: intent
+              ? withoutPendingExampleIntent(state.pendingExampleIntents, opId)
+              : state.pendingExampleIntents,
+          }));
+          return {
+            success: false,
+            error: storageErr instanceof Error ? storageErr.message : 'Failed to persist example deletion.',
+          };
+        }
+
+        if (!intent) return { success: true };
+        return await executeExampleIntent(intent, { preMutationCollections });
+      },
+
+      loadItemExamples: async (collectionId, itemId) => {
+        const { workspaceMode, cloudConfig, collections } = get();
+        const col = collections.find((c) => c.id === collectionId);
+        const existingItem = col ? findCollectionItemById(col.items, itemId) : undefined;
+        if (isOfflineOnly || workspaceMode !== 'cloud') {
+          return existingItem
+            ? { success: true, item: existingItem }
+            : { success: false, error: 'Item unavailable', notFound: true };
+        }
+        if (!isCloudSessionActive(cloudConfig) || !cloudConfig.activeScope) {
+          return { success: false, error: 'Sign in to load item examples.' };
+        }
+        const operation = beginAsyncOperation();
+        try {
+          const rawItem = await fetchScopeItem(
+            cloudConfig.apiUrl,
+            cloudConfig.token,
+            itemId,
+            cloudConfig.refreshToken,
+            operation.controller.signal,
+          );
+          if (!isAsyncOperationCurrent(operation) || isStoreDisposed) {
+            return { success: false, error: 'Session or scope changed.' };
+          }
+          commitServerItemToStore(collectionId, itemId, rawItem, cloudConfig.activeScope);
+          const ownerKey = cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl);
+          set((state) => ({
+            collections: overlayPendingExampleIntentsOnCollections(
+              state.collections,
+              state.pendingExampleIntents,
+              ownerKey,
+              state.cloudConfig.activeScope,
+            ),
+          }));
+          const updatedCol = get().collections.find((c) => c.id === collectionId);
+          const updatedItem = updatedCol ? findCollectionItemById(updatedCol.items, itemId) : undefined;
+          return { success: true, item: updatedItem };
+        } catch (err: unknown) {
+          if (!isAsyncOperationCurrent(operation) || isStoreDisposed) {
+            return { success: false, error: 'Operation cancelled.' };
+          }
+          if (err instanceof CloudApiError && err.status === 403) {
+            return { success: false, forbidden: true, error: 'You do not have permission to view this item.' };
+          }
+          if (err instanceof CloudApiError && err.status === 404) {
+            set((state) => ({
+              selectedExample: state.selectedExample?.itemId === itemId ? null : state.selectedExample,
+            }));
+            return { success: false, notFound: true, error: 'Item unavailable or deleted.' };
+          }
+          return {
+            success: false,
+            error: err instanceof Error ? err.message : 'Failed to load saved examples.',
+          };
+        } finally {
+          completeAsyncOperation(operation);
+        }
+      },
+
+      hydrateCollectionExamples: async (collectionId, options?: { includeBody?: boolean }) => {
+        const includeBody = options?.includeBody !== false;
+        const { workspaceMode, cloudConfig, collections } = get();
+        const col = collections.find((c) => c.id === collectionId);
+        if (!col) {
+          return { success: false, error: 'Collection not found.' };
+        }
+        if (isOfflineOnly || workspaceMode !== 'cloud') {
+          return { success: true, collection: col };
+        }
+        if (!isCloudSessionActive(cloudConfig) || !cloudConfig.activeScope) {
+          return { success: false, error: 'Sign in to load saved examples.' };
+        }
+
+        const hasTruncated = (items: CollectionItem[] = []): boolean =>
+          items.some((it) =>
+            it.type === 'folder'
+              ? hasTruncated(it.items || [])
+              : it.exampleSummariesTruncated === true || (includeBody && it.examplesLoaded === false && getItemExampleCount(it) > 0),
+          );
+
+        if (!col.isPartial && !hasTruncated(col.items || []) && !hasUnloadedCollectionExamples(col)) {
+          return { success: true, collection: col };
+        }
+
+        const operation = beginAsyncOperation();
+        try {
+          if (col.isPartial) {
+            const loaded = await get().loadCollectionDetails(collectionId);
+            if (!loaded.success) {
+              return { success: false, error: loaded.error || 'Failed to load collection details.' };
+            }
+          }
+
+          for (let driftAttempt = 0; driftAttempt < 2; driftAttempt++) {
+            let cursor: string | undefined = undefined;
+            let expectedCollectionVersion: number | null = null;
+            let versionDrifted = false;
+            const pageUpdates = new Map<string, any>();
+
+            while (true) {
+              if (!isAsyncOperationCurrent(operation) || isStoreDisposed) {
+                return { success: false, error: 'Session or scope changed.' };
+              }
+              const page = await fetchScopeCollectionExamples(
+                cloudConfig.apiUrl,
+                cloudConfig.token,
+                collectionId,
+                { cursor, limit: 100, includeBody },
+                cloudConfig.refreshToken,
+                operation.controller.signal,
+              );
+              if (expectedCollectionVersion === null) {
+                expectedCollectionVersion = page.collection_version;
+              } else if (page.collection_version !== expectedCollectionVersion) {
+                versionDrifted = true;
+                break;
+              }
+              for (const itemPage of page.items || []) {
+                pageUpdates.set(itemPage.item_id, itemPage);
+              }
+              if (!page.has_more || !page.next_cursor) break;
+              cursor = page.next_cursor;
+            }
+
+            if (versionDrifted) {
+              if (driftAttempt === 0) {
+                await get().loadCollectionDetails(collectionId);
+                continue;
+              }
+              return { success: false, error: 'Collection changed on server while loading examples. Please retry.' };
+            }
+
+            const ownerKey = cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl);
+            set((state) => {
+              const applyUpdates = (items: CollectionItem[]): CollectionItem[] =>
+                items.map((item) => {
+                  if (item.type === 'folder') {
+                    return { ...item, items: applyUpdates(item.items || []) };
+                  }
+                  const upd = pageUpdates.get(item.id);
+                  return upd ? applyServerItemToLocalItem(item, upd) : item;
+                });
+              const updatedCols = state.collections.map((c) =>
+                c.id === collectionId
+                  ? {
+                      ...c,
+                      ...(typeof expectedCollectionVersion === 'number' ? { version: expectedCollectionVersion } : {}),
+                      items: applyUpdates(c.items || []),
+                    }
+                  : c,
+              );
+              return {
+                collections: overlayPendingExampleIntentsOnCollections(
+                  updatedCols,
+                  state.pendingExampleIntents,
+                  ownerKey,
+                  state.cloudConfig.activeScope,
+                ),
+              };
+            });
+
+            const hydrated = get().collections.find((c) => c.id === collectionId);
+            return { success: true, collection: hydrated };
+          }
+          return { success: false, error: 'Failed to hydrate collection examples.' };
+        } catch (err: unknown) {
+          if (!isAsyncOperationCurrent(operation) || isStoreDisposed) {
+            return { success: false, error: 'Operation cancelled.' };
+          }
+          return {
+            success: false,
+            error: err instanceof Error ? err.message : 'Failed to hydrate collection examples.',
+          };
+        } finally {
+          completeAsyncOperation(operation);
+        }
+      },
+
+      retryPendingExampleIntent: async (operationId) => {
+        const intent = get().pendingExampleIntents?.[operationId];
+        if (!intent) {
+          return { success: false, error: 'Pending saved example intent not found.' };
+        }
+        return await executeExampleIntent(intent);
+      },
+
+      clearPendingExampleIntent: (operationId) => {
+        if (inFlightExampleOperations.has(operationId)) return;
+        set((state) => ({
+          pendingExampleIntents: withoutPendingExampleIntent(state.pendingExampleIntents, operationId),
+        }));
+      },
+
       clearPendingDuplicateIntent: (operationId) => {
+        if (inFlightDuplicateOperations.has(operationId) || get().activeDuplicateOperationIds?.[operationId]) {
+          return;
+        }
         set((state) => {
           if (!state.pendingDuplicateIntents?.[operationId]) return state;
-          const next = { ...(state.pendingDuplicateIntents || {}) };
-          delete next[operationId];
-          return { pendingDuplicateIntents: next };
+          return { pendingDuplicateIntents: withoutPendingDuplicateIntent(state.pendingDuplicateIntents, operationId) };
         });
       },
 
       retryPendingDuplicateIntent: async (operationId) => {
+        if (inFlightDuplicateOperations.has(operationId) || get().activeDuplicateOperationIds?.[operationId]) {
+          return {
+            success: false,
+            operationId,
+            reconcilePending: true,
+            error: 'Duplicate operation is already in progress.',
+          };
+        }
         const intent = get().pendingDuplicateIntents?.[operationId];
         if (!intent) {
           return { success: false, error: 'Pending duplicate intent not found.' };
@@ -6659,9 +8639,6 @@ export function createApiStore(
           const authoritativeScopeKey = resolveReceiptScopeKey(receipt, fallbackScopeKey);
           const resolvedTargetScope = resolveReceiptTargetScope(receipt, fallbackTargetScope);
 
-          const nextIntents = { ...(get().pendingDuplicateIntents || {}) };
-          delete nextIntents[opId];
-
           const latestState = get();
           const latestActiveScopeKey =
             latestState.workspaceMode === 'cloud' && latestState.cloudConfig.activeScope
@@ -6670,24 +8647,30 @@ export function createApiStore(
           const matchesActiveScope =
             latestActiveScopeKey !== null && latestActiveScopeKey === authoritativeScopeKey;
 
-          const clearAffectedScopeCaches = (baseCache: Record<string, any> | undefined) => {
+          const clearAffectedScopeCaches = (
+            baseCache: Record<string, any> | undefined,
+            extraScopeKey?: string | null,
+          ) => {
             const nextScopeCache = { ...(baseCache || {}) };
             delete nextScopeCache[authoritativeScopeKey];
             if (fallbackScopeKey !== authoritativeScopeKey) {
               delete nextScopeCache[fallbackScopeKey];
             }
+            if (extraScopeKey && extraScopeKey !== authoritativeScopeKey && extraScopeKey !== fallbackScopeKey) {
+              delete nextScopeCache[extraScopeKey];
+            }
             return nextScopeCache;
           };
 
           if (receipt.status === 'committed_deleted') {
-            set({
-              pendingDuplicateIntents: nextIntents,
-              scopeCache: clearAffectedScopeCaches(latestState.scopeCache),
+            set((state) => ({
+              pendingDuplicateIntents: withoutPendingDuplicateIntent(state.pendingDuplicateIntents, opId),
+              scopeCache: clearAffectedScopeCaches(state.scopeCache),
               syncStatus: 'idle',
               ...(matchesActiveScope
-                ? { collections: latestState.collections.filter((c) => c.id !== receipt.collection_id) }
+                ? { collections: state.collections.filter((c) => c.id !== receipt.collection_id) }
                 : {}),
-            });
+            }));
             return {
               success: true,
               operationId: opId,
@@ -6702,6 +8685,8 @@ export function createApiStore(
           if (matchesActiveScope && checkActiveOp()) {
             let createdCol: Collection | undefined;
             let rawMatchesActive = true;
+            let rawScopeKey: string | null = null;
+            let detailsError: string | undefined;
             try {
               const raw = await fetchCollectionByIdForRuntime(
                 cloudConfig.apiUrl,
@@ -6710,7 +8695,7 @@ export function createApiStore(
                 cloudConfig.refreshToken,
                 operationSignal,
               );
-              const rawScopeKey = raw?.workspace_id
+              rawScopeKey = raw?.workspace_id
                 ? `workspace:${raw.workspace_id}`
                 : raw?.project_id
                   ? `project:${raw.project_id}`
@@ -6720,7 +8705,8 @@ export function createApiStore(
               } else {
                 createdCol = buildCollectionFromDetails(raw);
               }
-            } catch {
+            } catch (err: unknown) {
+              detailsError = err instanceof Error ? err.message : 'Failed to load collection details.';
               createdCol = {
                 id: receipt.collection_id,
                 name: receipt.name,
@@ -6738,6 +8724,17 @@ export function createApiStore(
               cloudSessionGeneration !== capturedSessionGen ||
               cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) !== ownerKey
             ) {
+              if (
+                !isStoreDisposed &&
+                cloudSessionGeneration === capturedSessionGen &&
+                cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === ownerKey
+              ) {
+                set((state) => ({
+                  pendingDuplicateIntents: withoutPendingDuplicateIntent(state.pendingDuplicateIntents, opId),
+                  scopeCache: clearAffectedScopeCaches(state.scopeCache, rawScopeKey),
+                  syncStatus: 'idle',
+                }));
+              }
               return { success: false, operationId: opId, error: 'Session or scope changed.' };
             }
             const stateAfterFetch = get();
@@ -6749,8 +8746,8 @@ export function createApiStore(
               set((state) => {
                 const filtered = state.collections.filter((c) => c.id !== createdCol!.id);
                 return {
-                  pendingDuplicateIntents: nextIntents,
-                  scopeCache: clearAffectedScopeCaches(state.scopeCache),
+                  pendingDuplicateIntents: withoutPendingDuplicateIntent(state.pendingDuplicateIntents, opId),
+                  scopeCache: clearAffectedScopeCaches(state.scopeCache, rawScopeKey),
                   collections: [...filtered, createdCol!],
                   lastDuplicateReveal: {
                     pathIds: [createdCol!.id],
@@ -6766,13 +8763,14 @@ export function createApiStore(
                 targetScope: resolvedTargetScope,
                 name: createdCol.name,
                 minRole: createdCol.minRole,
+                ...(detailsError ? { detailsUnavailable: true, detailsError } : {}),
                 revealPathIds: [createdCol.id],
               };
             }
           }
 
           set((state) => ({
-            pendingDuplicateIntents: nextIntents,
+            pendingDuplicateIntents: withoutPendingDuplicateIntent(state.pendingDuplicateIntents, opId),
             scopeCache: clearAffectedScopeCaches(state.scopeCache),
             syncStatus: 'idle',
           }));
@@ -6792,6 +8790,15 @@ export function createApiStore(
             return { success: false, error: 'Sign in with the owning cloud account to reconcile this duplicate.' };
           }
           if (existingIntent.kind === 'import_duplicate' && existingIntent.sanitizedPayload) {
+            if (inFlightDuplicateOperations.has(existingIntent.operationId)) {
+              return {
+                success: false,
+                operationId: existingIntent.operationId,
+                reconcilePending: true,
+                error: 'Duplicate operation is already in progress.',
+              };
+            }
+            markDuplicateOperationInFlight(existingIntent.operationId);
             const operation = beginAsyncOperation();
             const capturedSessionGen = cloudSessionGeneration;
             try {
@@ -6823,40 +8830,44 @@ export function createApiStore(
                 () => !isStoreDisposed && isAsyncOperationCurrent(operation),
               );
             } catch (err: unknown) {
-              const rejected = err instanceof CloudApiError && [400, 401, 403, 404, 409, 413, 415].includes(err.status);
+              const rejected = err instanceof CloudApiError && [400, 403, 404, 409, 413, 415].includes(err.status);
+              const errMsg = err instanceof Error ? err.message : 'Failed to upload duplicated collection';
               const stillSameOwner =
                 !isStoreDisposed &&
                 cloudSessionGeneration === capturedSessionGen &&
                 currentOwnerKey !== null &&
                 cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
               if (stillSameOwner) {
-                const nextIntents = { ...(get().pendingDuplicateIntents || {}) };
-                if (rejected) {
-                  delete nextIntents[existingIntent.operationId];
-                } else {
-                  nextIntents[existingIntent.operationId] = { ...existingIntent, status: 'reconcile_required' };
-                }
-                set({
-                  pendingDuplicateIntents: nextIntents,
+                set((state) => ({
+                  pendingDuplicateIntents: rejected
+                    ? withoutPendingDuplicateIntent(state.pendingDuplicateIntents, existingIntent.operationId)
+                    : withReconcileRequiredIntent(
+                        state.pendingDuplicateIntents,
+                        existingIntent.operationId,
+                        existingIntent,
+                        errMsg,
+                      ),
                   syncStatus: 'error',
-                  syncError: err instanceof Error ? err.message : 'Failed to upload duplicated collection',
-                });
+                  syncError: errMsg,
+                }));
               }
               return {
                 success: false,
                 operationId: existingIntent.operationId,
                 reconcilePending: !rejected,
-                error: err instanceof Error ? err.message : 'Failed to upload duplicated collection',
+                error: errMsg,
               };
             } finally {
               completeAsyncOperation(operation);
+              clearDuplicateOperationInFlight(existingIntent.operationId);
             }
           }
 
           if (existingIntent.kind === 'collection') {
-            if (duplicatingCollections.has(collectionId)) {
+            if (inFlightDuplicateOperations.has(existingIntent.operationId) || duplicatingCollections.has(collectionId)) {
               return { success: false, error: 'Another move or duplicate operation is in progress for this collection.' };
             }
+            markDuplicateOperationInFlight(existingIntent.operationId);
             const lock = Symbol('collection duplicate replay');
             duplicatingCollections.set(collectionId, lock);
             const operation = beginAsyncOperation();
@@ -6890,32 +8901,35 @@ export function createApiStore(
                 () => isAsyncOperationCurrent(operation),
               );
             } catch (err: unknown) {
-              const rejected = err instanceof CloudApiError && [400, 401, 403, 404, 409, 413].includes(err.status);
+              const rejected = err instanceof CloudApiError && [400, 403, 404, 409, 413].includes(err.status);
+              const errMsg = err instanceof Error ? err.message : 'Failed to duplicate collection';
               const stillCurrent =
                 isAsyncOperationCurrent(operation) &&
                 cloudSessionGeneration === capturedSessionGen &&
                 cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
               if (stillCurrent) {
-                const nextIntents = { ...(get().pendingDuplicateIntents || {}) };
-                if (rejected) {
-                  delete nextIntents[existingIntent.operationId];
-                } else {
-                  nextIntents[existingIntent.operationId] = { ...existingIntent, status: 'reconcile_required' };
-                }
-                set({
-                  pendingDuplicateIntents: nextIntents,
+                set((state) => ({
+                  pendingDuplicateIntents: rejected
+                    ? withoutPendingDuplicateIntent(state.pendingDuplicateIntents, existingIntent.operationId)
+                    : withReconcileRequiredIntent(
+                        state.pendingDuplicateIntents,
+                        existingIntent.operationId,
+                        existingIntent,
+                        errMsg,
+                      ),
                   syncStatus: 'error',
-                  syncError: err instanceof Error ? err.message : 'Failed to duplicate collection',
-                });
+                  syncError: errMsg,
+                }));
               }
               return {
                 success: false,
                 operationId: existingIntent.operationId,
                 reconcilePending: !rejected,
-                error: err instanceof Error ? err.message : 'Failed to duplicate collection',
+                error: errMsg,
               };
             } finally {
               completeAsyncOperation(operation);
+              clearDuplicateOperationInFlight(existingIntent.operationId);
               if (duplicatingCollections.get(collectionId) === lock) {
                 duplicatingCollections.delete(collectionId);
               }
@@ -6954,74 +8968,88 @@ export function createApiStore(
             return { success: false, error: err instanceof Error ? err.message : 'Invalid collection for duplication.' };
           }
 
-          const prevCollections = get().collections;
-          const prevOfflineCache = get().offlineScopeCache || {};
+          const hadTargetCacheBefore = Boolean((get().offlineScopeCache || {})[targetScope.id]);
           const prevReveal = get().lastDuplicateReveal;
           const isSameOfflineWs = targetScope.id === activeOfflineWorkspaceId;
+          let appliedRevealRevision: number | null = null;
 
           if (isSameOfflineWs) {
-            set((state) => ({
-              collections: [...state.collections, cloned],
-              lastDuplicateReveal: {
-                pathIds: findCollectionNodePath(cloned),
-                revision: (state.lastDuplicateReveal?.revision ?? 0) + 1,
-              },
-            }));
-          } else {
-            const targetEntry = prevOfflineCache[targetScope.id] || {
-              collections: [],
-              environments: [],
-              activeEnvironmentId: null,
-              tabs: [createInitialTab()],
-              history: [],
-            };
-            set({
-              offlineScopeCache: {
-                ...prevOfflineCache,
-                [targetScope.id]: {
-                  ...targetEntry,
-                  collections: [...(targetEntry.collections || []), cloned],
+            set((state) => {
+              appliedRevealRevision = (state.lastDuplicateReveal?.revision ?? 0) + 1;
+              return {
+                collections: [...state.collections, cloned],
+                lastDuplicateReveal: {
+                  pathIds: findCollectionNodePath(cloned),
+                  revision: appliedRevealRevision,
                 },
-              },
+              };
+            });
+          } else {
+            set((state) => {
+              const prevCache = state.offlineScopeCache || {};
+              const targetEntry = prevCache[targetScope.id] || {
+                collections: [],
+                environments: [],
+                activeEnvironmentId: null,
+                tabs: [createInitialTab()],
+                history: [],
+              };
+              return {
+                offlineScopeCache: {
+                  ...prevCache,
+                  [targetScope.id]: {
+                    ...targetEntry,
+                    collections: [...(targetEntry.collections || []), cloned],
+                  },
+                },
+              };
             });
           }
 
           try {
             await flushPersisted();
           } catch {
-            // Roll back only the targeted offline workspace snapshot so switching workspaces mid-flush cannot clobber the active workspace.
-            const latestState = get();
-            const isStillSameOfflineWs =
-              latestState.workspaceMode === 'offline' &&
-              latestState.activeOfflineWorkspaceId === activeOfflineWorkspaceId;
-            if (isSameOfflineWs) {
-              if (isStillSameOfflineWs) {
-                set({
-                  collections: prevCollections,
-                  offlineScopeCache: prevOfflineCache,
-                  lastDuplicateReveal: prevReveal,
-                });
-              } else {
-                const latestOfflineCache = { ...(latestState.offlineScopeCache || {}) };
-                if (prevOfflineCache[activeOfflineWorkspaceId]) {
-                  latestOfflineCache[activeOfflineWorkspaceId] = prevOfflineCache[activeOfflineWorkspaceId];
-                } else if (latestOfflineCache[activeOfflineWorkspaceId]) {
-                  latestOfflineCache[activeOfflineWorkspaceId] = {
-                    ...latestOfflineCache[activeOfflineWorkspaceId],
-                    collections: prevCollections,
+            // Roll back only the newly created clone by ID from the target workspace's latest state.
+            set((state) => {
+              const isTargetActive =
+                state.workspaceMode === 'offline' && state.activeOfflineWorkspaceId === targetScope.id;
+              const prevCache = state.offlineScopeCache || {};
+              let nextOfflineCache = prevCache;
+              if (prevCache[targetScope.id]) {
+                const filteredCachedCollections = (prevCache[targetScope.id].collections || []).filter(
+                  (c) => c.id !== cloned.id,
+                );
+                if (
+                  !isTargetActive &&
+                  !hadTargetCacheBefore &&
+                  filteredCachedCollections.length === 0 &&
+                  (prevCache[targetScope.id].environments || []).length === 0 &&
+                  (prevCache[targetScope.id].history || []).length === 0
+                ) {
+                  nextOfflineCache = { ...prevCache };
+                  delete nextOfflineCache[targetScope.id];
+                } else {
+                  nextOfflineCache = {
+                    ...prevCache,
+                    [targetScope.id]: {
+                      ...prevCache[targetScope.id],
+                      collections: filteredCachedCollections,
+                    },
                   };
                 }
-                set({ offlineScopeCache: latestOfflineCache });
               }
-            } else {
-              const latestOfflineCache = { ...(latestState.offlineScopeCache || {}) };
-              if (prevOfflineCache[targetScope.id]) {
-                latestOfflineCache[targetScope.id] = prevOfflineCache[targetScope.id];
-              } else {
-                delete latestOfflineCache[targetScope.id];
-              }
-              set({ offlineScopeCache: latestOfflineCache });
-            }
+              const nextReveal =
+                appliedRevealRevision !== null && state.lastDuplicateReveal?.revision === appliedRevealRevision
+                  ? prevReveal
+                  : state.lastDuplicateReveal;
+              return {
+                ...(isTargetActive
+                  ? { collections: state.collections.filter((c) => c.id !== cloned.id) }
+                  : {}),
+                offlineScopeCache: nextOfflineCache,
+                lastDuplicateReveal: nextReveal,
+              };
+            });
             return { success: false, error: 'Failed to persist duplicated collection to local storage.' };
           }
 
@@ -7051,6 +9079,15 @@ export function createApiStore(
           ) {
             return { success: false, error: 'Write permission in the target project is required.' };
           }
+          if (collectionHasSavedExamples(sourceCol)) {
+            const supported = await ensureSavedExamplesCapability(true);
+            if (!supported) {
+              return {
+                success: false,
+                error: 'This cloud server does not support Saved Examples. Update the server before uploading collections with examples.',
+              };
+            }
+          }
 
           let sanitizedPayload: { name: string; description?: string; items: any[] };
           try {
@@ -7065,84 +9102,108 @@ export function createApiStore(
           }
 
           const opId = actionOptions?.operationId || crypto.randomUUID();
+          if (inFlightDuplicateOperations.has(opId)) {
+            return {
+              success: false,
+              operationId: opId,
+              reconcilePending: true,
+              error: 'Duplicate operation is already in progress.',
+            };
+          }
           const intent: PendingDuplicateIntent = {
             operationId: opId,
             ownerKey: currentOwnerKey,
             kind: 'import_duplicate',
             sourceCollectionId: sourceCol.id,
+            sourceName: sourceCol.name,
             targetScope,
             sanitizedPayload,
             createdAt: Date.now(),
             status: 'pending',
           };
 
-          const prevIntents = get().pendingDuplicateIntents || {};
-          set({
-            pendingDuplicateIntents: { ...prevIntents, [opId]: intent },
-          });
-          try {
-            await flushPersisted();
-          } catch {
-            set({ pendingDuplicateIntents: prevIntents });
-            return { success: false, error: 'Failed to persist duplicate intent before uploading.' };
-          }
-
           const operation = beginAsyncOperation();
           const capturedSessionGen = cloudSessionGeneration;
+          markDuplicateOperationInFlight(opId);
+          set((state) => ({
+            pendingDuplicateIntents: { ...(state.pendingDuplicateIntents || {}), [opId]: intent },
+          }));
           try {
-            set({ syncStatus: 'syncing', syncError: null });
-            const receipt = await importDuplicateCollection(
-              cloudConfig.apiUrl,
-              cloudConfig.token,
-              targetScope,
-              sanitizedPayload,
-              opId,
-              cloudConfig.refreshToken,
-              operation.controller.signal,
-            );
-            const stillSameOwner =
-              !isStoreDisposed &&
-              cloudSessionGeneration === capturedSessionGen &&
-              cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
-            if (!stillSameOwner) {
-              return { success: false, operationId: opId, error: 'Session changed' };
+            try {
+              await flushPersisted();
+            } catch {
+              set((state) => ({
+                pendingDuplicateIntents: withoutPendingDuplicateIntent(state.pendingDuplicateIntents, opId),
+              }));
+              return { success: false, error: 'Failed to persist duplicate intent before uploading.' };
             }
-            return await finalizeCommittedCollectionReceipt(
-              opId,
-              receipt,
-              targetScope,
-              capturedSessionGen,
-              currentOwnerKey,
-              operation.controller.signal,
-              () => !isStoreDisposed && isAsyncOperationCurrent(operation),
-            );
-          } catch (err: unknown) {
-            const rejected = err instanceof CloudApiError && [400, 401, 403, 404, 409, 413, 415].includes(err.status);
-            const stillSameOwner =
+
+            const stillValidBeforeUpload =
               !isStoreDisposed &&
+              isAsyncOperationCurrent(operation) &&
               cloudSessionGeneration === capturedSessionGen &&
+              isCloudSessionActive(get().cloudConfig) &&
               cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
-            if (stillSameOwner) {
-              const nextIntents = { ...(get().pendingDuplicateIntents || {}) };
-              if (rejected) {
-                delete nextIntents[opId];
-              } else {
-                nextIntents[opId] = { ...intent, status: 'reconcile_required' };
+            if (!stillValidBeforeUpload) {
+              set((state) => ({
+                pendingDuplicateIntents: withoutPendingDuplicateIntent(state.pendingDuplicateIntents, opId),
+              }));
+              return { success: false, operationId: opId, error: 'Session or scope changed.' };
+            }
+
+            try {
+              set({ syncStatus: 'syncing', syncError: null });
+              const receipt = await importDuplicateCollection(
+                cloudConfig.apiUrl,
+                cloudConfig.token,
+                targetScope,
+                sanitizedPayload,
+                opId,
+                cloudConfig.refreshToken,
+                operation.controller.signal,
+              );
+              const stillSameOwner =
+                !isStoreDisposed &&
+                cloudSessionGeneration === capturedSessionGen &&
+                cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
+              if (!stillSameOwner) {
+                return { success: false, operationId: opId, error: 'Session changed' };
               }
-              set({
-                pendingDuplicateIntents: nextIntents,
-                syncStatus: 'error',
-                syncError: err instanceof Error ? err.message : 'Failed to upload duplicated collection',
-              });
+              return await finalizeCommittedCollectionReceipt(
+                opId,
+                receipt,
+                targetScope,
+                capturedSessionGen,
+                currentOwnerKey,
+                operation.controller.signal,
+                () => !isStoreDisposed && isAsyncOperationCurrent(operation),
+              );
+            } catch (err: unknown) {
+              const rejected = err instanceof CloudApiError && [400, 401, 403, 404, 409, 413, 415].includes(err.status);
+              const errMsg = err instanceof Error ? err.message : 'Failed to upload duplicated collection';
+              const stillSameOwner =
+                !isStoreDisposed &&
+                cloudSessionGeneration === capturedSessionGen &&
+                cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
+              if (stillSameOwner) {
+                set((state) => ({
+                  pendingDuplicateIntents: rejected
+                    ? withoutPendingDuplicateIntent(state.pendingDuplicateIntents, opId)
+                    : withReconcileRequiredIntent(state.pendingDuplicateIntents, opId, intent, errMsg),
+                  syncStatus: 'error',
+                  syncError: errMsg,
+                }));
+              }
+              return {
+                success: false,
+                operationId: opId,
+                reconcilePending: !rejected,
+                error: errMsg,
+              };
             }
-            return {
-              success: false,
-              operationId: opId,
-              reconcilePending: !rejected,
-              error: err instanceof Error ? err.message : 'Failed to upload duplicated collection',
-            };
           } finally {
             completeAsyncOperation(operation);
+            clearDuplicateOperationInFlight(opId);
           }
         }
 
@@ -7170,23 +9231,33 @@ export function createApiStore(
           return { success: false, error: 'Another move or duplicate operation is in progress for this collection.' };
         }
 
+        const opId = existingIntent?.operationId || actionOptions?.operationId || crypto.randomUUID();
+        if (inFlightDuplicateOperations.has(opId)) {
+          return {
+            success: false,
+            operationId: opId,
+            reconcilePending: true,
+            error: 'Duplicate operation is already in progress.',
+          };
+        }
         const lock = Symbol('collection duplicate');
         duplicatingCollections.set(collectionId, lock);
         const operation = beginAsyncOperation();
         const capturedSessionGen = cloudSessionGeneration;
         const sourceScopeKey = getScopeCacheKey(activeScope);
         const targetScopeKey = getScopeCacheKey(targetScope);
-        const opId = existingIntent?.operationId || actionOptions?.operationId || crypto.randomUUID();
         const intent: PendingDuplicateIntent = existingIntent || {
           operationId: opId,
           ownerKey: currentOwnerKey,
           kind: 'collection',
           sourceCollectionId: collectionId,
+          sourceName: sourceCol.name,
           targetScope,
           createdAt: Date.now(),
           status: 'pending',
         };
 
+        markDuplicateOperationInFlight(opId);
         try {
           await collectionSaveSyncQueues.get(`${activeScope.type}:${activeScope.id}:${collectionId}`);
           if (!isAsyncOperationCurrent(operation)) {
@@ -7200,13 +9271,27 @@ export function createApiStore(
             return { success: false, error: 'Sync pending changes in this collection before duplicating.' };
           }
 
-          const prevIntents = get().pendingDuplicateIntents || {};
-          set({ pendingDuplicateIntents: { ...prevIntents, [opId]: intent } });
+          set((state) => ({
+            pendingDuplicateIntents: { ...(state.pendingDuplicateIntents || {}), [opId]: intent },
+          }));
           try {
             await flushPersisted();
           } catch {
-            set({ pendingDuplicateIntents: prevIntents });
+            set((state) => ({
+              pendingDuplicateIntents: withoutPendingDuplicateIntent(state.pendingDuplicateIntents, opId),
+            }));
             return { success: false, error: 'Failed to persist duplicate intent.' };
+          }
+
+          if (
+            !isAsyncOperationCurrent(operation) ||
+            cloudSessionGeneration !== capturedSessionGen ||
+            cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) !== currentOwnerKey
+          ) {
+            set((state) => ({
+              pendingDuplicateIntents: withoutPendingDuplicateIntent(state.pendingDuplicateIntents, opId),
+            }));
+            return { success: false, operationId: opId, error: 'Session or scope changed.' };
           }
 
           set({ syncStatus: 'syncing', syncError: null });
@@ -7238,31 +9323,29 @@ export function createApiStore(
           );
         } catch (err: unknown) {
           const rejected = err instanceof CloudApiError && [400, 401, 403, 404, 409, 413].includes(err.status);
+          const errMsg = err instanceof Error ? err.message : 'Failed to duplicate collection';
           const stillCurrent =
             isAsyncOperationCurrent(operation) &&
             cloudSessionGeneration === capturedSessionGen &&
             cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
           if (stillCurrent) {
-            const nextIntents = { ...(get().pendingDuplicateIntents || {}) };
-            if (rejected) {
-              delete nextIntents[opId];
-            } else {
-              nextIntents[opId] = { ...intent, status: 'reconcile_required' };
-            }
-            set({
-              pendingDuplicateIntents: nextIntents,
+            set((state) => ({
+              pendingDuplicateIntents: rejected
+                ? withoutPendingDuplicateIntent(state.pendingDuplicateIntents, opId)
+                : withReconcileRequiredIntent(state.pendingDuplicateIntents, opId, intent, errMsg),
               syncStatus: 'error',
-              syncError: err instanceof Error ? err.message : 'Failed to duplicate collection',
-            });
+              syncError: errMsg,
+            }));
           }
           return {
             success: false,
             operationId: opId,
             reconcilePending: !rejected,
-            error: err instanceof Error ? err.message : 'Failed to duplicate collection',
+            error: errMsg,
           };
         } finally {
           completeAsyncOperation(operation);
+          clearDuplicateOperationInFlight(opId);
           if (duplicatingCollections.get(collectionId) === lock) {
             duplicatingCollections.delete(collectionId);
           }
@@ -7320,11 +9403,11 @@ export function createApiStore(
           operationSignal: AbortSignal,
           checkActiveOp: () => boolean,
         ): Promise<DuplicateActionResult> => {
-          const nextIntents = { ...(get().pendingDuplicateIntents || {}) };
-          delete nextIntents[opId];
-
           if (receipt.status === 'committed_deleted') {
-            set({ pendingDuplicateIntents: nextIntents, syncStatus: 'idle' });
+            set((state) => ({
+              pendingDuplicateIntents: withoutPendingDuplicateIntent(state.pendingDuplicateIntents, opId),
+              syncStatus: 'idle',
+            }));
             return {
               success: true,
               operationId: opId,
@@ -7338,6 +9421,8 @@ export function createApiStore(
 
           let refreshedTargetCol: Collection | null = null;
           let rawMatchesActiveScope = true;
+          let rawScopeKey: string | null = null;
+          let detailsError: string | undefined;
           try {
             const rawTargetCol = await fetchCollectionByIdForRuntime(
               cloudConfig.apiUrl,
@@ -7349,18 +9434,19 @@ export function createApiStore(
             const activeScopeNow = get().cloudConfig.activeScope;
             const activeScopeKeyNow =
               get().workspaceMode === 'cloud' && activeScopeNow ? getScopeCacheKey(activeScopeNow) : null;
-            const rawScopeKey = rawTargetCol?.workspace_id
+            rawScopeKey = rawTargetCol?.workspace_id
               ? `workspace:${rawTargetCol.workspace_id}`
               : rawTargetCol?.project_id
                 ? `project:${rawTargetCol.project_id}`
                 : null;
-            if (rawScopeKey && activeScopeKeyNow && rawScopeKey !== activeScopeKeyNow) {
+            if (rawScopeKey && (!activeScopeKeyNow || rawScopeKey !== activeScopeKeyNow)) {
               rawMatchesActiveScope = false;
             } else {
               refreshedTargetCol = buildCollectionFromDetails(rawTargetCol);
             }
-          } catch {
+          } catch (err: unknown) {
             refreshedTargetCol = null;
+            detailsError = err instanceof Error ? err.message : 'Failed to load target collection details.';
           }
 
           if (
@@ -7368,6 +9454,25 @@ export function createApiStore(
             cloudSessionGeneration !== capturedSessionGen ||
             cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) !== ownerKey
           ) {
+            if (
+              !isStoreDisposed &&
+              cloudSessionGeneration === capturedSessionGen &&
+              cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === ownerKey
+            ) {
+              set((state) => {
+                const nextScopeCache = { ...(state.scopeCache || {}) };
+                for (const [k, entry] of Object.entries(nextScopeCache)) {
+                  if (k === rawScopeKey || entry?.collections?.some((c) => c.id === receipt.target_collection_id)) {
+                    delete nextScopeCache[k];
+                  }
+                }
+                return {
+                  pendingDuplicateIntents: withoutPendingDuplicateIntent(state.pendingDuplicateIntents, opId),
+                  scopeCache: nextScopeCache,
+                  syncStatus: 'idle',
+                };
+              });
+            }
             return { success: false, operationId: opId, error: 'Session or scope changed.' };
           }
 
@@ -7386,7 +9491,7 @@ export function createApiStore(
                 ? state.collections.map((c) => (c.id === refreshedTargetCol!.id ? refreshedTargetCol! : c))
                 : state.collections;
               return {
-                pendingDuplicateIntents: nextIntents,
+                pendingDuplicateIntents: withoutPendingDuplicateIntent(state.pendingDuplicateIntents, opId),
                 collections: nextCollections,
                 lastDuplicateReveal: {
                   pathIds: revealIds,
@@ -7408,22 +9513,34 @@ export function createApiStore(
           }
 
           // Server commit succeeded, but post-commit GET failed or collection belongs to an inactive scope.
-          set((state) => ({
-            pendingDuplicateIntents: nextIntents,
-            collections: rawMatchesActiveScope
-              ? state.collections.map((c) =>
-                  c.id === receipt.target_collection_id
-                    ? {
-                        ...c,
-                        version: receipt.target_collection_version ?? c.version,
-                        isPartial: true,
-                        updatedAt: Date.now(),
-                      }
-                    : c,
-                )
-              : state.collections,
-            syncStatus: 'idle',
-          }));
+          set((state) => {
+            const nextScopeCache =
+              !rawMatchesActiveScope && rawScopeKey && state.scopeCache?.[rawScopeKey]
+                ? (() => {
+                    const copy = { ...(state.scopeCache || {}) };
+                    delete copy[rawScopeKey!];
+                    return copy;
+                  })()
+                : state.scopeCache;
+            return {
+              pendingDuplicateIntents: withoutPendingDuplicateIntent(state.pendingDuplicateIntents, opId),
+              scopeCache: nextScopeCache,
+              collections:
+                rawMatchesActiveScope && state.workspaceMode === 'cloud'
+                  ? state.collections.map((c) =>
+                      c.id === receipt.target_collection_id
+                        ? {
+                            ...c,
+                            version: receipt.target_collection_version ?? c.version,
+                            isPartial: true,
+                            updatedAt: Date.now(),
+                          }
+                        : c,
+                    )
+                  : state.collections,
+              syncStatus: 'idle',
+            };
+          });
 
           return {
             success: true,
@@ -7432,12 +9549,13 @@ export function createApiStore(
             targetCollectionId: receipt.target_collection_id,
             targetParentId: receipt.target_parent_id ?? null,
             name: receipt.name,
+            ...(detailsError ? { detailsUnavailable: true, detailsError } : {}),
           };
         };
 
         // Replay path for persisted item duplicate intents even if source item/collection changed locally.
         if (existingIntent && existingIntent.kind === 'item') {
-          if (isOfflineOnly || !isCloudSessionActive(cloudConfig) || !cloudConfig.activeScope || !currentOwnerKey) {
+          if (isOfflineOnly || !isCloudSessionActive(cloudConfig) || !currentOwnerKey) {
             return { success: false, error: 'Sign in before duplicating cloud items.' };
           }
           if (existingIntent.ownerKey !== currentOwnerKey) {
@@ -7449,9 +9567,10 @@ export function createApiStore(
           const replaySourceColId = existingIntent.sourceCollectionId;
           const replayTargetColId = existingIntent.targetCollectionId || targetCollectionId;
           const replayIds = [...new Set([replaySourceColId, replayTargetColId])];
-          if (replayIds.some((id) => movingCollections.has(id) || duplicatingCollections.has(id))) {
+          if (inFlightDuplicateOperations.has(existingIntent.operationId) || replayIds.some((id) => movingCollections.has(id) || duplicatingCollections.has(id))) {
             return { success: false, error: 'A move or duplicate operation is already in progress for this collection.' };
           }
+          markDuplicateOperationInFlight(existingIntent.operationId);
           const lock = Symbol('item duplicate replay');
           replayIds.forEach((id) => duplicatingCollections.set(id, lock));
           const operation = beginAsyncOperation();
@@ -7485,32 +9604,35 @@ export function createApiStore(
               () => isAsyncOperationCurrent(operation),
             );
           } catch (err: unknown) {
-            const rejected = err instanceof CloudApiError && [400, 401, 403, 404, 409, 413].includes(err.status);
+            const rejected = err instanceof CloudApiError && [400, 403, 404, 409, 413].includes(err.status);
+            const errMsg = err instanceof Error ? err.message : 'Failed to duplicate item';
             const stillCurrent =
               isAsyncOperationCurrent(operation) &&
               cloudSessionGeneration === capturedSessionGen &&
               cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
             if (stillCurrent) {
-              const nextIntents = { ...(get().pendingDuplicateIntents || {}) };
-              if (rejected) {
-                delete nextIntents[existingIntent.operationId];
-              } else {
-                nextIntents[existingIntent.operationId] = { ...existingIntent, status: 'reconcile_required' };
-              }
-              set({
-                pendingDuplicateIntents: nextIntents,
+              set((state) => ({
+                pendingDuplicateIntents: rejected
+                  ? withoutPendingDuplicateIntent(state.pendingDuplicateIntents, existingIntent.operationId)
+                  : withReconcileRequiredIntent(
+                      state.pendingDuplicateIntents,
+                      existingIntent.operationId,
+                      existingIntent,
+                      errMsg,
+                    ),
                 syncStatus: 'error',
-                syncError: err instanceof Error ? err.message : 'Failed to duplicate item',
-              });
+                syncError: errMsg,
+              }));
             }
             return {
               success: false,
               operationId: existingIntent.operationId,
               reconcilePending: !rejected,
-              error: err instanceof Error ? err.message : 'Failed to duplicate item',
+              error: errMsg,
             };
           } finally {
             completeAsyncOperation(operation);
+            clearDuplicateOperationInFlight(existingIntent.operationId);
             replayIds.forEach((id) => {
               if (duplicatingCollections.get(id) === lock) duplicatingCollections.delete(id);
             });
@@ -7562,48 +9684,63 @@ export function createApiStore(
           }
 
           const capturedOfflineWsId = activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID;
-          const prevCollections = get().collections;
-          const prevOfflineCache = get().offlineScopeCache || {};
           const prevReveal = get().lastDuplicateReveal;
+          let appliedRevealRevision: number | null = null;
           const revealIds = [
             targetCollectionId,
             ...(targetParentId ? (findFolderRevealPath(nextTargetItems, targetParentId) || [targetParentId]) : []),
             ...(clonedItem.type === 'folder' ? [clonedItem.id] : []),
           ];
 
-          set((state) => ({
-            collections: state.collections.map((c) =>
-              c.id === targetCollectionId
-                ? { ...c, items: nextTargetItems, updatedAt: Date.now() }
-                : c,
-            ),
-            lastDuplicateReveal: {
-              pathIds: revealIds,
-              revision: (state.lastDuplicateReveal?.revision ?? 0) + 1,
-            },
-          }));
+          set((state) => {
+            appliedRevealRevision = (state.lastDuplicateReveal?.revision ?? 0) + 1;
+            return {
+              collections: state.collections.map((c) =>
+                c.id === targetCollectionId
+                  ? { ...c, items: nextTargetItems, updatedAt: Date.now() }
+                  : c,
+              ),
+              lastDuplicateReveal: {
+                pathIds: revealIds,
+                revision: appliedRevealRevision,
+              },
+            };
+          });
 
           try {
             await flushPersisted();
           } catch {
-            const latestState = get();
-            const isStillSameOfflineWs =
-              latestState.workspaceMode === 'offline' &&
-              latestState.activeOfflineWorkspaceId === capturedOfflineWsId;
-            if (isStillSameOfflineWs) {
-              set({ collections: prevCollections, lastDuplicateReveal: prevReveal });
-            } else {
-              const latestOfflineCache = { ...(latestState.offlineScopeCache || {}) };
-              if (prevOfflineCache[capturedOfflineWsId]) {
-                latestOfflineCache[capturedOfflineWsId] = prevOfflineCache[capturedOfflineWsId];
-              } else if (latestOfflineCache[capturedOfflineWsId]) {
-                latestOfflineCache[capturedOfflineWsId] = {
-                  ...latestOfflineCache[capturedOfflineWsId],
-                  collections: prevCollections,
-                };
-              }
-              set({ offlineScopeCache: latestOfflineCache });
-            }
+            set((state) => {
+              const isTargetActive =
+                state.workspaceMode === 'offline' &&
+                (state.activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID) === capturedOfflineWsId;
+              const stripClonedItem = (cols: Collection[]) =>
+                cols.map((c) => {
+                  if (c.id !== targetCollectionId) return c;
+                  const { items, removed } = removeItemFromCollectionTree(c.items || [], clonedItem.id);
+                  return removed ? { ...c, items } : c;
+                });
+              const prevCache = state.offlineScopeCache || {};
+              const cachedTarget = prevCache[capturedOfflineWsId];
+              const nextOfflineCache = cachedTarget
+                ? {
+                    ...prevCache,
+                    [capturedOfflineWsId]: {
+                      ...cachedTarget,
+                      collections: stripClonedItem(cachedTarget.collections || []),
+                    },
+                  }
+                : prevCache;
+              const nextReveal =
+                appliedRevealRevision !== null && state.lastDuplicateReveal?.revision === appliedRevealRevision
+                  ? prevReveal
+                  : state.lastDuplicateReveal;
+              return {
+                ...(isTargetActive ? { collections: stripClonedItem(state.collections) } : {}),
+                offlineScopeCache: nextOfflineCache,
+                lastDuplicateReveal: nextReveal,
+              };
+            });
             return { success: false, error: 'Failed to persist duplicated item to local storage.' };
           }
 
@@ -7640,23 +9777,36 @@ export function createApiStore(
           return { success: false, error: 'A move or duplicate operation is already in progress for this collection.' };
         }
 
+        const opId = actionOptions?.operationId || crypto.randomUUID();
+        if (inFlightDuplicateOperations.has(opId)) {
+          return {
+            success: false,
+            operationId: opId,
+            reconcilePending: true,
+            error: 'Duplicate operation is already in progress.',
+          };
+        }
+
         const lock = Symbol('item duplicate');
         ids.forEach((id) => duplicatingCollections.set(id, lock));
         const operation = beginAsyncOperation();
         const capturedSessionGen = cloudSessionGeneration;
-        const opId = actionOptions?.operationId || crypto.randomUUID();
         const intent: PendingDuplicateIntent = {
           operationId: opId,
           ownerKey: currentOwnerKey,
           kind: 'item',
           sourceCollectionId,
           sourceItemId: savedItem.id,
+          sourceName: savedItem.name,
+          sourceItemType: savedItem.type,
           targetCollectionId,
+          targetCollectionName: targetCol.name,
           targetParentId,
           createdAt: Date.now(),
           status: 'pending',
         };
 
+        markDuplicateOperationInFlight(opId);
         try {
           await Promise.all(ids.map((id) => collectionSaveSyncQueues.get(`${scope.type}:${scope.id}:${id}`)));
           if (!isAsyncOperationCurrent(operation)) {
@@ -7666,13 +9816,27 @@ export function createApiStore(
             return { success: false, error: 'Sync pending changes in both collections before duplicating.' };
           }
 
-          const prevIntents = get().pendingDuplicateIntents || {};
-          set({ pendingDuplicateIntents: { ...prevIntents, [opId]: intent } });
+          set((state) => ({
+            pendingDuplicateIntents: { ...(state.pendingDuplicateIntents || {}), [opId]: intent },
+          }));
           try {
             await flushPersisted();
           } catch {
-            set({ pendingDuplicateIntents: prevIntents });
+            set((state) => ({
+              pendingDuplicateIntents: withoutPendingDuplicateIntent(state.pendingDuplicateIntents, opId),
+            }));
             return { success: false, error: 'Failed to persist duplicate intent.' };
+          }
+
+          if (
+            !isAsyncOperationCurrent(operation) ||
+            cloudSessionGeneration !== capturedSessionGen ||
+            cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) !== currentOwnerKey
+          ) {
+            set((state) => ({
+              pendingDuplicateIntents: withoutPendingDuplicateIntent(state.pendingDuplicateIntents, opId),
+            }));
+            return { success: false, operationId: opId, error: 'Session or scope changed.' };
           }
 
           const receipt = await duplicateScopeItem(
@@ -7704,31 +9868,29 @@ export function createApiStore(
           );
         } catch (err: unknown) {
           const rejected = err instanceof CloudApiError && [400, 401, 403, 404, 409, 413].includes(err.status);
+          const errMsg = err instanceof Error ? err.message : 'Failed to duplicate item';
           const stillCurrent =
             isAsyncOperationCurrent(operation) &&
             cloudSessionGeneration === capturedSessionGen &&
             cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
           if (stillCurrent) {
-            const nextIntents = { ...(get().pendingDuplicateIntents || {}) };
-            if (rejected) {
-              delete nextIntents[opId];
-            } else {
-              nextIntents[opId] = { ...intent, status: 'reconcile_required' };
-            }
-            set({
-              pendingDuplicateIntents: nextIntents,
+            set((state) => ({
+              pendingDuplicateIntents: rejected
+                ? withoutPendingDuplicateIntent(state.pendingDuplicateIntents, opId)
+                : withReconcileRequiredIntent(state.pendingDuplicateIntents, opId, intent, errMsg),
               syncStatus: 'error',
-              syncError: err instanceof Error ? err.message : 'Failed to duplicate item',
-            });
+              syncError: errMsg,
+            }));
           }
           return {
             success: false,
             operationId: opId,
             reconcilePending: !rejected,
-            error: err instanceof Error ? err.message : 'Failed to duplicate item',
+            error: errMsg,
           };
         } finally {
           completeAsyncOperation(operation);
+          clearDuplicateOperationInFlight(opId);
           ids.forEach((id) => {
             if (duplicatingCollections.get(id) === lock) duplicatingCollections.delete(id);
           });
@@ -7750,6 +9912,7 @@ export function createApiStore(
             return {
               activeTabId: existingTab.id,
               activeResponse: restoredResponse,
+              selectedExample: null,
               tabResponses: nextTabResponses,
               tabRevealRevision: state.tabRevealRevision + 1,
               canUndoActiveRequest: (tabUndoHistory[existingTab.id]?.past?.length ?? 0) > 0,
@@ -7770,6 +9933,7 @@ export function createApiStore(
             tabs: [...state.tabs, newTab],
             activeTabId: newTab.id,
             activeResponse: initialResponse || null,
+            selectedExample: null,
             tabResponses: nextTabResponses,
             tabRevealRevision: state.tabRevealRevision + 1,
             canUndoActiveRequest: false,
@@ -7956,6 +10120,7 @@ export function createApiStore(
               },
           nativeCredentialState: state.nativeCredentialState,
           nativeCredentialCleanupPending: state.nativeCredentialCleanupPending ? true : undefined,
+          pendingExampleIntents: state.pendingExampleIntents || {},
           pendingDuplicateIntents: state.pendingDuplicateIntents || {},
           theme: state.theme ?? 'system',
         };

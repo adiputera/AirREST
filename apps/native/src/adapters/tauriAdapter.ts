@@ -33,11 +33,13 @@ import {
 import type { NativeCredentialStorage } from '@airrest/common/platform';
 
 export const MAX_IMPORT_FILE_BYTES = 16 * 1024 * 1024; // 16 MiB
+export const MAX_IMPORT_BATCH_FILES = 50;
+export const MAX_IMPORT_BATCH_TOTAL_BYTES = 64 * 1024 * 1024; // 64 MiB
 
 export function extractFilename(filePath: string): string {
   if (filePath.startsWith('content:')) {
     try {
-      const decoded = decodeURIComponent(filePath);
+      const decoded = decodeURIComponent(filePath).replace(/^content:\/\/[^/]*\/?/i, '');
       const segments = decoded.split(/[/?&#]/).filter(Boolean);
       for (let i = segments.length - 1; i >= 0; i--) {
         const seg = segments[i].split(/[:/\\]/).pop();
@@ -471,16 +473,46 @@ export const tauriScriptExecutor: ScriptExecutor = {
   },
 };
 
-async function readValidatedTauriTextFile(filePath: string): Promise<{ filename: string; content: string }> {
+async function readValidatedTauriTextFileWithSize(
+  filePath: string,
+  remainingBatchBytes?: number
+): Promise<{ filename: string; content: string; utf8ByteLength: number }> {
   const fileInfo = typeof tauriStat === 'function' ? await tauriStat(filePath).catch(() => null) : null;
-  if (fileInfo && typeof fileInfo.size === 'number' && fileInfo.size > MAX_IMPORT_FILE_BYTES) {
-    throw new Error('Selected file exceeds maximum allowed limit of 16 MB.');
+  if (fileInfo && typeof fileInfo.size === 'number') {
+    if (fileInfo.size > MAX_IMPORT_FILE_BYTES) {
+      throw new Error('Selected file exceeds maximum allowed limit of 16 MB.');
+    }
+    if (remainingBatchBytes !== undefined && fileInfo.size > remainingBatchBytes) {
+      throw new Error('Import batch exceeds maximum total size limit of 64 MB.');
+    }
   }
   const content = await tauriReadTextFile(filePath);
-  if (content.length > MAX_IMPORT_FILE_BYTES) {
+  let utf8ByteLength = 0;
+  if (typeof TextEncoder !== 'undefined') {
+    utf8ByteLength = new TextEncoder().encode(content).byteLength;
+  } else {
+    for (let i = 0; i < content.length; i++) {
+      const code = content.charCodeAt(i);
+      if (code < 0x80) utf8ByteLength += 1;
+      else if (code < 0x800) utf8ByteLength += 2;
+      else if (code >= 0xd800 && code <= 0xdbff && i + 1 < content.length) {
+        utf8ByteLength += 4;
+        i += 1;
+      } else utf8ByteLength += 3;
+    }
+  }
+  if (utf8ByteLength > MAX_IMPORT_FILE_BYTES) {
     throw new Error('Selected file exceeds maximum allowed limit of 16 MB.');
   }
+  if (remainingBatchBytes !== undefined && utf8ByteLength > remainingBatchBytes) {
+    throw new Error('Import batch exceeds maximum total size limit of 64 MB.');
+  }
   const filename = extractFilename(filePath);
+  return { filename, content, utf8ByteLength };
+}
+
+async function readValidatedTauriTextFile(filePath: string): Promise<{ filename: string; content: string }> {
+  const { filename, content } = await readValidatedTauriTextFileWithSize(filePath);
   return { filename, content };
 }
 
@@ -545,13 +577,27 @@ export const tauriAdapter: PlatformAdapter = {
 
     const paths = (Array.isArray(selected) ? selected : [selected]).filter(Boolean);
     if (paths.length === 0) return [];
+    if (paths.length > MAX_IMPORT_BATCH_FILES) {
+      return [
+        {
+          filename: `Batch (${paths.length} files)`,
+          content: '',
+          error: `Selected batch exceeds maximum allowed limit of ${MAX_IMPORT_BATCH_FILES} files.`,
+        },
+      ];
+    }
 
+    let totalBytes = 0;
     const results: OpenedFileResult[] = [];
     for (const filePath of paths) {
       const filename = extractFilename(filePath);
       try {
-        const result = await readValidatedTauriTextFile(filePath);
-        results.push(result);
+        const result = await readValidatedTauriTextFileWithSize(
+          filePath,
+          MAX_IMPORT_BATCH_TOTAL_BYTES - totalBytes
+        );
+        totalBytes += result.utf8ByteLength;
+        results.push({ filename: result.filename, content: result.content });
       } catch (err) {
         console.error('Failed to read file via native dialog:', err);
         results.push({

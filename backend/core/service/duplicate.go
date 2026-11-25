@@ -181,6 +181,7 @@ func validateAndConvertImportDuplicateItems(items []ImportItemRequest) ([]postgr
 			BodyFormData:       it.BodyFormData,
 			PreRequestScript:   it.PreRequestScript,
 			PostResponseScript: it.PostResponseScript,
+			Examples:           it.Examples,
 			Items:              children,
 		})
 	}

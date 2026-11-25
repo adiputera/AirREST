@@ -16,7 +16,7 @@ export interface CloseTabShortcutOptions {
 }
 
 const BLOCKING_MODAL_SELECTOR =
-  '[data-modal="true"], [role="dialog"], [data-payload-modal="true"], .fixed.inset-0[class*="z-50"], .fixed.inset-0[class*="z-[60]"], .fixed.inset-0[class*="z-[70]"]';
+  '[data-modal="true"], [role="dialog"], [data-payload-modal="true"], .fixed.inset-0[class*="z-50"]:not([data-non-blocking-overlay="true"]), .fixed.inset-0[class*="z-[60]"]:not([data-non-blocking-overlay="true"]), .fixed.inset-0[class*="z-[70]"]:not([data-non-blocking-overlay="true"])';
 
 /**
  * Detects whether the current environment runs on an Apple OS (macOS, iOS, iPadOS).
@@ -46,7 +46,7 @@ export function isCloseActiveTabShortcut(
   if (event.getModifierState?.('AltGraph')) return false;
 
   const key = (event.key || '').toLowerCase();
-  const isWKey = key === 'w' || (options.isMac && event.code === 'KeyW');
+  const isWKey = key === 'w' || (options.isMac && Boolean(event.altKey) && key === '∑');
   if (!isWKey) return false;
 
   const isAltClose =

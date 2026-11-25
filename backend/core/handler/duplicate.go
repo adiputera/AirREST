@@ -204,7 +204,7 @@ func writeDuplicateError(w http.ResponseWriter, err error) {
 		response.Error(w, http.StatusNotFound, err.Error(), "NOT_FOUND")
 	case errors.Is(err, postgres.ErrDuplicateConflict), errors.Is(err, postgres.ErrVersionConflict):
 		response.Error(w, http.StatusConflict, err.Error(), "CONFLICT")
-	case errors.Is(err, postgres.ErrDuplicateLimit), errors.Is(err, service.ErrBatchLimit):
+	case errors.Is(err, postgres.ErrDuplicateLimit), errors.Is(err, service.ErrBatchLimit), errors.Is(err, service.ErrExampleLimitExceeded):
 		response.Error(w, http.StatusRequestEntityTooLarge, err.Error(), "DUPLICATE_LIMIT_EXCEEDED")
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 		response.Error(w, http.StatusServiceUnavailable, "request deadline exceeded", "REQUEST_TIMEOUT")

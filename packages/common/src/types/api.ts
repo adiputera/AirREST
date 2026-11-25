@@ -93,6 +93,12 @@ export interface ApiResponse {
   updatedEnvVars?: string[];
   timestamp: number;
   contentType?: string;
+  /** Raw Content-Type response header including charset/parameters or comma-joined values. */
+  rawContentType?: string;
+  /** True when strict charset decoding of the raw response bytes failed. */
+  hasDecodingError?: boolean;
+  /** Snapshot of the request definition captured when this response was executed (pre-script). */
+  capturedRequest?: ApiRequest;
   isBinary?: boolean;
   isImage?: boolean;
   blobUrl?: string;
@@ -104,12 +110,50 @@ export interface ApiResponse {
   failureKind?: RequestFailureKind;
 }
 
+export interface SavedExampleHeader {
+  key: string;
+  value: string;
+  disabled?: boolean;
+  description?: string;
+}
+
+export interface SavedExample {
+  id: string;
+  revision: number;
+  name: string;
+  originalRequest?: Record<string, unknown>;
+  status: string;
+  code: number;
+  header: SavedExampleHeader[];
+  cookie?: Array<Record<string, unknown>>;
+  body: string;
+  _postman_previewlanguage?: string | null;
+  [key: string]: unknown;
+}
+
+export interface SavedExampleSummary {
+  id: string;
+  revision: number;
+  name: string;
+  code: number;
+  status: string;
+  _postman_previewlanguage?: string | null;
+  body_size_bytes: number;
+}
+
 export interface CollectionItem {
   id: string;
   name: string;
   type: 'folder' | 'request';
   request?: ApiRequest;
   items?: CollectionItem[];
+  version?: number;
+  examples?: SavedExample[];
+  exampleSummaries?: SavedExampleSummary[];
+  exampleCount?: number;
+  exampleSummariesTruncated?: boolean;
+  /** True when full example bodies are loaded; false when only summaries or truncated metadata are cached. */
+  examplesLoaded?: boolean;
 }
 
 export type ProjectRole = 'admin' | 'maintainer' | 'contributor' | 'reader';
@@ -153,6 +197,9 @@ export interface Environment {
   variables: EnvironmentVariable[];
   minRole?: 'admin' | 'maintainer' | 'contributor' | 'reader';
   version?: number;
+  _syncStatus?: 'synced' | 'pending' | 'error';
+  /** True only while a locally created cloud environment has never succeeded createScopeEnvironment. */
+  _pendingCreate?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -232,6 +279,9 @@ export interface FeaturePolicy {
   revision: number;
   updated_by?: string;
   updated_at: string;
+  capabilities?: {
+    saved_examples?: boolean;
+  };
 }
 
 export type FeaturePolicyStatus = 'idle' | 'loading' | 'ready' | 'stale' | 'error';
@@ -262,12 +312,33 @@ export interface PendingDuplicateIntent {
   kind: 'collection' | 'import_duplicate' | 'item';
   sourceCollectionId: string;
   sourceItemId?: string;
+  sourceName?: string;
+  sourceItemType?: 'folder' | 'request';
   targetScope?: ActiveScope;
   targetCollectionId?: string;
+  targetCollectionName?: string;
   targetParentId?: string | null;
   sanitizedPayload?: { name: string; description?: string; items: any[] };
   createdAt: number;
   status: 'pending' | 'reconcile_required';
+  lastError?: string;
+}
+
+export interface PendingExampleIntent {
+  operationId: string;
+  ownerKey: string | null;
+  op: 'add' | 'rename' | 'delete';
+  collectionId: string;
+  itemId: string;
+  exampleId: string;
+  baseVersion?: number;
+  baseExampleRevision?: number;
+  example?: SavedExample;
+  name?: string;
+  targetScope?: ActiveScope;
+  createdAt: number;
+  status: 'pending' | 'reconcile_required';
+  lastError?: string;
 }
 
 export interface DuplicateActionResult {
@@ -283,5 +354,7 @@ export interface DuplicateActionResult {
   minRole?: ProjectRole;
   reconcilePending?: boolean;
   deletedOnServer?: boolean;
+  detailsUnavailable?: boolean;
+  detailsError?: string;
   revealPathIds?: string[];
 }

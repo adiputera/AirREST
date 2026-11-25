@@ -40,6 +40,8 @@ export const TabBar: React.FC = () => {
   const tabs = useApiStore((state) => state.tabs);
   const collections = useApiStore((state) => state.collections);
   const activeTabId = useApiStore((state) => state.activeTabId);
+  const selectedExample = useApiStore((state) => state.selectedExample);
+  const selectSavedExample = useApiStore((state) => state.selectSavedExample);
   const tabRevealRevision = useApiStore((state) => state.tabRevealRevision);
   const setActiveTabId = useApiStore((state) => state.setActiveTabId);
   const createTab = useApiStore((state) => state.createTab);
@@ -307,12 +309,17 @@ export const TabBar: React.FC = () => {
     };
   }, [contextMenu]);
 
-  // Close unsaved confirm modal on Escape key
+  // Close unsaved confirm modal on Escape key and move focus into the modal
+  const unsavedCancelButtonRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
     if (!unsavedConfirmTab) return;
 
+    unsavedCancelButtonRef.current?.focus();
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
         handleCancelClose();
       }
     };
@@ -391,6 +398,12 @@ export const TabBar: React.FC = () => {
       closeTab(cleanId);
     }
 
+    // Blur any focused editor/input before opening the confirmation modal so floating
+    // portals (such as autocomplete listboxes) close cleanly and input cannot leak behind the modal.
+    if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+
     const [firstDirtyTab, ...remainingDirtyTabs] = plan.dirtyTabs;
     const remainingIds = remainingDirtyTabs.map((tab) => tab.id);
     pendingCloseTabIdsRef.current = remainingIds;
@@ -409,10 +422,43 @@ export const TabBar: React.FC = () => {
 
   const shortcutBlockedRef = useRef(false);
   shortcutBlockedRef.current = Boolean(isSwitchingWorkspace || unsavedConfirmTab || isSaveModalOpen);
+  const selectedExampleRef = useRef(selectedExample);
+  selectedExampleRef.current = selectedExample;
+  const lastNativeCloseAtRef = useRef(0);
 
-  // Close the active request tab with Alt+W (all platforms) or Ctrl+W / Cmd+W (desktop)
+  // Close the active example viewer or request tab with Alt+W (all platforms) or Ctrl+W / Cmd+W (desktop)
   useEffect(() => {
+    const triggerCloseActiveTab = () => {
+      if (shortcutBlockedRef.current || hasOpenBlockingModal()) return false;
+
+      if (selectedExampleRef.current) {
+        selectSavedExample(null);
+        return true;
+      }
+
+      const currentActiveId = activeTabIdRef.current;
+      if (!currentActiveId || !tabIdsRef.current.includes(currentActiveId)) return false;
+
+      if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
+      setContextMenu(null);
+      handleRequestCloseTabRef.current(currentActiveId);
+      return true;
+    };
+
     const handleKeyDown = (e: KeyboardEvent) => {
+      const hasMacNativeMenuOwner =
+        isDesktopRuntime &&
+        isMacPlatform &&
+        Boolean(
+          (window as Window & { __AIRREST_MAC_NATIVE_CLOSE_TAB_MENU__?: boolean })
+            .__AIRREST_MAC_NATIVE_CLOSE_TAB_MENU__
+        );
+      if (hasMacNativeMenuOwner && e.metaKey && !e.altKey) {
+        return;
+      }
+
       if (
         !isCloseActiveTabShortcut(e, {
           isDesktop: isDesktopRuntime,
@@ -422,19 +468,37 @@ export const TabBar: React.FC = () => {
         return;
       }
 
-      if (shortcutBlockedRef.current || hasOpenBlockingModal()) return;
+      // On native desktop, Ctrl+W / Cmd+W must always be consumed even when blocked by a modal
+      // or when 0 tabs are open so the underlying WebView never handles a default window shortcut.
+      if (isDesktopRuntime && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        e.stopPropagation();
+        triggerCloseActiveTab();
+        return;
+      }
 
-      const currentActiveId = activeTabIdRef.current;
-      if (!currentActiveId || !tabIdsRef.current.includes(currentActiveId)) return;
+      if (!triggerCloseActiveTab()) return;
 
       e.preventDefault();
       e.stopPropagation();
-      setContextMenu(null);
-      handleRequestCloseTabRef.current(currentActiveId);
+    };
+
+    const handleCloseActiveTabEvent = () => {
+      const now = Date.now();
+      if (now - lastNativeCloseAtRef.current < 180) {
+        return;
+      }
+      if (triggerCloseActiveTab()) {
+        lastNativeCloseAtRef.current = now;
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('airrest:close-active-tab', handleCloseActiveTabEvent);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('airrest:close-active-tab', handleCloseActiveTabEvent);
+    };
   }, [isDesktopRuntime, isMacPlatform]);
 
   const handleTabAuxClick = (e: React.MouseEvent, tabId: string) => {
@@ -780,6 +844,9 @@ export const TabBar: React.FC = () => {
           onClick={(e) => {
             if (e.target === e.currentTarget) handleCancelClose();
           }}
+          data-modal="true"
+          role="dialog"
+          aria-modal="true"
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150 select-none"
         >
           <div
@@ -835,6 +902,7 @@ export const TabBar: React.FC = () => {
             {/* Action Buttons: Cancel, Discard All (for multi-tab batch), Close Tab, Save */}
             <div className="mt-6 flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-line">
               <button
+                ref={unsavedCancelButtonRef}
                 type="button"
                 onClick={handleCancelClose}
                 className="rounded-xl border border-line bg-card px-3.5 py-2 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition cursor-pointer"

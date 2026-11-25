@@ -270,7 +270,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
     }, [acContext, environments, activeEnvironmentId]);
 
     const isAutocompleteOpen = Boolean(
-      !readOnly && enableVariableAutocomplete && acContext && acSuggestions.length > 0
+      !readOnly && enableVariableAutocomplete && acContext && acAnchorRect && acSuggestions.length > 0
     );
 
     // Refs so CodeMirror keymaps and updateListeners always see latest autocomplete state
@@ -290,6 +290,24 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
     const languageCompartmentRef = useRef(new Compartment());
     const themeCompartmentRef = useRef(new Compartment());
     const highlightCompartmentRef = useRef(new Compartment());
+    const ariaCompartmentRef = useRef(new Compartment());
+
+    const getContentAttributes = useCallback(
+      (open: boolean, ro: boolean, acEnabled: boolean, idx: number): Record<string, string> => {
+        if (ro || !acEnabled) return {};
+        const attrs: Record<string, string> = {
+          role: 'combobox',
+          'aria-autocomplete': 'list',
+          'aria-expanded': open ? 'true' : 'false',
+        };
+        if (open) {
+          attrs['aria-controls'] = listboxId;
+          attrs['aria-activedescendant'] = `${listboxId}-item-${idx}`;
+        }
+        return attrs;
+      },
+      [listboxId]
+    );
 
     // Keep latest value and onChange in refs to prevent stale closures
     const valueRef = useRef(value);
@@ -306,6 +324,14 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
       const coords = view.coordsAtPos(pos);
       const containerRect = containerRef.current?.getBoundingClientRect();
       if (coords) {
+        if (typeof window !== 'undefined') {
+          if (coords.bottom < 0 || coords.top > window.innerHeight || coords.right < 0 || coords.left > window.innerWidth) {
+            return null;
+          }
+        }
+        if (containerRect && (coords.bottom < containerRect.top - 4 || coords.top > containerRect.bottom + 4)) {
+          return null;
+        }
         return {
           left: coords.left,
           top: coords.top,
@@ -314,6 +340,11 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
         };
       }
       if (containerRect) {
+        if (typeof window !== 'undefined') {
+          if (containerRect.bottom < 0 || containerRect.top > window.innerHeight || containerRect.right < 0 || containerRect.left > window.innerWidth) {
+            return null;
+          }
+        }
         return {
           left: containerRect.left + 24,
           top: containerRect.top + 24,
@@ -332,19 +363,19 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
 
       const chosen = list[index];
       const currentDoc = view.state.doc.toString();
-      const { nextText, nextCursorPos } = applyAutocompleteSuggestion(currentDoc, ctx, chosen);
-      const insertedSegment = nextText.slice(
-        ctx.replaceFrom,
-        nextText.length - (currentDoc.length - ctx.replaceTo)
+      const { replaceFrom, replaceTo, insertedText, nextCursorPos } = applyAutocompleteSuggestion(
+        currentDoc,
+        ctx,
+        chosen
       );
 
       setAcContext(null);
       isDiscreteChangeRef.current = true;
       view.dispatch({
         changes: {
-          from: ctx.replaceFrom,
-          to: ctx.replaceTo,
-          insert: insertedSegment,
+          from: replaceFrom,
+          to: replaceTo,
+          insert: insertedText,
         },
         selection: { anchor: nextCursorPos },
       });
@@ -363,14 +394,20 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
     useEffect(() => {
       if (!isAutocompleteOpen) return;
       const handleScrollOrResize = (e: Event) => {
-        const target = e.target as HTMLElement | null;
-        if (target && target.closest?.(`#${CSS.escape(listboxId)}`)) {
+        const target = e.target as Node | null;
+        const listboxEl = typeof document !== 'undefined' ? document.getElementById(listboxId) : null;
+        if (target && listboxEl?.contains(target)) {
           return;
         }
         const view = viewRef.current;
         const ctx = acContextRef.current;
         if (view && ctx) {
-          setAcAnchorRect(computeCmAnchorRect(view, ctx.openBracesIndex ?? ctx.replaceFrom));
+          const rect = computeCmAnchorRect(view, ctx.openBracesIndex ?? ctx.replaceFrom);
+          if (!rect) {
+            setAcContext(null);
+          } else {
+            setAcAnchorRect(rect);
+          }
         }
       };
       window.addEventListener('scroll', handleScrollOrResize, true);
@@ -429,6 +466,11 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
         EditorView.lineWrapping,
         indentUnit.of('  '),
         readOnlyCompartmentRef.current.of(EditorState.readOnly.of(readOnly)),
+        ariaCompartmentRef.current.of(
+          EditorView.contentAttributes.of(
+            getContentAttributes(isAcOpenRef.current, readOnly, enableVariableAutocomplete, acActiveIndexRef.current)
+          )
+        ),
         languageCompartmentRef.current.of(getLanguageExtension(language)),
         highlightCompartmentRef.current.of(
           syntaxHighlighting(isDark ? darkHighlightStyle : lightHighlightStyle, { fallback: true })
@@ -465,6 +507,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
             keymap.of([
               {
                 key: 'ArrowDown',
+                stopPropagation: true,
                 run: () => {
                   if (!isAcOpenRef.current) return false;
                   const len = acSuggestionsRef.current.length;
@@ -476,6 +519,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
               },
               {
                 key: 'ArrowUp',
+                stopPropagation: true,
                 run: () => {
                   if (!isAcOpenRef.current) return false;
                   const len = acSuggestionsRef.current.length;
@@ -487,6 +531,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
               },
               {
                 key: 'Enter',
+                stopPropagation: true,
                 run: () => {
                   if (!isAcOpenRef.current) return false;
                   handleSelectSuggestionRef.current(acActiveIndexRef.current);
@@ -495,6 +540,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
               },
               {
                 key: 'Tab',
+                stopPropagation: true,
                 run: () => {
                   if (!isAcOpenRef.current) return false;
                   handleSelectSuggestionRef.current(acActiveIndexRef.current);
@@ -503,10 +549,42 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
               },
               {
                 key: 'Escape',
+                stopPropagation: true,
                 run: () => {
                   if (!isAcOpenRef.current) return false;
                   setAcContext(null);
                   return true;
+                },
+              },
+              {
+                key: 'Ctrl-Space',
+                stopPropagation: true,
+                run: (view) => {
+                  if (readOnly || !enableVarAcRef.current) return false;
+                  const sel = view.state.selection.main;
+                  if (!sel.empty) return false;
+                  const detected = detectInputAutocompleteContext(view.state.doc.toString(), sel.head, 'variable-only');
+                  if (!detected) return false;
+                  const rect = computeCmAnchorRect(view, detected.openBracesIndex ?? detected.replaceFrom);
+                  if (!rect) return false;
+                  setAcActiveIndex(0);
+                  setAcContext(detected);
+                  setAcAnchorRect(rect);
+                  return true;
+                },
+              },
+              {
+                key: 'Mod-Enter',
+                run: () => {
+                  if (isAcOpenRef.current) setAcContext(null);
+                  return false;
+                },
+              },
+              {
+                key: 'Ctrl-Enter',
+                run: () => {
+                  if (isAcOpenRef.current) setAcContext(null);
+                  return false;
                 },
               },
             ])
@@ -568,7 +646,12 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
 
         extensions.push(
           EditorView.domEventHandlers({
-            blur: () => {
+            blur: (event) => {
+              const listboxEl = typeof document !== 'undefined' ? document.getElementById(listboxId) : null;
+              const related = event.relatedTarget as Node | null;
+              if (related && listboxEl?.contains(related)) {
+                return false;
+              }
               setAcContext(null);
               return false;
             },
@@ -607,17 +690,22 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
               if (!detected) {
                 setAcContext(null);
               } else {
-                setAcContext((prev) => {
-                  if (!prev || prev.query !== detected.query) {
-                    setAcActiveIndex(0);
-                  }
-                  return detected;
-                });
                 const rect = computeCmAnchorRect(
                   update.view,
                   detected.openBracesIndex ?? detected.replaceFrom
                 );
-                setAcAnchorRect(rect);
+                if (!rect) {
+                  setAcContext(null);
+                  setAcAnchorRect(null);
+                } else {
+                  setAcContext((prev) => {
+                    if (!prev || prev.query !== detected.query) {
+                      setAcActiveIndex(0);
+                    }
+                    return detected;
+                  });
+                  setAcAnchorRect(rect);
+                }
               }
             }
           })
@@ -650,12 +738,31 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
       if (!view) return;
       const currentDoc = view.state.doc.toString();
       if (currentDoc !== value) {
+        acContextRef.current = null;
+        setAcContext(null);
         view.dispatch({
           changes: { from: 0, to: currentDoc.length, insert: value || '' },
           annotations: [externalValueSync.of(true), Transaction.addToHistory.of(false)],
         });
       }
     }, [value]);
+
+    useEffect(() => {
+      if (readOnly || !enableVariableAutocomplete) {
+        acContextRef.current = null;
+        setAcContext(null);
+      }
+      const view = viewRef.current;
+      if (view) {
+        view.dispatch({
+          effects: ariaCompartmentRef.current.reconfigure(
+            EditorView.contentAttributes.of(
+              getContentAttributes(isAutocompleteOpen, readOnly, enableVariableAutocomplete, acActiveIndex)
+            )
+          ),
+        });
+      }
+    }, [readOnly, enableVariableAutocomplete, isAutocompleteOpen, acActiveIndex, getContentAttributes]);
 
     // Synchronize language changes
     useEffect(() => {
@@ -703,6 +810,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
           activeIndex={acActiveIndex}
           onSelectIndex={handleSelectSuggestion}
           onHighlightIndex={setAcActiveIndex}
+          onDismiss={() => setAcContext(null)}
           anchorRect={acAnchorRect}
           query={acContext?.query || ''}
           kind="variable"

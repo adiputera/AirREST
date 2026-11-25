@@ -29,11 +29,11 @@ test('Sidebar component has updated search placeholder and clear button', () => 
       `${filePath} must tokenize search query`
     );
 
-    // Verify request search inspects name, method, and url
+    // Verify request search inspects name, method, url, and example names
     assert.match(
       content,
-      /fullText = `\$\{item\.name \|\| ''\} \$\{item\.request\?\.method \|\| ''\} \$\{item\.request\?\.url \|\| ''\}`\.toLowerCase\(\)/,
-      `${filePath} must search name, method, and url for requests`
+      /fullText = `\$\{item\.name \|\| ''\} \$\{item\.request\?\.method \|\| ''\} \$\{item\.request\?\.url \|\| ''\}(?: \$\{exampleNames\})?`\.toLowerCase\(\)/,
+      `${filePath} must search name, method, url, and example names for requests`
     );
 
     // Verify collection item matching priority: matched items > col.items
@@ -41,6 +41,18 @@ test('Sidebar component has updated search placeholder and clear button', () => 
       content,
       /items: matchedItems\.length > 0 \? matchedItems : col\.items/,
       `${filePath} must prioritize matched items when requests match inside collection`
+    );
+
+    // C3: Export Collection & Duplicate resolve unpruned collections/items and hydrate partial collections
+    assert.match(
+      content,
+      /const resolveUnprunedCollection = \(colId: string, fallback: Collection\): Collection =>/,
+      `${filePath} must resolve unpruned collections from full store state`
+    );
+    assert.match(
+      content,
+      /let exportTarget = resolveUnprunedCollection\(col\.id, col\);[\s\S]*if \(exportTarget\.isPartial\)[\s\S]*loadCollectionDetails\(exportTarget\.id\)/,
+      `${filePath} handleExportCollection must resolve unpruned collection and hydrate partial collections`
     );
   }
 });

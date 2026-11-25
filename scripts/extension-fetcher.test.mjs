@@ -417,17 +417,65 @@ function loadDownload(response, blobs, saveFile, rawBodies = new Map(), options 
     useRef: (initial = null) => ({ current: initial }),
   };
   const jsx = (type, props) => ({ type, props });
+  const examplesSource = fs.readFileSync(new URL('../packages/common/src/lib/examples.ts', import.meta.url), 'utf8');
+  const examplesCompiled = ts.transpileModule(examplesSource, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const examplesExports = {};
+  vm.runInNewContext(examplesCompiled, {
+    exports: examplesExports,
+    require: () => ({}),
+    crypto,
+    URL,
+    URLSearchParams,
+    TextEncoder,
+    TextDecoder,
+    Blob,
+    File: globalThis.File,
+    JSON,
+    Math,
+    Object,
+    Array,
+    Map,
+    Set,
+    RegExp,
+    Error,
+  });
   const modules = {
     react: { ...react, default: react },
     'react/jsx-runtime': { jsx, jsxs: jsx },
     'lucide-react': new Proxy({}, { get: (_, name) => name }),
-    '../store/useApiStore': { useApiStore: (select) => select({ activeResponse: response, tabs: [], isLoading: false }) },
+    '../store/useApiStore': {
+      useApiStore: (select) => select({
+        activeResponse: response,
+        tabs: [],
+        activeTabId: null,
+        collections: [],
+        activeWorkspaceId: null,
+        activeTeamId: null,
+        activeProjectId: null,
+        workspaceMode: 'local',
+        cloudConfig: { activeScope: { type: 'personal' }, user: null, apiUrl: '' },
+        cloudAuth: { isAuthenticated: false, user: null },
+        isLoading: false,
+        updateActiveRequest: () => {},
+        sendRequest: () => {},
+        saveResponseAsExample: async () => ({ status: 'saved' }),
+        selectSavedExample: () => {},
+      }),
+    },
     '../context': { usePlatformAdapter: () => (options.noAdapter ? null : { saveFile }) },
     '../lib/blobManager': {
       getTrackedBlob: (url) => blobs.get(url),
       getTrackedRawBody: (id) => rawBodies.get(id),
     },
     '../lib/backNavigation': { useBackHandler: () => {} },
+    '../lib/hostPermissions': { requestHostPermission: async () => true },
+    './editor/CodeEditor': { CodeEditor: () => null },
+    './SaveToCollectionModal': { SaveToCollectionModal: () => null },
+    '../lib/requestDiff': { findSavedRequestInCollections: () => null },
+    '../lib/jwt': { canModifyCollection: () => true, hasScopePermission: () => true },
+    '../lib/examples': examplesExports,
   };
   const exports = {};
   vm.runInNewContext(compiled, {

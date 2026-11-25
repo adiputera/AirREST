@@ -2,7 +2,13 @@ import { ApiRequest, HttpMethod, KeyValuePair, AuthConfig, FormDataItem, BinaryF
 import { resolveBodyContentTypeHeader, resolveEffectiveAuthHeader, resolveManualHeaders } from './authHeaders';
 import { interpolateVariables } from './fetcher';
 import { compileEffectiveJsonPayload } from './formatters';
-import { parsePathVariablesFromUrl, parseQueryParamsFromUrl, substitutePathVariables } from './urlParams';
+import {
+  decodeQueryComponentPreservingTemplates,
+  encodeQueryComponentPreservingTemplates,
+  parsePathVariablesFromUrl,
+  parseQueryParamsFromUrl,
+  substitutePathVariables,
+} from './urlParams';
 
 function generateId(): string {
   return Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
@@ -320,34 +326,84 @@ export function tokenizeCurlCommand(input: string): string[] {
     rawTokens.push(current);
   }
 
-  // Normalize attached short flags (-XPOST, -H"...") and --flag=value tokens
-  const tokens: string[] = [];
-  for (const tok of rawTokens) {
-    if (tok.startsWith('--')) {
-      const eqIdx = tok.indexOf('=');
-      if (eqIdx > 2) {
-        const flagName = tok.slice(0, eqIdx);
-        if (LONG_FLAGS_WITH_EQUALS.has(flagName)) {
-          tokens.push(flagName, tok.slice(eqIdx + 1));
-          continue;
-        }
-      }
-      tokens.push(tok);
-      continue;
-    }
+  return rawTokens;
+}
 
-    if (tok.length > 2 && tok[0] === '-' && tok[1] !== '-') {
-      const shortFlag = tok.slice(0, 2);
-      if (/^-(X|H|d|u|F|b|A|e|o|x|m|w|D|c)$/.test(shortFlag)) {
-        tokens.push(shortFlag, tok.slice(2));
-        continue;
+const ATTACHED_SHORT_VALUE_FLAGS = new Set([
+  '-X',
+  '-H',
+  '-d',
+  '-u',
+  '-F',
+  '-b',
+  '-A',
+  '-e',
+  '-o',
+  '-x',
+  '-m',
+  '-w',
+  '-D',
+  '-c',
+  '-K',
+  '-T',
+]);
+
+function splitOptionToken(rawToken: string): { flag: string; attachedValue?: string } {
+  if (rawToken.startsWith('--')) {
+    const eqIdx = rawToken.indexOf('=');
+    if (eqIdx > 2) {
+      const flagName = rawToken.slice(0, eqIdx);
+      if (LONG_FLAGS_WITH_EQUALS.has(flagName)) {
+        return { flag: flagName, attachedValue: rawToken.slice(eqIdx + 1) };
       }
     }
-
-    tokens.push(tok);
+    return { flag: rawToken };
   }
 
-  return tokens;
+  if (rawToken.length > 2 && rawToken[0] === '-' && rawToken[1] !== '-') {
+    const shortFlag = rawToken.slice(0, 2);
+    if (ATTACHED_SHORT_VALUE_FLAGS.has(shortFlag)) {
+      return { flag: shortFlag, attachedValue: rawToken.slice(2) };
+    }
+  }
+
+  return { flag: rawToken };
+}
+
+interface ParsedCurlDataArg {
+  raw: string;
+  urlencode: boolean;
+}
+
+function encodeCurlUrlencodeArg(raw: string): string {
+  const eqIdx = raw.indexOf('=');
+  if (eqIdx > 0) {
+    const key = raw.slice(0, eqIdx);
+    const val = raw.slice(eqIdx + 1);
+    return `${encodeQueryComponentPreservingTemplates(key)}=${encodeQueryComponentPreservingTemplates(val)}`;
+  }
+  if (eqIdx === 0) {
+    return encodeQueryComponentPreservingTemplates(raw.slice(1));
+  }
+  return encodeQueryComponentPreservingTemplates(raw);
+}
+
+function appendDataArgsToUrl(baseUrl: string, args: ParsedCurlDataArg[]): string {
+  const hashIdx = baseUrl.indexOf('#');
+  const hash = hashIdx >= 0 ? baseUrl.slice(hashIdx) : '';
+  const withoutHash = hashIdx >= 0 ? baseUrl.slice(0, hashIdx) : baseUrl;
+
+  const encodedParts = args
+    .map((arg) => (arg.urlencode ? encodeCurlUrlencodeArg(arg.raw) : arg.raw))
+    .filter((part) => part.length > 0);
+
+  if (encodedParts.length === 0) {
+    return baseUrl;
+  }
+
+  const joined = encodedParts.join('&');
+  const sep = withoutHash.includes('?') ? (withoutHash.endsWith('?') || withoutHash.endsWith('&') ? '' : '&') : '?';
+  return `${withoutHash}${sep}${joined}${hash}`;
 }
 
 function isLikelyUrlToken(token: string): boolean {
@@ -376,7 +432,7 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
   const headers: KeyValuePair[] = [];
   const bodyFormData: FormDataItem[] = [];
   const bodyUrlEncoded: KeyValuePair[] = [];
-  const dataPayloads: string[] = [];
+  const dataArgs: ParsedCurlDataArg[] = [];
   let bodyBinaryFile: BinaryFileData | undefined = undefined;
   let bodyContent = '';
   let bodyType: ApiRequest['bodyType'] = 'none';
@@ -386,25 +442,41 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
 
   const tokens = tokenizeCurlCommand(cleaned);
   let auth: AuthConfig = { type: 'none' };
+  let afterDoubleDash = false;
+  let hasJsonFlag = false;
+  const cookieCrumbs: string[] = [];
 
   for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i];
+    const rawToken = tokens[i];
+    if (!afterDoubleDash && rawToken === '--') {
+      afterDoubleDash = true;
+      continue;
+    }
 
-    if (token === '-X' || token === '--request') {
-      const next = tokens[++i];
+    const { flag, attachedValue } = afterDoubleDash
+      ? { flag: rawToken, attachedValue: undefined }
+      : splitOptionToken(rawToken);
+
+    const consumeValue = (): string | undefined => {
+      if (attachedValue !== undefined) return attachedValue;
+      return tokens[++i];
+    };
+
+    if (!afterDoubleDash && (flag === '-X' || flag === '--request')) {
+      const next = consumeValue();
       if (next) {
         explicitMethod = next.toUpperCase() as HttpMethod;
         method = explicitMethod;
       }
-    } else if (token === '-I' || token === '--head') {
+    } else if (!afterDoubleDash && (flag === '-I' || flag === '--head')) {
       isHeadFlag = true;
       if (!explicitMethod) {
         method = 'HEAD';
       }
-    } else if (token === '-G' || token === '--get') {
+    } else if (!afterDoubleDash && (flag === '-G' || flag === '--get')) {
       isGetFlag = true;
-    } else if (token === '-u' || token === '--user') {
-      const userPass = tokens[++i] || '';
+    } else if (!afterDoubleDash && (flag === '-u' || flag === '--user')) {
+      const userPass = consumeValue() || '';
       const colonIndex = userPass.indexOf(':');
       if (colonIndex >= 0) {
         auth = {
@@ -419,16 +491,16 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
           basicPassword: '',
         };
       }
-    } else if (token === '--oauth2-bearer') {
-      const bearer = tokens[++i] || '';
+    } else if (!afterDoubleDash && flag === '--oauth2-bearer') {
+      const bearer = consumeValue() || '';
       if (bearer) {
         auth = {
           type: 'bearer',
           bearerToken: bearer,
         };
       }
-    } else if (token === '-H' || token === '--header') {
-      const headerLine = tokens[++i];
+    } else if (!afterDoubleDash && (flag === '-H' || flag === '--header')) {
+      const headerLine = consumeValue();
       if (headerLine) {
         const colonIndex = headerLine.indexOf(':');
         if (colonIndex > 0) {
@@ -442,8 +514,8 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
           });
         }
       }
-    } else if (token === '-A' || token === '--user-agent') {
-      const ua = tokens[++i];
+    } else if (!afterDoubleDash && (flag === '-A' || flag === '--user-agent')) {
+      const ua = consumeValue();
       if (ua) {
         headers.push({
           id: generateId(),
@@ -452,18 +524,13 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
           enabled: true,
         });
       }
-    } else if (token === '-b' || token === '--cookie') {
-      const cookie = tokens[++i];
+    } else if (!afterDoubleDash && (flag === '-b' || flag === '--cookie')) {
+      const cookie = consumeValue();
       if (cookie) {
-        headers.push({
-          id: generateId(),
-          key: 'Cookie',
-          value: cookie,
-          enabled: true,
-        });
+        cookieCrumbs.push(cookie);
       }
-    } else if (token === '-e' || token === '--referer') {
-      const referer = tokens[++i];
+    } else if (!afterDoubleDash && (flag === '-e' || flag === '--referer')) {
+      const referer = consumeValue();
       if (referer) {
         headers.push({
           id: generateId(),
@@ -472,41 +539,26 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
           enabled: true,
         });
       }
-    } else if (token === '--json') {
-      const data = tokens[++i];
+    } else if (!afterDoubleDash && flag === '--json') {
+      const data = consumeValue();
       if (data !== undefined) {
-        dataPayloads.push(data);
+        hasJsonFlag = true;
+        dataArgs.push({ raw: data, urlencode: false });
         bodyContent = data;
         bodyType = 'json';
         rawType = 'json';
         if (!explicitMethod && !isGetFlag && !isHeadFlag && method === 'GET') {
           method = 'POST';
         }
-        if (!headers.some((h) => h.key.toLowerCase() === 'content-type')) {
-          headers.push({
-            id: generateId(),
-            key: 'Content-Type',
-            value: 'application/json',
-            enabled: true,
-          });
-        }
-        if (!headers.some((h) => h.key.toLowerCase() === 'accept')) {
-          headers.push({
-            id: generateId(),
-            key: 'Accept',
-            value: 'application/json',
-            enabled: true,
-          });
-        }
       }
-    } else if (token === '-F' || token === '--form' || token === '--form-string') {
-      const formEntry = tokens[++i];
+    } else if (!afterDoubleDash && (flag === '-F' || flag === '--form' || flag === '--form-string')) {
+      const formEntry = consumeValue();
       if (formEntry) {
         const eqIdx = formEntry.indexOf('=');
         if (eqIdx > 0) {
           const k = formEntry.substring(0, eqIdx).trim();
           let v = formEntry.substring(eqIdx + 1).trim();
-          const isFile = token !== '--form-string' && v.startsWith('@');
+          const isFile = flag !== '--form-string' && v.startsWith('@');
           if (isFile) {
             v = v.substring(1).trim();
           }
@@ -523,41 +575,26 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
           }
         }
       }
-    } else if (token === '--data-urlencode') {
-      const data = tokens[++i];
+    } else if (!afterDoubleDash && flag === '--data-urlencode') {
+      const data = consumeValue();
       if (data !== undefined) {
-        dataPayloads.push(data);
+        dataArgs.push({ raw: data, urlencode: true });
         bodyType = 'x-www-form-urlencoded';
-        const eqIdx = data.indexOf('=');
-        if (eqIdx > 0) {
-          bodyUrlEncoded.push({
-            id: generateId(),
-            key: data.substring(0, eqIdx).trim(),
-            value: data.substring(eqIdx + 1).trim(),
-            enabled: true,
-          });
-        } else {
-          bodyUrlEncoded.push({
-            id: generateId(),
-            key: data.trim(),
-            value: '',
-            enabled: true,
-          });
-        }
         if (!explicitMethod && !isGetFlag && !isHeadFlag && method === 'GET') {
           method = 'POST';
         }
       }
     } else if (
-      token === '-d' ||
-      token === '--data' ||
-      token === '--data-raw' ||
-      token === '--data-binary' ||
-      token === '--data-ascii'
+      !afterDoubleDash &&
+      (flag === '-d' ||
+        flag === '--data' ||
+        flag === '--data-raw' ||
+        flag === '--data-binary' ||
+        flag === '--data-ascii')
     ) {
-      const data = tokens[++i];
+      const data = consumeValue();
       if (data !== undefined) {
-        if (token === '--data-binary' && data.startsWith('@')) {
+        if (flag === '--data-binary' && data.startsWith('@')) {
           const fileName = data.substring(1).trim();
           bodyType = 'binary';
           bodyBinaryFile = {
@@ -566,43 +603,18 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
             type: 'application/octet-stream',
           };
         } else {
-          dataPayloads.push(data);
-          bodyContent = dataPayloads.length === 1 ? data : dataPayloads.join('&');
-          const trimmed = bodyContent.trim();
-          const effectiveJson = compileEffectiveJsonPayload(trimmed).trim();
-          if (effectiveJson.startsWith('{') || effectiveJson.startsWith('[')) {
-            try {
-              const parsed = JSON.parse(effectiveJson);
-              if (parsed && typeof parsed === 'object' && typeof parsed.query === 'string') {
-                bodyType = 'graphql';
-                graphqlQuery = parsed.query;
-                graphqlVariables = parsed.variables ? JSON.stringify(parsed.variables, null, 2) : '';
-              } else {
-                bodyType = 'json';
-                rawType = 'json';
-              }
-            } catch {
-              bodyType = 'json';
-              rawType = 'json';
-            }
-          } else if (trimmed.startsWith('<') && trimmed.endsWith('>')) {
-            bodyType = 'xml';
-            rawType = 'xml';
-          } else {
-            bodyType = 'raw';
-            rawType = 'text';
-          }
+          dataArgs.push({ raw: data, urlencode: false });
         }
         if (!explicitMethod && !isGetFlag && !isHeadFlag && method === 'GET') {
           method = 'POST'; // curl defaults to POST when -d is passed without -G/-I
         }
       }
-    } else if (token === '--url') {
-      url = tokens[++i] || '';
-    } else if (NON_URL_VALUE_FLAGS.has(token)) {
-      i++;
-    } else if (!url && isLikelyUrlToken(token)) {
-      url = token;
+    } else if (!afterDoubleDash && flag === '--url') {
+      url = consumeValue() || '';
+    } else if (!afterDoubleDash && NON_URL_VALUE_FLAGS.has(flag)) {
+      consumeValue();
+    } else if (!url && (afterDoubleDash || isLikelyUrlToken(rawToken))) {
+      url = rawToken;
     }
   }
 
@@ -611,11 +623,8 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
     if (!explicitMethod) {
       method = isHeadFlag ? 'HEAD' : 'GET';
     }
-    if (dataPayloads.length > 0 && url) {
-      const joinedQuery = dataPayloads.filter(Boolean).join('&');
-      if (joinedQuery) {
-        url += (url.includes('?') ? '&' : '?') + joinedQuery;
-      }
+    if (dataArgs.length > 0 && url) {
+      url = appendDataArgsToUrl(url, dataArgs);
       bodyContent = '';
       bodyType = 'none';
       rawType = 'text';
@@ -655,36 +664,162 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
   }
 
   // If auth was extracted, clean up redundant Authorization header
+  if (cookieCrumbs.length > 0) {
+    const mergedCookie = cookieCrumbs.join('; ');
+    const existingCookieHeader = headers.find(
+      (h) => String(h?.key ?? '').trim().toLowerCase() === 'cookie'
+    );
+    if (existingCookieHeader) {
+      existingCookieHeader.value = existingCookieHeader.value
+        ? `${existingCookieHeader.value}; ${mergedCookie}`
+        : mergedCookie;
+    } else {
+      headers.push({
+        id: generateId(),
+        key: 'Cookie',
+        value: mergedCookie,
+        enabled: true,
+      });
+    }
+  }
+
+  if (hasJsonFlag) {
+    if (!headers.some((h) => h.key.toLowerCase() === 'content-type')) {
+      headers.push({
+        id: generateId(),
+        key: 'Content-Type',
+        value: 'application/json',
+        enabled: true,
+      });
+    }
+    if (!headers.some((h) => h.key.toLowerCase() === 'accept')) {
+      headers.push({
+        id: generateId(),
+        key: 'Accept',
+        value: 'application/json',
+        enabled: true,
+      });
+    }
+  }
+
   const cleanHeaders = auth.type !== 'none'
     ? headers.filter((h) => String(h?.key ?? '').trim().toLowerCase() !== 'authorization')
     : headers;
 
-  // Check Content-Type header if present to refine bodyType and rawType
+  // Resolve bodyType, bodyContent, and form-urlencoded items for non-GET requests with data args
   const contentTypeHeader = cleanHeaders.find((h) => String(h?.key ?? '').trim().toLowerCase() === 'content-type');
-  if (contentTypeHeader && bodyType !== 'none' && bodyType !== 'form-data' && bodyType !== 'binary') {
-    const ctVal = String(contentTypeHeader.value ?? '').toLowerCase();
-    if (ctVal.includes('application/xml') || ctVal.includes('text/xml')) {
-      bodyType = 'xml';
-      rawType = 'xml';
-    } else if (ctVal.includes('application/json') || ctVal.includes('+json')) {
-      if (bodyType !== 'graphql') {
-        bodyType = 'json';
-        rawType = 'json';
-      }
-    } else if (ctVal.includes('text/html')) {
-      bodyType = 'raw';
-      rawType = 'html';
-    } else if (ctVal.includes('text/plain')) {
-      bodyType = 'raw';
-      rawType = 'text';
-    } else if (ctVal.includes('application/x-www-form-urlencoded')) {
+  const ctVal = contentTypeHeader ? String(contentTypeHeader.value ?? '').toLowerCase() : '';
+  const hasUrlEncodedData = dataArgs.some((arg) => arg.urlencode);
+
+  if (!isGetFlag && dataArgs.length > 0 && bodyType !== 'form-data' && bodyType !== 'binary') {
+    const combinedRaw = dataArgs.length === 1 ? dataArgs[0].raw : dataArgs.map((arg) => arg.raw).join('&');
+    const trimmedCombined = combinedRaw.trim();
+    const looksLikeDefaultCurlForm =
+      !ctVal &&
+      bodyType !== 'json' &&
+      trimmedCombined.length > 0 &&
+      !trimmedCombined.startsWith('-') &&
+      !trimmedCombined.startsWith('{') &&
+      !trimmedCombined.startsWith('[') &&
+      !(trimmedCombined.startsWith('<') && trimmedCombined.endsWith('>')) &&
+      !/[\r\n]/.test(trimmedCombined) &&
+      trimmedCombined
+        .split('&')
+        .filter(Boolean)
+        .every((pair) => /^[^=\s]+=/.test(pair));
+
+    if (hasUrlEncodedData || ctVal.includes('application/x-www-form-urlencoded') || looksLikeDefaultCurlForm) {
       bodyType = 'x-www-form-urlencoded';
-      if (bodyContent && bodyUrlEncoded.length === 0) {
-        const parsedParams = parseQueryParamsFromUrl(`?${bodyContent}`);
-        for (const p of parsedParams) {
-          if (p.key || p.value) {
-            bodyUrlEncoded.push(p);
+      bodyContent = dataArgs
+        .map((arg) => (arg.urlencode ? encodeCurlUrlencodeArg(arg.raw) : arg.raw))
+        .filter((part) => part.length > 0)
+        .join('&');
+
+      for (const arg of dataArgs) {
+        if (arg.urlencode) {
+          const eqIdx = arg.raw.indexOf('=');
+          if (eqIdx > 0) {
+            bodyUrlEncoded.push({
+              id: generateId(),
+              key: arg.raw.slice(0, eqIdx),
+              value: arg.raw.slice(eqIdx + 1),
+              enabled: true,
+            });
+          } else if (eqIdx === 0) {
+            bodyUrlEncoded.push({
+              id: generateId(),
+              key: '',
+              value: arg.raw.slice(1),
+              enabled: true,
+            });
+          } else if (arg.raw.length > 0) {
+            bodyUrlEncoded.push({
+              id: generateId(),
+              key: arg.raw,
+              value: '',
+              enabled: true,
+            });
           }
+        } else if (arg.raw.length > 0) {
+          for (const pair of arg.raw.split('&')) {
+            if (!pair) continue;
+            const eqIdx = pair.indexOf('=');
+            const rawKey = eqIdx >= 0 ? pair.slice(0, eqIdx) : pair;
+            const rawVal = eqIdx >= 0 ? pair.slice(eqIdx + 1) : '';
+            bodyUrlEncoded.push({
+              id: generateId(),
+              key: decodeQueryComponentPreservingTemplates(rawKey),
+              value: decodeQueryComponentPreservingTemplates(rawVal),
+              enabled: true,
+            });
+          }
+        }
+      }
+    } else {
+      bodyContent = dataArgs.length === 1 ? dataArgs[0].raw : dataArgs.map((arg) => arg.raw).join('&');
+      const trimmed = bodyContent.trim();
+      const effectiveJson = compileEffectiveJsonPayload(trimmed).trim();
+
+      if (bodyType !== 'json') {
+        if (effectiveJson.startsWith('{') || effectiveJson.startsWith('[')) {
+          try {
+            const parsed = JSON.parse(effectiveJson);
+            if (parsed && typeof parsed === 'object' && typeof parsed.query === 'string') {
+              bodyType = 'graphql';
+              graphqlQuery = parsed.query;
+              graphqlVariables = parsed.variables ? JSON.stringify(parsed.variables, null, 2) : '';
+            } else {
+              bodyType = 'json';
+              rawType = 'json';
+            }
+          } catch {
+            bodyType = 'json';
+            rawType = 'json';
+          }
+        } else if (trimmed.startsWith('<') && trimmed.endsWith('>')) {
+          bodyType = 'xml';
+          rawType = 'xml';
+        } else {
+          bodyType = 'raw';
+          rawType = 'text';
+        }
+      }
+
+      if (ctVal) {
+        if (ctVal.includes('application/xml') || ctVal.includes('text/xml')) {
+          bodyType = 'xml';
+          rawType = 'xml';
+        } else if (ctVal.includes('application/json') || ctVal.includes('+json')) {
+          if (bodyType !== 'graphql') {
+            bodyType = 'json';
+            rawType = 'json';
+          }
+        } else if (ctVal.includes('text/html')) {
+          bodyType = 'raw';
+          rawType = 'html';
+        } else if (ctVal.includes('text/plain')) {
+          bodyType = 'raw';
+          rawType = 'text';
         }
       }
     }
@@ -735,6 +870,74 @@ export function tryParseCurlCommand(rawText: string): Partial<ApiRequest> | null
 }
 
 /**
+ * Formats an argument safely for POSIX shells.
+ * Keeps readable double quotes when the value contains no shell-interpreted characters
+ * (`"`, `$`, `` ` ``, `\`, `!`, or newlines), and otherwise wraps in single quotes
+ * with `'` escaped as `'\''`.
+ */
+function quoteCurlShellArg(value: string): string {
+  const str = String(value ?? '');
+  if (!/["$`\\!\r\n]/.test(str)) {
+    return `"${str}"`;
+  }
+  return `'${str.replace(/'/g, `'\\''`)}'`;
+}
+
+function appendOrReplaceQueryParamsInUrl(
+  rawUrl: string,
+  params: KeyValuePair[],
+  variables: Record<string, string>
+): string {
+  const activeOrCleared = (params || []).filter(
+    (p) => p && interpolateVariables(String(p.key || '').trim(), variables) !== ''
+  );
+  if (activeOrCleared.length === 0) {
+    return rawUrl;
+  }
+
+  const hashIdx = rawUrl.indexOf('#');
+  const hash = hashIdx >= 0 ? rawUrl.slice(hashIdx) : '';
+  const withoutHash = hashIdx >= 0 ? rawUrl.slice(0, hashIdx) : rawUrl;
+
+  const qIdx = withoutHash.indexOf('?');
+  const baseUrl = qIdx >= 0 ? withoutHash.slice(0, qIdx) : withoutHash;
+  const existingQuery = qIdx >= 0 ? withoutHash.slice(qIdx + 1) : '';
+
+  const managedKeys = new Set<string>();
+  const appendedPairs: string[] = [];
+  for (const p of activeOrCleared) {
+    const k = interpolateVariables(String(p.key || '').trim(), variables);
+    if (!k) continue;
+    managedKeys.add(k);
+    if (p.enabled) {
+      const v = interpolateVariables(String(p.value ?? ''), variables);
+      appendedPairs.push(
+        `${encodeQueryComponentPreservingTemplates(k)}=${encodeQueryComponentPreservingTemplates(v)}`
+      );
+    }
+  }
+
+  const preservedPairs: string[] = [];
+  if (existingQuery) {
+    for (const pair of existingQuery.split('&')) {
+      if (!pair) continue;
+      const eqIdx = pair.indexOf('=');
+      const rawKey = eqIdx >= 0 ? pair.slice(0, eqIdx) : pair;
+      const decodedKey = decodeQueryComponentPreservingTemplates(rawKey);
+      if (!managedKeys.has(decodedKey) && !managedKeys.has(rawKey)) {
+        preservedPairs.push(pair);
+      }
+    }
+  }
+
+  const allPairs = [...preservedPairs, ...appendedPairs];
+  if (allPairs.length === 0) {
+    return `${baseUrl}${hash}`;
+  }
+  return `${baseUrl}?${allPairs.join('&')}${hash}`;
+}
+
+/**
  * Converts an ApiRequest into a shell-ready cURL command string.
  */
 export function generateCurlCommand(
@@ -752,31 +955,12 @@ export function generateCurlCommand(
     url = substitutePathVariables(url, interpolatedPathVars);
   }
 
-  // Append query parameters
+  // Append query parameters (preserve duplicate keys, drop disabled keys, preserve fragment and schemeless/template hosts)
   if (request.params && request.params.length > 0) {
-    const activeParams = request.params.filter((p) => p && p.enabled && String(p?.key ?? '').trim());
-    if (activeParams.length > 0) {
-      try {
-        const dummyBase = !/^https?:\/\//i.test(url) ? 'http://placeholder' : undefined;
-        const parsedUrl = new URL(url, dummyBase);
-        for (const p of activeParams) {
-          const k = interpolateVariables(String(p.key).trim(), variables);
-          const v = interpolateVariables(String(p.value ?? ''), variables);
-          parsedUrl.searchParams.set(k, v);
-        }
-        url = dummyBase ? parsedUrl.pathname + parsedUrl.search : parsedUrl.toString();
-      } catch {
-        if (!url.includes('?')) {
-          const queryString = activeParams
-            .map((p) => `${encodeURIComponent(interpolateVariables(String(p.key).trim(), variables))}=${encodeURIComponent(interpolateVariables(String(p.value ?? ''), variables))}`)
-            .join('&');
-          url += '?' + queryString;
-        }
-      }
-    }
+    url = appendOrReplaceQueryParamsInUrl(url, request.params, variables);
   }
 
-  // If API Key is configured in query parameters, attach it
+  // If API Key is configured in query parameters, attach it before any #fragment
   if (
     request.auth?.type === 'apikey' &&
     request.auth?.apiKeyIn === 'query' &&
@@ -786,17 +970,18 @@ export function generateCurlCommand(
     const k = interpolateVariables(request.auth.apiKeyKey.trim(), variables).trim();
     const v = interpolateVariables(request.auth.apiKeyValue.trim(), variables);
     if (k) {
-      try {
-        const parsedUrl = new URL(url);
-        parsedUrl.searchParams.set(k, v);
-        url = parsedUrl.toString();
-      } catch {
-        url += (url.includes('?') ? '&' : '?') + `${encodeURIComponent(k)}=${encodeURIComponent(v)}`;
-      }
+      url = appendOrReplaceQueryParamsInUrl(
+        url,
+        [{ id: 'auth-api-key', key: k, value: v, enabled: true }],
+        {}
+      );
     }
   }
 
-  const parts: string[] = [`curl -X ${request.method} "${url}"`];
+  const safeMethod = /^[A-Z]+$/i.test(String(request.method || '').trim())
+    ? String(request.method).trim().toUpperCase()
+    : quoteCurlShellArg(String(request.method || 'GET'));
+  const parts: string[] = [`curl -X ${safeMethod} ${quoteCurlShellArg(url)}`];
 
   // Headers (excluding manual headers overridden by active Auth or runtime-managed form-data Content-Type)
   const resolveVar = (input: string) => interpolateVariables(input, variables);
@@ -814,19 +999,21 @@ export function generateCurlCommand(
   let hasContentType = effectiveAuth?.normalizedKey === 'content-type';
   for (const h of resolvedManualHeaders) {
     if (h.key.toLowerCase() === 'content-type') hasContentType = true;
-    parts.push(`-H "${h.key}: ${h.value}"`);
+    parts.push(`-H ${quoteCurlShellArg(`${h.key}: ${h.value}`)}`);
   }
 
   if (bodyContentType && !bodyContentType.isManagedByRuntime && !hasContentType) {
-    parts.push(`-H "Content-Type: ${bodyContentType.value}"`);
+    parts.push(`-H ${quoteCurlShellArg(`Content-Type: ${bodyContentType.value}`)}`);
   }
 
   // Auth
   if (effectiveAuth) {
     if (effectiveAuth.authType === 'basic' && effectiveAuth.basicCredentials) {
-      parts.push(`-u "${effectiveAuth.basicCredentials.username}:${effectiveAuth.basicCredentials.password}"`);
+      parts.push(
+        `-u ${quoteCurlShellArg(`${effectiveAuth.basicCredentials.username}:${effectiveAuth.basicCredentials.password}`)}`
+      );
     } else {
-      parts.push(`-H "${effectiveAuth.key}: ${effectiveAuth.value}"`);
+      parts.push(`-H ${quoteCurlShellArg(`${effectiveAuth.key}: ${effectiveAuth.value}`)}`);
     }
   }
 
@@ -861,7 +1048,7 @@ export function generateCurlCommand(
     ) {
       const body = interpolateVariables(request.bodyContent || '', variables);
       if (body) {
-        parts.push(`-d '${body.replace(/'/g, `'\\''`)}'`);
+        parts.push(`--data-raw ${quoteCurlShellArg(body)}`);
       }
     } else if (request.bodyType === 'x-www-form-urlencoded') {
       const activeItems = (request.bodyUrlEncoded || []).filter((item) => item.enabled && item.key.trim());
@@ -869,7 +1056,7 @@ export function generateCurlCommand(
         for (const item of activeItems) {
           const k = interpolateVariables(item.key.trim(), variables);
           const v = interpolateVariables(item.value || '', variables);
-          parts.push(`--data-urlencode "${k}=${v}"`);
+          parts.push(`--data-urlencode ${quoteCurlShellArg(`${k}=${v}`)}`);
         }
       } else if (request.bodyContent) {
         const body = interpolateVariables(request.bodyContent, variables);
@@ -879,17 +1066,23 @@ export function generateCurlCommand(
       for (const item of request.bodyFormData || []) {
         if (item.enabled && item.key.trim()) {
           const k = interpolateVariables(item.key.trim(), variables);
-          if (item.type === 'file' && item.file) {
-            parts.push(`-F "${k}=@${item.file.name}"`);
+          if (item.type === 'file') {
+            const fileName =
+              item.file?.name ||
+              item.fileName ||
+              interpolateVariables(item.value || '', variables) ||
+              'file.bin';
+            parts.push(`-F ${quoteCurlShellArg(`${k}=@${fileName}`)}`);
           } else {
             const v = interpolateVariables(item.value || '', variables);
-            parts.push(`-F "${k}=${v}"`);
+            const flag = v.startsWith('@') || v.startsWith('<') || v.includes(';') ? '--form-string' : '-F';
+            parts.push(`${flag} ${quoteCurlShellArg(`${k}=${v}`)}`);
           }
         }
       }
     } else if (request.bodyType === 'binary' && request.bodyBinaryFile) {
       const fileName = request.bodyBinaryFile.name || 'file.bin';
-      parts.push(`--data-binary "@${fileName}"`);
+      parts.push(`--data-binary ${quoteCurlShellArg(`@${fileName}`)}`);
     }
   }
 

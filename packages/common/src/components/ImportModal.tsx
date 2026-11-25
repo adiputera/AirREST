@@ -22,13 +22,18 @@ import { useApiStore } from '../store/useApiStore';
 import { useStoreContext } from '../store/storeContext';
 import { parseCurlCommand } from '../lib/curl';
 import {
-  importPostmanCollection,
+  importPostmanCollectionWithSummary,
   importPostmanEnvironment,
   detectPostmanJsonType,
 } from '../lib/postman';
 import {
   ImportBatchItem,
+  ImportBatchItemOutcome,
   ImportBatchStats,
+  ImportTargetBinding,
+  captureImportTarget,
+  getImportTargetKey,
+  isImportTargetMatching,
   parseImportBatchFiles,
   recomputeBatchConflicts,
   toggleImportBatchItem,
@@ -37,6 +42,8 @@ import {
   formatBatchImportSummary,
   isJsonCandidateFile,
   readBrowserFiles,
+  MAX_IMPORT_FILE_BYTES,
+  getImportUtf8ByteLength,
 } from '../lib/importBatch';
 import {
   compareCollections,
@@ -93,12 +100,14 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
         existingCol: Collection;
         incomingCol: Collection;
         diff: CollectionDiffSummary;
+        batchItemId?: string;
       }
     | {
         type: 'environment';
         existingEnv: Environment;
         incomingEnv: Environment;
         diff: EnvironmentDiffSummary;
+        batchItemId?: string;
       }
     | null
   >(null);
@@ -113,6 +122,22 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
   const masterCheckboxRef = useRef<HTMLInputElement>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const batchImportedIdsRef = useRef<Set<string>>(new Set());
+  const isMountedRef = useRef(true);
+  const isOpenRef = useRef(isOpen);
+  isOpenRef.current = isOpen;
+  const importRunIdRef = useRef(0);
+  const modalOpenGenRef = useRef(0);
+  const activeTargetRef = useRef<ImportTargetBinding | null>(null);
+  const retryCopyDraftRef = useRef<{
+    targetKey: string;
+    batchItemId?: string;
+    id: string;
+    name: string;
+  } | null>(null);
+  const isImportingRef = useRef(isImporting);
+  isImportingRef.current = isImporting;
+  const isResolvingConflictRef = useRef(isResolvingConflict);
+  isResolvingConflictRef.current = isResolvingConflict;
 
   const clearCloseTimer = useCallback(() => {
     if (closeTimerRef.current) {
@@ -121,9 +146,26 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
     }
   }, []);
 
-  const resetModalState = useCallback(() => {
+  const invalidateActiveRun = useCallback(() => {
+    importRunIdRef.current += 1;
+    activeTargetRef.current = null;
     clearCloseTimer();
+  }, [clearCloseTimer]);
+
+  const isRunCurrent = useCallback(
+    (runId: number, target: ImportTargetBinding | null): boolean => {
+      if (!target || !isMountedRef.current || !isOpenRef.current) return false;
+      if (importRunIdRef.current !== runId) return false;
+      return isImportTargetMatching(activeStore.getState(), target);
+    },
+    [activeStore]
+  );
+
+  const resetModalState = useCallback(() => {
+    modalOpenGenRef.current += 1;
+    invalidateActiveRun();
     batchImportedIdsRef.current.clear();
+    retryCopyDraftRef.current = null;
     setConflict(null);
     setErrorMsg(null);
     setSuccessMsg(null);
@@ -134,7 +176,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
     setBatchStats(null);
     setIsBatchConflict(false);
     setOpenedFromInitialFiles(false);
-  }, [clearCloseTimer]);
+  }, [invalidateActiveRun]);
 
   const handleModalClose = useCallback(() => {
     resetModalState();
@@ -143,7 +185,8 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
 
   const openFilesIntoReview = useCallback(
     (files: OpenedFileResult[], mode: 'replace' | 'append') => {
-      if (files.length === 0) return;
+      if (files.length === 0 || !isMountedRef.current || !isOpenRef.current) return;
+      if (isImportingRef.current || isResolvingConflictRef.current) return;
       const liveState = activeStore.getState();
       const canWriteCollection = hasScopePermission(
         liveState.cloudConfig.activeScope,
@@ -168,7 +211,8 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
           existingBatchItems: existingBatch,
         });
         const combined = mode === 'append' ? [...existingBatch, ...parsed] : parsed;
-        return recomputeBatchConflicts(combined, liveState.collections, liveState.environments);
+        const targetKey = getImportTargetKey(captureImportTarget(liveState));
+        return recomputeBatchConflicts(combined, liveState.collections, liveState.environments, targetKey);
       });
       setActiveImportTab('postman');
       setErrorMsg(null);
@@ -189,10 +233,76 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
   }, [isOpen, initialFiles, openFilesIntoReview, resetModalState]);
 
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
-      clearCloseTimer();
+      isMountedRef.current = false;
+      invalidateActiveRun();
     };
-  }, [clearCloseTimer]);
+  }, [invalidateActiveRun]);
+
+  const activeOfflineWorkspaceId = activeStore((state) => state.activeOfflineWorkspaceId);
+  useEffect(() => {
+    if (!isOpen) return;
+    if (activeTargetRef.current && !isImportTargetMatching(activeStore.getState(), activeTargetRef.current)) {
+      invalidateActiveRun();
+      setIsImporting(false);
+      setIsResolvingConflict(false);
+      setConflict(null);
+      setBatchQueue([]);
+      setBatchStats(null);
+      setIsBatchConflict(false);
+      setErrorMsg('Workspace or session changed. Remaining import items were stopped.');
+    }
+  }, [
+    isOpen,
+    workspaceMode,
+    activeOfflineWorkspaceId,
+    cloudConfig.activeScope?.id,
+    cloudConfig.activeScope?.type,
+    cloudConfig.user?.id,
+    cloudConfig.apiUrl,
+    activeStore,
+    invalidateActiveRun,
+  ]);
+
+  useEffect(() => {
+    if (!isOpen || !batchItems || isImporting || isResolvingConflict) return;
+    const liveState = activeStore.getState();
+    const targetKey = getImportTargetKey(captureImportTarget(liveState));
+    const canWriteCollection = hasScopePermission(
+      liveState.cloudConfig.activeScope,
+      'collection:write',
+      liveState.workspaceMode,
+      liveState.cloudConfig.user?.role
+    );
+    const canWriteEnvironment = hasScopePermission(
+      liveState.cloudConfig.activeScope,
+      'env:write',
+      liveState.workspaceMode,
+      liveState.cloudConfig.user?.role
+    );
+    setBatchItems((prev) => {
+      if (!prev) return prev;
+      const next = recomputeBatchConflicts(prev, collections, environments, targetKey, {
+        canWriteCollection,
+        canWriteEnvironment,
+      });
+      const changed = next.some((item, idx) => item !== prev[idx]);
+      return changed ? next : prev;
+    });
+  }, [
+    isOpen,
+    batchItems,
+    isImporting,
+    isResolvingConflict,
+    collections,
+    environments,
+    workspaceMode,
+    activeOfflineWorkspaceId,
+    cloudConfig.activeScope,
+    cloudConfig.user?.role,
+    activeStore,
+  ]);
 
   useEffect(() => {
     if (!masterCheckboxRef.current || !batchItems) return;
@@ -211,7 +321,18 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
 
       event.preventDefault();
       event.stopPropagation();
+      if (isImportingRef.current || isResolvingConflictRef.current) return;
+      const openGen = modalOpenGenRef.current;
       void readBrowserFiles(pastedFiles).then((opened) => {
+        if (
+          !isMountedRef.current ||
+          !isOpenRef.current ||
+          modalOpenGenRef.current !== openGen ||
+          isImportingRef.current ||
+          isResolvingConflictRef.current
+        ) {
+          return;
+        }
         if (opened.length > 0) {
           openFilesIntoReview(opened, batchItems ? 'append' : 'replace');
         }
@@ -227,6 +348,8 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
   useBackHandler(isOpen, () => {
     if (isImporting || isResolvingConflict) return;
     if (conflict) {
+      invalidateActiveRun();
+      retryCopyDraftRef.current = null;
       setConflict(null);
       setBatchQueue([]);
       setBatchStats(null);
@@ -250,25 +373,46 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
   if (!isOpen) return null;
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    setErrorMsg(null);
-    setSuccessMsg(null);
     const files = Array.from(e.target.files || []);
     e.target.value = '';
-    if (files.length === 0) return;
+    if (files.length === 0 || isImportingRef.current || isResolvingConflictRef.current) return;
+    setErrorMsg(null);
+    setSuccessMsg(null);
 
+    const openGen = modalOpenGenRef.current;
     const opened = await readBrowserFiles(files, { requireJsonExtension: false });
+    if (
+      !isMountedRef.current ||
+      !isOpenRef.current ||
+      modalOpenGenRef.current !== openGen ||
+      isImportingRef.current ||
+      isResolvingConflictRef.current
+    ) {
+      return;
+    }
     openFilesIntoReview(opened, batchItems ? 'append' : 'replace');
   };
 
   const handleFileDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    if (isImportingRef.current || isResolvingConflictRef.current) return;
     setErrorMsg(null);
     setSuccessMsg(null);
     const files = Array.from(e.dataTransfer.files || []);
     if (files.length === 0) return;
 
+    const openGen = modalOpenGenRef.current;
     const opened = await readBrowserFiles(files, { requireJsonExtension: true });
+    if (
+      !isMountedRef.current ||
+      !isOpenRef.current ||
+      modalOpenGenRef.current !== openGen ||
+      isImportingRef.current ||
+      isResolvingConflictRef.current
+    ) {
+      return;
+    }
     openFilesIntoReview(opened, batchItems ? 'append' : 'replace');
   };
 
@@ -277,7 +421,9 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
       e.preventDefault();
       e.stopPropagation();
     }
+    if (isImportingRef.current || isResolvingConflictRef.current) return;
     const adapter = runtimeAdapter;
+    const openGen = modalOpenGenRef.current;
     if (adapter?.capabilities?.supportsNativeFileSystem && adapter?.openFiles) {
       try {
         setErrorMsg(null);
@@ -285,10 +431,20 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
         const results = await adapter.openFiles({
           filters: [{ name: 'Postman JSON Files', extensions: ['json'] }],
         });
+        if (
+          !isMountedRef.current ||
+          !isOpenRef.current ||
+          modalOpenGenRef.current !== openGen ||
+          isImportingRef.current ||
+          isResolvingConflictRef.current
+        ) {
+          return;
+        }
         if (results && results.length > 0) {
           openFilesIntoReview(results, batchItems ? 'append' : 'replace');
         }
       } catch (err) {
+        if (!isMountedRef.current || !isOpenRef.current || modalOpenGenRef.current !== openGen) return;
         setErrorMsg(err instanceof Error ? err.message : 'Failed to open files via system dialog.');
       }
       return;
@@ -300,10 +456,20 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
         const result = await adapter.openFile({
           filters: [{ name: 'Postman JSON Files', extensions: ['json'] }],
         });
+        if (
+          !isMountedRef.current ||
+          !isOpenRef.current ||
+          modalOpenGenRef.current !== openGen ||
+          isImportingRef.current ||
+          isResolvingConflictRef.current
+        ) {
+          return;
+        }
         if (result && typeof result.content === 'string') {
           openFilesIntoReview([result], batchItems ? 'append' : 'replace');
         }
       } catch (err) {
+        if (!isMountedRef.current || !isOpenRef.current || modalOpenGenRef.current !== openGen) return;
         setErrorMsg(err instanceof Error ? err.message : 'Failed to open file via system dialog.');
       }
       return;
@@ -313,10 +479,56 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
     fileInputRef.current?.click();
   };
 
-  const finishBatchRun = (stats: ImportBatchStats) => {
+  const markBatchItemOutcome = (
+    itemId: string,
+    outcome: ImportBatchItemOutcome,
+    extra?: { error?: string; retryCollectionId?: string; retryEnvironmentId?: string; retryTargetKey?: string }
+  ) => {
+    setBatchItems((prev) => {
+      if (!prev) return prev;
+      const liveState = activeStore.getState();
+      const targetKey = getImportTargetKey(captureImportTarget(liveState));
+      const updated = prev.map((item) => {
+        if (item.id !== itemId) return item;
+        if (outcome === 'imported' || outcome === 'skipped') {
+          return {
+            ...item,
+            outcome,
+            checked: false,
+            disabled: true,
+            hasConflict: false,
+            error: undefined,
+            retryCollectionId: undefined,
+            retryEnvironmentId: undefined,
+            retryTargetKey: undefined,
+          };
+        }
+        return {
+          ...item,
+          outcome: 'failed' as const,
+          checked: true,
+          disabled: false,
+          error: extra?.error,
+          retryCollectionId: extra?.retryCollectionId,
+          retryEnvironmentId: extra?.retryEnvironmentId,
+          retryTargetKey: extra?.retryTargetKey,
+        };
+      });
+      return recomputeBatchConflicts(updated, liveState.collections, liveState.environments, targetKey);
+    });
+  };
+
+  const finishBatchRun = (
+    stats: ImportBatchStats,
+    runId: number,
+    target: ImportTargetBinding
+  ) => {
+    if (!isRunCurrent(runId, target)) return;
     setBatchQueue([]);
     setBatchStats(null);
     setIsBatchConflict(false);
+    setIsImporting(false);
+    activeTargetRef.current = null;
 
     const summary = formatBatchImportSummary(stats);
     if (stats.failed.length > 0) {
@@ -331,20 +543,31 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
     setSuccessMsg(summary);
     clearCloseTimer();
     closeTimerRef.current = setTimeout(() => {
+      if (!isRunCurrent(runId, target)) return;
       handleModalClose();
     }, 900);
   };
 
-  const processBatchQueue = async (queue: ImportBatchItem[], initialStats: ImportBatchStats) => {
+  const processBatchQueue = async (
+    queue: ImportBatchItem[],
+    initialStats: ImportBatchStats,
+    runId: number,
+    target: ImportTargetBinding
+  ) => {
     const currentStats: ImportBatchStats = {
       collectionsImported: initialStats.collectionsImported,
       environmentsImported: initialStats.environmentsImported,
       skipped: initialStats.skipped,
       failed: [...initialStats.failed],
     };
+    const targetKey = getImportTargetKey(target);
 
     for (let i = 0; i < queue.length; i++) {
+      if (!isRunCurrent(runId, target)) return;
       const item = queue[i];
+      if (item.outcome === 'imported' || item.outcome === 'skipped') {
+        continue;
+      }
       const remaining = queue.slice(i + 1);
       const liveState = activeStore.getState();
 
@@ -357,9 +580,12 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
             liveState.cloudConfig.user?.role
           )
         ) {
+          const permErr =
+            'Insufficient permission to import environments into this scope (requires env:write).';
+          markBatchItemOutcome(item.id, 'failed', { error: permErr, retryTargetKey: targetKey });
           currentStats.failed.push({
             name: item.name,
-            error: 'Insufficient permission to import environments into this scope (requires env:write).',
+            error: permErr,
           });
           continue;
         }
@@ -368,14 +594,28 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
           item.parsedEnvironment,
           item.parsedEnvironment.name
         );
+        const isExplicitEnvRetry = Boolean(
+          item.outcome === 'failed' &&
+            item.retryEnvironmentId &&
+            item.retryTargetKey === targetKey &&
+            liveState.environments.some(
+              (e) => e.id === item.retryEnvironmentId && e._syncStatus === 'pending'
+            )
+        );
+        if (isExplicitEnvRetry && item.retryEnvironmentId) {
+          incomingEnv.id = item.retryEnvironmentId;
+        }
+
         const existingEnv = liveState.environments.find(
           (e) =>
             String(e.name ?? '').trim().toLowerCase() ===
-            String(incomingEnv.name ?? '').trim().toLowerCase()
+              String(incomingEnv.name ?? '').trim().toLowerCase() &&
+            !(isExplicitEnvRetry && e.id === item.retryEnvironmentId)
         );
 
         if (existingEnv) {
           const diff = compareEnvironments(existingEnv, incomingEnv);
+          if (!isRunCurrent(runId, target)) return;
           setBatchQueue(remaining);
           setBatchStats(currentStats);
           setIsBatchConflict(true);
@@ -384,17 +624,31 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
             existingEnv,
             incomingEnv,
             diff,
+            batchItemId: item.id,
           });
           return;
         }
 
         try {
-          await addEnvironment(incomingEnv);
+          await addEnvironment(incomingEnv, { target, isRetry: isExplicitEnvRetry });
+          if (!isRunCurrent(runId, target)) return;
+          markBatchItemOutcome(item.id, 'imported');
           currentStats.environmentsImported += 1;
         } catch (err: unknown) {
+          if (!isRunCurrent(runId, target)) return;
+          const errMsg = err instanceof Error ? err.message : 'Failed to import environment.';
+          const postState = activeStore.getState();
+          const hasLocalEnvDraft = postState.environments.some(
+            (e) => e.id === incomingEnv.id && e._syncStatus === 'pending'
+          );
+          markBatchItemOutcome(item.id, 'failed', {
+            error: errMsg,
+            retryEnvironmentId: hasLocalEnvDraft ? incomingEnv.id : undefined,
+            retryTargetKey: hasLocalEnvDraft ? targetKey : undefined,
+          });
           currentStats.failed.push({
             name: item.name,
-            error: err instanceof Error ? err.message : 'Failed to import environment.',
+            error: errMsg,
           });
         }
       } else if (item.type === 'collection' && item.parsedCollection) {
@@ -406,9 +660,12 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
             liveState.cloudConfig.user?.role
           )
         ) {
+          const permErr =
+            'Insufficient permission to import collections into this scope (requires collection:write).';
+          markBatchItemOutcome(item.id, 'failed', { error: permErr, retryTargetKey: targetKey });
           currentStats.failed.push({
             name: item.name,
-            error: 'Insufficient permission to import collections into this scope (requires collection:write).',
+            error: permErr,
           });
           continue;
         }
@@ -417,27 +674,28 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
           item.parsedCollection,
           item.parsedCollection.name
         );
-        const existingPendingCol = liveState.collections.find(
-          (c) =>
-            String(c.name ?? '').trim().toLowerCase() ===
-              String(incomingCol.name ?? '').trim().toLowerCase() &&
-            c._syncStatus === 'pending' &&
-            !batchImportedIdsRef.current.has(c.id)
+        const isExplicitColRetry = Boolean(
+          item.outcome === 'failed' &&
+            item.retryCollectionId &&
+            item.retryTargetKey === targetKey &&
+            liveState.collections.some(
+              (c) => c.id === item.retryCollectionId && c._syncStatus === 'pending'
+            )
         );
-        if (existingPendingCol) {
-          incomingCol.id = existingPendingCol.id;
+        if (isExplicitColRetry && item.retryCollectionId) {
+          incomingCol.id = item.retryCollectionId;
         }
 
         const existingCol = liveState.collections.find(
           (c) =>
             String(c.name ?? '').trim().toLowerCase() ===
               String(incomingCol.name ?? '').trim().toLowerCase() &&
-            (c._syncStatus !== 'pending' || batchImportedIdsRef.current.has(c.id)) &&
-            c.id !== incomingCol.id
+            !(isExplicitColRetry && c.id === item.retryCollectionId)
         );
 
         if (existingCol) {
           const diff = compareCollections(existingCol, incomingCol);
+          if (!isRunCurrent(runId, target)) return;
           setBatchQueue(remaining);
           setBatchStats(currentStats);
           setIsBatchConflict(true);
@@ -446,24 +704,38 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
             existingCol,
             incomingCol,
             diff,
+            batchItemId: item.id,
           });
           return;
         }
 
         try {
-          await addCollection(incomingCol);
+          await addCollection(incomingCol, { target, isRetry: isExplicitColRetry });
+          if (!isRunCurrent(runId, target)) return;
           batchImportedIdsRef.current.add(incomingCol.id);
+          markBatchItemOutcome(item.id, 'imported');
           currentStats.collectionsImported += 1;
         } catch (err: unknown) {
+          if (!isRunCurrent(runId, target)) return;
+          const errMsg = err instanceof Error ? err.message : 'Failed to import collection.';
+          const postState = activeStore.getState();
+          const hasPendingDraft = postState.collections.some(
+            (c) => c.id === incomingCol.id && c._syncStatus === 'pending'
+          );
+          markBatchItemOutcome(item.id, 'failed', {
+            error: errMsg,
+            retryCollectionId: hasPendingDraft ? incomingCol.id : undefined,
+            retryTargetKey: hasPendingDraft ? targetKey : undefined,
+          });
           currentStats.failed.push({
             name: item.name,
-            error: err instanceof Error ? err.message : 'Failed to import collection.',
+            error: errMsg,
           });
         }
       }
     }
 
-    finishBatchRun(currentStats);
+    finishBatchRun(currentStats, runId, target);
   };
 
   const handleImportBatch = async () => {
@@ -472,24 +744,40 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
     setSuccessMsg(null);
 
     const selectedItems = batchItems.filter(
-      (item) => item.checked && !item.disabled && item.type !== 'invalid'
+      (item) =>
+        item.checked &&
+        !item.disabled &&
+        item.type !== 'invalid' &&
+        item.outcome !== 'imported' &&
+        item.outcome !== 'skipped'
     );
     if (selectedItems.length === 0) {
       setErrorMsg('Please select at least one valid file to import.');
       return;
     }
 
+    const runId = ++importRunIdRef.current;
+    const target = captureImportTarget(activeStore.getState());
+    activeTargetRef.current = target;
+
     setIsImporting(true);
     batchImportedIdsRef.current = new Set();
     try {
-      await processBatchQueue(selectedItems, {
-        collectionsImported: 0,
-        environmentsImported: 0,
-        skipped: 0,
-        failed: [],
-      });
+      await processBatchQueue(
+        selectedItems,
+        {
+          collectionsImported: 0,
+          environmentsImported: 0,
+          skipped: 0,
+          failed: [],
+        },
+        runId,
+        target
+      );
     } finally {
-      setIsImporting(false);
+      if (importRunIdRef.current === runId && isMountedRef.current && isOpenRef.current) {
+        setIsImporting(false);
+      }
     }
   };
 
@@ -501,21 +789,45 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
       setErrorMsg('Please paste JSON content or select a file first.');
       return;
     }
+    if (getImportUtf8ByteLength(jsonText) > MAX_IMPORT_FILE_BYTES) {
+      setErrorMsg('Pasted content exceeds maximum allowed limit of 16 MB.');
+      return;
+    }
+
+    const runId = ++importRunIdRef.current;
+    const target = captureImportTarget(activeStore.getState());
+    activeTargetRef.current = target;
 
     setIsImporting(true);
     batchImportedIdsRef.current = new Set();
     try {
+      const liveState = activeStore.getState();
       const detected = detectPostmanJsonType(jsonText);
 
+      if (detected === 'unknown') {
+        invalidateActiveRun();
+        setErrorMsg('Unrecognized JSON format. Expected a Postman Collection or Environment JSON.');
+        return;
+      }
+
       if (detected === 'environment') {
-        if (!hasScopePermission(cloudConfig.activeScope, 'env:write', workspaceMode, cloudConfig.user?.role)) {
+        if (
+          !hasScopePermission(
+            liveState.cloudConfig.activeScope,
+            'env:write',
+            liveState.workspaceMode,
+            liveState.cloudConfig.user?.role
+          )
+        ) {
           setErrorMsg('Insufficient permission to import environments into this scope (requires env:write).');
           return;
         }
 
         const incomingEnv = importPostmanEnvironment(jsonText);
-        const existingEnv = environments.find(
-          (e) => e.name.trim().toLowerCase() === incomingEnv.name.trim().toLowerCase()
+        const existingEnv = liveState.environments.find(
+          (e) =>
+            String(e.name ?? '').trim().toLowerCase() ===
+            String(incomingEnv.name ?? '').trim().toLowerCase()
         );
 
         if (existingEnv) {
@@ -529,29 +841,33 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
           return;
         }
 
-        await addEnvironment(incomingEnv);
+        await addEnvironment(incomingEnv, { target });
+        if (!isRunCurrent(runId, target)) return;
         setSuccessMsg(`Postman Environment "${incomingEnv.name}" imported and activated!`);
         clearCloseTimer();
         closeTimerRef.current = setTimeout(() => {
+          if (!isRunCurrent(runId, target)) return;
           setJsonText('');
           handleModalClose();
         }, 900);
       } else {
-        if (!hasScopePermission(cloudConfig.activeScope, 'collection:write', workspaceMode, cloudConfig.user?.role)) {
+        if (
+          !hasScopePermission(
+            liveState.cloudConfig.activeScope,
+            'collection:write',
+            liveState.workspaceMode,
+            liveState.cloudConfig.user?.role
+          )
+        ) {
           setErrorMsg('Insufficient permission to import collections into this scope (requires collection:write).');
           return;
         }
 
-        const incomingCol = importPostmanCollection(jsonText);
-        const existingPendingCol = collections.find(
-          (c) => c.name.trim().toLowerCase() === incomingCol.name.trim().toLowerCase() && c._syncStatus === 'pending'
-        );
-        if (existingPendingCol) {
-          incomingCol.id = existingPendingCol.id;
-        }
-
-        const existingCol = collections.find(
-          (c) => c.name.trim().toLowerCase() === incomingCol.name.trim().toLowerCase() && c._syncStatus !== 'pending' && c.id !== incomingCol.id
+        const { collection: incomingCol, exampleImportSummary } = importPostmanCollectionWithSummary(jsonText);
+        const existingCol = liveState.collections.find(
+          (c) =>
+            String(c.name ?? '').trim().toLowerCase() ===
+            String(incomingCol.name ?? '').trim().toLowerCase()
         );
 
         if (existingCol) {
@@ -565,32 +881,48 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
           return;
         }
 
-        await addCollection(incomingCol);
-        setSuccessMsg(`Postman Collection "${incomingCol.name}" imported and synced!`);
+        await addCollection(incomingCol, { target });
+        if (!isRunCurrent(runId, target)) return;
+        const skippedNote = exampleImportSummary.skipped > 0
+          ? ` (${exampleImportSummary.skipped} invalid/unsupported response example${exampleImportSummary.skipped === 1 ? '' : 's'} skipped${exampleImportSummary.skippedReasons.length > 0 ? `: ${exampleImportSummary.skippedReasons[0]}` : ''})`
+          : '';
+        setSuccessMsg(`Postman Collection "${incomingCol.name}" imported and synced!${skippedNote}`);
         clearCloseTimer();
         closeTimerRef.current = setTimeout(() => {
+          if (!isRunCurrent(runId, target)) return;
           setJsonText('');
           handleModalClose();
         }, 900);
       }
     } catch (err: unknown) {
+      if (!isRunCurrent(runId, target)) return;
       setErrorMsg(err instanceof Error ? err.message : 'Failed to parse Postman file.');
     } finally {
-      setIsImporting(false);
+      if (importRunIdRef.current === runId && isMountedRef.current && isOpenRef.current) {
+        setIsImporting(false);
+      }
     }
   };
 
   const handleBackFromConflict = () => {
+    invalidateActiveRun();
+    retryCopyDraftRef.current = null;
     setConflict(null);
     setErrorMsg(null);
     if (isBatchConflict) {
       setBatchQueue([]);
       setBatchStats(null);
       setIsBatchConflict(false);
+      setIsImporting(false);
     }
   };
 
-  const advanceBatchAfterConflict = async (outcome: 'collection' | 'environment' | 'skipped') => {
+  const advanceBatchAfterConflict = async (
+    outcome: 'collection' | 'environment' | 'skipped',
+    runId: number,
+    target: ImportTargetBinding
+  ) => {
+    if (!isRunCurrent(runId, target)) return;
     const baseStats = batchStats || {
       collectionsImported: 0,
       environmentsImported: 0,
@@ -608,30 +940,49 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
     const remaining = batchQueue;
     setConflict(null);
     if (remaining.length > 0) {
-      await processBatchQueue(remaining, nextStats);
+      await processBatchQueue(remaining, nextStats, runId, target);
     } else {
-      finishBatchRun(nextStats);
+      finishBatchRun(nextStats, runId, target);
     }
   };
 
   const handleSkipConflict = async () => {
     if (!conflict || !isBatchConflict) return;
+    retryCopyDraftRef.current = null;
+    const runId = importRunIdRef.current;
+    const target = activeTargetRef.current;
+    if (!isRunCurrent(runId, target) || !target) return;
     setErrorMsg(null);
     setSuccessMsg(null);
     setIsResolvingConflict(true);
     try {
-      await advanceBatchAfterConflict('skipped');
+      if (conflict.batchItemId) {
+        markBatchItemOutcome(conflict.batchItemId, 'skipped');
+      }
+      await advanceBatchAfterConflict('skipped', runId, target);
     } finally {
-      setIsResolvingConflict(false);
+      if (importRunIdRef.current === runId && isMountedRef.current && isOpenRef.current) {
+        setIsResolvingConflict(false);
+      }
     }
   };
 
   const handleImportAsCopy = async () => {
     if (!conflict) return;
+    const runId = isBatchConflict ? importRunIdRef.current : ++importRunIdRef.current;
+    const target = isBatchConflict
+      ? activeTargetRef.current
+      : captureImportTarget(activeStore.getState());
+    if (!isBatchConflict) {
+      activeTargetRef.current = target;
+    }
+    if (!isRunCurrent(runId, target) || !target) return;
+
     setIsResolvingConflict(true);
     setErrorMsg(null);
     try {
       const liveState = activeStore.getState();
+      const targetKey = getImportTargetKey(target);
       const importedType: 'collection' | 'environment' = conflict.type;
       if (conflict.type === 'collection') {
         if (!hasScopePermission(liveState.cloudConfig.activeScope, 'collection:write', liveState.workspaceMode, liveState.cloudConfig.user?.role)) {
@@ -639,11 +990,33 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
           return;
         }
 
-        const existingNames = liveState.collections.map((c) => c.name);
-        const copyName = generateCopyCollectionName(conflict.incomingCol.name, existingNames);
-        const copyCol = cloneCollectionWithNewIds(conflict.incomingCol, copyName);
+        const existingCopyDraft =
+          retryCopyDraftRef.current &&
+          retryCopyDraftRef.current.targetKey === targetKey &&
+          retryCopyDraftRef.current.batchItemId === conflict.batchItemId &&
+          liveState.collections.some(
+            (c) => c.id === retryCopyDraftRef.current?.id && c._syncStatus === 'pending'
+          )
+            ? retryCopyDraftRef.current
+            : null;
 
-        await addCollection(copyCol);
+        const copyName = existingCopyDraft
+          ? existingCopyDraft.name
+          : generateCopyCollectionName(conflict.incomingCol.name, liveState.collections.map((c) => c.name));
+        const copyCol = cloneCollectionWithNewIds(conflict.incomingCol, copyName);
+        if (existingCopyDraft) {
+          copyCol.id = existingCopyDraft.id;
+        }
+        retryCopyDraftRef.current = {
+          targetKey,
+          batchItemId: conflict.batchItemId,
+          id: copyCol.id,
+          name: copyName,
+        };
+
+        await addCollection(copyCol, { target, isRetry: Boolean(existingCopyDraft) });
+        if (!isRunCurrent(runId, target)) return;
+        retryCopyDraftRef.current = null;
         batchImportedIdsRef.current.add(copyCol.id);
         if (!isBatchConflict) {
           setSuccessMsg(`Postman Collection "${copyName}" imported as copy!`);
@@ -654,39 +1027,78 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
           return;
         }
 
-        const existingNames = liveState.environments.map((e) => e.name);
-        const copyName = generateCopyEnvironmentName(conflict.incomingEnv.name, existingNames);
-        const copyEnv = cloneEnvironmentWithNewIds(conflict.incomingEnv, copyName);
+        const existingCopyDraft =
+          retryCopyDraftRef.current &&
+          retryCopyDraftRef.current.targetKey === targetKey &&
+          retryCopyDraftRef.current.batchItemId === conflict.batchItemId &&
+          liveState.environments.some(
+            (e) => e.id === retryCopyDraftRef.current?.id && e._syncStatus === 'pending'
+          )
+            ? retryCopyDraftRef.current
+            : null;
 
-        await addEnvironment(copyEnv);
+        const copyName = existingCopyDraft
+          ? existingCopyDraft.name
+          : generateCopyEnvironmentName(conflict.incomingEnv.name, liveState.environments.map((e) => e.name));
+        const copyEnv = cloneEnvironmentWithNewIds(conflict.incomingEnv, copyName);
+        if (existingCopyDraft) {
+          copyEnv.id = existingCopyDraft.id;
+        }
+        retryCopyDraftRef.current = {
+          targetKey,
+          batchItemId: conflict.batchItemId,
+          id: copyEnv.id,
+          name: copyName,
+        };
+
+        await addEnvironment(copyEnv, { target, isRetry: Boolean(existingCopyDraft) });
+        if (!isRunCurrent(runId, target)) return;
+        retryCopyDraftRef.current = null;
         if (!isBatchConflict) {
           setSuccessMsg(`Postman Environment "${copyName}" imported as copy!`);
         }
       }
 
       if (isBatchConflict) {
-        await advanceBatchAfterConflict(importedType);
+        if (conflict.batchItemId) {
+          markBatchItemOutcome(conflict.batchItemId, 'imported');
+        }
+        await advanceBatchAfterConflict(importedType, runId, target);
         return;
       }
 
       clearCloseTimer();
       closeTimerRef.current = setTimeout(() => {
+        if (!isRunCurrent(runId, target)) return;
         setJsonText('');
         handleModalClose();
       }, 900);
     } catch (err: unknown) {
+      if (!isRunCurrent(runId, target)) return;
       setErrorMsg(
         err instanceof Error
           ? err.message
           : `Failed to import ${conflict.type} as copy.`
       );
     } finally {
-      setIsResolvingConflict(false);
+      if (importRunIdRef.current === runId && isMountedRef.current && isOpenRef.current) {
+        setIsResolvingConflict(false);
+      }
     }
   };
 
   const handleReplace = async () => {
     if (!conflict) return;
+    retryCopyDraftRef.current = null;
+    const runId = isBatchConflict ? importRunIdRef.current : ++importRunIdRef.current;
+    const target = isBatchConflict
+      ? activeTargetRef.current
+      : captureImportTarget(activeStore.getState());
+    if (!isBatchConflict) {
+      activeTargetRef.current = target;
+    }
+    if (!isRunCurrent(runId, target) || !target) return;
+
     setIsResolvingConflict(true);
     setErrorMsg(null);
     try {
@@ -698,7 +1110,8 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
           return;
         }
 
-        await replaceCollection(conflict.existingCol.id, conflict.incomingCol);
+        await replaceCollection(conflict.existingCol.id, conflict.incomingCol, { target });
+        if (!isRunCurrent(runId, target)) return;
         batchImportedIdsRef.current.add(conflict.existingCol.id);
         if (!isBatchConflict) {
           setSuccessMsg(`Collection "${conflict.existingCol.name}" replaced successfully!`);
@@ -710,30 +1123,43 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
           return;
         }
 
-        await replaceEnvironment(conflict.existingEnv.id, conflict.incomingEnv);
+        await replaceEnvironment(conflict.existingEnv.id, conflict.incomingEnv, { target });
+        if (!isRunCurrent(runId, target)) return;
         if (!isBatchConflict) {
           setSuccessMsg(`Environment "${conflict.existingEnv.name}" replaced successfully!`);
         }
       }
 
       if (isBatchConflict) {
-        await advanceBatchAfterConflict(importedType);
+        if (conflict.batchItemId) {
+          markBatchItemOutcome(conflict.batchItemId, 'imported');
+        }
+        await advanceBatchAfterConflict(importedType, runId, target);
         return;
       }
 
       clearCloseTimer();
       closeTimerRef.current = setTimeout(() => {
+        if (!isRunCurrent(runId, target)) return;
         setJsonText('');
         handleModalClose();
       }, 900);
     } catch (err: unknown) {
+      if (!isRunCurrent(runId, target)) return;
+      if (conflict?.type === 'environment' && activeStore.getState().environmentOccConflict) {
+        // Yield cleanly to the dedicated EnvironmentOccModal instead of stacking modals
+        handleModalClose();
+        return;
+      }
       setErrorMsg(
         err instanceof Error
           ? err.message
           : `Failed to replace ${conflict.type}.`
       );
     } finally {
-      setIsResolvingConflict(false);
+      if (importRunIdRef.current === runId && isMountedRef.current && isOpenRef.current) {
+        setIsResolvingConflict(false);
+      }
     }
   };
 
@@ -759,9 +1185,14 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
       if (newTabId) {
         queueInitialRequestEditorSection(newTabId, targetSection);
       }
+      const runId = ++importRunIdRef.current;
+      const target = captureImportTarget(activeStore.getState());
+      activeTargetRef.current = target;
+
       setSuccessMsg('cURL request imported into a new tab!');
       clearCloseTimer();
       closeTimerRef.current = setTimeout(() => {
+        if (!isRunCurrent(runId, target)) return;
         setCurlText('');
         handleModalClose();
       }, 700);
@@ -773,7 +1204,27 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
   const batchSummary = batchItems ? getImportBatchSelectionSummary(batchItems) : null;
 
   return (
-    <div data-modal="true" role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+    <div
+      data-modal="true"
+      role="dialog"
+      aria-modal="true"
+      onDragOver={(e) => {
+        if (e.dataTransfer?.types && Array.from(e.dataTransfer.types).includes('Files')) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }}
+      onDrop={(e) => {
+        const files = Array.from(e.dataTransfer?.files || []);
+        if (files.length === 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (!conflict && activeImportTab === 'postman' && !isImporting && !isResolvingConflict) {
+          void handleFileDrop(e);
+        }
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"
+    >
       <div className="max-h-[90dvh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-line bg-surface p-4 shadow-2xl md:p-6">
         {/* Hidden File Input placed outside clickable triggers to prevent recursive bubbling */}
         <input
@@ -1337,10 +1788,12 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
                     setBatchItems((prev) => {
                       if (!prev) return prev;
                       const liveState = activeStore.getState();
+                      const targetKey = getImportTargetKey(captureImportTarget(liveState));
                       return recomputeBatchConflicts(
                         toggleAllImportBatchItems(prev, e.target.checked),
                         liveState.collections,
-                        liveState.environments
+                        liveState.environments,
+                        targetKey
                       );
                     })
                   }
@@ -1387,10 +1840,12 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
                         setBatchItems((prev) => {
                           if (!prev) return prev;
                           const liveState = activeStore.getState();
+                          const targetKey = getImportTargetKey(captureImportTarget(liveState));
                           return recomputeBatchConflicts(
                             toggleImportBatchItem(prev, item.id),
                             liveState.collections,
-                            liveState.environments
+                            liveState.environments,
+                            targetKey
                           );
                         })
                       }
@@ -1419,6 +1874,18 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
                             <span>Invalid</span>
                           </span>
                         )}
+                        {item.outcome === 'imported' && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-300">
+                            <CheckCircle2 className="h-3 w-3" />
+                            <span>Imported</span>
+                          </span>
+                        )}
+                        {item.outcome === 'skipped' && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-zinc-500/30 bg-zinc-500/10 px-2 py-0.5 text-[10px] font-semibold text-zinc-400">
+                            <SkipForward className="h-3 w-3" />
+                            <span>Skipped</span>
+                          </span>
+                        )}
                         {item.hasConflict && (
                           <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-300">
                             <AlertTriangle className="h-3 w-3" />
@@ -1429,6 +1896,14 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
 
                       <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] text-tx-muted">
                         {item.itemCountLabel && <span>{item.itemCountLabel}</span>}
+                        {typeof item.skippedExamplesCount === 'number' && item.skippedExamplesCount > 0 && (
+                          <span
+                            className="text-amber-600 dark:text-amber-400"
+                            title={item.skippedExamplesReasons?.join('; ')}
+                          >
+                            {item.skippedExamplesCount} invalid example{item.skippedExamplesCount === 1 ? '' : 's'} skipped
+                          </span>
+                        )}
                         {item.filename !== item.name && (
                           <span className="truncate font-mono text-[10px] text-tx-faint">
                             {item.filename}

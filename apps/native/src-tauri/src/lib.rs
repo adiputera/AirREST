@@ -54,6 +54,114 @@ fn credential_remove(scope: String) -> Result<(), String> {
     }
 }
 
+#[cfg(target_os = "macos")]
+use tauri::{
+    Emitter, Manager,
+    menu::{
+        AboutMetadata, HELP_SUBMENU_ID, Menu, MenuItem, PredefinedMenuItem, Submenu,
+        WINDOW_SUBMENU_ID,
+    },
+};
+
+#[cfg(target_os = "macos")]
+fn build_macos_menu<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
+    let pkg_info = app_handle.package_info();
+    let config = app_handle.config();
+    let about_metadata = AboutMetadata {
+        name: Some(pkg_info.name.clone()),
+        version: Some(pkg_info.version.to_string()),
+        copyright: config.bundle.copyright.clone(),
+        authors: config.bundle.publisher.clone().map(|p| vec![p]),
+        ..Default::default()
+    };
+
+    let close_tab_item = MenuItem::with_id(
+        app_handle,
+        "close_active_tab",
+        "Close Tab",
+        true,
+        Some("CmdOrCtrl+W"),
+    )?;
+    let close_window_item = MenuItem::with_id(
+        app_handle,
+        "close_window",
+        "Close Window",
+        true,
+        Some("CmdOrCtrl+Shift+W"),
+    )?;
+    let window_close_item = MenuItem::with_id(
+        app_handle,
+        "window_close_window",
+        "Close Window",
+        true,
+        None::<&str>,
+    )?;
+
+    let window_menu = Submenu::with_id_and_items(
+        app_handle,
+        WINDOW_SUBMENU_ID,
+        "Window",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(app_handle, None)?,
+            &PredefinedMenuItem::maximize(app_handle, None)?,
+            &PredefinedMenuItem::separator(app_handle)?,
+            &window_close_item,
+        ],
+    )?;
+
+    let help_menu = Submenu::with_id_and_items(app_handle, HELP_SUBMENU_ID, "Help", true, &[])?;
+
+    Menu::with_items(
+        app_handle,
+        &[
+            &Submenu::with_items(
+                app_handle,
+                pkg_info.name.clone(),
+                true,
+                &[
+                    &PredefinedMenuItem::about(app_handle, None, Some(about_metadata))?,
+                    &PredefinedMenuItem::separator(app_handle)?,
+                    &PredefinedMenuItem::services(app_handle, None)?,
+                    &PredefinedMenuItem::separator(app_handle)?,
+                    &PredefinedMenuItem::hide(app_handle, None)?,
+                    &PredefinedMenuItem::hide_others(app_handle, None)?,
+                    &PredefinedMenuItem::separator(app_handle)?,
+                    &PredefinedMenuItem::quit(app_handle, None)?,
+                ],
+            )?,
+            &Submenu::with_items(
+                app_handle,
+                "File",
+                true,
+                &[&close_tab_item, &close_window_item],
+            )?,
+            &Submenu::with_items(
+                app_handle,
+                "Edit",
+                true,
+                &[
+                    &PredefinedMenuItem::undo(app_handle, None)?,
+                    &PredefinedMenuItem::redo(app_handle, None)?,
+                    &PredefinedMenuItem::separator(app_handle)?,
+                    &PredefinedMenuItem::cut(app_handle, None)?,
+                    &PredefinedMenuItem::copy(app_handle, None)?,
+                    &PredefinedMenuItem::paste(app_handle, None)?,
+                    &PredefinedMenuItem::select_all(app_handle, None)?,
+                ],
+            )?,
+            &Submenu::with_items(
+                app_handle,
+                "View",
+                true,
+                &[&PredefinedMenuItem::fullscreen(app_handle, None)?],
+            )?,
+            &window_menu,
+            &help_menu,
+        ],
+    )
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -61,6 +169,21 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init());
+
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .menu(build_macos_menu)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "close_active_tab" => {
+                let _ = app.emit("airrest:close-active-tab", ());
+            }
+            "close_window" | "window_close_window" => {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.close();
+                }
+            }
+            _ => {}
+        });
 
     #[cfg(target_os = "android")]
     let builder = builder.plugin(

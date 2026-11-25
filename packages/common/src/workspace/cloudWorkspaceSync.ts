@@ -18,6 +18,7 @@ export type CloudWorkspaceSyncResult =
 
 export interface CloudWorkspaceSyncInput<Detail extends CloudCollectionDetail, RawEnvironment> {
   currentCollections: Collection[];
+  replayPendingExampleIntents?: () => Promise<void>;
   uploadPendingCollection: (collection: Collection) => Promise<void>;
   fetchCollectionMetadata: PullCloudCollectionsInput<Detail>['fetchMetadata'];
   fetchCollectionDetail: PullCloudCollectionsInput<Detail>['fetchDetail'];
@@ -50,6 +51,11 @@ export async function synchronizeCloudWorkspace<Detail extends CloudCollectionDe
   if (pushed.status === 'cancelled') return pushed;
   if (pushed.status === 'failed') {
     return { status: 'push_failed', collection: pushed.collection, error: pushed.error };
+  }
+
+  if (input.replayPendingExampleIntents) {
+    await input.replayPendingExampleIntents();
+    if (!input.isCurrent()) return { status: 'cancelled' };
   }
 
   const pulled = await pullCloudCollections({

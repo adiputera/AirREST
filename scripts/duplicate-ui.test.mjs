@@ -231,14 +231,27 @@ function loadDuplicateDeps(storeState, overrides = {}) {
     new Function('module', 'exports', transpileTsx('packages/common/src/lib/jwt.ts'))(m, m.exports);
     return m.exports;
   })();
+  const examples = (() => {
+    const m = { exports: {} };
+    new Function('module', 'exports', 'require', transpileTsx('packages/common/src/lib/examples.ts'))(m, m.exports, () => ({}));
+    return m.exports;
+  })();
   const duplicate = (() => {
     const m = { exports: {} };
-    new Function('module', 'exports', transpileTsx('packages/common/src/lib/duplicate.ts'))(m, m.exports);
+    new Function('module', 'exports', 'require', transpileTsx('packages/common/src/lib/duplicate.ts'))(
+      m,
+      m.exports,
+      (id) => (id.includes('examples') ? examples : require(id)),
+    );
     return m.exports;
   })();
   const requestDiff = (() => {
     const m = { exports: {} };
-    new Function('module', 'exports', transpileTsx('packages/common/src/lib/requestDiff.ts'))(m, m.exports);
+    new Function('module', 'exports', 'require', transpileTsx('packages/common/src/lib/requestDiff.ts'))(
+      m,
+      m.exports,
+      (id) => (id.includes('examples') ? examples : require(id)),
+    );
     return m.exports;
   })();
 
@@ -264,7 +277,7 @@ function loadDuplicateDeps(storeState, overrides = {}) {
       useProductPolicy: () => stablePolicy,
     },
     backNavigation: {
-      useBackHandler: () => {},
+      useBackHandler: () => { },
     },
     nextUuid: () => `op-${opSeq++}`,
   };
@@ -288,8 +301,8 @@ function loadDuplicateCollectionModal(harness, storeState, overrides = {}) {
   return mod.exports.DuplicateCollectionModal;
 }
 
-function loadDuplicateItemModal(harness, storeState) {
-  const deps = loadDuplicateDeps(storeState);
+function loadDuplicateItemModal(harness, storeState, overrides = {}) {
+  const deps = loadDuplicateDeps(storeState, overrides);
   const { fn, mod, stubRequire } = loadTsModule('packages/common/src/components/DuplicateItemModal.tsx', {
     react: harness.MockReact,
     'lucide-react': createIconProxy(),
@@ -301,6 +314,7 @@ function loadDuplicateItemModal(harness, storeState) {
       MethodBadge: ({ method }) => RealReact.createElement('span', null, method),
     },
     jwt: deps.jwt,
+    context: deps.context,
     backNavigation: deps.backNavigation,
   });
   fn(stubRequire, mod, mod.exports, harness.mockWindow, harness.mockDocument, { randomUUID: deps.nextUuid });
@@ -316,6 +330,8 @@ test('E01/E02 Sidebar source wires Duplicate Collection, Folder, and Request men
   // Icons & modals imported and mounted
   assert.match(sidebarSrc, /import\s*\{\s*DuplicateCollectionModal\s*\}\s*from\s*'\.\/DuplicateCollectionModal'/);
   assert.match(sidebarSrc, /import\s*\{\s*DuplicateItemModal\s*\}\s*from\s*'\.\/DuplicateItemModal'/);
+  assert.match(sidebarSrc, /import\s*\{\s*PendingDuplicateRecovery\s*\}\s*from\s*'\.\/PendingDuplicateRecovery'/);
+  assert.match(sidebarSrc, /<PendingDuplicateRecovery\s*\/>/);
   assert.match(sidebarSrc, /<DuplicateCollectionModal[\s\S]*?returnFocusTo=\{collectionToDuplicate\?\.trigger\}/);
   assert.match(sidebarSrc, /<DuplicateItemModal[\s\S]*?returnFocusTo=\{itemToDuplicate\?\.trigger\}/);
 
@@ -548,7 +564,7 @@ test('E01 DuplicateCollectionModal: blocks project -> personal and handles parti
   const Modal = loadDuplicateCollectionModal(harness, storeState, { cloudClient });
   const inst = harness.mount(Modal, {
     isOpen: true,
-    onClose: () => {},
+    onClose: () => { },
     collection: { id: 'col-p', name: 'Cloud Col', minRole: 'admin', items: [] },
   });
   await inst.flush();
@@ -639,10 +655,10 @@ test('E02 DuplicateItemModal: folder picker, lazy partial load & retry, same/cro
       storeState.collections = storeState.collections.map((c) =>
         c.id === colId
           ? {
-              ...c,
-              isPartial: false,
-              items: [{ id: 'f-dest', type: 'folder', name: 'Dest Folder', items: [] }],
-            }
+            ...c,
+            isPartial: false,
+            items: [{ id: 'f-dest', type: 'folder', name: 'Dest Folder', items: [] }],
+          }
           : c,
       );
       return { success: true };
@@ -715,7 +731,7 @@ test('E02 DuplicateItemModal: folder picker, lazy partial load & retry, same/cro
   const longName = 'a'.repeat(146);
   const longModalInst = harness.mount(loadDuplicateItemModal(harness, storeState), {
     isOpen: true,
-    onClose: () => {},
+    onClose: () => { },
     item: { id: 'f-long', type: 'folder', name: longName, items: [] },
     sourceCollectionId: 'col-src',
   });
@@ -737,7 +753,7 @@ test('E02 DuplicateItemModal: folder picker, lazy partial load & retry, same/cro
   };
   const depthInst = harness.mount(loadDuplicateItemModal(harness, depthStore), {
     isOpen: true,
-    onClose: () => {},
+    onClose: () => { },
     item: { id: 'req-deep', type: 'request', name: 'Too Deep Req', request: { id: 'req-deep', method: 'GET', url: 'https://httpbin.org/get', headers: [], params: [] } },
     sourceCollectionId: 'col-depth',
   });
@@ -866,4 +882,689 @@ test('E02 DuplicateItemModal: inline New Collection creation, validation, error 
   assert.equal(dupCalls[1].targetCollectionId, 'col-new-1');
   assert.equal(dupCalls[1].opts.operationId, dupCalls[0].opts.operationId);
   assert.equal(closeCount, 1);
+});
+
+function loadPendingDuplicateRecovery(harness, storeState, overrides = {}) {
+  const deps = loadDuplicateDeps(storeState, overrides);
+  const { fn, mod, stubRequire } = loadTsModule('packages/common/src/components/PendingDuplicateRecovery.tsx', {
+    react: harness.MockReact,
+    'lucide-react': createIconProxy(),
+    useApiStore: { useApiStore: deps.useApiStore },
+    context: deps.context,
+    duplicate: deps.duplicate,
+  });
+  fn(stubRequire, mod, mod.exports, harness.mockWindow, harness.mockDocument, { randomUUID: deps.nextUuid });
+  return mod.exports.PendingDuplicateRecovery;
+}
+
+test('V7 & V8/V10 (UI): reopening DuplicateCollectionModal/DuplicateItemModal preserves durable recovery with original ID, isolates from new duplicate options, and PendingDuplicateRecovery gates by owner & distinguishes statuses', async () => {
+  // 1. Collection modal: uncertain -> Escape close -> reopen -> Resume uses original opId and keeps single copy on server
+  {
+    const harness = createModalHarness();
+    const operations = [];
+    const serverCopies = new Set();
+    let closes = 0;
+    const aliceCfg = {
+      apiUrl: 'https://api.example.com',
+      token: 'tok-alice',
+      user: { id: 'alice', role: 'user' },
+      activeScope: { id: 'ws-a', type: 'workspace', name: 'Workspace A' },
+    };
+    const state = {
+      workspaceMode: 'cloud',
+      cloudConfig: aliceCfg,
+      offlineWorkspaces: [],
+      pendingDuplicateIntents: {},
+      duplicateCollection: async (sourceCollectionId, targetScope, opts) => {
+        operations.push({ sourceCollectionId, targetScope, opId: opts.operationId });
+        serverCopies.add(opts.operationId);
+        state.pendingDuplicateIntents = {
+          ...state.pendingDuplicateIntents,
+          [opts.operationId]: {
+            operationId: opts.operationId,
+            ownerKey: '["https://api.example.com","alice"]',
+            kind: 'collection',
+            sourceCollectionId,
+            sourceName: 'Source',
+            targetScope,
+            createdAt: 100,
+            status: 'reconcile_required',
+            lastError: 'reply lost after commit',
+          },
+        };
+        return { success: false, operationId: opts.operationId, reconcilePending: true, error: 'reply lost after commit' };
+      },
+      retryPendingDuplicateIntent: async (opId) => {
+        const intent = state.pendingDuplicateIntents[opId];
+        operations.push({ sourceCollectionId: intent.sourceCollectionId, targetScope: intent.targetScope, opId });
+        serverCopies.add(opId);
+        const next = { ...state.pendingDuplicateIntents };
+        delete next[opId];
+        state.pendingDuplicateIntents = next;
+        return { success: true, operationId: opId, name: 'Source copy' };
+      },
+      clearPendingDuplicateIntent: (opId) => {
+        const next = { ...state.pendingDuplicateIntents };
+        delete next[opId];
+        state.pendingDuplicateIntents = next;
+      },
+    };
+    const Modal = loadDuplicateCollectionModal(harness, state, {
+      cloudClient: {
+        fetchUserWorkspaces: async () => [{ id: 'ws-a', name: 'Workspace A' }, { id: 'ws-b', name: 'Workspace B' }],
+        fetchUserTeams: async () => [],
+        fetchTeamProjects: async () => [],
+      },
+    });
+    const col = { id: 'c1', name: 'Source', minRole: 'reader', items: [] };
+    const inst = harness.mount(Modal, { isOpen: true, collection: col, onClose: () => closes++ });
+    await inst.flush();
+
+    const submitBtn = () => findElements(inst.tree, (n) => n.type === 'button' && collectText(n) === 'Duplicate Collection').at(-1);
+    await submitBtn().props.onClick();
+    await inst.flush();
+    assert.equal(operations.length, 1);
+
+    harness.mockWindow.dispatchKey('Escape');
+    assert.equal(closes, 1);
+    inst.update({ isOpen: false });
+    await inst.flush();
+
+    // Reopen modal -> Pending Duplicate Recovery card is visible; changing destination dropdown below does NOT erase or alter pending intent
+    inst.update({ isOpen: true });
+    await inst.flush();
+    const wsBBtn = findElements(inst.tree, (n) => n.type === 'button' && collectText(n).includes('Workspace B'))[0];
+    wsBBtn.props.onClick();
+    await inst.flush();
+
+    const resumeBtn = findElements(inst.tree, (n) => n.type === 'button' && collectText(n).includes('Resume Pending Duplicate'))[0];
+    assert.ok(resumeBtn, 'Reopened modal must offer Resume Pending Duplicate');
+    await resumeBtn.props.onClick();
+    await inst.flush();
+
+    assert.equal(operations.length, 2);
+    assert.equal(operations[1].opId, operations[0].opId);
+    assert.equal(operations[1].targetScope.id, 'ws-a');
+    assert.equal(serverCopies.size, 1);
+    assert.equal(closes, 2);
+  }
+
+  // 2. Item modal: uncertain -> close -> reopen -> Resume reuses original opId and keeps deleted/detailsUnavailable notices visible
+  {
+    const harness = createModalHarness();
+    const itemOps = [];
+    let closes = 0;
+    const state = {
+      workspaceMode: 'cloud',
+      cloudConfig: {
+        apiUrl: 'https://api.example.com',
+        token: 'tok-alice',
+        user: { id: 'alice', role: 'user' },
+        activeScope: { id: 'ws-a', type: 'workspace', name: 'Workspace A' },
+      },
+      collections: [
+        {
+          id: 'c1',
+          name: 'Col 1',
+          minRole: 'reader',
+          items: [{ id: 'r1', name: 'Get Users', type: 'request', request: { id: 'r1', method: 'GET', url: 'https://httpbin.org/get', headers: [], params: [] } }],
+        },
+        { id: 'c2', name: 'Col 2', minRole: 'reader', items: [] },
+      ],
+      pendingDuplicateIntents: {},
+      loadCollectionDetails: async () => ({ success: true }),
+      duplicateCollectionItem: async (srcColId, itemId, targetColId, targetParentId, opts) => {
+        itemOps.push({ targetColId, opId: opts.operationId });
+        state.pendingDuplicateIntents = {
+          ...state.pendingDuplicateIntents,
+          [opts.operationId]: {
+            operationId: opts.operationId,
+            ownerKey: '["https://api.example.com","alice"]',
+            kind: 'item',
+            sourceCollectionId: srcColId,
+            sourceItemId: itemId,
+            sourceName: 'Get Users',
+            sourceItemType: 'request',
+            targetCollectionId: targetColId,
+            targetCollectionName: 'Col 1',
+            targetParentId,
+            createdAt: 100,
+            status: 'reconcile_required',
+          },
+        };
+        return { success: false, operationId: opts.operationId, reconcilePending: true, error: 'timeout' };
+      },
+      retryPendingDuplicateIntent: async (opId) => {
+        const intent = state.pendingDuplicateIntents[opId];
+        itemOps.push({ targetColId: intent.targetCollectionId, opId });
+        const next = { ...state.pendingDuplicateIntents };
+        delete next[opId];
+        state.pendingDuplicateIntents = next;
+        return { success: true, operationId: opId, name: 'Get Users copy', detailsUnavailable: true, detailsError: 'HTTP 413' };
+      },
+    };
+    const ItemModal = loadDuplicateItemModal(harness, state);
+    const inst = harness.mount(ItemModal, {
+      isOpen: true,
+      onClose: () => { closes++; },
+      item: state.collections[0].items[0],
+      sourceCollectionId: 'c1',
+    });
+    await inst.flush();
+    const submitBtn = findElements(inst.tree, (n) => n.type === 'button' && collectText(n) === 'Duplicate Request').at(-1);
+    await submitBtn.props.onClick();
+    await inst.flush();
+    harness.mockWindow.dispatchKey('Escape');
+    inst.update({ isOpen: false });
+    await inst.flush();
+
+    inst.update({ isOpen: true });
+    await inst.flush();
+    const resumeBtn = findElements(inst.tree, (n) => n.type === 'button' && collectText(n).includes('Resume Pending Duplicate'))[0];
+    assert.ok(resumeBtn);
+    await resumeBtn.props.onClick();
+    await inst.flush();
+    assert.equal(itemOps[1].opId, itemOps[0].opId);
+    assert.match(collectText(inst.tree), /details are unavailable/i);
+    assert.equal(closes, 1);
+  }
+
+  // 3. PendingDuplicateRecovery: works when source is gone, hides on account switch / offline-only, supports provider session, and distinguishes committed/partial/deleted/uncertain/rejected
+  {
+    const harness = createModalHarness();
+    let mode = 'committed_partial';
+    const state = {
+      cloudConfig: {
+        apiUrl: 'https://api.example.com',
+        sessionKind: 'provider',
+        user: { id: 'alice', role: 'user' },
+      },
+      collections: [], // source already deleted locally!
+      pendingDuplicateIntents: {
+        'op-alice': {
+          operationId: 'op-alice',
+          ownerKey: '["https://api.example.com","alice"]',
+          kind: 'collection',
+          sourceCollectionId: 'deleted-src',
+          sourceName: 'Lost Collection',
+          targetScope: { id: 'proj-1', name: 'Core Project', type: 'project' },
+          createdAt: 200,
+          status: 'reconcile_required',
+          lastError: 'connection dropped',
+        },
+        'op-bob': {
+          operationId: 'op-bob',
+          ownerKey: '["https://api.example.com","bob"]',
+          kind: 'collection',
+          sourceCollectionId: 'bob-src',
+          sourceName: 'Secret Bob Collection',
+          targetScope: { id: 'ws-b', name: 'Bob WS', type: 'workspace' },
+          createdAt: 300,
+          status: 'reconcile_required',
+        },
+      },
+      retryPendingDuplicateIntent: async (opId) => {
+        if (mode === 'committed_partial') {
+          const next = { ...state.pendingDuplicateIntents };
+          delete next[opId];
+          state.pendingDuplicateIntents = next;
+          return { success: true, operationId: opId, name: 'Lost Collection', detailsUnavailable: true, detailsError: 'HTTP 403' };
+        }
+        return { success: true, operationId: opId, name: 'Lost Collection', deletedOnServer: true };
+      },
+      clearPendingDuplicateIntent: (opId) => {
+        const next = { ...state.pendingDuplicateIntents };
+        delete next[opId];
+        state.pendingDuplicateIntents = next;
+      },
+    };
+    const Banner = loadPendingDuplicateRecovery(harness, state);
+    const inst = harness.mount(Banner, {});
+    await inst.flush();
+
+    const text = collectText(inst.tree);
+    assert.equal(text.includes('Lost Collection'), true);
+    assert.equal(text.includes('Secret Bob Collection'), false, 'Must never expose another account intent');
+
+    // Switch to Bob -> Alice intent vanishes and Bob intent appears
+    state.cloudConfig = { apiUrl: 'https://api.example.com', sessionKind: 'provider', user: { id: 'bob', role: 'user' } };
+    inst.rerender();
+    await inst.flush();
+    const bobText = collectText(inst.tree);
+    assert.equal(bobText.includes('Secret Bob Collection'), true);
+    assert.equal(bobText.includes('Lost Collection'), false);
+
+    // Switch back to Alice and Resume -> shows Committed (Details Unavailable) status
+    state.cloudConfig = { apiUrl: 'https://api.example.com', sessionKind: 'provider', user: { id: 'alice', role: 'user' } };
+    inst.rerender();
+    await inst.flush();
+    const resumeBtn = findElements(inst.tree, (n) => n.type === 'button' && collectText(n).includes('Resume'))[0];
+    await resumeBtn.props.onClick();
+    await inst.flush();
+    assert.match(collectText(inst.tree), /Committed \(Details Unavailable\): Lost Collection/);
+
+    // Deleted on server outcome
+    mode = 'deleted';
+    state.pendingDuplicateIntents = {
+      'op-alice-2': {
+        operationId: 'op-alice-2',
+        ownerKey: '["https://api.example.com","alice"]',
+        kind: 'item',
+        sourceCollectionId: 'c1',
+        sourceItemId: 'r1',
+        sourceName: 'Deleted Copy Item',
+        sourceItemType: 'request',
+        targetCollectionId: 'c2',
+        targetCollectionName: 'Target Col',
+        createdAt: 400,
+        status: 'reconcile_required',
+      },
+    };
+    inst.rerender();
+    await inst.flush();
+    const resumeBtn2 = findElements(inst.tree, (n) => n.type === 'button' && collectText(n).includes('Resume'))[0];
+    await resumeBtn2.props.onClick();
+    await inst.flush();
+    assert.match(collectText(inst.tree), /Deleted \/ Expired: Lost Collection|Deleted \/ Expired: Deleted Copy Item/);
+  }
+});
+
+test('Follow-up P2 (UI): delayed Resume callback after A->B and A->B->A cannot leak outcome or unlock B, and active pending POST locks Dismiss & Resume while post-restart pending remains recoverable', async () => {
+  // 1. Delayed Resume across A -> B (with B active Resume) and A -> B -> A
+  {
+    const harness = createModalHarness();
+    const cfg = (id) => ({ apiUrl: 'https://api.example.com', sessionKind: 'provider', user: { id, role: 'user' } });
+    const resolvers = {};
+    const state = {
+      cloudConfig: cfg('alice'),
+      activeDuplicateOperationIds: {},
+      pendingDuplicateIntents: {
+        'op-alice': {
+          operationId: 'op-alice',
+          ownerKey: '["https://api.example.com","alice"]',
+          kind: 'collection',
+          sourceCollectionId: 'c-a',
+          sourceName: 'Alice Private Collection',
+          targetScope: { id: 'ws-a', name: 'Alice WS', type: 'workspace' },
+          createdAt: 100,
+          status: 'reconcile_required',
+        },
+        'op-bob': {
+          operationId: 'op-bob',
+          ownerKey: '["https://api.example.com","bob"]',
+          kind: 'collection',
+          sourceCollectionId: 'c-b',
+          sourceName: 'Bob Collection',
+          targetScope: { id: 'ws-b', name: 'Bob WS', type: 'workspace' },
+          createdAt: 200,
+          status: 'reconcile_required',
+        },
+      },
+      retryPendingDuplicateIntent: (opId) => new Promise((resolve) => {
+        resolvers[opId] = resolve;
+      }),
+      clearPendingDuplicateIntent: () => { },
+    };
+
+    const Banner = loadPendingDuplicateRecovery(harness, state);
+    const inst = harness.mount(Banner, {});
+    await inst.flush();
+
+    // Alice starts Resume
+    const aliceResume = findElements(inst.tree, (n) => n.type === 'button' && collectText(n) === 'Resume')[0];
+    aliceResume.props.onClick();
+    await inst.flush(1);
+
+    // Switch to Bob (A -> B) and start Bob's Resume
+    state.cloudConfig = cfg('bob');
+    inst.rerender();
+    await inst.flush();
+    assert.equal(collectText(inst.tree).includes('Alice Private Collection'), false);
+
+    const bobResume = findElements(inst.tree, (n) => n.type === 'button' && collectText(n) === 'Resume')[0];
+    assert.equal(bobResume.props.disabled, false);
+    bobResume.props.onClick();
+    await inst.flush(1);
+    const bobBusyResume = findElements(inst.tree, (n) => n.type === 'button' && collectText(n).includes('Resuming'))[0];
+    assert.equal(bobBusyResume.props.disabled, true);
+
+    // Delayed Alice callback settles while Bob is active & in-flight -> must NOT reveal Alice label and must NOT unlock Bob!
+    resolvers['op-alice']({ success: false, error: 'Session or scope changed.' });
+    await inst.flush();
+    assert.equal(collectText(inst.tree).includes('Alice Private Collection'), false);
+    const bobStillBusy = findElements(inst.tree, (n) => n.type === 'button' && collectText(n).includes('Resuming'))[0];
+    assert.equal(bobStillBusy.props.disabled, true, 'Stale Alice callback must not clear Bob active lock');
+
+    // Switch back to Alice (A -> B -> A) before Bob finishes, and verify Bob callback & another delayed A->B->A callback stay ignored
+    state.cloudConfig = cfg('alice');
+    inst.rerender();
+    await inst.flush();
+    resolvers['op-bob']({ success: true, name: 'Bob Collection' });
+    await inst.flush();
+    assert.equal(collectText(inst.tree).includes('Bob Collection'), false);
+
+    // Now Alice clicks Resume in new generation 2, switches A -> B -> A to gen 4, then old gen 2 resolves -> ignored!
+    const aliceResume2 = findElements(inst.tree, (n) => n.type === 'button' && collectText(n) === 'Resume')[0];
+    aliceResume2.props.onClick();
+    await inst.flush(1);
+    const gen2Resolver = resolvers['op-alice'];
+
+    state.cloudConfig = cfg('bob');
+    inst.rerender();
+    await inst.flush();
+    state.cloudConfig = cfg('alice');
+    inst.rerender();
+    await inst.flush();
+
+    gen2Resolver({ success: false, reconcilePending: true, error: 'stale gen 2 error' });
+    await inst.flush();
+    assert.equal(collectText(inst.tree).includes('stale gen 2 error'), false, 'A->B->A must ignore stale generation callback');
+  }
+
+  // 2. Active in-flight 'pending' submission disables Dismiss & Resume; post-restart 'pending' (no activeDuplicateOperationIds) enables both
+  {
+    const harness = createModalHarness();
+    let dismissed = 0;
+    let retried = 0;
+    const state = {
+      cloudConfig: { apiUrl: 'https://api.example.com', sessionKind: 'provider', user: { id: 'alice', role: 'user' } },
+      activeDuplicateOperationIds: { 'op-live': true },
+      pendingDuplicateIntents: {
+        'op-live': {
+          operationId: 'op-live',
+          ownerKey: '["https://api.example.com","alice"]',
+          kind: 'collection',
+          sourceCollectionId: 'c1',
+          sourceName: 'Inflight Collection',
+          targetScope: { id: 'ws-a', name: 'Workspace A', type: 'workspace' },
+          createdAt: 100,
+          status: 'pending',
+        },
+      },
+      retryPendingDuplicateIntent: async () => {
+        retried++;
+        return { success: true, operationId: 'op-live', name: 'Inflight Collection' };
+      },
+      clearPendingDuplicateIntent: () => {
+        dismissed++;
+      },
+    };
+
+    const Banner = loadPendingDuplicateRecovery(harness, state);
+    const inst = harness.mount(Banner, {});
+    await inst.flush();
+
+    assert.equal(collectText(inst.tree).includes('In Progress'), true);
+    const liveDismiss = findElements(inst.tree, (n) => n.type === 'button' && collectText(n) === 'Dismiss')[0];
+    const liveResume = findElements(inst.tree, (n) => n.type === 'button' && collectText(n).includes('Resuming'))[0];
+    assert.equal(liveDismiss.props.disabled, true);
+    assert.equal(liveResume.props.disabled, true);
+    liveDismiss.props.onClick();
+    liveResume.props.onClick();
+    assert.equal(dismissed, 0);
+    assert.equal(retried, 0);
+
+    // Simulate post-restart state: same persisted status === 'pending', but runtime activeDuplicateOperationIds is empty
+    state.activeDuplicateOperationIds = {};
+    inst.rerender();
+    await inst.flush();
+
+    assert.equal(collectText(inst.tree).includes('Pending'), true);
+    const restartDismiss = findElements(inst.tree, (n) => n.type === 'button' && collectText(n) === 'Dismiss')[0];
+    const restartResume = findElements(inst.tree, (n) => n.type === 'button' && collectText(n) === 'Resume')[0];
+    assert.equal(restartDismiss.props.disabled, false);
+    assert.equal(restartResume.props.disabled, false);
+    await restartResume.props.onClick();
+    await inst.flush();
+    assert.equal(retried, 1);
+  }
+});
+
+test('C9 (P3): DuplicateItemModal honors isOfflineOnly owner scoping, DuplicateCollectionModal locks X/targets during resume, RequestEditor uses useStoreContext', async () => {
+  // 1. DuplicateItemModal passes !productPolicy.workspace.cloud to getOwnedPendingDuplicateIntents
+  {
+    const harness = createModalHarness();
+    const state = {
+      workspaceMode: 'offline',
+      collections: [
+        {
+          id: 'c1',
+          name: 'Col 1',
+          items: [
+            {
+              id: 'r1',
+              name: 'Req 1',
+              type: 'request',
+              request: { id: 'r1', name: 'Req 1', method: 'GET', url: 'https://a.test', params: [], headers: [], auth: { type: 'none' }, bodyType: 'none', bodyContent: '' },
+            },
+          ],
+        },
+      ],
+      cloudConfig: { apiUrl: 'https://api.example.com', sessionKind: 'provider', user: { id: 'alice', role: 'user' } },
+      pendingDuplicateIntents: {
+        'op-cloud-only': {
+          operationId: 'op-cloud-only',
+          ownerKey: '["https://api.example.com","alice"]',
+          kind: 'item',
+          sourceCollectionId: 'c1',
+          sourceItemId: 'r1',
+          sourceName: 'Leaked Cloud Recovery',
+          targetCollectionId: 'c1',
+          createdAt: 100,
+          status: 'reconcile_required',
+        },
+      },
+      duplicateCollectionItem: async () => ({ success: true }),
+      retryPendingDuplicateIntent: async () => ({ success: true }),
+      clearPendingDuplicateIntent: () => { },
+      activeDuplicateOperationIds: {},
+    };
+    const Modal = loadDuplicateItemModal(harness, state, {
+      productPolicy: { workspace: { offline: true, cloud: false } },
+    });
+    const inst = harness.mount(Modal, {
+      isOpen: true,
+      collectionId: 'c1',
+      itemId: 'r1',
+      itemType: 'request',
+      itemName: 'Req 1',
+      onClose: () => { },
+    });
+    await inst.flush();
+    assert.equal(
+      collectText(inst.tree).includes('Leaked Cloud Recovery'),
+      false,
+      'Offline-only DuplicateItemModal must not surface cloud-owned recovery intents',
+    );
+  }
+
+  // 2. DuplicateCollectionModal disables X close and destination target buttons while resumingOpId !== null
+  {
+    const harness = createModalHarness();
+    let resolveResume;
+    let closeCalls = 0;
+    const state = {
+      workspaceMode: 'cloud',
+      collections: [{ id: 'c1', name: 'Col 1', items: [] }],
+      offlineWorkspaces: [],
+      cloudConfig: {
+        apiUrl: 'https://api.example.com',
+        token: 'tok',
+        sessionKind: 'provider',
+        user: { id: 'alice', role: 'owner' },
+        activeScope: { type: 'workspace', id: 'ws-a', name: 'WS A', role: 'owner' },
+      },
+      pendingDuplicateIntents: {
+        'op-resuming': {
+          operationId: 'op-resuming',
+          ownerKey: '["https://api.example.com","alice"]',
+          kind: 'collection',
+          sourceCollectionId: 'c1',
+          sourceName: 'Col 1',
+          targetScope: { type: 'workspace', id: 'ws-a', name: 'WS A', role: 'owner' },
+          createdAt: 100,
+          status: 'reconcile_required',
+        },
+      },
+      activeDuplicateOperationIds: {},
+      retryPendingDuplicateIntent: async () => new Promise((r) => { resolveResume = r; }),
+      clearPendingDuplicateIntent: () => { },
+      duplicateCollection: async () => ({ success: true }),
+    };
+    const Modal = loadDuplicateCollectionModal(harness, state, {
+      cloudApi: {
+        fetchUserWorkspaces: async () => [{ id: 'ws-a', name: 'WS A', role: 'owner' }],
+        fetchUserTeams: async () => [],
+        fetchTeamProjects: async () => [],
+      },
+    });
+    const inst = harness.mount(Modal, {
+      isOpen: true,
+      collection: state.collections[0],
+      onClose: () => { closeCalls++; },
+    });
+    await inst.flush();
+    const resumeBtn = findElements(inst.tree, (n) => n.type === 'button' && collectText(n).includes('Resume Pending Duplicate'))[0];
+    assert.ok(resumeBtn);
+    resumeBtn.props.onClick();
+    await inst.flush();
+
+    const closeBtn = findElements(inst.tree, (n) => n.type === 'button' && n.props['aria-label'] === 'Close modal')[0];
+    const wsBtn = findElements(inst.tree, (n) => n.type === 'button' && collectText(n).includes('WS A'))[0];
+    assert.equal(closeBtn.props.disabled, true, 'Close button must be disabled while resumingOpId !== null');
+    assert.equal(wsBtn.props.disabled, true, 'Destination scope buttons must be disabled while resumingOpId !== null');
+    closeBtn.props.onClick();
+    assert.equal(closeCalls, 0);
+    resolveResume({ success: true, operationId: 'op-resuming', name: 'Col 1' });
+    await inst.flush();
+  }
+
+  // 3. RequestEditor resolves active store via useStoreContext() || useApiStore
+  const reqEditorSrc = fs.readFileSync(path.join(ROOT, 'packages/common/src/components/RequestEditor.tsx'), 'utf8');
+  assert.match(reqEditorSrc, /useStoreContext\(\)\s*\|\|\s*useApiStore/);
+
+  // 4. C-R1: Closing DuplicateCollectionModal mid-submit resets isSubmitting on reopen
+  {
+    const harness = createModalHarness();
+    let releaseDup;
+    const state = {
+      workspaceMode: 'offline',
+      collections: [{ id: 'c1', name: 'Col 1', items: [] }],
+      offlineWorkspaces: [
+        { id: 'ws-1', name: 'Local 1' },
+        { id: 'ws-2', name: 'Local 2' },
+      ],
+      activeOfflineWorkspaceId: 'ws-1',
+      cloudConfig: { apiUrl: '', token: '', user: null, activeScope: null },
+      pendingDuplicateIntents: {},
+      activeDuplicateOperationIds: {},
+      duplicateCollection: () => new Promise((resolve) => { releaseDup = resolve; }),
+    };
+    const Modal = loadDuplicateCollectionModal(harness, state, {});
+    const inst = harness.mount(Modal, {
+      isOpen: true,
+      collection: state.collections[0],
+      onClose: () => {},
+    });
+    await inst.flush();
+    const submitBtn = findElements(inst.tree, (n) => n.type === 'button' && collectText(n).includes('Duplicate Collection'))[0];
+    assert.ok(submitBtn && !submitBtn.props.disabled);
+    const pendingSubmit = submitBtn.props.onClick();
+    await inst.flush();
+    assert.ok(findElements(inst.tree, (n) => n.type === 'button' && collectText(n).includes('Duplicating...'))[0]);
+
+    // Close modal before duplicateCollection resolves, then reopen
+    inst.update({ isOpen: false, collection: state.collections[0], onClose: () => {} });
+    await inst.flush();
+    inst.update({ isOpen: true, collection: state.collections[0], onClose: () => {} });
+    await inst.flush();
+    const reopenedSubmit = findElements(inst.tree, (n) => n.type === 'button' && collectText(n).includes('Duplicate Collection'))[0];
+    assert.ok(reopenedSubmit && !reopenedSubmit.props.disabled, 'Reopened DuplicateCollectionModal must not stay stuck in isSubmitting');
+    releaseDup({ success: true });
+    await pendingSubmit;
+  }
+
+  // 5. C-R3: EnvironmentConflictModal displays errorMsg and EnvironmentModal passes conflictErrorMsg + retryCopyEnvDraftRef
+  const envConflictSrc = fs.readFileSync(path.join(ROOT, 'packages/common/src/components/EnvironmentConflictModal.tsx'), 'utf8');
+  const envModalSrc = fs.readFileSync(path.join(ROOT, 'packages/common/src/components/EnvironmentModal.tsx'), 'utf8');
+  assert.match(envConflictSrc, /errorMsg\s*=\s*null/);
+  assert.match(envModalSrc, /errorMsg=\{conflictErrorMsg\}/);
+  assert.match(envModalSrc, /retryCopyEnvDraftRef/);
+
+  // 6. C-R5: EnvironmentModal sanitizes exported filename to alphanumeric + hyphens
+  assert.match(envModalSrc, /\.replace\(\/\[\^a-z0-9\]\+\/g,\s*'-'\)\s*\.replace\(\/\^-\+\|-\+\$\/g,\s*''\)\s*\|\|\s*'environment'/);
+
+  // 7. C-R6: DuplicateItemModal disables X close and target selectors while resumingOpId !== null
+  {
+    const harness = createModalHarness();
+    let resolveResume;
+    let closeCalls = 0;
+    const state = {
+      workspaceMode: 'cloud',
+      collections: [
+        {
+          id: 'c1',
+          name: 'Col 1',
+          items: [{ id: 'r1', name: 'Req 1', type: 'request', request: { id: 'r1', name: 'Req 1', method: 'GET', url: 'https://a.test', params: [], headers: [], auth: { type: 'none' }, bodyType: 'none', bodyContent: '' } }],
+        },
+      ],
+      offlineWorkspaces: [],
+      cloudConfig: {
+        apiUrl: 'https://api.example.com',
+        token: 'tok',
+        sessionKind: 'provider',
+        user: { id: 'alice', role: 'owner' },
+        activeScope: { type: 'workspace', id: 'ws-a', name: 'WS A', role: 'owner' },
+      },
+      pendingDuplicateIntents: {
+        'op-item-resuming': {
+          operationId: 'op-item-resuming',
+          ownerKey: '["https://api.example.com","alice"]',
+          kind: 'item',
+          sourceCollectionId: 'c1',
+          sourceItemId: 'r1',
+          sourceItemType: 'request',
+          sourceName: 'Req 1',
+          targetScope: { type: 'workspace', id: 'ws-a', name: 'WS A', role: 'owner' },
+          createdAt: 100,
+          status: 'reconcile_required',
+        },
+      },
+      activeDuplicateOperationIds: {},
+      retryPendingDuplicateIntent: async () => new Promise((r) => { resolveResume = r; }),
+      clearPendingDuplicateIntent: () => { },
+      duplicateItem: async () => ({ success: true }),
+    };
+    const Modal = loadDuplicateItemModal(harness, state, {
+      cloudApi: {
+        fetchUserWorkspaces: async () => [{ id: 'ws-a', name: 'WS A', role: 'owner' }],
+        fetchUserTeams: async () => [],
+        fetchTeamProjects: async () => [],
+      },
+    });
+    const inst = harness.mount(Modal, {
+      isOpen: true,
+      sourceCollectionId: 'c1',
+      item: state.collections[0].items[0],
+      onClose: () => { closeCalls++; },
+    });
+    await inst.flush();
+    const resumeBtn = findElements(inst.tree, (n) => n.type === 'button' && collectText(n).includes('Resume Pending Duplicate'))[0];
+    assert.ok(resumeBtn);
+    resumeBtn.props.onClick();
+    await inst.flush();
+
+    const closeBtn = findElements(inst.tree, (n) => n.type === 'button' && n.props['aria-label'] === 'Close modal')[0];
+    const selects = findElements(inst.tree, (n) => n.type === 'select');
+    assert.equal(closeBtn.props.disabled, true, 'DuplicateItemModal close button must be disabled while resumingOpId !== null');
+    assert.ok(selects.length >= 1 && selects.every((s) => s.props.disabled === true), 'Target selects must be disabled while resumingOpId !== null');
+    closeBtn.props.onClick();
+    assert.equal(closeCalls, 0);
+    resolveResume({ success: true, operationId: 'op-item-resuming', name: 'Req 1' });
+    await inst.flush();
+  }
+
+  // 8. C-R7: EnvironmentConflictModal stops Escape propagation and EnvironmentModal skips parent close while child dialogs are open
+  assert.match(envConflictSrc, /e\.preventDefault\(\);\s*e\.stopPropagation\(\);\s*onClose\(\);/);
+  assert.match(envModalSrc, /if \(conflict \|\| showDeleteConfirm \|\| isPermModalOpen \|\| isNewEnvPermModalOpen\) \{\s*return;\s*\}/);
 });

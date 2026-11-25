@@ -18,11 +18,16 @@ type FeatureFlags struct {
 	CollectionExport bool `json:"collection.export"`
 }
 
+type FeaturePolicyCapabilities struct {
+	SavedExamples bool `json:"saved_examples"`
+}
+
 type FeaturePolicy struct {
-	Flags     FeatureFlags `json:"flags"`
-	Revision  int64        `json:"revision"`
-	UpdatedBy *uuid.UUID   `json:"updated_by,omitempty"`
-	UpdatedAt time.Time    `json:"updated_at"`
+	Flags        FeatureFlags               `json:"flags"`
+	Revision     int64                      `json:"revision"`
+	UpdatedBy    *uuid.UUID                 `json:"updated_by,omitempty"`
+	UpdatedAt    time.Time                  `json:"updated_at"`
+	Capabilities *FeaturePolicyCapabilities `json:"capabilities,omitempty"`
 }
 
 func DefaultFeatureFlags() FeatureFlags {

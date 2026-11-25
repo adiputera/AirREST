@@ -1,4 +1,5 @@
-import { Collection, CollectionItem, Environment, EnvironmentVariable, ApiRequest, FormDataItem } from '../types/api';
+import { Collection, CollectionItem, Environment, EnvironmentVariable, ApiRequest, FormDataItem, SavedExample, SavedExampleSummary } from '../types/api';
+import { buildExampleSummariesFromExamples, cloneSavedExamplesList, cloneSavedExampleSummaries } from './examples';
 import { parsePathVariablesFromUrl } from './urlParams';
 
 
@@ -97,11 +98,47 @@ export function buildItemTree(
       updatedAt: new Date(item.updated_at || Date.now()).getTime(),
     };
 
+    let examples: SavedExample[] | undefined;
+    if (Array.isArray(item.examples)) {
+      examples = cloneSavedExamplesList(item.examples);
+    } else if (typeof item.examples === 'string' && item.examples.trim()) {
+      const parsedEx = safeJsonParse(item.examples, undefined);
+      if (Array.isArray(parsedEx)) {
+        examples = cloneSavedExamplesList(parsedEx);
+      }
+    }
+
+    const exampleSummaries: SavedExampleSummary[] | undefined = Array.isArray(item.example_summaries)
+      ? cloneSavedExampleSummaries(item.example_summaries)
+      : examples
+        ? buildExampleSummariesFromExamples(examples)
+        : undefined;
+    const exampleCount =
+      typeof item.example_count === 'number'
+        ? item.example_count
+        : examples
+          ? examples.length
+          : exampleSummaries
+            ? exampleSummaries.length
+            : 0;
+    const examplesLoaded =
+      typeof item.examples_loaded === 'boolean'
+        ? item.examples_loaded
+        : Array.isArray(examples)
+          ? true
+          : exampleCount === 0;
+
     return [{
       id: item.id,
       name: item.name,
       type: 'request' as const,
       request: req,
+      ...(typeof item.version === 'number' ? { version: item.version } : {}),
+      ...(examples ? { examples } : exampleCount === 0 ? { examples: [] } : {}),
+      ...(exampleSummaries ? { exampleSummaries } : {}),
+      exampleCount,
+      ...(item.example_summaries_truncated === true ? { exampleSummariesTruncated: true } : {}),
+      examplesLoaded,
     }];
   });
 }

@@ -16,9 +16,23 @@ function loadCloudDeltaState() {
     exports: snapshotExports,
     require: () => cacheExports,
   });
+  const examplesExports = {};
+  vm.runInNewContext(compile('../packages/common/src/lib/examples.ts'), {
+    exports: examplesExports,
+    require: () => ({}),
+    Map,
+    Set,
+    TextEncoder,
+    TextDecoder,
+    JSON,
+    crypto,
+  });
   const exports = {};
   const requestDiff = {};
-  vm.runInNewContext(compile('../packages/common/src/lib/requestDiff.ts'), { exports: requestDiff });
+  vm.runInNewContext(compile('../packages/common/src/lib/requestDiff.ts'), {
+    exports: requestDiff,
+    require: (id) => id.includes('examples') ? examplesExports : {},
+  });
   vm.runInNewContext(compile('../packages/common/src/workspace/cloudDeltaState.ts'), {
     exports,
     require: (id) => id.includes('requestDiff') ? requestDiff : id.includes('scopeCache') ? cacheExports : snapshotExports,

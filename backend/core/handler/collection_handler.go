@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/adiputera/airrest-backend/core/domain"
 	"github.com/adiputera/airrest-backend/core/middleware"
@@ -244,21 +245,32 @@ func (h *CollectionHandler) Move(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.collectionService.MoveCollection(r.Context(), user, id, targetWsID, targetProjID); err != nil {
-		if errors.Is(err, service.ErrFeatureDisabled) {
-			response.Error(w, http.StatusForbidden, err.Error(), "FEATURE_DISABLED")
-			return
-		}
-		if errors.Is(err, service.ErrFeaturePolicyUnavailable) {
-			response.Error(w, http.StatusServiceUnavailable, "feature policy unavailable", "FEATURE_POLICY_UNAVAILABLE")
-			return
-		}
-		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
+		writeMoveCollectionError(w, err)
 		return
 	}
 
 	response.JSON(w, http.StatusOK, map[string]string{
 		"message": "collection moved successfully",
 	})
+}
+
+func writeMoveCollectionError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, service.ErrFeatureDisabled):
+		response.Error(w, http.StatusForbidden, err.Error(), "FEATURE_DISABLED")
+	case errors.Is(err, service.ErrFeaturePolicyUnavailable):
+		response.Error(w, http.StatusServiceUnavailable, "feature policy unavailable", "FEATURE_POLICY_UNAVAILABLE")
+	case errors.Is(err, service.ErrInvalidCollectionMove):
+		response.Error(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST")
+	case errors.Is(err, service.ErrForbidden), errors.Is(err, service.ErrProjectCollectionMoveToPersonalScope):
+		response.Error(w, http.StatusForbidden, err.Error(), "FORBIDDEN")
+	case errors.Is(err, postgres.ErrCollectionNotFound), errors.Is(err, postgres.ErrProjectNotFound), errors.Is(err, postgres.ErrWorkspaceNotFound):
+		response.Error(w, http.StatusNotFound, "collection or destination not found", "NOT_FOUND")
+	case errors.Is(err, postgres.ErrVersionConflict):
+		response.Error(w, http.StatusConflict, "collection permissions or location changed; refresh before retrying", "CONFLICT")
+	default:
+		response.Error(w, http.StatusInternalServerError, "failed to move collection", "SERVER_ERROR")
+	}
 }
 
 // Item Handlers
@@ -271,11 +283,7 @@ func (h *CollectionHandler) CreateItem(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.collectionService.CreateItem(r.Context(), user, &item); err != nil {
-		if errors.Is(err, service.ErrInvalidItemPayload) {
-			response.Error(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST")
-			return
-		}
-		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
+		writeCollectionItemError(w, err, nil)
 		return
 	}
 
@@ -305,15 +313,7 @@ func (h *CollectionHandler) UpdateItem(w http.ResponseWriter, r *http.Request) {
 	req.Item.ID = id
 	updated, err := h.collectionService.UpdateItem(r.Context(), user, &req.Item, req.BaseVersion)
 	if err != nil {
-		if errors.Is(err, service.ErrInvalidItemPayload) {
-			response.Error(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST")
-			return
-		}
-		if errors.Is(err, postgres.ErrVersionConflict) {
-			response.Conflict(w, "conflict: item has been modified by another user", updated)
-			return
-		}
-		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
+		writeCollectionItemError(w, err, updated)
 		return
 	}
 
@@ -330,7 +330,7 @@ func (h *CollectionHandler) DeleteItem(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.collectionService.DeleteItem(r.Context(), user, id); err != nil {
-		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
+		writeCollectionItemError(w, err, nil)
 		return
 	}
 
@@ -348,11 +348,103 @@ func (h *CollectionHandler) GetItem(w http.ResponseWriter, r *http.Request) {
 
 	item, err := h.collectionService.GetItem(r.Context(), user, id)
 	if err != nil {
-		response.Error(w, http.StatusNotFound, "item not found", "NOT_FOUND")
+		writeCollectionItemError(w, err, nil)
 		return
 	}
 
 	response.JSON(w, http.StatusOK, item)
+}
+
+func (h *CollectionHandler) PatchItemExamples(w http.ResponseWriter, r *http.Request) {
+	user := middleware.GetUserFromContext(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "invalid item id", "BAD_REQUEST")
+		return
+	}
+
+	var req service.PatchItemExamplesInput
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.Error(w, http.StatusBadRequest, "invalid request body", "BAD_REQUEST")
+		return
+	}
+
+	updated, err := h.collectionService.PatchItemExamples(r.Context(), user, id, req)
+	if err != nil {
+		writeCollectionItemError(w, err, updated)
+		return
+	}
+
+	response.JSON(w, http.StatusOK, updated)
+}
+
+func (h *CollectionHandler) GetCollectionExamples(w http.ResponseWriter, r *http.Request) {
+	user := middleware.GetUserFromContext(r.Context())
+	colID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "invalid collection id", "BAD_REQUEST")
+		return
+	}
+
+	cursor := r.URL.Query().Get("cursor")
+	limit := 50
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		parsedLimit, parseErr := strconv.Atoi(limitStr)
+		if parseErr != nil || parsedLimit <= 0 {
+			response.Error(w, http.StatusBadRequest, "invalid limit", "BAD_REQUEST")
+			return
+		}
+		limit = parsedLimit
+	}
+	includeBody := r.URL.Query().Get("include_body") == "true"
+
+	page, err := h.collectionService.GetCollectionExamples(r.Context(), user, colID, cursor, limit, includeBody)
+	if err != nil {
+		writeCollectionItemError(w, err, nil)
+		return
+	}
+
+	response.JSON(w, http.StatusOK, page)
+}
+
+func (h *CollectionHandler) ReplaceCollection(w http.ResponseWriter, r *http.Request) {
+	user := middleware.GetUserFromContext(r.Context())
+	colID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "invalid collection id", "BAD_REQUEST")
+		return
+	}
+
+	var req service.ReplaceCollectionInput
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.Error(w, http.StatusBadRequest, "invalid request body", "BAD_REQUEST")
+		return
+	}
+
+	receipt, err := h.collectionService.ReplaceCollection(r.Context(), user, colID, req)
+	if err != nil {
+		writeCollectionItemError(w, err, nil)
+		return
+	}
+
+	response.JSON(w, http.StatusOK, receipt)
+}
+
+func writeCollectionItemError(w http.ResponseWriter, err error, conflictData any) {
+	switch {
+	case errors.Is(err, service.ErrInvalidItemPayload):
+		response.Error(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST")
+	case errors.Is(err, service.ErrExampleLimitExceeded), errors.Is(err, service.ErrBatchLimit):
+		response.Error(w, http.StatusRequestEntityTooLarge, err.Error(), "LIMIT_EXCEEDED")
+	case errors.Is(err, postgres.ErrVersionConflict), errors.Is(err, service.ErrExampleConflict):
+		response.Conflict(w, err.Error(), conflictData)
+	case errors.Is(err, postgres.ErrItemNotFound), errors.Is(err, postgres.ErrCollectionNotFound), errors.Is(err, service.ErrExampleNotFound):
+		response.Error(w, http.StatusNotFound, "resource not found", "NOT_FOUND")
+	case errors.Is(err, service.ErrForbidden), errors.Is(err, service.ErrReaderCannotModify):
+		response.Error(w, http.StatusForbidden, err.Error(), "FORBIDDEN")
+	default:
+		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
+	}
 }
 
 type ReorderItemsRequest struct {

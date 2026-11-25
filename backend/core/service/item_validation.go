@@ -339,6 +339,13 @@ func ValidateCollectionItem(item *domain.CollectionItem) error {
 	if err := validateFormDataArray(item.BodyFormData); err != nil {
 		return err
 	}
+	if item.Examples.Present {
+		normalized, err := ValidateAndNormalizeExamples(item.Examples, item.Type)
+		if err != nil {
+			return err
+		}
+		item.Examples = domain.NewOptionalRawJSON(normalized)
+	}
 	return nil
 }
 
@@ -379,6 +386,13 @@ func ValidateImportItem(item *ImportItemRequest) error {
 	}
 	if err := validateFormDataArray(item.BodyFormData); err != nil {
 		return err
+	}
+	if item.Examples.Present {
+		normalized, err := ValidateAndNormalizeExamples(item.Examples, itemType)
+		if err != nil {
+			return err
+		}
+		item.Examples = domain.NewOptionalRawJSON(normalized)
 	}
 	return nil
 }

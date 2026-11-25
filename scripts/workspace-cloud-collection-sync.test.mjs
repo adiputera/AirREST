@@ -11,10 +11,21 @@ function loadCloudCollectionSync() {
   ).outputText;
   const syncCollections = {};
   vm.runInNewContext(compile('../packages/common/src/workspace/cloudSyncCollections.ts'), { exports: syncCollections, Date });
+  const examples = {};
+  vm.runInNewContext(compile('../packages/common/src/lib/examples.ts'), {
+    exports: examples,
+    require: () => ({}),
+    Map,
+    Set,
+    TextEncoder,
+    TextDecoder,
+    JSON,
+    crypto,
+  });
   const exports = {};
   vm.runInNewContext(compile('../packages/common/src/workspace/cloudCollectionSync.ts'), {
     exports,
-    require: (id) => id.includes('cloudSyncCollections') ? syncCollections : {},
+    require: (id) => id.includes('cloudSyncCollections') ? syncCollections : id.includes('examples') ? examples : {},
     Date,
     Map,
     Set,

@@ -141,13 +141,35 @@ func (r *CollectionRepository) UpdateCollection(ctx context.Context, c *domain.C
 	return nil
 }
 
-// MoveCollection moves a collection to a new workspace or project and touches child items updated_at atomically
-func (r *CollectionRepository) MoveCollection(ctx context.Context, id uuid.UUID, workspaceID, projectID *uuid.UUID, modifiedBy uuid.UUID) error {
+// MoveCollection moves a collection to a new workspace or project and touches child items updated_at atomically.
+// When expected is provided, the collection row is locked FOR UPDATE and verified against the authorized snapshot.
+func (r *CollectionRepository) MoveCollection(ctx context.Context, id uuid.UUID, expected *domain.Collection, workspaceID, projectID *uuid.UUID, modifiedBy uuid.UUID) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+
+	var current domain.Collection
+	err = tx.QueryRow(ctx, `
+		SELECT id, workspace_id, project_id, min_role
+		FROM collections
+		WHERE id = $1 AND deleted_at IS NULL
+		FOR UPDATE
+	`, id).Scan(&current.ID, &current.WorkspaceID, &current.ProjectID, &current.MinRole)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrCollectionNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("failed to lock collection for move: %w", err)
+	}
+	if expected != nil {
+		if !sameOptionalUUID(current.WorkspaceID, expected.WorkspaceID) ||
+			!sameOptionalUUID(current.ProjectID, expected.ProjectID) ||
+			current.MinRole != expected.MinRole {
+			return ErrVersionConflict
+		}
+	}
 
 	now := time.Now().UTC()
 	query := `
@@ -241,26 +263,32 @@ func (r *CollectionRepository) CreateItem(ctx context.Context, item *domain.Coll
 	item.CreatedAt = now
 	item.UpdatedAt = now
 
+	examplesArg := "[]"
+	if item.Type == domain.ItemTypeRequest && item.Examples.Present && !item.Examples.IsNull && len(item.Examples.Raw) > 0 {
+		examplesArg = string(item.Examples.Raw)
+	}
+	item.Examples = domain.NewOptionalRawJSON([]byte(examplesArg))
+
 	query := `
 		INSERT INTO collection_items (
 			id, collection_id, parent_id, type, name, sort_order,
 			method, url, params, path_variables, headers, auth, body_type, raw_type,
 			body_content, graphql_query, graphql_variables, body_form_data,
-			pre_request_script, post_response_script, version, last_modified_by,
+			pre_request_script, post_response_script, examples, version, last_modified_by,
 			created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
 			$7, $8, $9, $10, $11, $12, $13, $14,
 			$15, $16, $17, $18,
-			$19, $20, 1, $21,
-			$22, $23
+			$19, $20, $21::jsonb, 1, $22,
+			$23, $24
 		)
 	`
 	_, err = tx.Exec(ctx, query,
 		item.ID, item.CollectionID, item.ParentID, string(item.Type), item.Name, item.SortOrder,
 		item.Method, item.URL, item.Params, item.PathVariables, item.Headers, item.Auth, item.BodyType, item.RawType,
 		item.BodyContent, item.GraphQLQuery, item.GraphQLVariables, item.BodyFormData,
-		item.PreRequestScript, item.PostResponseScript, item.LastModifiedBy,
+		item.PreRequestScript, item.PostResponseScript, examplesArg, item.LastModifiedBy,
 		item.CreatedAt, item.UpdatedAt,
 	)
 	if err != nil {
@@ -276,7 +304,7 @@ func (r *CollectionRepository) GetItemByID(ctx context.Context, id uuid.UUID) (*
 		SELECT id, collection_id, parent_id, type, name, sort_order,
 		       method, url, params, path_variables, headers, auth, body_type, raw_type,
 		       body_content, graphql_query, graphql_variables, body_form_data,
-		       pre_request_script, post_response_script, version, last_modified_by,
+		       pre_request_script, post_response_script, examples, version, last_modified_by,
 		       created_at, updated_at, deleted_at
 		FROM collection_items
 		WHERE id = $1
@@ -287,7 +315,7 @@ func (r *CollectionRepository) GetItemByID(ctx context.Context, id uuid.UUID) (*
 		&item.ID, &item.CollectionID, &item.ParentID, &typeStr, &item.Name, &item.SortOrder,
 		&item.Method, &item.URL, &item.Params, &item.PathVariables, &item.Headers, &item.Auth, &item.BodyType, &item.RawType,
 		&item.BodyContent, &item.GraphQLQuery, &item.GraphQLVariables, &item.BodyFormData,
-		&item.PreRequestScript, &item.PostResponseScript, &item.Version, &item.LastModifiedBy,
+		&item.PreRequestScript, &item.PostResponseScript, &item.Examples, &item.Version, &item.LastModifiedBy,
 		&item.CreatedAt, &item.UpdatedAt, &item.DeletedAt,
 	)
 	if err != nil {
@@ -324,31 +352,46 @@ func (r *CollectionRepository) UpdateItem(ctx context.Context, item *domain.Coll
 		return ErrCollectionNotFound
 	}
 
-	// 2. Update item with OCC check
+	updateExamples := item.Examples.Present && !item.Examples.IsNull
+	examplesArg := "[]"
+	if updateExamples {
+		if item.Type == domain.ItemTypeFolder {
+			examplesArg = "[]"
+		} else if len(item.Examples.Raw) > 0 {
+			examplesArg = string(item.Examples.Raw)
+		}
+	}
+
+	// 2. Update item with OCC check, preserving examples when omitted
 	query := `
 		UPDATE collection_items
 		SET parent_id = $1, name = $2, sort_order = $3,
 		    method = $4, url = $5, params = $6, path_variables = $7, headers = $8, auth = $9,
 		    body_type = $10, raw_type = $11, body_content = $12, graphql_query = $13,
 		    graphql_variables = $14, body_form_data = $15, pre_request_script = $16,
-		    post_response_script = $17, version = version + 1, last_modified_by = $18,
-		    updated_at = $19
-		WHERE id = $20 AND version = $21 AND deleted_at IS NULL
+		    post_response_script = $17,
+		    examples = CASE WHEN $18 THEN $19::jsonb ELSE examples END,
+		    version = version + 1, last_modified_by = $20,
+		    updated_at = $21
+		WHERE id = $22 AND version = $23 AND deleted_at IS NULL
+		RETURNING examples
 	`
-	result, err := tx.Exec(ctx, query,
+	var savedExamples domain.OptionalRawJSON
+	err = tx.QueryRow(ctx, query,
 		item.ParentID, item.Name, item.SortOrder,
 		item.Method, item.URL, item.Params, item.PathVariables, item.Headers, item.Auth,
 		item.BodyType, item.RawType, item.BodyContent, item.GraphQLQuery,
 		item.GraphQLVariables, item.BodyFormData, item.PreRequestScript,
-		item.PostResponseScript, item.LastModifiedBy,
+		item.PostResponseScript, updateExamples, examplesArg, item.LastModifiedBy,
 		now, item.ID, baseVersion,
-	)
+	).Scan(&savedExamples)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrVersionConflict
+		}
 		return fmt.Errorf("failed to update item: %w", err)
 	}
-	if result.RowsAffected() == 0 {
-		return ErrVersionConflict
-	}
+	item.Examples = savedExamples
 	item.Version = baseVersion + 1
 	item.UpdatedAt = now
 
@@ -356,79 +399,107 @@ func (r *CollectionRepository) UpdateItem(ctx context.Context, item *domain.Coll
 }
 
 // SoftDeleteItem marks an item as deleted (and recursively deletes all descendant items if folder),
-// touching parent collection version atomically within a single transaction.
+// locking collections before collection_items to match MoveItem/UpdateItem/BatchReorderItems lock order.
 func (r *CollectionRepository) SoftDeleteItem(ctx context.Context, id uuid.UUID, modifiedBy uuid.UUID) error {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	// Fetch collection_id and type of the item being deleted
-	var colID uuid.UUID
-	var itemType string
-	err = tx.QueryRow(ctx, `SELECT collection_id, type FROM collection_items WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`, id).Scan(&colID, &itemType)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrItemNotFound
-		}
-		return fmt.Errorf("failed to query item for deletion: %w", err)
-	}
-
-	now := time.Now().UTC()
-
-	// 1. Touch parent collection version
-	colQuery := `
-		UPDATE collections
-		SET updated_at = $1, last_modified_by = $2, version = version + 1
-		WHERE id = $3 AND deleted_at IS NULL
-	`
-	res, err := tx.Exec(ctx, colQuery, now, modifiedBy, colID)
-	if err != nil {
-		return fmt.Errorf("failed to touch collection version: %w", err)
-	}
-	if res.RowsAffected() == 0 {
-		return ErrCollectionNotFound
-	}
-
-	// 2. If folder: recursive CTE soft-delete all active descendants and the folder itself
-	if itemType == string(domain.ItemTypeFolder) {
-		recursiveQuery := `
-			WITH RECURSIVE subtree AS (
-				SELECT id FROM collection_items WHERE id = $1 AND deleted_at IS NULL
-				UNION ALL
-				SELECT ci.id FROM collection_items ci
-				INNER JOIN subtree s ON ci.parent_id = s.id
-				WHERE ci.deleted_at IS NULL AND ci.collection_id = $2
-			)
-			UPDATE collection_items
-			SET deleted_at = $3, updated_at = $3, last_modified_by = $4, version = version + 1
-			WHERE id IN (SELECT id FROM subtree) AND deleted_at IS NULL
-		`
-		result, err := tx.Exec(ctx, recursiveQuery, id, colID, now, modifiedBy)
+	for attempt := 0; attempt < 3; attempt++ {
+		tx, err := r.pool.Begin(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to soft delete folder subtree: %w", err)
+			return fmt.Errorf("failed to begin transaction: %w", err)
 		}
-		if result.RowsAffected() == 0 {
-			return ErrItemNotFound
+
+		// Peek collection_id before acquiring row locks so collections is always locked first
+		var colID uuid.UUID
+		err = tx.QueryRow(ctx, `SELECT collection_id FROM collection_items WHERE id = $1 AND deleted_at IS NULL`, id).Scan(&colID)
+		if err != nil {
+			tx.Rollback(ctx)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrItemNotFound
+			}
+			return fmt.Errorf("failed to query item for deletion: %w", err)
 		}
-	} else {
-		// Single request item
-		query := `
-			UPDATE collection_items
-			SET deleted_at = $1, updated_at = $1, last_modified_by = $2, version = version + 1
+
+		now := time.Now().UTC()
+
+		// 1. Lock and touch parent collection version first
+		colQuery := `
+			UPDATE collections
+			SET updated_at = $1, last_modified_by = $2, version = version + 1
 			WHERE id = $3 AND deleted_at IS NULL
 		`
-		result, err := tx.Exec(ctx, query, now, modifiedBy, id)
+		res, err := tx.Exec(ctx, colQuery, now, modifiedBy, colID)
 		if err != nil {
-			return fmt.Errorf("failed to soft delete item: %w", err)
+			tx.Rollback(ctx)
+			return fmt.Errorf("failed to touch collection version: %w", err)
 		}
-		if result.RowsAffected() == 0 {
-			return ErrItemNotFound
+		if res.RowsAffected() == 0 {
+			tx.Rollback(ctx)
+			return ErrCollectionNotFound
 		}
+
+		// 2. Lock the item row FOR UPDATE and verify it did not move collections concurrently
+		var lockedColID uuid.UUID
+		var itemType string
+		err = tx.QueryRow(ctx, `SELECT collection_id, type FROM collection_items WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`, id).Scan(&lockedColID, &itemType)
+		if err != nil {
+			tx.Rollback(ctx)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrItemNotFound
+			}
+			return fmt.Errorf("failed to lock item for deletion: %w", err)
+		}
+		if lockedColID != colID {
+			tx.Rollback(ctx)
+			continue
+		}
+
+		// 3. If folder: recursive CTE soft-delete all active descendants and the folder itself
+		if itemType == string(domain.ItemTypeFolder) {
+			recursiveQuery := `
+				WITH RECURSIVE subtree AS (
+					SELECT id FROM collection_items WHERE id = $1 AND deleted_at IS NULL
+					UNION ALL
+					SELECT ci.id FROM collection_items ci
+					INNER JOIN subtree s ON ci.parent_id = s.id
+					WHERE ci.deleted_at IS NULL AND ci.collection_id = $2
+				)
+				UPDATE collection_items
+				SET deleted_at = $3, updated_at = $3, last_modified_by = $4, version = version + 1
+				WHERE id IN (SELECT id FROM subtree) AND deleted_at IS NULL
+			`
+			result, err := tx.Exec(ctx, recursiveQuery, id, colID, now, modifiedBy)
+			if err != nil {
+				tx.Rollback(ctx)
+				return fmt.Errorf("failed to soft delete folder subtree: %w", err)
+			}
+			if result.RowsAffected() == 0 {
+				tx.Rollback(ctx)
+				return ErrItemNotFound
+			}
+		} else {
+			// Single request item
+			query := `
+				UPDATE collection_items
+				SET deleted_at = $1, updated_at = $1, last_modified_by = $2, version = version + 1
+				WHERE id = $3 AND deleted_at IS NULL
+			`
+			result, err := tx.Exec(ctx, query, now, modifiedBy, id)
+			if err != nil {
+				tx.Rollback(ctx)
+				return fmt.Errorf("failed to soft delete item: %w", err)
+			}
+			if result.RowsAffected() == 0 {
+				tx.Rollback(ctx)
+				return ErrItemNotFound
+			}
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("failed to commit item deletion: %w", err)
+		}
+		return nil
 	}
 
-	return tx.Commit(ctx)
+	return ErrVersionConflict
 }
 
 // ListActiveItemsByCollection returns non-deleted items for collection
@@ -437,7 +508,7 @@ func (r *CollectionRepository) ListActiveItemsByCollection(ctx context.Context, 
 		SELECT id, collection_id, parent_id, type, name, sort_order,
 		       method, url, params, path_variables, headers, auth, body_type, raw_type,
 		       body_content, graphql_query, graphql_variables, body_form_data,
-		       pre_request_script, post_response_script, version, last_modified_by,
+		       pre_request_script, post_response_script, examples, version, last_modified_by,
 		       created_at, updated_at, deleted_at
 		FROM collection_items
 		WHERE collection_id = $1 AND deleted_at IS NULL
@@ -457,7 +528,7 @@ func (r *CollectionRepository) ListActiveItemsByCollection(ctx context.Context, 
 			&item.ID, &item.CollectionID, &item.ParentID, &typeStr, &item.Name, &item.SortOrder,
 			&item.Method, &item.URL, &item.Params, &item.PathVariables, &item.Headers, &item.Auth, &item.BodyType, &item.RawType,
 			&item.BodyContent, &item.GraphQLQuery, &item.GraphQLVariables, &item.BodyFormData,
-			&item.PreRequestScript, &item.PostResponseScript, &item.Version, &item.LastModifiedBy,
+			&item.PreRequestScript, &item.PostResponseScript, &item.Examples, &item.Version, &item.LastModifiedBy,
 			&item.CreatedAt, &item.UpdatedAt, &item.DeletedAt,
 		)
 		if err != nil {

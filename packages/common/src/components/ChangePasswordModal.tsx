@@ -141,6 +141,9 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
           onClose();
         }
       }}
+      data-modal="true"
+      role="dialog"
+      aria-modal="true"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in duration-150"
     >
       <div className="relative w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl border border-line-strong bg-card p-6 shadow-2xl shadow-black/90">

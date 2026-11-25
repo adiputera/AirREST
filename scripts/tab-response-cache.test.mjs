@@ -7,6 +7,18 @@ import ts from 'typescript';
 
 const require = createRequire(import.meta.url);
 
+function loadUrlParamsModule() {
+  const urlParams = {};
+  vm.runInNewContext(
+    ts.transpileModule(
+      fs.readFileSync(new URL('../packages/common/src/lib/urlParams.ts', import.meta.url), 'utf8'),
+      { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } },
+    ).outputText,
+    { exports: urlParams },
+  );
+  return urlParams;
+}
+
 function loadStore({ executeApiRequest = async () => ({ status: 200, statusText: 'OK', data: '{"ok":true}', timeMs: 50, sizeBytes: 10, headers: {} }), cloudClient, storage, productPolicy, credentialStorage } = {}) {
   const source = fs
     .readFileSync(new URL('../packages/common/src/store/useApiStore.ts', import.meta.url), 'utf8')
@@ -17,10 +29,10 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
   const exports = {};
   const appStorage = storage || {
     getItem: async () => null,
-    setItem: async () => {},
-    removeItem: async () => {},
+    setItem: async () => { },
+    removeItem: async () => { },
   };
-  const noop = () => {};
+  const noop = () => { };
   const modules = {
     'storage': { appStorage },
     'nativeCredentials': {
@@ -36,8 +48,8 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
       executePreRequestScript: async () => ({ success: true, environment: {}, variables: {} }),
       executePostResponseScript: async () => ({ success: true, environment: {}, variables: {} }),
     },
-    'postman': { importPostmanCollection: noop, importPostmanEnvironment: noop, detectPostmanJsonType: noop },
-    'urlParams': { parseQueryParamsFromUrl: () => [], parsePathVariablesFromUrl: () => [], buildUrlWithParams: (u) => u },
+    'postman': { importPostmanCollection: noop, importPostmanEnvironment: noop, detectPostmanJsonType: noop, buildPostmanUrl: noop },
+    'urlParams': {},
     'asyncOperationCoordinator': {
       createAsyncOperationCoordinator: ({ isDisposed }) => {
         let sessionGeneration = 0;
@@ -228,6 +240,10 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
       fetchScopeCollections: noop,
       fetchCollectionById: noop,
       fetchScopeEnvironments: noop,
+      patchScopeItemExamples: noop,
+      fetchScopeItem: noop,
+      fetchScopeCollectionExamples: noop,
+      replaceScopeCollection: noop,
     },
     'treeHelper': { reorderItemInTree: noop, findRequestAncestorIds: () => [] },
     'duplicate': { duplicateCollectionTree: noop, duplicateItemSubtree: noop, insertItemIntoCollectionTree: noop, formatImportDuplicateCollectionPayload: noop, getTargetFolderDepth: () => 0 },
@@ -258,11 +274,17 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText, { exports: policyExports });
   modules.productPolicy = policyExports;
+  const examples = {};
+  vm.runInNewContext(ts.transpileModule(fs.readFileSync(new URL('../packages/common/src/lib/examples.ts', import.meta.url), 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText, { exports: examples, require: () => ({}), Map, Set, TextEncoder, TextDecoder, JSON, crypto });
+  modules.examples = examples;
   const requestDiff = {};
   vm.runInNewContext(ts.transpileModule(fs.readFileSync(new URL('../packages/common/src/lib/requestDiff.ts', import.meta.url), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText, { exports: requestDiff });
+  }).outputText, { exports: requestDiff, require: (id) => modules[id.split('/').at(-1)] || {} });
   modules.requestDiff = requestDiff;
+  modules.urlParams = loadUrlParamsModule();
   modules.cloudDeltaState = loadWorkspaceModule('cloudDeltaState');
   modules.scopeSnapshot.snapshotWorkspaceResources = loadWorkspaceModule('scopeSnapshot').snapshotWorkspaceResources;
   modules.cloudCacheArchive = loadWorkspaceModule('cloudCacheArchive');
@@ -316,7 +338,7 @@ test('native vault saves a verified session before state changes and rejects a f
         records.set(JSON.stringify(scope), record);
       },
       read: async (scope) => records.get(JSON.stringify(scope)) || null,
-      remove: async () => {},
+      remove: async () => { },
     },
   });
 
@@ -337,7 +359,7 @@ test('native vault saves a verified session before state changes and rejects a f
     credentialStorage: {
       write: async () => { throw new Error('vault unavailable'); },
       read: async () => null,
-      remove: async () => {},
+      remove: async () => { },
     },
   });
   await assert.rejects(
@@ -366,8 +388,10 @@ test('cloud-only product rejects offline workspace commands and clears the live 
   assert.equal(store.getState().offlineWorkspaces.length, existing);
   assert.equal(store.getState().recoverCloudCachesToOfflineWorkspaces().success, false);
   assert.equal((await store.getState().moveCollection('unused', { type: 'offline_workspace', id: 'local', name: 'Local' })).success, false);
-  store.setState({ cloudConfig: { apiUrl: 'https://example.test', token: 'token', user: { id: 'a' }, activeScope: { type: 'workspace', id: 'a' } },
-    collections: [{ id: 'cloud', name: 'Cloud', items: [] }] });
+  store.setState({
+    cloudConfig: { apiUrl: 'https://example.test', token: 'token', user: { id: 'a' }, activeScope: { type: 'workspace', id: 'a' } },
+    collections: [{ id: 'cloud', name: 'Cloud', items: [] }]
+  });
   store.getState().logoutCloud();
   assert.equal(store.getState().workspaceMode, 'cloud');
   assert.equal(store.getState().cloudConfig.token, undefined);
@@ -504,7 +528,7 @@ test('sync deletion keeps the active request and response, and saving reattaches
   const cloudClient = {
     fetchScopeCollections: async () => [],
     fetchScopeEnvironments: async () => [],
-    batchImportToScope: async () => {},
+    batchImportToScope: async () => { },
   };
   const store = loadStore({ cloudClient });
   await new Promise((resolve) => setImmediate(resolve));
@@ -513,9 +537,11 @@ test('sync deletion keeps the active request and response, and saving reattaches
   store.setState({
     workspaceMode: 'cloud',
     cloudConfig: { apiUrl: 'https://example.test', token: 'test-token', activeScope: { type: 'workspace', id: 'shared' } },
-    collections: [{ id: 'original', name: 'Original', version: 1, _origin: 'cloud', items: [
-      { id: request.id, type: 'request', request: { ...request, bodyContent: 'saved' } },
-    ] }],
+    collections: [{
+      id: 'original', name: 'Original', version: 1, _origin: 'cloud', items: [
+        { id: request.id, type: 'request', request: { ...request, bodyContent: 'saved' } },
+      ]
+    }],
     tabs: [request], activeTabId: request.id, activeResponse: response, tabResponses: { [request.id]: response },
   });
   store.getState().updateActiveRequest({ name: 'Edited example' });
@@ -553,7 +579,8 @@ test('failed sync keeps the saved tab unmarked', async () => {
   const store = loadStore({ cloudClient: { fetchScopeCollections: async () => { throw new Error('Offline'); } } });
   await new Promise((resolve) => setImmediate(resolve));
   const request = store.getState().tabs[0];
-  store.setState({ workspaceMode: 'cloud', cloudConfig: { apiUrl: 'https://example.test', token: 'test-token', activeScope: { type: 'workspace', id: 'shared' } },
+  store.setState({
+    workspaceMode: 'cloud', cloudConfig: { apiUrl: 'https://example.test', token: 'test-token', activeScope: { type: 'workspace', id: 'shared' } },
     collections: [{ id: 'original', name: 'Original', version: 1, items: [{ id: request.id, type: 'request', request }] }],
   });
   await store.getState().pullCloudDelta();
@@ -654,9 +681,11 @@ test('revoked provider workspace is closed without deleting pending changes', as
   const store = loadStore({ cloudClient, productPolicy: { edition: 'cloud', workspace: { cloud: true, offline: false } } });
   await new Promise((resolve) => setImmediate(resolve));
   const owner = JSON.stringify(['https://example.test', 'one']);
-  store.setState({ workspaceMode: 'cloud', cloudCacheOwner: owner,
+  store.setState({
+    workspaceMode: 'cloud', cloudCacheOwner: owner,
     cloudConfig: { apiUrl: 'https://example.test', sessionKind: 'provider', user: { id: 'one' }, activeScope: { type: 'workspace', id: 'workspace', name: 'Workspace' } },
-    collections: [{ id: 'pending', name: 'Pending', items: [], _syncStatus: 'pending' }], scopesCache: undefined });
+    collections: [{ id: 'pending', name: 'Pending', items: [], _syncStatus: 'pending' }], scopesCache: undefined
+  });
   await store.getState().fetchScopes(true);
   assert.equal(store.getState().cloudConfig.sessionKind, undefined);
   assert.equal(store.getState().collections.length, 0);
@@ -666,16 +695,20 @@ test('revoked provider workspace is closed without deleting pending changes', as
 
 test('cloud-only closes a revoked project when team discovery returns no project or forbids access', async () => {
   for (const forbidden of [false, true]) {
-    const cloudClient = { fetchTeamProjects: async () => {
-      if (forbidden) throw Object.assign(new Error('forbidden'), { status: 403 });
-      return [];
-    } };
+    const cloudClient = {
+      fetchTeamProjects: async () => {
+        if (forbidden) throw Object.assign(new Error('forbidden'), { status: 403 });
+        return [];
+      }
+    };
     const store = loadStore({ cloudClient, productPolicy: { edition: 'cloud', workspace: { cloud: true, offline: false } } });
     await new Promise((resolve) => setImmediate(resolve));
     const owner = JSON.stringify(['https://example.test', 'one']);
-    store.setState({ workspaceMode: 'cloud', cloudCacheOwner: owner,
+    store.setState({
+      workspaceMode: 'cloud', cloudCacheOwner: owner,
       cloudConfig: { apiUrl: 'https://example.test', sessionKind: 'provider', user: { id: 'one' }, activeScope: { type: 'project', id: 'project', teamId: 'team', name: 'Project' } },
-      collections: [{ id: 'pending', name: 'Pending', items: [], _syncStatus: 'pending' }], scopesCache: undefined });
+      collections: [{ id: 'pending', name: 'Pending', items: [], _syncStatus: 'pending' }], scopesCache: undefined
+    });
     await store.getState().fetchProjectsForTeam('team', true);
     assert.equal(store.getState().workspaceMode, 'cloud');
     assert.equal(store.getState().cloudConfig.sessionKind, undefined);
@@ -708,13 +741,17 @@ test('late cloud workspace mutations do not alter a replacement session', async 
     let finish;
     let signal;
     const defer = (...args) => { signal = args.at(-1); return new Promise((resolve) => { finish = resolve; }); };
-    const cloudClient = { createCloudWorkspace: defer, updateCloudWorkspace: defer, deleteCloudWorkspace: defer,
-      fetchFeaturePolicy: async () => ({ revision: 1, flags: {} }) };
+    const cloudClient = {
+      createCloudWorkspace: defer, updateCloudWorkspace: defer, deleteCloudWorkspace: defer,
+      fetchFeaturePolicy: async () => ({ revision: 1, flags: {} })
+    };
     const store = loadStore({ cloudClient, productPolicy: { edition: 'cloud', workspace: { cloud: true, offline: false } } });
     await new Promise((resolve) => setImmediate(resolve));
     const scope = { type: 'workspace', id: 'one-workspace', name: 'One' };
-    store.setState({ cloudConfig: { apiUrl: 'https://example.test', sessionKind: 'provider', user: { id: 'one' }, activeScope: scope },
-      scopesCache: { workspaces: [{ id: 'one-workspace', name: 'One' }], teamsWithProjects: [], lastFetchedAt: 1 } });
+    store.setState({
+      cloudConfig: { apiUrl: 'https://example.test', sessionKind: 'provider', user: { id: 'one' }, activeScope: scope },
+      scopesCache: { workspaces: [{ id: 'one-workspace', name: 'One' }], teamsWithProjects: [], lastFetchedAt: 1 }
+    });
     const pending = action === 'create' ? store.getState().createCloudWorkspace('Created')
       : action === 'rename' ? store.getState().renameCloudWorkspace('one-workspace', 'Renamed')
         : store.getState().deleteCloudWorkspace('one-workspace');
@@ -731,11 +768,13 @@ test('late cloud workspace mutations do not alter a replacement session', async 
 
 test('hydration quarantines a persisted provider marker and its active data', async () => {
   const owner = JSON.stringify(['https://example.test', 'user-one']);
-  let saved = JSON.stringify({ version: 0, state: {
-    workspaceMode: 'cloud', cloudCacheOwner: owner,
-    cloudConfig: { apiUrl: 'https://example.test', sessionKind: 'provider', user: { id: 'user-one' }, activeScope: { type: 'workspace', id: 'shared' } },
-    collections: [{ id: 'draft', items: [], _syncStatus: 'pending' }], environments: [], tabs: [], history: [], scopeCache: {},
-  } });
+  let saved = JSON.stringify({
+    version: 0, state: {
+      workspaceMode: 'cloud', cloudCacheOwner: owner,
+      cloudConfig: { apiUrl: 'https://example.test', sessionKind: 'provider', user: { id: 'user-one' }, activeScope: { type: 'workspace', id: 'shared' } },
+      collections: [{ id: 'draft', items: [], _syncStatus: 'pending' }], environments: [], tabs: [], history: [], scopeCache: {},
+    }
+  });
   const storage = { getItem: async () => saved, setItem: async (_key, value) => { saved = value; }, removeItem: async () => { saved = null; } };
   const store = loadStore({ storage, productPolicy: { edition: 'cloud', workspace: { cloud: true, offline: false } } });
   await new Promise((resolve) => setImmediate(resolve));
@@ -747,11 +786,13 @@ test('hydration quarantines a persisted provider marker and its active data', as
 });
 
 test('legacy cloud data without proven ownership is quarantined on hydration and remains idempotent', async () => {
-  let saved = JSON.stringify({ version: 0, state: {
-    workspaceMode: 'cloud',
-    cloudConfig: { apiUrl: 'https://example.test', token: 'legacy-token', user: { id: 'unverified' }, activeScope: { type: 'workspace', id: 'shared', name: 'Shared' } },
-    collections: [{ id: 'legacy-draft', name: 'Draft', items: [], _syncStatus: 'pending' }], environments: [], tabs: [], history: [], scopeCache: {},
-  } });
+  let saved = JSON.stringify({
+    version: 0, state: {
+      workspaceMode: 'cloud',
+      cloudConfig: { apiUrl: 'https://example.test', token: 'legacy-token', user: { id: 'unverified' }, activeScope: { type: 'workspace', id: 'shared', name: 'Shared' } },
+      collections: [{ id: 'legacy-draft', name: 'Draft', items: [], _syncStatus: 'pending' }], environments: [], tabs: [], history: [], scopeCache: {},
+    }
+  });
   const storage = { getItem: async () => saved, setItem: async (_key, value) => { saved = value; }, removeItem: async () => { saved = null; } };
   const policy = { edition: 'cloud', workspace: { cloud: true, offline: false } };
   const first = loadStore({ storage, productPolicy: policy });
@@ -806,9 +847,11 @@ test('a pending cloud cache survives logout and restart for its verified owner',
   const scope = { type: 'workspace', id: 'workspace-1', name: 'Workspace' };
   const first = loadStore({ cloudClient, storage });
   await new Promise((resolve) => setImmediate(resolve));
-  first.setState({ workspaceMode: 'cloud', cloudConfig: { apiUrl: 'https://example.test', token: 'token', user: { id: 'user-1' }, activeScope: scope },
+  first.setState({
+    workspaceMode: 'cloud', cloudConfig: { apiUrl: 'https://example.test', token: 'token', user: { id: 'user-1' }, activeScope: scope },
     cloudCacheOwner: JSON.stringify(['https://example.test', 'user-1']),
-    collections: [{ id: 'pending', name: 'Pending', items: [], _syncStatus: 'pending', _origin: 'cloud' }], lastSyncedAt: Date.now() });
+    collections: [{ id: 'pending', name: 'Pending', items: [], _syncStatus: 'pending', _origin: 'cloud' }], lastSyncedAt: Date.now()
+  });
   first.getState().logoutCloud();
   await new Promise((resolve) => setImmediate(resolve));
   first.dispose();
@@ -827,9 +870,11 @@ test('a pending cloud cache survives logout and restart for its verified owner',
 test('legacy cache without an ownership marker is preserved without assuming its owner', () => {
   const store = loadStore({ cloudClient: { fetchFeaturePolicy: async () => ({ revision: 1, flags: {} }) } });
   const scope = { type: 'workspace', id: 'workspace-1', name: 'Workspace' };
-  store.setState({ workspaceMode: 'cloud', cloudConfig: { apiUrl: 'https://example.test', token: 'credential-secret-123', user: { id: 'a' }, activeScope: scope },
+  store.setState({
+    workspaceMode: 'cloud', cloudConfig: { apiUrl: 'https://example.test', token: 'credential-secret-123', user: { id: 'a' }, activeScope: scope },
     cloudCacheOwner: null, collections: [{ id: 'legacy-pending', name: 'Pending', items: [], _syncStatus: 'pending' }],
-    environments: [{ id: 'env-1', name: 'Environment', variables: [{ id: 'value', key: 'k', currentValue: 'original', enabled: true }] }] });
+    environments: [{ id: 'env-1', name: 'Environment', variables: [{ id: 'value', key: 'k', currentValue: 'original', enabled: true }] }]
+  });
   store.getState().logoutCloud();
   const archived = store.getState().cloudCacheArchives;
   assert.equal(archived.unclaimed[0].scopeCache['workspace:workspace-1'].collections[0].id, 'legacy-pending');
@@ -858,10 +903,14 @@ test('an imported recovery backup stays unclaimed until it is explicitly copied 
   const store = loadStore({ productPolicy: { edition: 'full', workspace: { cloud: true, offline: true } } });
   const backup = JSON.stringify({
     format: 'AirREST cloud cache recovery', version: 1,
-    archives: [{ scopeCache: { 'workspace:imported': {
-      collections: [{ id: 'imported-draft', name: 'Imported', items: [], _syncStatus: 'pending' }],
-      environments: [], tabs: [], history: [],
-    } } }],
+    archives: [{
+      scopeCache: {
+        'workspace:imported': {
+          collections: [{ id: 'imported-draft', name: 'Imported', items: [], _syncStatus: 'pending' }],
+          environments: [], tabs: [], history: [],
+        }
+      }
+    }],
   });
 
   const imported = store.getState().importCloudCacheRecoveryBackup(backup);
@@ -882,9 +931,11 @@ test('changing server clears the previous active scope and retains its pending s
   const scope = { type: 'workspace', id: 'scope-1', name: 'Workspace' };
   const owner = JSON.stringify(['https://one.example', 'user-1']);
   const otherOwner = JSON.stringify(['https://two.example', 'user-1']);
-  store.setState({ workspaceMode: 'cloud', cloudConfig: { apiUrl: 'https://one.example', token: 'token', refreshToken: 'refresh', user: { id: 'user-1' }, activeScope: scope },
+  store.setState({
+    workspaceMode: 'cloud', cloudConfig: { apiUrl: 'https://one.example', token: 'token', refreshToken: 'refresh', user: { id: 'user-1' }, activeScope: scope },
     cloudCacheOwner: owner, cloudCacheArchives: { version: 1, unclaimed: [], owners: { [otherOwner]: { scopeCache: { 'workspace:scope-1': { collections: [{ id: 'other-server', name: 'Other', items: [] }] } } } } },
-    collections: [{ id: 'pending', name: 'Pending', items: [], _syncStatus: 'pending' }] });
+    collections: [{ id: 'pending', name: 'Pending', items: [], _syncStatus: 'pending' }]
+  });
   store.getState().setCloudConfig({ apiUrl: 'https://two.example' });
   assert.equal(store.getState().cloudConfig.activeScope, undefined);
   assert.equal(store.getState().cloudConfig.user, undefined);
@@ -906,10 +957,12 @@ test('changing user without new credentials cannot open another user cache', asy
   const scope = { type: 'workspace', id: 'shared', name: 'Shared' };
   const firstOwner = JSON.stringify(['https://example.test', 'one']);
   const secondOwner = JSON.stringify(['https://example.test', 'two']);
-  store.setState({ workspaceMode: 'cloud', cloudCacheOwner: firstOwner,
+  store.setState({
+    workspaceMode: 'cloud', cloudCacheOwner: firstOwner,
     cloudConfig: { apiUrl: 'https://example.test', token: 'one-token', refreshToken: 'one-refresh', user: { id: 'one' }, activeScope: scope },
     cloudCacheArchives: { version: 1, unclaimed: [], owners: { [secondOwner]: { scopeCache: { 'workspace:shared': { collections: [{ id: 'two-draft', items: [] }] } } } } },
-    collections: [{ id: 'one-draft', items: [], _syncStatus: 'pending' }] });
+    collections: [{ id: 'one-draft', items: [], _syncStatus: 'pending' }]
+  });
   store.getState().setCloudConfig({ user: { id: 'two' }, activeScope: scope });
   assert.equal(store.getState().cloudConfig.token, undefined);
   assert.equal(store.getState().cloudConfig.refreshToken, undefined);
@@ -1288,8 +1341,8 @@ function loadStoreWithRealBlobManager({ executeApiRequest, productPolicy } = {})
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
   const exports = {};
-  const noop = () => {};
-  const appStorage = { getItem: async () => null, setItem: async () => {}, removeItem: async () => {} };
+  const noop = () => { };
+  const appStorage = { getItem: async () => null, setItem: async () => { }, removeItem: async () => { } };
   const modules = {
     'storage': { appStorage },
     'nativeCredentials': { getNativeCredentialScope: () => null },
@@ -1299,8 +1352,8 @@ function loadStoreWithRealBlobManager({ executeApiRequest, productPolicy } = {})
       executePreRequestScript: async () => ({ success: true, environment: {}, variables: {} }),
       executePostResponseScript: async () => ({ success: true, environment: {}, variables: {} }),
     },
-    'postman': { importPostmanCollection: noop, importPostmanEnvironment: noop, detectPostmanJsonType: noop },
-    'urlParams': { parseQueryParamsFromUrl: () => [], parsePathVariablesFromUrl: () => [], buildUrlWithParams: (u) => u },
+    'postman': { importPostmanCollection: noop, importPostmanEnvironment: noop, detectPostmanJsonType: noop, buildPostmanUrl: noop },
+    'urlParams': {},
     'asyncOperationCoordinator': {
       createAsyncOperationCoordinator: ({ isDisposed }) => {
         let sessionGeneration = 0;
@@ -1399,6 +1452,20 @@ function loadStoreWithRealBlobManager({ executeApiRequest, productPolicy } = {})
   vm.runInNewContext(ts.transpileModule(fs.readFileSync(new URL('../packages/common/src/productPolicy.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, { exports: policyExports });
   modules.productPolicy = policyExports;
   modules.requestDiff = {};
+  modules.urlParams = loadUrlParamsModule();
+  const examplesEx = {};
+  vm.runInNewContext(
+    ts.transpileModule(fs.readFileSync(new URL('../packages/common/src/lib/examples.ts', import.meta.url), 'utf8'), {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    }).outputText,
+    {
+      exports: examplesEx,
+      require: (id) => modules[id.split('/').at(-1)] || {},
+      Object, Array, Map, Set, RegExp, Error, JSON, Math, URL, URLSearchParams, TextEncoder, TextDecoder, Blob,
+      crypto: { randomUUID: () => 'ex-uuid' },
+    }
+  );
+  modules.examples = examplesEx;
   modules.cloudDeltaState = loadWorkspaceModule('cloudDeltaState');
   modules.cloudCacheArchive = loadWorkspaceModule('cloudCacheArchive');
   modules.cloudCacheRecovery = loadWorkspaceModule('cloudCacheRecovery');

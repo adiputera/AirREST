@@ -15,14 +15,19 @@ import {
 } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
 import { isCloudSessionActive } from '../workspace/cloudSession';
-import { Collection, ActiveScope } from '../types/api';
+import { Collection, ActiveScope, PendingDuplicateIntent } from '../types/api';
 import {
   fetchUserWorkspaces,
   fetchUserTeams,
   fetchTeamProjects,
 } from '../lib/cloudApi';
 import { getRoleFromJwt, canModifyCollection, hasScopePermission, ROLE_RANK } from '../lib/jwt';
-import { resolveDuplicateName, inspectDuplicateAttachments } from '../lib/duplicate';
+import {
+  resolveDuplicateName,
+  inspectDuplicateAttachments,
+  getOwnedPendingDuplicateIntents,
+  getPendingDuplicateOwnerKey,
+} from '../lib/duplicate';
 import { useCloudClient, useProductPolicy } from '../context';
 import { useBackHandler } from '../lib/backNavigation';
 
@@ -53,6 +58,10 @@ export const DuplicateCollectionModal: React.FC<DuplicateCollectionModalProps> =
   const workspaceMode = useApiStore((state) => state.workspaceMode);
   const cloudConfig = useApiStore((state) => state.cloudConfig);
   const duplicateCollection = useApiStore((state) => state.duplicateCollection);
+  const pendingDuplicateIntents = useApiStore((state) => state.pendingDuplicateIntents);
+  const activeDuplicateOperationIds = useApiStore((state) => state.activeDuplicateOperationIds) || {};
+  const retryPendingDuplicateIntent = useApiStore((state) => state.retryPendingDuplicateIntent);
+  const clearPendingDuplicateIntent = useApiStore((state) => state.clearPendingDuplicateIntent);
   const offlineWorkspaces = useApiStore((state) => state.offlineWorkspaces) || [];
   const activeOfflineWorkspaceId = useApiStore((state) => state.activeOfflineWorkspaceId);
 
@@ -61,21 +70,35 @@ export const DuplicateCollectionModal: React.FC<DuplicateCollectionModalProps> =
   const [targetOptions, setTargetOptions] = useState<TargetOption[]>([]);
   const [selectedTargetScope, setSelectedTargetScope] = useState<ActiveScope | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [resumingOpId, setResumingOpId] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [recoveryNotice, setRecoveryNotice] = useState<{
+    kind: 'committed_partial' | 'deleted' | 'uncertain' | 'rejected';
+    message: string;
+  } | null>(null);
   const [reconcilePending, setReconcilePending] = useState(false);
   const [reloadNonce, setReloadNonce] = useState(0);
 
   const dialogRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const pendingOpIdRef = useRef<string | null>(null);
+  const currentOwnerKey = isOfflineOnly ? null : getPendingDuplicateOwnerKey(cloudConfig);
+  const modalContextKey = `${Boolean(isOpen)}:${collection?.id || ''}:${currentOwnerKey || ''}`;
+  const contextGenRef = useRef(0);
+  const prevContextKeyRef = useRef(modalContextKey);
+  if (prevContextKeyRef.current !== modalContextKey) {
+    prevContextKeyRef.current = modalContextKey;
+    contextGenRef.current += 1;
+  }
 
   const handleClose = useCallback(() => {
-    if (isSubmitting) return;
+    if (isSubmitting || resumingOpId !== null) return;
     pendingOpIdRef.current = null;
     setReconcilePending(false);
     setErrorMsg(null);
+    setRecoveryNotice(null);
     onClose();
-  }, [isSubmitting, onClose]);
+  }, [isSubmitting, resumingOpId, onClose]);
 
   useBackHandler(isOpen && Boolean(collection), handleClose, 20);
 
@@ -97,14 +120,14 @@ export const DuplicateCollectionModal: React.FC<DuplicateCollectionModalProps> =
   useEffect(() => {
     if (!isOpen || !collection) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !isSubmitting) {
+      if (e.key === 'Escape' && !isSubmitting && resumingOpId === null) {
         e.preventDefault();
         handleClose();
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isOpen, collection, isSubmitting, handleClose]);
+  }, [isOpen, collection, isSubmitting, resumingOpId, handleClose]);
 
   const activeScope = cloudConfig.activeScope;
   const isSourceProject = workspaceMode === 'cloud' && activeScope?.type === 'project';
@@ -118,12 +141,15 @@ export const DuplicateCollectionModal: React.FC<DuplicateCollectionModalProps> =
 
   // Load eligible destinations per scope matrix
   useEffect(() => {
+    setIsSubmitting(false);
     if (!isOpen || !collection) {
       setTargetOptions([]);
       setSelectedTargetScope(null);
       setErrorMsg(null);
+      setRecoveryNotice(null);
       setDiscoveryError(null);
       setReconcilePending(false);
+      setResumingOpId(null);
       pendingOpIdRef.current = null;
       return;
     }
@@ -132,6 +158,7 @@ export const DuplicateCollectionModal: React.FC<DuplicateCollectionModalProps> =
     const controller = new AbortController();
     setIsLoadingTargets(true);
     setErrorMsg(null);
+    setRecoveryNotice(null);
     setDiscoveryError(null);
 
     const loadTargets = async () => {
@@ -373,26 +400,101 @@ export const DuplicateCollectionModal: React.FC<DuplicateCollectionModalProps> =
     return parts.join(' ');
   }, [collection, workspaceMode, selectedTargetScope]);
 
+  const ownedRecoveryIntents = useMemo(() => {
+    if (!collection) return [];
+    return getOwnedPendingDuplicateIntents(pendingDuplicateIntents, cloudConfig, isOfflineOnly).filter(
+      (intent) =>
+        (intent.kind === 'collection' || intent.kind === 'import_duplicate') &&
+        intent.sourceCollectionId === collection.id &&
+        (!reconcilePending || intent.operationId !== pendingOpIdRef.current),
+    );
+  }, [collection, pendingDuplicateIntents, cloudConfig, isOfflineOnly, reconcilePending]);
+
   if (!isOpen || !collection) return null;
+
+  const handleResumeIntent = async (intent: PendingDuplicateIntent) => {
+    if (isSubmitting || resumingOpId !== null || activeDuplicateOperationIds[intent.operationId]) return;
+    const capturedContextGen = contextGenRef.current;
+    setResumingOpId(intent.operationId);
+    setErrorMsg(null);
+    setRecoveryNotice(null);
+    const result = retryPendingDuplicateIntent
+      ? await retryPendingDuplicateIntent(intent.operationId)
+      : intent.targetScope
+        ? await duplicateCollection(intent.sourceCollectionId, intent.targetScope, {
+            operationId: intent.operationId,
+          })
+        : { success: false, error: 'Recovery action unavailable.' };
+    if (contextGenRef.current !== capturedContextGen) return;
+    setResumingOpId(null);
+
+    if (result.success) {
+      if (result.deletedOnServer) {
+        setRecoveryNotice({
+          kind: 'deleted',
+          message: 'Pending duplicate copy was already deleted or expired on the server. No new copy was created.',
+        });
+        return;
+      }
+      if (result.detailsUnavailable) {
+        setRecoveryNotice({
+          kind: 'committed_partial',
+          message: `Duplicate committed on server (${result.name || collection.name}), but details are unavailable (${result.detailsError || 'refresh sync later'}).`,
+        });
+        return;
+      }
+      onClose();
+      return;
+    }
+
+    if (result.reconcilePending) {
+      setRecoveryNotice({
+        kind: 'uncertain',
+        message: result.error || 'Duplicate status still uncertain. Resume again safely using the original operation ID.',
+      });
+    } else {
+      setRecoveryNotice({
+        kind: 'rejected',
+        message: result.error || 'Pending duplicate was rejected by the server.',
+      });
+    }
+  };
 
   const handleConfirmDuplicate = async () => {
     if (!canWriteSource) {
       setErrorMsg('You do not have write permission to duplicate this collection.');
       return;
     }
-    if (!selectedTargetScope || namePreview.error || isSubmitting) return;
+    if (!selectedTargetScope || namePreview.error || isSubmitting || resumingOpId !== null) return;
 
+    const capturedContextGen = contextGenRef.current;
     const opId = pendingOpIdRef.current || crypto.randomUUID();
     pendingOpIdRef.current = opId;
     setIsSubmitting(true);
     setErrorMsg(null);
+    setRecoveryNotice(null);
 
     const result = await duplicateCollection(collection.id, selectedTargetScope, { operationId: opId });
+    if (contextGenRef.current !== capturedContextGen) return;
     setIsSubmitting(false);
 
     if (result.success) {
       pendingOpIdRef.current = null;
       setReconcilePending(false);
+      if (result.deletedOnServer) {
+        setRecoveryNotice({
+          kind: 'deleted',
+          message: 'Duplicate copy was already deleted or expired on the server. No new copy was created.',
+        });
+        return;
+      }
+      if (result.detailsUnavailable) {
+        setRecoveryNotice({
+          kind: 'committed_partial',
+          message: `Duplicate committed on server (${result.name || collection.name}), but details are unavailable (${result.detailsError || 'refresh sync later'}).`,
+        });
+        return;
+      }
       onClose();
       return;
     }
@@ -410,8 +512,9 @@ export const DuplicateCollectionModal: React.FC<DuplicateCollectionModalProps> =
   return (
     <div
       onClick={(e) => {
-        if (e.target === e.currentTarget && !isSubmitting) handleClose();
+        if (e.target === e.currentTarget && !isSubmitting && resumingOpId === null) handleClose();
       }}
+      data-modal="true"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150 select-none"
     >
       <div
@@ -439,13 +542,79 @@ export const DuplicateCollectionModal: React.FC<DuplicateCollectionModalProps> =
           <button
             type="button"
             onClick={handleClose}
-            disabled={isSubmitting}
+            disabled={isSubmitting || resumingOpId !== null}
             aria-label="Close modal"
-            className="rounded-lg p-1 text-tx-muted hover:text-tx-primary hover:bg-hover transition"
+            className="rounded-lg p-1 text-tx-muted hover:text-tx-primary hover:bg-hover disabled:opacity-40 transition"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
+
+        {/* Pending Recovery Section (isolated from new duplicate target selection) */}
+        {ownedRecoveryIntents.length > 0 && (
+          <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-700 dark:text-amber-300">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                <span>Pending Duplicate Needs Recovery</span>
+              </div>
+              <span className="text-[10px] font-medium text-amber-700/80 dark:text-amber-300/80">
+                Uncertain
+              </span>
+            </div>
+            <div className="space-y-2">
+              {ownedRecoveryIntents.map((intent) => (
+                <div
+                  key={intent.operationId}
+                  className="rounded-lg border border-line bg-surface/90 p-2.5 flex items-center justify-between gap-2"
+                >
+                  <div className="min-w-0">
+                    <div className="text-xs font-semibold text-tx-primary truncate">
+                      Target: {intent.targetScope?.name || 'Cloud workspace'}
+                    </div>
+                    <div className="text-[10px] text-tx-muted truncate">
+                      {intent.lastError || 'Previous attempt lost response; resume safely with original ID.'}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      disabled={isSubmitting || resumingOpId !== null || Boolean(activeDuplicateOperationIds[intent.operationId])}
+                      onClick={() => {
+                        if (activeDuplicateOperationIds[intent.operationId]) return;
+                        clearPendingDuplicateIntent?.(intent.operationId);
+                      }}
+                      className="rounded-lg px-2 py-1 text-[11px] font-medium text-tx-muted hover:bg-hover hover:text-tx-primary disabled:opacity-50 transition"
+                    >
+                      Dismiss
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isSubmitting || resumingOpId !== null || Boolean(activeDuplicateOperationIds[intent.operationId])}
+                      onClick={() => void handleResumeIntent(intent)}
+                      className="inline-flex items-center gap-1 rounded-lg bg-amber-500 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-amber-400 disabled:opacity-50 transition"
+                    >
+                      {resumingOpId === intent.operationId || activeDuplicateOperationIds[intent.operationId] ? (
+                        <>
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          <span>Resuming...</span>
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="h-3 w-3" />
+                          <span>Resume Pending Duplicate</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <p className="text-[10px] text-amber-700/90 dark:text-amber-300/90">
+              Use Resume above to reconcile the unfinished duplicate, or select a destination below to create a separate new copy.
+            </p>
+          </div>
+        )}
 
         {/* Name Preview */}
         <div className="mt-4 rounded-xl border border-line bg-card p-3">
@@ -511,8 +680,9 @@ export const DuplicateCollectionModal: React.FC<DuplicateCollectionModalProps> =
                   <button
                     key={`${opt.scope.type}:${opt.scope.id}`}
                     type="button"
+                    disabled={isSubmitting || resumingOpId !== null}
                     onClick={() => {
-                      if (isSubmitting) return;
+                      if (isSubmitting || resumingOpId !== null) return;
                       pendingOpIdRef.current = null;
                       setReconcilePending(false);
                       setErrorMsg(null);
@@ -588,6 +758,20 @@ export const DuplicateCollectionModal: React.FC<DuplicateCollectionModalProps> =
           </div>
         )}
 
+        {recoveryNotice && (
+          <div
+            role="status"
+            className={`mt-3 flex items-start gap-2 rounded-xl border p-3 text-xs ${
+              recoveryNotice.kind === 'rejected'
+                ? 'border-rose-500/20 bg-rose-500/10 text-rose-500 dark:text-rose-400'
+                : 'border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-300'
+            }`}
+          >
+            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+            <span>{recoveryNotice.message}</span>
+          </div>
+        )}
+
         {errorMsg && (
           <div className="mt-3 flex items-center gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-500 dark:text-rose-400">
             <AlertCircle className="h-4 w-4 shrink-0" />
@@ -599,7 +783,7 @@ export const DuplicateCollectionModal: React.FC<DuplicateCollectionModalProps> =
           <button
             type="button"
             onClick={handleClose}
-            disabled={isSubmitting}
+            disabled={isSubmitting || resumingOpId !== null}
             className="rounded-xl px-4 py-2 text-xs font-medium text-tx-muted hover:bg-hover hover:text-tx-primary transition"
           >
             Cancel
@@ -609,6 +793,7 @@ export const DuplicateCollectionModal: React.FC<DuplicateCollectionModalProps> =
             onClick={handleConfirmDuplicate}
             disabled={
               isSubmitting ||
+              resumingOpId !== null ||
               isLoadingTargets ||
               !canWriteSource ||
               !selectedTargetScope ||

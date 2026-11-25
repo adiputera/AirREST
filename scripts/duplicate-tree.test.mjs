@@ -5,14 +5,33 @@ import vm from 'node:vm';
 import ts from 'typescript';
 
 function loadDuplicateModule() {
-  const source = fs.readFileSync(new URL('../packages/common/src/lib/duplicate.ts', import.meta.url), 'utf8');
-  const compiled = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  const exports = {};
-  vm.runInNewContext(compiled, {
-    exports,
+  const compile = (file) => ts.transpileModule(
+    fs.readFileSync(new URL(file, import.meta.url), 'utf8'),
+    { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const examplesExports = {};
+  vm.runInNewContext(compile('../packages/common/src/lib/examples.ts'), {
+    exports: examplesExports,
     require: () => ({}),
+    crypto,
+    Set,
+    Map,
+    Array,
+    Object,
+    String,
+    Number,
+    Boolean,
+    Error,
+    Date,
+    Math,
+    JSON,
+    TextEncoder,
+    TextDecoder,
+  });
+  const exports = {};
+  vm.runInNewContext(compile('../packages/common/src/lib/duplicate.ts'), {
+    exports,
+    require: (id) => (id.includes('examples') ? examplesExports : {}),
     crypto,
     Set,
     Array,
