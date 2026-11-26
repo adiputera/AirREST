@@ -458,7 +458,7 @@ export const App: React.FC = () => {
     }
   }, [theme]);
 
-  useEffect(() => setSidebarOpen(false), [activeTabId]);
+  useEffect(() => setSidebarOpen(false), [activeTabId, selectedExample]);
 
   useEffect(() => {
     if (!sidebarOpen) return;

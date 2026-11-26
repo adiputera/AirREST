@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.1] - 2026-11-26
+
+### Changed
+- **Android Sideload Update via External Browser (Removed `REQUEST_INSTALL_PACKAGES`)**:
+  - Removed `<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />` from `apps/native/src-tauri/gen/android/app/src/main/AndroidManifest.xml` (and the `apk_updates` staging entry from `file_paths.xml`) so sideloaded builds no longer trigger Play Protect / Android "dangerous application" install permission flags.
+  - Replaced the in-app `DownloadManager` + `FileProvider` APK installer in `AndroidUpdatePlugin.kt` and `UpdatePolicy.kt` with explicit external-browser handoff commands (`download` and `browse`) using `Intent(Intent.ACTION_VIEW, uri)` + `CATEGORY_BROWSABLE` + `FLAG_ACTIVITY_NEW_TASK` + `https://` browser `selector` (preventing Custom Tabs / WebView / GitHub app interception), plus best-effort startup cleanup of legacy staged update files.
+  - Updated `apps/native/src-tauri/build.rs`, `apps/native/src-tauri/capabilities/android.json`, `apps/native/src/androidUpdater.ts`, `apps/native/src/components/AndroidUpdateBanner.tsx`, `UpdatePolicyTest.kt`, and `scripts/android-update-banner.test.mjs` so **Download APK** opens the ABI-matched release `.apk` directly in the device's external browser (with release-page fallback and a **Release page** action) while keeping desktop auto-updates completely isolated.
+
+### Fixed
+- **Saved Examples Dedicated Tabs & Unified Request Snapshot Viewer**:
+  - **Dedicated Session-Only Example Tabs (`TabBar`, `useApiStore`)**: Opening a Saved Example now creates and activates its own dedicated session-only tab (`openExampleTabs`, `tabOrder`) in `TabBar` (displaying a `<BookOpen>` badge, HTTP status code pill, example name, middle-click/close button, `Alt+W`/`Ctrl+W` close shortcut, and context menu with `Open Parent Request` and `Close` / `Close Others` / `Close to the Right` / `Close All` support) instead of leaving the previously active request tab highlighted. Closing an example tab activates the adjacent visual tab (request or example), while switching back to a request tab keeps open example tabs intact.
+  - **Request Snapshot Layout Parity & Tabbed Headers (`SavedExampleViewer`)**: Redesigned the `Request Snapshot` view to match `Example Response` with a compact captured target bar, dedicated `Body` and `Headers (N)` subtabs (expanding the headers table to full scrollable viewport height for long header lists and mobile viewports), full-height `CodeEditor` body rendering without dead space below, syntax highlighting for JSON/XML snapshots, `Pretty`/`Raw` toggle, `Collapse`/`Expand` folding, and `Copy` support for both request and response bodies.
+  - **Auto-Added Headers & JSON Comment Stripping (`examples.ts`, `SavedExampleViewer`)**: Updated `buildOriginalRequestSnapshot` to strip JSON/JSONC comments (`//`, `/* */`) and trailing commas via `compileEffectiveJsonPayload` (matching outbound request payloads while preserving `{{variable}}` templates and string URLs) and include auto-derived `Content-Type` and Auth headers (`Authorization` / header API key, with `multipart/form-data` overriding manual `Content-Type`), plus `resolveSnapshotDisplayHeaders` and `resolveSnapshotBody` fallback inference so previously saved examples also display auto-added headers and clean syntax-highlighted bodies.
+
 ## [1.4.0] - 2026-11-25
 
 ### Added

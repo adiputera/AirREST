@@ -16,7 +16,9 @@ class UpdatePolicyTest {
         assertEquals(asset("x86_64"), UpdatePolicy.selectAsset(assets, "v1.3.4", listOf("x86_64", "x86")))
     }
 
-    @Test fun neverFallsBackToAnIncompatibleApk() {
+    @Test fun returnsNullOrThrowsWhenNoApkMatchesDeviceAbi() {
+        assertNull(UpdatePolicy.selectAssetOrNull(listOf(asset()), "v1.3.4", listOf("x86_64")))
+        assertNull(UpdatePolicy.selectAssetOrNull(listOf(asset()), "v1.3.4", listOf("armeabi-v7a")))
         assertThrows(IllegalArgumentException::class.java) {
             UpdatePolicy.selectAsset(listOf(asset()), "v1.3.4", listOf("x86_64"))
         }
@@ -43,14 +45,24 @@ class UpdatePolicyTest {
         }
     }
 
-    @Test fun byteProgressDoesNotMeanDownloadCompleted() {
-        assertEquals(99, UpdatePolicy.progress(1024, 1024))
-        assertEquals("downloading", UpdatePolicy.phase(2))
-        assertEquals("verifying", UpdatePolicy.phase(8))
-        assertEquals("failed", UpdatePolicy.phase(16))
-        assertEquals("paused", UpdatePolicy.phase(4))
-        assertNull(UpdatePolicy.progress(128, -1))
-        assertEquals(50, UpdatePolicy.progress(512, 1024))
+    @Test fun validatesOfficialReleasePageUrlsOnly() {
+        val validUrl = "https://github.com/adiputera/AirREST/releases/tag/v1.3.4"
+        assertEquals(validUrl, UpdatePolicy.validateReleaseUrl(validUrl, "v1.3.4"))
+        val invalid = listOf(
+            validUrl.replace("https:", "http:"),
+            validUrl.replace("github.com", "github.com.example.com"),
+            validUrl.replace("adiputera/AirREST", "example/other"),
+            validUrl.replace("/v1.3.4", "/v1.3.3"),
+            "$validUrl?tab=assets",
+            "$validUrl#readme",
+            validUrl.replace("github.com", "user@github.com"),
+            "https://github.com/adiputera/AirREST/releases/download/v1.3.4/airrest-1.3.4-android-arm64.apk",
+        )
+        invalid.forEach { value ->
+            assertThrows(IllegalArgumentException::class.java) {
+                UpdatePolicy.validateReleaseUrl(value, "v1.3.4")
+            }
+        }
     }
 
     @Test fun versionsFollowReleaseVersionCodeAndRejectPreReleases() {
@@ -59,12 +71,5 @@ class UpdatePolicyTest {
         listOf("v1.3.4-beta", "../1.3.4", "1.3", "1.1000.0").forEach {
             assertThrows(IllegalArgumentException::class.java) { UpdatePolicy.version(it) }
         }
-    }
-
-    @Test fun mismatchedOrMissingSigningKeysCannotBeInstalled() {
-        assertTrue(UpdatePolicy.sameSigners(setOf("release-key"), setOf("release-key")))
-        assertFalse(UpdatePolicy.sameSigners(setOf("debug-key"), setOf("release-key")))
-        assertFalse(UpdatePolicy.sameSigners(emptySet(), emptySet()))
-        assertFalse(UpdatePolicy.sameSigners(setOf("key-a", "key-b"), setOf("key-a")))
     }
 }

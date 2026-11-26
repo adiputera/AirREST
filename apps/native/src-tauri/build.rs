@@ -7,7 +7,7 @@ fn main() {
     let attributes = tauri_build::Attributes::new()
         .plugin(
             "android-update",
-            tauri_build::InlinedPlugin::new().commands(&["status", "start", "cancel", "install"]),
+            tauri_build::InlinedPlugin::new().commands(&["download", "browse"]),
         )
         .plugin(
             "native-credential",

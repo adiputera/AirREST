@@ -20,28 +20,27 @@ If omitted, updater checks will log an informational warning and remain inactive
 
 ## Android APK updates
 
-The Android update banner downloads the matching ARM64 or x86-64 APK directly from
-the official GitHub release using Android DownloadManager. Transfers continue in
-the background, and reopening AirREST restores the download status. A failed
-download can be retried; active downloads can be cancelled.
+The Android update banner checks the official GitHub releases feed and offers
+**Download APK** and **Release page** actions that launch the device's external
+browser (using `Intent.ACTION_VIEW` with `FLAG_ACTIVITY_NEW_TASK` and an
+`https://` browser selector, never an in-app WebView or Custom Tab).
 
-After Android reports a completed download, AirREST stages the APK in private
-storage and verifies its size, SHA-256 digest when supplied by the release,
-package/version, and signing key. The banner then offers **Install APK**. If
-Android requires installation permission, allow AirREST in the settings screen,
-return to AirREST, and tap **Install APK** again. Installation always requires
-confirmation in Android's installer. A cancelled installation can be retried
-without downloading the APK again. **Manual download** opens the release page.
+**Download APK** selects the direct ARM64 or x86-64 `.apk` asset matching the
+device's ABI from the official release (falling back to the release page if no
+direct ABI asset matches), and hands the download off to the external browser.
+Once the download completes in the browser, the user opens the APK from the
+device's Downloads to install. AirREST does **not** request
+`REQUEST_INSTALL_PACKAGES` or stage/install APKs in-app.
 
 Updates must use the same signing key as the installed app, so a debug build
-cannot install a production APK through this updater. Version codes use
+cannot upgrade over a production APK (and vice versa). Version codes use
 `major * 1000000 + minor * 1000 + patch`. This path is for directly distributed
 APKs; store-managed distributions should use their store's update mechanism.
 
-Run `npm run test:android-update` for frontend lifecycle tests. After a Tauri
-Android build has generated the Gradle wiring, run
+Run `npm run test:android-update` for frontend lifecycle and manifest guard tests.
+After a Tauri Android build has generated the Gradle wiring, run
 `./gradlew :app:testUniversalDebugUnitTest` from `src-tauri/gen/android` for the
-native release/transfer policy tests. Verify the complete download and upgrade
+native release policy tests. Verify the external-browser handoff and APK upgrade
 flow on an Android device with two APKs signed by the same key.
 
 ## Android development

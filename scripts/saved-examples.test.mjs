@@ -49,14 +49,14 @@ function loadModuleGraph() {
     Promise,
     Symbol,
     window: {
-      addEventListener() {},
-      removeEventListener() {},
-      localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+      addEventListener() { },
+      removeEventListener() { },
+      localStorage: { getItem: () => null, setItem() { }, removeItem() { } },
     },
     document: {
-      documentElement: { classList: { toggle() {}, add() {}, remove() {} }, setAttribute() {}, removeAttribute() {}, style: {} },
+      documentElement: { classList: { toggle() { }, add() { }, remove() { } }, setAttribute() { }, removeAttribute() { }, style: {} },
     },
-    navigator: { platform: 'Linux', clipboard: { writeText: async () => {} } },
+    navigator: { platform: 'Linux', clipboard: { writeText: async () => { } } },
   };
 
   function load(relPath, overrides = {}) {
@@ -117,7 +117,7 @@ function createStoreHarness({ cloudOverrides = {}, executeApiRequest, customStor
   };
 
   const cache = new Map();
-  const noop = () => {};
+  const noop = () => { };
   const modules = {
     storage: {
       appStorage: storage,
@@ -385,7 +385,7 @@ test('Saved Examples: classifier, charset validation, HTTP reason phrase fallbac
   );
   assert.equal(http2RedirectResp.statusText, 'Temporary Redirect');
 
-  // originalRequest snapshot preserves {{variables}} and redacts File objects
+  // originalRequest snapshot preserves {{variables}}, strips JSON comments, includes auto-added headers, and redacts File objects
   const reqSnapshot = examples.buildOriginalRequestSnapshot({
     id: 'r1',
     name: 'Upload {{env}}',
@@ -393,7 +393,10 @@ test('Saved Examples: classifier, charset validation, HTTP reason phrase fallbac
     url: 'https://example.com/users/{{id}}',
     params: [],
     pathVariables: [{ id: 'p1', key: 'id', value: '{{userId}}', enabled: true }],
-    headers: [{ id: 'h1', key: 'X-Env', value: '{{env}}', enabled: true }],
+    headers: [
+      { id: 'h1', key: 'X-Env', value: '{{env}}', enabled: true },
+      { id: 'h-ct', key: 'Content-Type', value: 'text/plain', enabled: true },
+    ],
     auth: { type: 'bearer', bearerToken: '{{token}}' },
     bodyType: 'form-data',
     bodyFormData: [{ id: 'f1', key: 'avatar', type: 'file', value: 'me.png', fileName: 'avatar.png', file: { name: 'secret' }, enabled: true }],
@@ -401,6 +404,53 @@ test('Saved Examples: classifier, charset validation, HTTP reason phrase fallbac
   assert.equal(reqSnapshot.url.raw, 'https://example.com/users/{{id}}');
   assert.equal(reqSnapshot.body.formdata[0].src, 'avatar.png');
   assert.equal('file' in reqSnapshot.body.formdata[0], false);
+  // form-data overrides manual Content-Type, and Auth Bearer header is included
+  assert.equal(reqSnapshot.header.some((h) => h.key === 'Authorization' && h.value === 'Bearer {{token}}'), true);
+  assert.equal(reqSnapshot.header.some((h) => h.key === 'Content-Type' && h.value === 'multipart/form-data'), true);
+  assert.equal(reqSnapshot.header.some((h) => h.key === 'Content-Type' && h.value === 'text/plain'), false);
+
+  // JSON comment stripping + trailing commas + auto Content-Type + preserved {{var}} & URL strings
+  const jsonReqSnapshot = examples.buildOriginalRequestSnapshot({
+    id: 'r2',
+    name: 'Create Rule',
+    method: 'POST',
+    url: 'https://example.com/rules',
+    params: [],
+    headers: [{ id: 'h1', key: 'Authorization', value: '{{droolsToken}}', enabled: true }],
+    auth: { type: 'none' },
+    bodyType: 'json',
+    bodyContent: '{\n  "id": "001-222", // optional comment\n  // "disabledField": true,\n  "url": "https://example.com/a//b",\n  "name": "{{ruleName}}",\n}',
+  }, (u) => ({ raw: u }));
+  assert.equal(jsonReqSnapshot.body.raw.includes('optional comment'), false);
+  assert.equal(jsonReqSnapshot.body.raw.includes('disabledField'), false);
+  assert.equal(jsonReqSnapshot.body.raw.includes('https://example.com/a//b'), true);
+  assert.equal(jsonReqSnapshot.body.raw.includes('{{ruleName}}'), true);
+  assert.equal(jsonReqSnapshot.header.some((h) => h.key === 'Content-Type' && h.value === 'application/json'), true);
+
+  // Legacy snapshot fallback: backfills auto Content-Type, strips legacy JSON comments, and detects JSON language
+  const exampleSnapshot = load('packages/common/src/lib/exampleSnapshot.ts');
+  const legacyOrigReq = {
+    method: 'POST',
+    url: { raw: 'https://example.com/rules' },
+    header: [{ key: 'Authorization', value: '{{token}}' }],
+    body: {
+      mode: 'raw',
+      raw: '{\n  "id": "001", // legacy comment\n  // "commented": 1,\n  "tag": "{{tag}}"\n}',
+      options: { raw: { language: 'json' } },
+    },
+  };
+  const legacyHeaders = exampleSnapshot.resolveSnapshotDisplayHeaders(legacyOrigReq);
+  assert.equal(legacyHeaders.length, 2);
+  assert.equal(legacyHeaders[1].key, 'Content-Type');
+  assert.equal(legacyHeaders[1].value, 'application/json');
+  assert.equal(legacyHeaders[1].autoSource, 'body');
+
+  const resolvedLegacyBody = exampleSnapshot.resolveSnapshotBody(legacyOrigReq.body, legacyHeaders);
+  assert.equal(resolvedLegacyBody.language, 'json');
+  assert.equal(resolvedLegacyBody.isJson, true);
+  assert.equal(resolvedLegacyBody.rawContent.includes('legacy comment'), false);
+  assert.equal(resolvedLegacyBody.rawContent.includes('commented'), false);
+  assert.equal(resolvedLegacyBody.prettyContent.includes('{{tag}}'), true);
 });
 
 test('Saved Examples: Postman v2.1 round-trip skips folder/corrupt responses, strips internal fields, and blocks unhydrated export', () => {
@@ -850,14 +900,114 @@ test('Saved Examples UI: SavedExampleViewer renders HTML strictly as CodeEditor 
   assert.equal(/<iframe\b/i.test(viewerSrc), false);
   assert.match(viewerSrc, /<CodeEditor[\s\S]*readOnly/);
 
-  // App opens SavedExampleViewer even when tabs.length === 0 & blocks Ctrl+Enter / Ctrl+S while TabBar closes on Ctrl+W
+  // App opens SavedExampleViewer even when tabs.length === 0 & blocks Ctrl+Enter / Ctrl+S while TabBar closes active example tab on Ctrl+W
   const tabBarSrc = fs.readFileSync(path.join(ROOT, 'packages/common/src/components/TabBar.tsx'), 'utf8');
   assert.match(appSrc, /selectedExample\s*\?\s*\(\s*<SavedExampleViewer\s*\/>/);
   assert.match(appSrc, /if\s*\(\s*!selectedExample\s*\)\s*return;[\s\S]*?key === 'enter' \|\| key === 's'/);
-  assert.match(tabBarSrc, /selectedExample[\s\S]*?selectSavedExample\(null\)/);
+  assert.match(tabBarSrc, /selectedExampleRef\.current[\s\S]*?closeExampleTab\(makeExampleTabId\(selectedExampleRef\.current\)\)/);
+  assert.match(tabBarSrc, /activeVisualTabId/);
+  assert.match(viewerSrc, /resolveSnapshotDisplayHeaders/);
+  assert.match(viewerSrc, /resolveSnapshotBody/);
+  assert.match(viewerSrc, /Headers \(\{snapshotHeaders\.length\}\)/);
 
   // Sidebar chevron only on items with getItemExampleCount(item) > 0, child example row draggable={false}
   assert.match(sidebarSrc, /const exampleCount = getItemExampleCount\(item\)/);
   assert.match(sidebarSrc, /exampleCount > 0/);
   assert.match(sidebarSrc, /draggable=\{false\}/);
+});
+
+test('Saved Examples Tabs: dedicated session-only tabs, mixed tab ordering, adjacent focus on close, and close scopes', async () => {
+  const colId = 'col-tabs-1';
+  const reqAId = 'req-a';
+  const reqBId = 'req-b';
+  const harness = createStoreHarness();
+  const store = harness.storeMod.createApiStore({
+    storage: harness.storage,
+    cloudClient: harness.cloudApiStub,
+    productPolicy: { edition: 'full', workspace: { cloud: true, offline: true } },
+  });
+  await store.persist.rehydrate();
+
+  store.setState({
+    collections: [{
+      id: colId,
+      name: 'Demo',
+      items: [
+        {
+          id: reqAId,
+          type: 'request',
+          name: 'Request A',
+          request: { id: reqAId, name: 'Request A', method: 'GET', url: 'https://example.com/a', params: [], headers: [], bodyType: 'none', bodyContent: '' },
+          examples: [{ id: 'ex-a1', revision: 1, name: '200 A', status: 'OK', code: 200, header: [{ key: 'Content-Type', value: 'application/json' }], body: '{"a":1}' }],
+          exampleCount: 1,
+          examplesLoaded: true,
+        },
+        {
+          id: reqBId,
+          type: 'request',
+          name: 'Request B',
+          request: { id: reqBId, name: 'Request B', method: 'POST', url: 'https://example.com/b', params: [], headers: [], bodyType: 'json', bodyContent: '{}' },
+          examples: [
+            { id: 'ex-b1', revision: 1, name: '400 Bad Request', status: 'Bad Request', code: 400, header: [{ key: 'Content-Type', value: 'application/json' }], body: '{"err":1}' },
+            { id: 'ex-b2', revision: 1, name: '201 Created', status: 'Created', code: 201, header: [{ key: 'Content-Type', value: 'application/json' }], body: '{"id":2}' },
+          ],
+          exampleCount: 2,
+          examplesLoaded: true,
+        },
+      ],
+      createdAt: 1,
+      updatedAt: 1,
+    }],
+    tabs: [{ id: reqAId, name: 'Request A', method: 'GET', url: 'https://example.com/a', params: [], headers: [], bodyType: 'none', bodyContent: '' }],
+    activeTabId: reqAId,
+    tabOrder: [reqAId],
+    openExampleTabs: [],
+    selectedExample: null,
+  });
+
+  // Opening Request B's example while Request A is open creates a dedicated example tab and focuses it
+  store.getState().selectSavedExample({ collectionId: colId, itemId: reqBId, exampleId: 'ex-b1' });
+  const exB1TabId = harness.examplesMod.makeExampleTabId({ collectionId: colId, itemId: reqBId, exampleId: 'ex-b1' });
+  assert.equal(store.getState().openExampleTabs.length, 1);
+  assert.deepEqual([...store.getState().tabOrder], [reqAId, exB1TabId]);
+  assert.equal(store.getState().selectedExample?.exampleId, 'ex-b1');
+
+  // Switching back to Request A hides viewer without closing Example B tab
+  store.getState().setActiveTabId(reqAId);
+  assert.equal(store.getState().selectedExample, null);
+  assert.equal(store.getState().openExampleTabs.length, 1);
+
+  // Opening a second example tab appends to tabOrder
+  store.getState().selectSavedExample({ collectionId: colId, itemId: reqBId, exampleId: 'ex-b2' });
+  const exB2TabId = harness.examplesMod.makeExampleTabId({ collectionId: colId, itemId: reqBId, exampleId: 'ex-b2' });
+  assert.deepEqual([...store.getState().tabOrder], [reqAId, exB1TabId, exB2TabId]);
+
+  // Closing active example tab ex-b2 focuses adjacent tab ex-b1
+  store.getState().closeExampleTab(exB2TabId);
+  assert.equal(store.getState().openExampleTabs.length, 1);
+  assert.equal(store.getState().selectedExample?.exampleId, 'ex-b1');
+
+  // Closing active example tab ex-b1 focuses adjacent Request A tab
+  store.getState().closeExampleTab(exB1TabId);
+  assert.equal(store.getState().openExampleTabs.length, 0);
+  assert.equal(store.getState().selectedExample, null);
+  assert.equal(store.getState().activeTabId, reqAId);
+
+  // Re-open examples and test closeTabsToRight + closeOtherTabs + session-only persistence
+  store.getState().selectSavedExample({ collectionId: colId, itemId: reqBId, exampleId: 'ex-b1' });
+  store.getState().selectSavedExample({ collectionId: colId, itemId: reqBId, exampleId: 'ex-b2' });
+  store.getState().closeTabsToRight(exB1TabId);
+  assert.deepEqual([...store.getState().tabOrder], [reqAId, exB1TabId]);
+  assert.equal(store.getState().selectedExample?.exampleId, 'ex-b1');
+
+  // closeOtherTabs keeping an example tab closes Request A and focuses that example tab
+  store.getState().closeOtherTabs(exB1TabId);
+  assert.equal(store.getState().tabs.length, 0);
+  assert.deepEqual([...store.getState().tabOrder], [exB1TabId]);
+  assert.equal(store.getState().selectedExample?.exampleId, 'ex-b1');
+
+  // Deleting the example closes its open example tab cleanly
+  await store.getState().deleteSavedExample({ collectionId: colId, itemId: reqBId, exampleId: 'ex-b1' });
+  assert.equal(store.getState().openExampleTabs.length, 0);
+  assert.equal(store.getState().selectedExample, null);
 });

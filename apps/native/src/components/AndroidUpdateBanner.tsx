@@ -1,37 +1,34 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { openUrl } from '@tauri-apps/plugin-opener';
 import {
-  CHECK_INTERVAL_MS, DISMISSED_VERSION_KEY, IDLE_UPDATE, RELEASE_CACHE_KEY,
-  createAndroidUpdateController, isNewerVersion, nativeAndroidUpdater, parseRelease,
-  readCachedRelease, updateError,
-  type AndroidUpdateStatus, type GitHubRelease,
+  CHECK_INTERVAL_MS,
+  DISMISSED_VERSION_KEY,
+  RELEASE_CACHE_KEY,
+  isNewerVersion,
+  nativeAndroidUpdater,
+  parseRelease,
+  readCachedRelease,
+  updateError,
+  type GitHubRelease,
 } from '../androidUpdater';
 
 export function AndroidUpdateBanner({
   repo,
   currentVersion = typeof __AIRREST_VERSION__ !== 'undefined' ? __AIRREST_VERSION__ : '0.0.0',
-}: { repo: string; currentVersion?: string }) {
+}: {
+  repo: string;
+  currentVersion?: string;
+}) {
   const [release, setRelease] = useState<GitHubRelease | null>(null);
-  const [status, setStatus] = useState<AndroidUpdateStatus>(IDLE_UPDATE);
   const [dismissed, setDismissed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const updater = useRef<ReturnType<typeof createAndroidUpdateController> | null>(null);
+  const mountedRef = useRef(true);
+  const busyRef = useRef(false);
 
   useEffect(() => {
-    const controller = createAndroidUpdateController(nativeAndroidUpdater, setStatus, setMessage, setBusy);
-    updater.current = controller;
-    const refresh = () => { if (!document.hidden) void controller.refresh(); };
-    refresh();
-    const timer = setInterval(refresh, 2000);
-    document.addEventListener('visibilitychange', refresh);
-    window.addEventListener('focus', refresh);
+    mountedRef.current = true;
     return () => {
-      clearInterval(timer);
-      document.removeEventListener('visibilitychange', refresh);
-      window.removeEventListener('focus', refresh);
-      controller.dispose();
-      updater.current = null;
+      mountedRef.current = false;
     };
   }, []);
 
@@ -44,6 +41,7 @@ export function AndroidUpdateBanner({
       setRelease(isNewerVersion(candidate.tag_name, currentVersion) ? candidate : null);
       setDismissed(localStorage.getItem(DISMISSED_VERSION_KEY) === candidate.tag_name);
     };
+
     async function check() {
       try {
         const cached = readCachedRelease(localStorage.getItem(RELEASE_CACHE_KEY), repo);
@@ -53,7 +51,8 @@ export function AndroidUpdateBanner({
           if (age >= 0 && age < CHECK_INTERVAL_MS) return;
         }
         const response = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
-          signal: abort.signal, headers: { Accept: 'application/vnd.github+json' },
+          signal: abort.signal,
+          headers: { Accept: 'application/vnd.github+json' },
         });
         if (!response.ok) return; // Offline/rate-limited checks leave the cached update available.
         const candidate = parseRelease(await response.json());
@@ -69,28 +68,56 @@ export function AndroidUpdateBanner({
         clearTimeout(timeout);
       }
     }
+
     void check();
-    return () => { mounted = false; abort.abort(); clearTimeout(timeout); };
+    return () => {
+      mounted = false;
+      abort.abort();
+      clearTimeout(timeout);
+    };
   }, [repo, currentVersion]);
 
-  // An in-progress or downloaded APK survives dismissal, offline startup, and app restart.
-  const hasDownload = status.state !== 'idle';
-  if (!hasDownload && (!release || dismissed)) return null;
-  const transferring = ['pending', 'downloading', 'paused', 'verifying'].includes(status.state);
-  const ready = status.state === 'ready';
-  const version = hasDownload ? status.version : release?.tag_name;
-  const description = status.state === 'pending' ? 'Waiting for download…'
-    : status.state === 'downloading' ? `Downloading APK${status.progress == null ? '…' : ` (${status.progress}%)`}`
-    : status.state === 'verifying' ? 'Checking APK…'
-    : ready ? 'APK verified and ready to install'
-    : status.state === 'failed' ? 'Update needs attention'
-    : status.state === 'paused' ? 'Download paused'
-    : 'Update available';
+  if (!release || dismissed) return null;
 
-  async function manualDownload() {
+  async function runAction(action: () => Promise<void>) {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
+    setMessage(null);
+    try {
+      await action();
+    } catch (error) {
+      if (mountedRef.current) {
+        setMessage(updateError(error));
+      }
+    } finally {
+      busyRef.current = false;
+      if (mountedRef.current) {
+        setBusy(false);
+      }
+    }
+  }
+
+  function downloadInBrowser() {
     if (!release) return;
-    try { await openUrl(release.html_url); }
-    catch (error) { setMessage(`Could not open the release page. ${updateError(error)}`); }
+    void runAction(async () => {
+      const result = await nativeAndroidUpdater.download(release);
+      if (!mountedRef.current) return;
+      setMessage(
+        result.target === 'apk'
+          ? 'Opened the APK download in your browser. Once finished, open the file from Downloads to install.'
+          : 'Opened the release page in your browser because no direct APK matched this device.',
+      );
+    });
+  }
+
+  function openReleasePage() {
+    if (!release) return;
+    void runAction(async () => {
+      await nativeAndroidUpdater.browse(release);
+      if (!mountedRef.current) return;
+      setMessage('Opened the release page in your browser.');
+    });
   }
 
   function dismiss() {
@@ -100,33 +127,35 @@ export function AndroidUpdateBanner({
 
   const buttonClass = 'rounded bg-cyan-600 px-2.5 py-1 font-medium text-white hover:bg-cyan-500 disabled:opacity-50';
   return (
-    <aside role="status" aria-live="polite"
-      className="sticky top-0 z-50 border-b border-cyan-800/40 bg-gradient-to-r from-cyan-950 via-slate-900 to-indigo-950 px-3 py-2 text-xs text-slate-100 shadow-md">
+    <aside
+      role="status"
+      aria-live="polite"
+      className="sticky top-0 z-50 border-b border-cyan-800/40 bg-gradient-to-r from-cyan-950 via-slate-900 to-indigo-950 px-3 py-2 text-xs text-slate-100 shadow-md"
+    >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
-          <span className="font-semibold text-cyan-300">AirREST {version}</span>
-          <span className="ml-2">{description}</span>
+          <span className="font-semibold text-cyan-300">AirREST {release.tag_name}</span>
+          <span className="ml-2">Update available</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {ready ? (
-            <button type="button" className={buttonClass} disabled={busy} onClick={() => void updater.current?.install()}>
-              {busy ? 'Opening…' : 'Install APK'}
-            </button>
-          ) : !transferring && release ? (
-            <button type="button" className={buttonClass} disabled={busy} onClick={() => void updater.current?.start(release)}>
-              {busy ? 'Starting…' : status.state === 'failed' ? 'Retry download' : 'Download APK'}
-            </button>
-          ) : null}
-          {hasDownload && (
-            <button type="button" disabled={busy} onClick={() => void updater.current?.cancel()} className="px-2 py-1 disabled:opacity-50">
-              {ready ? 'Discard APK' : 'Cancel'}
-            </button>
-          )}
-          {release && !transferring && <button type="button" disabled={busy} onClick={() => void manualDownload()} className="px-2 py-1 underline">Manual download</button>}
-          {!hasDownload && <button type="button" disabled={busy} onClick={dismiss} aria-label="Close update notification" className="px-2 py-1">✕</button>}
+          <button type="button" className={buttonClass} disabled={busy} onClick={downloadInBrowser}>
+            {busy ? 'Opening…' : 'Download APK'}
+          </button>
+          <button type="button" disabled={busy} onClick={openReleasePage} className="px-2 py-1 underline disabled:opacity-50">
+            Release page
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={dismiss}
+            aria-label="Close update notification"
+            className="px-2 py-1 disabled:opacity-50"
+          >
+            ✕
+          </button>
         </div>
       </div>
-      {(status.message || message) && <p className="mt-1 break-words text-amber-200">{message || status.message}</p>}
+      {message && <p className="mt-1 break-words text-amber-200">{message}</p>}
     </aside>
   );
 }

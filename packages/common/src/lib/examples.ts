@@ -1,14 +1,98 @@
-import {
+import type {
   ActiveScope,
   ApiRequest,
   ApiResponse,
+  AuthConfig,
   Collection,
   CollectionItem,
+  OpenExampleTab,
   PendingExampleIntent,
   SavedExample,
   SavedExampleHeader,
   SavedExampleSummary,
 } from '../types/api';
+
+export const EXAMPLE_TAB_ID_PREFIX = 'example:';
+
+export function makeExampleTabId(selection: {
+  collectionId: string;
+  itemId: string;
+  exampleId: string;
+}): string {
+  return `${EXAMPLE_TAB_ID_PREFIX}${selection.collectionId}:${selection.itemId}:${selection.exampleId}`;
+}
+
+export function isExampleTabId(id: string | null | undefined): boolean {
+  return typeof id === 'string' && id.startsWith(EXAMPLE_TAB_ID_PREFIX);
+}
+
+export type OrderedVisualTab<TRequestTab extends { id: string } = { id: string }> =
+  | { kind: 'request'; id: string; tab: TRequestTab }
+  | { kind: 'example'; id: string; exampleTab: OpenExampleTab };
+
+/**
+ * Resolves the ordered list of request and example tabs for TabBar rendering and adjacent focus selection.
+ */
+export function buildOrderedVisualTabs<TRequestTab extends { id: string }>(
+  tabs: readonly TRequestTab[] = [],
+  openExampleTabs: readonly OpenExampleTab[] = [],
+  tabOrder: readonly string[] = [],
+): OrderedVisualTab<TRequestTab>[] {
+  const requestMap = new Map<string, TRequestTab>();
+  for (const tab of tabs) {
+    if (tab?.id && !requestMap.has(tab.id)) {
+      requestMap.set(tab.id, tab);
+    }
+  }
+  const exampleMap = new Map<string, OpenExampleTab>();
+  for (const exTab of openExampleTabs) {
+    if (exTab?.id && !exampleMap.has(exTab.id)) {
+      exampleMap.set(exTab.id, exTab);
+    }
+  }
+
+  const seen = new Set<string>();
+  const ordered: OrderedVisualTab<TRequestTab>[] = [];
+
+  for (const id of tabOrder) {
+    if (!id || seen.has(id)) continue;
+    const reqTab = requestMap.get(id);
+    if (reqTab) {
+      seen.add(id);
+      ordered.push({ kind: 'request', id, tab: reqTab });
+      continue;
+    }
+    const exTab = exampleMap.get(id);
+    if (exTab) {
+      seen.add(id);
+      ordered.push({ kind: 'example', id, exampleTab: exTab });
+    }
+  }
+
+  for (const tab of tabs) {
+    if (tab?.id && !seen.has(tab.id)) {
+      seen.add(tab.id);
+      ordered.push({ kind: 'request', id: tab.id, tab });
+    }
+  }
+
+  for (const exTab of openExampleTabs) {
+    if (exTab?.id && !seen.has(exTab.id)) {
+      seen.add(exTab.id);
+      ordered.push({ kind: 'example', id: exTab.id, exampleTab: exTab });
+    }
+  }
+
+  return ordered;
+}
+
+export function syncVisualTabOrder(
+  tabs: readonly { id: string }[] = [],
+  openExampleTabs: readonly OpenExampleTab[] = [],
+  tabOrder: readonly string[] = [],
+): string[] {
+  return buildOrderedVisualTabs(tabs, openExampleTabs, tabOrder).map((entry) => entry.id);
+}
 
 export const MAX_SAVED_EXAMPLE_NAME_RUNES = 150;
 export const MAX_SAVED_EXAMPLE_BYTES = 512 * 1024; // 512 KiB
@@ -19,14 +103,14 @@ export type SavedExampleLanguage = 'json' | 'xml' | 'html';
 
 export type ExampleEligibilityResult =
   | {
-      eligible: true;
-      previewLanguage: SavedExampleLanguage;
-      contentType: string;
-    }
+    eligible: true;
+    previewLanguage: SavedExampleLanguage;
+    contentType: string;
+  }
   | {
-      eligible: false;
-      reason: string;
-    };
+    eligible: false;
+    reason: string;
+  };
 
 const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
@@ -697,26 +781,298 @@ function defaultGenerateExampleId(): string {
   });
 }
 
+function normalizeHeaderKey(name: string): string {
+  return String(name ?? '').trim().toLowerCase();
+}
+
+function encodeBasicAuthBase64(username: string, password: string): string {
+  const raw = `${username}:${password}`;
+  try {
+    return btoa(unescape(encodeURIComponent(raw)));
+  } catch {
+    return btoa(raw);
+  }
+}
+
+function hasTemplatePlaceholder(value: string): boolean {
+  return /\{\{[^{}]+\}\}/.test(value);
+}
+
+function resolveSnapshotAuthHeader(auth?: AuthConfig | null): { key: string; normalizedKey: string; value: string } | null {
+  if (!auth || auth.type === 'none') return null;
+
+  if (auth.type === 'bearer') {
+    const rawToken = String(auth.bearerToken ?? '').trim();
+    if (!rawToken) return null;
+    return {
+      key: 'Authorization',
+      normalizedKey: 'authorization',
+      value: `Bearer ${rawToken}`,
+    };
+  }
+
+  if (auth.type === 'basic') {
+    const rawUser = String(auth.basicUsername ?? '');
+    const rawPass = String(auth.basicPassword ?? '');
+    if (rawUser === '' && rawPass === '') return null;
+    const value = hasTemplatePlaceholder(rawUser) || hasTemplatePlaceholder(rawPass)
+      ? `Basic ${rawUser}:${rawPass}`
+      : `Basic ${encodeBasicAuthBase64(rawUser, rawPass)}`;
+    return {
+      key: 'Authorization',
+      normalizedKey: 'authorization',
+      value,
+    };
+  }
+
+  if (auth.type === 'apikey') {
+    if (auth.apiKeyIn === 'query') return null;
+    const rawKey = String(auth.apiKeyKey ?? '').trim();
+    const rawValue = String(auth.apiKeyValue ?? '').trim();
+    if (!rawKey || !rawValue) return null;
+    return {
+      key: rawKey,
+      normalizedKey: normalizeHeaderKey(rawKey),
+      value: rawValue,
+    };
+  }
+
+  return null;
+}
+
+function resolveSnapshotBodyContentType(req: ApiRequest): { key: 'Content-Type'; value: string; isManagedByRuntime: boolean } | null {
+  const method = String(req.method || 'GET').toUpperCase();
+  if (method === 'GET' || method === 'HEAD') return null;
+
+  if (req.bodyType === 'json' || (req.bodyType === 'raw' && req.rawType === 'json') || req.bodyType === 'graphql') {
+    return { key: 'Content-Type', value: 'application/json', isManagedByRuntime: false };
+  }
+  if (req.bodyType === 'xml' || (req.bodyType === 'raw' && req.rawType === 'xml')) {
+    return { key: 'Content-Type', value: 'application/xml', isManagedByRuntime: false };
+  }
+  if (req.bodyType === 'raw' && req.rawType === 'html') {
+    return { key: 'Content-Type', value: 'text/html', isManagedByRuntime: false };
+  }
+  if (req.bodyType === 'raw') {
+    return { key: 'Content-Type', value: 'text/plain', isManagedByRuntime: false };
+  }
+  if (req.bodyType === 'x-www-form-urlencoded') {
+    return { key: 'Content-Type', value: 'application/x-www-form-urlencoded', isManagedByRuntime: false };
+  }
+  if (req.bodyType === 'form-data') {
+    return { key: 'Content-Type', value: 'multipart/form-data', isManagedByRuntime: true };
+  }
+  if (req.bodyType === 'binary') {
+    return { key: 'Content-Type', value: req.bodyBinaryFile?.type || 'application/octet-stream', isManagedByRuntime: false };
+  }
+  return null;
+}
+
+/**
+ * Strips JSONC comments (//, /* *\/) and trailing commas outside string literals
+ * while dropping comment-only lines cleanly for snapshot storage.
+ */
+function stripSnapshotJsonCommentsAndTrailingCommas(rawJson?: string | null): string {
+  if (!rawJson || typeof rawJson !== 'string') return '';
+  if (!rawJson.trim()) return rawJson;
+  try {
+    JSON.parse(rawJson);
+    return rawJson;
+  } catch {
+    // Strip comments and trailing commas
+  }
+
+  let stripped = '';
+  let lineBuffer = '';
+  let lineHadCode = false;
+  let lineHadComment = false;
+  let inString = false;
+  let quoteChar = '';
+  let escaped = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  const flushLine = (lineBreak: string) => {
+    if (lineHadComment && !lineHadCode) {
+      // Drop lines containing only whitespace + comments
+    } else if (lineHadComment) {
+      stripped += lineBuffer.replace(/[ \t]+$/, '') + lineBreak;
+    } else {
+      stripped += lineBuffer + lineBreak;
+    }
+    lineBuffer = '';
+    lineHadCode = false;
+    lineHadComment = false;
+  };
+
+  for (let i = 0; i < rawJson.length; i++) {
+    const ch = rawJson[i];
+    const next = rawJson[i + 1];
+
+    if (inLineComment) {
+      if (ch === '\r' && next === '\n') {
+        inLineComment = false;
+        flushLine('\r\n');
+        i++;
+      } else if (ch === '\n' || ch === '\r') {
+        inLineComment = false;
+        flushLine(ch);
+      }
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (ch === '*' && next === '/') {
+        inBlockComment = false;
+        i++;
+      } else if (ch === '\r' && next === '\n') {
+        flushLine('\r\n');
+        i++;
+      } else if (ch === '\n' || ch === '\r') {
+        flushLine(ch);
+      }
+      continue;
+    }
+
+    if (inString) {
+      lineBuffer += ch;
+      lineHadCode = true;
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === quoteChar) inString = false;
+      continue;
+    }
+
+    if (ch === '\r' && next === '\n') {
+      flushLine('\r\n');
+      i++;
+      continue;
+    }
+    if (ch === '\n' || ch === '\r') {
+      flushLine(ch);
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      inString = true;
+      quoteChar = ch;
+      escaped = false;
+      lineBuffer += ch;
+      lineHadCode = true;
+      continue;
+    }
+    if (ch === '/' && next === '/') {
+      inLineComment = true;
+      lineHadComment = true;
+      i++;
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      inBlockComment = true;
+      lineHadComment = true;
+      i++;
+      continue;
+    }
+    lineBuffer += ch;
+    if (ch !== ' ' && ch !== '\t') lineHadCode = true;
+  }
+
+  if (lineBuffer.length > 0 || (lineHadComment && lineHadCode)) {
+    stripped += lineHadComment && !lineHadCode ? '' : (lineHadComment ? lineBuffer.replace(/[ \t]+$/, '') : lineBuffer);
+  }
+
+  let output = '';
+  inString = false;
+  quoteChar = '';
+  escaped = false;
+  for (let i = 0; i < stripped.length; i++) {
+    const ch = stripped[i];
+    if (inString) {
+      output += ch;
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === quoteChar) inString = false;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      inString = true;
+      quoteChar = ch;
+      escaped = false;
+      output += ch;
+      continue;
+    }
+    if (ch === ',') {
+      let j = i + 1;
+      while (j < stripped.length && /\s/.test(stripped[j])) j++;
+      if (j < stripped.length && (stripped[j] === '}' || stripped[j] === ']')) continue;
+    }
+    output += ch;
+  }
+
+  return output.trim() ? output : '';
+}
+
 /**
  * Converts an AirREST ApiRequest into a Postman-compatible originalRequest snapshot,
- * keeping {{variable}} placeholders unresolved and sanitizing live File/Blob handles.
+ * keeping {{variable}} placeholders unresolved, stripping JSON/JSONC comments,
+ * including auto-derived Auth and Body Content-Type headers, and sanitizing File/Blob handles.
  */
 export function buildOriginalRequestSnapshot(
   req: ApiRequest,
   buildUrlObj: (rawUrl: string, params: ApiRequest['params'], pathVariables?: ApiRequest['pathVariables']) => unknown,
 ): Record<string, unknown> {
-  const headers = (req.headers || [])
-    .filter((h) => h && (String(h.key ?? '').trim() !== '' || String(h.value ?? '').trim() !== ''))
-    .map((h) => ({
-      key: String(h.key ?? ''),
-      value: String(h.value ?? ''),
-      ...(h.enabled === false ? { disabled: true } : {}),
+  const effectiveAuth = resolveSnapshotAuthHeader(req.auth);
+  const bodyContentType = resolveSnapshotBodyContentType(req);
+  const activeHeaderKeys = new Set<string>();
+  const headers: Array<Record<string, unknown>> = [];
+
+  for (const h of req.headers || []) {
+    if (!h) continue;
+    const key = String(h.key ?? '');
+    const value = String(h.value ?? '');
+    if (key.trim() === '' && value.trim() === '') continue;
+    const normalizedKey = normalizeHeaderKey(key);
+    const isDisabled = h.enabled === false;
+
+    if (!isDisabled && normalizedKey) {
+      if (effectiveAuth && normalizedKey === effectiveAuth.normalizedKey) {
+        continue;
+      }
+      if (bodyContentType?.isManagedByRuntime && normalizedKey === 'content-type') {
+        continue;
+      }
+      activeHeaderKeys.add(normalizedKey);
+    }
+
+    headers.push({
+      key,
+      value,
+      ...(isDisabled ? { disabled: true } : {}),
       ...(h.description ? { description: h.description } : {}),
-    }));
+    });
+  }
+
+  if (effectiveAuth && !activeHeaderKeys.has(effectiveAuth.normalizedKey)) {
+    activeHeaderKeys.add(effectiveAuth.normalizedKey);
+    headers.push({
+      key: effectiveAuth.key,
+      value: effectiveAuth.value,
+    });
+  }
+
+  if (bodyContentType && !activeHeaderKeys.has('content-type')) {
+    headers.push({
+      key: bodyContentType.key,
+      value: bodyContentType.value,
+    });
+  }
 
   let body: Record<string, unknown> | undefined;
   if (req.bodyType === 'json' || (req.bodyType === 'raw' && req.rawType === 'json')) {
-    body = { mode: 'raw', raw: req.bodyContent || '', options: { raw: { language: 'json' } } };
+    body = {
+      mode: 'raw',
+      raw: stripSnapshotJsonCommentsAndTrailingCommas(req.bodyContent || ''),
+      options: { raw: { language: 'json' } },
+    };
   } else if (req.bodyType === 'xml' || (req.bodyType === 'raw' && req.rawType === 'xml')) {
     body = { mode: 'raw', raw: req.bodyContent || '', options: { raw: { language: 'xml' } } };
   } else if (req.bodyType === 'raw' && req.rawType === 'html') {
@@ -728,7 +1084,7 @@ export function buildOriginalRequestSnapshot(
       mode: 'graphql',
       graphql: {
         query: req.graphqlQuery || req.bodyContent || '',
-        variables: req.graphqlVariables || '',
+        variables: stripSnapshotJsonCommentsAndTrailingCommas(req.graphqlVariables || ''),
       },
     };
   } else if (req.bodyType === 'x-www-form-urlencoded') {
@@ -854,11 +1210,11 @@ export function cloneSavedExample(example: SavedExample, regenerateId = false): 
     code: typeof cloned.code === 'number' ? cloned.code : Number(cloned.code) || 200,
     header: Array.isArray(cloned.header)
       ? cloned.header.map((h) => ({
-          key: String(h?.key ?? ''),
-          value: String(h?.value ?? ''),
-          ...(h?.disabled ? { disabled: true } : {}),
-          ...(h?.description ? { description: String(h.description) } : {}),
-        }))
+        key: String(h?.key ?? ''),
+        value: String(h?.value ?? ''),
+        ...(h?.disabled ? { disabled: true } : {}),
+        ...(h?.description ? { description: String(h.description) } : {}),
+      }))
       : [],
     cookie: Array.isArray(cloned.cookie) ? cloned.cookie.map((c) => sanitizeJsonValue({ ...c })) : [],
     body: String(cloned.body ?? ''),
@@ -1107,10 +1463,10 @@ export function applyExampleMutationToItem(
       nextExamples = nextExamples.map((ex) =>
         ex.id === mutation.exampleId
           ? {
-              ...ex,
-              name: trimmed,
-              revision: mutation.nextExampleRevision ?? ((ex.revision || 1) + 1),
-            }
+            ...ex,
+            name: trimmed,
+            revision: mutation.nextExampleRevision ?? ((ex.revision || 1) + 1),
+          }
           : ex,
       );
       nextSummaries = buildExampleSummariesFromExamples(nextExamples);
@@ -1118,10 +1474,10 @@ export function applyExampleMutationToItem(
       nextSummaries = nextSummaries.map((s) =>
         s.id === mutation.exampleId
           ? {
-              ...s,
-              name: trimmed,
-              revision: mutation.nextExampleRevision ?? ((s.revision || 1) + 1),
-            }
+            ...s,
+            name: trimmed,
+            revision: mutation.nextExampleRevision ?? ((s.revision || 1) + 1),
+          }
           : s,
       );
     }

@@ -35,6 +35,7 @@ import {
   PendingDuplicateIntent,
   PendingExampleIntent,
   DuplicateActionResult,
+  OpenExampleTab,
   SavedExample,
   SavedExampleSummary,
 } from '../types/api';
@@ -94,6 +95,7 @@ import {
   applyServerItemToLocalItem,
   buildDefaultExampleName,
   buildExampleSummariesFromExamples,
+  buildOrderedVisualTabs,
   buildSavedExampleFromResponse,
   cloneSavedExamplesList,
   cloneSavedExampleSummaries,
@@ -104,10 +106,13 @@ import {
   getExampleUtf8ByteLength,
   getItemExampleCount,
   hasUnloadedCollectionExamples,
+  isExampleTabId,
+  makeExampleTabId,
   MAX_SAVED_EXAMPLES_PER_ITEM,
   MAX_SAVED_EXAMPLES_TOTAL_BYTES_PER_ITEM,
   overlayPendingExampleIntentsOnCollections,
   preserveHydratedItemExamples,
+  syncVisualTabOrder,
   updateCollectionItemById,
   validateSavedExampleName,
 } from '../lib/examples';
@@ -635,8 +640,11 @@ export interface ApiStoreState {
   loadCollectionDetails: (
     collectionId: string
   ) => Promise<{ success: boolean; collection?: Collection; error?: string }>;
+  openExampleTabs: OpenExampleTab[];
+  tabOrder: string[];
   selectedExample: SelectedSavedExample | null;
   selectSavedExample: (selection: SelectedSavedExample | null) => void;
+  closeExampleTab: (tabId: string) => void;
   pendingExampleIntents: Record<string, PendingExampleIntent>;
   saveResponseAsExample: (input: {
     collectionId: string;
@@ -1372,6 +1380,33 @@ export function createApiStore(
             lastSyncedAt: 0,
           };
         }
+        const nextOpenExampleTabs = (state.openExampleTabs || []).map((ex) =>
+          ex.collectionId === sourceCollectionId && ex.itemId === itemId && sourceCollectionId !== targetCollectionId
+            ? {
+                ...ex,
+                collectionId: targetCollectionId,
+                id: makeExampleTabId({
+                  collectionId: targetCollectionId,
+                  itemId: ex.itemId,
+                  exampleId: ex.exampleId,
+                }),
+              }
+            : ex
+        );
+        const tabIdRewrite = new Map<string, string>();
+        (state.openExampleTabs || []).forEach((oldEx, idx) => {
+          const nextEx = nextOpenExampleTabs[idx];
+          if (nextEx && oldEx.id !== nextEx.id) {
+            tabIdRewrite.set(oldEx.id, nextEx.id);
+          }
+        });
+        const nextTabOrder = tabIdRewrite.size > 0
+          ? syncVisualTabOrder(
+              state.tabs,
+              nextOpenExampleTabs,
+              (state.tabOrder || []).map((id) => tabIdRewrite.get(id) ?? id),
+            )
+          : state.tabOrder;
         return {
           collections: state.collections.map((col) =>
             ids.includes(col.id)
@@ -1382,6 +1417,8 @@ export function createApiStore(
                 }
               : col
           ),
+          openExampleTabs: nextOpenExampleTabs,
+          tabOrder: nextTabOrder,
           selectedExample:
             state.selectedExample &&
             state.selectedExample.collectionId === sourceCollectionId &&
@@ -1452,6 +1489,21 @@ export function createApiStore(
         return inExamples || inSummaries;
       };
 
+      const pruneExampleTabsState = (
+        state: Pick<ApiStoreState, 'openExampleTabs' | 'selectedExample' | 'tabOrder' | 'tabs'>,
+        shouldKeep: (selection: SelectedSavedExample) => boolean,
+      ): Pick<ApiStoreState, 'openExampleTabs' | 'selectedExample' | 'tabOrder'> => {
+        const nextExampleTabs = (state.openExampleTabs || []).filter((ex) => shouldKeep(ex));
+        const nextSelected = state.selectedExample && shouldKeep(state.selectedExample)
+          ? state.selectedExample
+          : null;
+        return {
+          openExampleTabs: nextExampleTabs,
+          selectedExample: nextSelected,
+          tabOrder: syncVisualTabOrder(state.tabs, nextExampleTabs, state.tabOrder),
+        };
+      };
+
       const ensureSavedExamplesCapability = async (forceCloudCheck = false): Promise<boolean> => {
         const live = get();
         if (isOfflineOnly) return false;
@@ -1504,15 +1556,10 @@ export function createApiStore(
               itemId,
               serverItem,
             );
-            const nextSelected =
-              state.selectedExample &&
-              !isSelectedExampleStillPresent(nextCollections, state.selectedExample)
-                ? null
-                : state.selectedExample;
             return {
               collections: nextCollections,
               pendingExampleIntents: nextIntents,
-              selectedExample: nextSelected,
+              ...pruneExampleTabsState(state, (sel) => isSelectedExampleStillPresent(nextCollections, sel)),
             };
           }
           if (targetScope) {
@@ -1712,8 +1759,8 @@ export function createApiStore(
                       ...(opts?.preMutationCollections && state.workspaceMode === 'cloud'
                         ? { collections: opts.preMutationCollections }
                         : {}),
-                      ...(fetchErr.status === 404 && state.selectedExample?.itemId === intent.itemId
-                        ? { selectedExample: null }
+                      ...(fetchErr.status === 404
+                        ? pruneExampleTabsState(state, (sel) => sel.itemId !== intent.itemId)
                         : {}),
                     }));
                     await flushStorePersistence().catch(() => undefined);
@@ -1730,8 +1777,8 @@ export function createApiStore(
                 set((state) => ({
                   pendingExampleIntents: withoutPendingExampleIntent(state.pendingExampleIntents, intent.operationId),
                   ...(opts?.preMutationCollections ? { collections: opts.preMutationCollections } : {}),
-                  ...(err.status === 404 && state.selectedExample?.itemId === intent.itemId
-                    ? { selectedExample: null }
+                  ...(err.status === 404
+                    ? pruneExampleTabsState(state, (sel) => sel.itemId !== intent.itemId)
                     : {}),
                 }));
                 await flushStorePersistence().catch(() => undefined);
@@ -1846,6 +1893,8 @@ export function createApiStore(
       scopeCache: {},
       cloudCacheOwner: null,
       cloudCacheArchives: emptyCloudCacheArchives(),
+      openExampleTabs: [],
+      tabOrder: [],
       selectedExample: null,
       pendingExampleIntents: {},
       pendingDuplicateIntents: {},
@@ -1910,6 +1959,9 @@ export function createApiStore(
             activeEnvironmentId: transition.targetResources.activeEnvironmentId,
             tabs: transition.targetResources.tabs,
             activeTabId: transition.targetResources.activeTabId,
+            openExampleTabs: [],
+            tabOrder: transition.targetResources.tabs.map((t) => t.id),
+            selectedExample: null,
             activeResponse: null,
             tabResponses: {},
             isLoading: false,
@@ -1937,6 +1989,9 @@ export function createApiStore(
             activeEnvironmentId: transition.targetResources.activeEnvironmentId,
             tabs: transition.targetResources.tabs,
             activeTabId: transition.targetResources.activeTabId,
+            openExampleTabs: [],
+            tabOrder: transition.targetResources.tabs.map((t) => t.id),
+            selectedExample: null,
             activeResponse: null,
             tabResponses: {},
             isLoading: false,
@@ -2549,6 +2604,8 @@ export function createApiStore(
           activeEnvironmentId: transition.targetResources.activeEnvironmentId,
           tabs: transition.targetResources.tabs,
           activeTabId: transition.targetResources.activeTabId,
+          openExampleTabs: [],
+          tabOrder: transition.targetResources.tabs.map((t) => t.id),
           activeResponse: null,
           tabResponses: {},
           selectedExample: null,
@@ -2622,6 +2679,8 @@ export function createApiStore(
           activeEnvironmentId: restoredResources.activeEnvironmentId,
           tabs: restoredResources.tabs,
           activeTabId: restoredResources.activeTabId,
+          openExampleTabs: [],
+          tabOrder: restoredResources.tabs.map((t) => t.id),
           activeResponse: null,
           tabResponses: {},
           selectedExample: null,
@@ -2749,15 +2808,9 @@ export function createApiStore(
             syncedAt: Date.now(),
           });
 
-          const nextSelectedExample =
-            currentState.selectedExample &&
-            !isSelectedExampleStillPresent(deltaState.collections, currentState.selectedExample)
-              ? null
-              : currentState.selectedExample;
-
           set({
             ...deltaState,
-            selectedExample: nextSelectedExample,
+            ...pruneExampleTabsState(currentState, (sel) => isSelectedExampleStillPresent(deltaState.collections, sel)),
           });
         } catch (err: unknown) {
           if (!isAsyncOperationCurrent(operation)) return;
@@ -3436,6 +3489,8 @@ export function createApiStore(
           activeEnvironmentId: targetEntry.activeEnvironmentId || null,
           tabs: restoredTabs,
           activeTabId: restoredActiveTabId,
+          openExampleTabs: [],
+          tabOrder: restoredTabs.map((t) => t.id),
           activeResponse: null,
           tabResponses: {},
           selectedExample: null,
@@ -4332,6 +4387,7 @@ export function createApiStore(
           activeTabId: newReq.id,
           activeResponse: null,
           selectedExample: null,
+          tabOrder: [...syncVisualTabOrder(state.tabs, state.openExampleTabs, state.tabOrder), newReq.id],
           tabRevealRevision: state.tabRevealRevision + 1,
           canUndoActiveRequest: false,
           canRedoActiveRequest: false,
@@ -4372,39 +4428,108 @@ export function createApiStore(
           const nextTabResponses = { ...(state.tabResponses || {}) };
           delete nextTabResponses[id];
 
+          const ordered = buildOrderedVisualTabs(state.tabs, state.openExampleTabs, state.tabOrder);
+          const closingVisualIndex = ordered.findIndex((entry) => entry.kind === 'request' && entry.id === id);
+          const remainingOrdered = ordered.filter((entry) => entry.id !== id);
+          const nextTabOrder = remainingOrdered.map((entry) => entry.id);
           const filteredTabs = state.tabs.filter((t) => t.id !== id);
-          if (filteredTabs.length === 0) {
-            return {
-              tabs: [],
-              activeTabId: '',
-              activeResponse: null,
-              tabResponses: nextTabResponses,
-              canUndoActiveRequest: false,
-              canRedoActiveRequest: false,
-              ...(shouldResetLoading ? { isLoading: false } : {}),
-            };
-          }
 
+          const wasRequestTabActive = !state.selectedExample && state.activeTabId === id;
           let newActiveId = state.activeTabId;
-          if (state.activeTabId === id) {
+          let nextSelectedExample = state.selectedExample;
+          let nextRevealRevision = state.tabRevealRevision;
+
+          if (wasRequestTabActive) {
+            const adj =
+              remainingOrdered[closingVisualIndex] ||
+              remainingOrdered[closingVisualIndex - 1] ||
+              remainingOrdered[0];
+            if (!adj) {
+              newActiveId = '';
+              nextSelectedExample = null;
+            } else if (adj.kind === 'example') {
+              nextSelectedExample = {
+                collectionId: adj.exampleTab.collectionId,
+                itemId: adj.exampleTab.itemId,
+                exampleId: adj.exampleTab.exampleId,
+              };
+              newActiveId = filteredTabs[0]?.id || '';
+              nextRevealRevision += 1;
+            } else {
+              newActiveId = adj.id;
+              nextSelectedExample = null;
+              nextRevealRevision += 1;
+            }
+          } else if (state.activeTabId === id) {
             const closingIndex = state.tabs.findIndex((t) => t.id === id);
-            const nextTab = filteredTabs[closingIndex] || filteredTabs[closingIndex - 1] || filteredTabs[0];
-            newActiveId = nextTab.id;
+            const fallbackTab = filteredTabs[closingIndex] || filteredTabs[closingIndex - 1] || filteredTabs[0];
+            newActiveId = fallbackTab?.id || '';
           }
 
           return {
             tabs: filteredTabs,
             activeTabId: newActiveId,
-            activeResponse: nextTabResponses[newActiveId] || null,
+            activeResponse: newActiveId ? (nextTabResponses[newActiveId] || null) : null,
             tabResponses: nextTabResponses,
-            canUndoActiveRequest: (tabUndoHistory[newActiveId]?.past?.length ?? 0) > 0,
-            canRedoActiveRequest: (tabUndoHistory[newActiveId]?.future?.length ?? 0) > 0,
+            selectedExample: nextSelectedExample,
+            tabOrder: nextTabOrder,
+            tabRevealRevision: nextRevealRevision,
+            canUndoActiveRequest: newActiveId ? (tabUndoHistory[newActiveId]?.past?.length ?? 0) > 0 : false,
+            canRedoActiveRequest: newActiveId ? (tabUndoHistory[newActiveId]?.future?.length ?? 0) > 0 : false,
             ...(shouldResetLoading ? { isLoading: false } : {}),
           };
         });
       },
 
       closeOtherTabs: (id) => {
+        if (isExampleTabId(id)) {
+          const currentExample = (get().openExampleTabs || []).find((ex) => ex.id === id);
+          if (!currentExample) return;
+
+          if (activeRequestOperation) {
+            activeRequestOperation.controller.abort();
+            activeRequestOperation = null;
+            activeRequestTabId = null;
+          }
+          for (const key of Object.keys(tabUndoHistory)) {
+            delete tabUndoHistory[key];
+          }
+          for (const key of Object.keys(undoTypingTimers)) {
+            clearTimeout(undoTypingTimers[key]);
+            delete undoTypingTimers[key];
+          }
+
+          set((state) => {
+            revokeUnreferencedResponses(
+              [state.activeResponse, ...Object.values(state.tabResponses || {})],
+              [],
+              [
+                state.history,
+                ...Object.values(state.scopeCache || {}).map((e) => e.history),
+                ...Object.values(state.offlineScopeCache || {}).map((e) => e.history),
+              ]
+            );
+            return {
+              tabs: [],
+              activeTabId: '',
+              activeResponse: null,
+              tabResponses: {},
+              openExampleTabs: [currentExample],
+              tabOrder: [currentExample.id],
+              selectedExample: {
+                collectionId: currentExample.collectionId,
+                itemId: currentExample.itemId,
+                exampleId: currentExample.exampleId,
+              },
+              tabRevealRevision: state.tabRevealRevision + 1,
+              isLoading: false,
+              canUndoActiveRequest: false,
+              canRedoActiveRequest: false,
+            };
+          });
+          return;
+        }
+
         let aborted = false;
         if (activeRequestOperation && activeRequestTabId && activeRequestTabId !== id) {
           activeRequestOperation.controller.abort();
@@ -4454,6 +4579,10 @@ export function createApiStore(
             activeTabId: id,
             activeResponse: nextTabResponses[id] || null,
             tabResponses: nextTabResponses,
+            openExampleTabs: [],
+            tabOrder: [id],
+            selectedExample: null,
+            tabRevealRevision: state.tabRevealRevision + 1,
             canUndoActiveRequest: (tabUndoHistory[id]?.past?.length ?? 0) > 0,
             canRedoActiveRequest: (tabUndoHistory[id]?.future?.length ?? 0) > 0,
             ...(shouldResetLoading ? { isLoading: false } : {}),
@@ -4492,6 +4621,9 @@ export function createApiStore(
             activeTabId: '',
             activeResponse: null,
             tabResponses: {},
+            openExampleTabs: [],
+            tabOrder: [],
+            selectedExample: null,
             isLoading: false,
             canUndoActiveRequest: false,
             canRedoActiveRequest: false,
@@ -4501,38 +4633,70 @@ export function createApiStore(
 
       closeTabsToRight: (id) => {
         set((state) => {
-          const index = state.tabs.findIndex((t) => t.id === id);
-          if (index === -1) return state;
-          const remainingTabs = state.tabs.slice(0, index + 1);
-          const remainingIds = new Set(remainingTabs.map((t) => t.id));
+          const ordered = buildOrderedVisualTabs(state.tabs, state.openExampleTabs, state.tabOrder);
+          const pivotIndex = ordered.findIndex((entry) => entry.id === id);
+          if (pivotIndex === -1) return state;
+
+          const keptEntries = ordered.slice(0, pivotIndex + 1);
+          const remainingTabs = keptEntries
+            .filter((entry): entry is { kind: 'request'; id: string; tab: RequestTab } => entry.kind === 'request')
+            .map((entry) => entry.tab);
+          const remainingExampleTabs = keptEntries
+            .filter((entry): entry is { kind: 'example'; id: string; exampleTab: OpenExampleTab } => entry.kind === 'example')
+            .map((entry) => entry.exampleTab);
+          const remainingOrder = keptEntries.map((entry) => entry.id);
+          const remainingRequestIds = new Set(remainingTabs.map((t) => t.id));
 
           for (const key of Object.keys(tabUndoHistory)) {
-            if (!remainingIds.has(key)) {
+            if (!remainingRequestIds.has(key)) {
               delete tabUndoHistory[key];
             }
           }
           for (const key of Object.keys(undoTypingTimers)) {
-            if (!remainingIds.has(key)) {
+            if (!remainingRequestIds.has(key)) {
               clearTimeout(undoTypingTimers[key]);
               delete undoTypingTimers[key];
             }
           }
 
           let shouldResetLoading = false;
-          if (activeRequestOperation && activeRequestTabId && !remainingIds.has(activeRequestTabId)) {
+          if (activeRequestOperation && activeRequestTabId && !remainingRequestIds.has(activeRequestTabId)) {
             activeRequestOperation.controller.abort();
             activeRequestOperation = null;
             activeRequestTabId = null;
             shouldResetLoading = true;
           }
 
-          const wasActiveClosed = !remainingTabs.some((t) => t.id === state.activeTabId);
-          const nextActiveId = wasActiveClosed ? id : state.activeTabId;
+          const currentVisualId = state.selectedExample
+            ? makeExampleTabId(state.selectedExample)
+            : state.activeTabId;
+          const wasCurrentVisualClosed = !keptEntries.some((entry) => entry.id === currentVisualId);
+          const pivotEntry = keptEntries[pivotIndex];
+
+          let nextActiveId = remainingRequestIds.has(state.activeTabId)
+            ? state.activeTabId
+            : (remainingTabs[0]?.id || '');
+          let nextSelectedExample = state.selectedExample;
+          let nextRevealRevision = state.tabRevealRevision;
+
+          if (wasCurrentVisualClosed) {
+            nextRevealRevision += 1;
+            if (pivotEntry.kind === 'example') {
+              nextSelectedExample = {
+                collectionId: pivotEntry.exampleTab.collectionId,
+                itemId: pivotEntry.exampleTab.itemId,
+                exampleId: pivotEntry.exampleTab.exampleId,
+              };
+            } else {
+              nextSelectedExample = null;
+              nextActiveId = pivotEntry.id;
+            }
+          }
 
           const nextTabResponses: Record<string, ApiResponse> = {};
           const closedResponses: ApiResponse[] = [];
           Object.entries(state.tabResponses || {}).forEach(([tabId, res]) => {
-            if (remainingIds.has(tabId)) {
+            if (remainingRequestIds.has(tabId)) {
               nextTabResponses[tabId] = res;
             } else {
               closedResponses.push(res);
@@ -4551,10 +4715,14 @@ export function createApiStore(
           return {
             tabs: remainingTabs,
             activeTabId: nextActiveId,
-            activeResponse: nextTabResponses[nextActiveId] || null,
+            activeResponse: nextActiveId ? (nextTabResponses[nextActiveId] || null) : null,
             tabResponses: nextTabResponses,
-            canUndoActiveRequest: (tabUndoHistory[nextActiveId]?.past?.length ?? 0) > 0,
-            canRedoActiveRequest: (tabUndoHistory[nextActiveId]?.future?.length ?? 0) > 0,
+            openExampleTabs: remainingExampleTabs,
+            tabOrder: remainingOrder,
+            selectedExample: nextSelectedExample,
+            tabRevealRevision: nextRevealRevision,
+            canUndoActiveRequest: nextActiveId ? (tabUndoHistory[nextActiveId]?.past?.length ?? 0) > 0 : false,
+            canRedoActiveRequest: nextActiveId ? (tabUndoHistory[nextActiveId]?.future?.length ?? 0) > 0 : false,
             ...(shouldResetLoading ? { isLoading: false } : {}),
           };
         });
@@ -4579,10 +4747,21 @@ export function createApiStore(
           const index = state.tabs.findIndex((t) => t.id === id);
           const newTabs = [...state.tabs];
           newTabs.splice(index + 1, 0, duplicatedTab);
+          const currentOrder = syncVisualTabOrder(state.tabs, state.openExampleTabs, state.tabOrder);
+          const orderIdx = currentOrder.indexOf(id);
+          const nextOrder = [...currentOrder];
+          if (orderIdx >= 0) {
+            nextOrder.splice(orderIdx + 1, 0, duplicatedTab.id);
+          } else {
+            nextOrder.push(duplicatedTab.id);
+          }
           return {
             tabs: newTabs,
             activeTabId: duplicatedTab.id,
             activeResponse: null,
+            selectedExample: null,
+            tabOrder: nextOrder,
+            tabRevealRevision: state.tabRevealRevision + 1,
             canUndoActiveRequest: false,
             canRedoActiveRequest: false,
           };
@@ -4620,9 +4799,13 @@ export function createApiStore(
             nextTabResponses[updates.id] = nextTabResponses[state.activeTabId];
             delete nextTabResponses[state.activeTabId];
           }
+          const nextTabOrder = updates.id !== undefined && updates.id !== state.activeTabId
+            ? (state.tabOrder || []).map((tabId) => (tabId === state.activeTabId ? updates.id! : tabId))
+            : state.tabOrder;
           return {
             activeTabId: nextActiveTabId,
             tabResponses: nextTabResponses,
+            tabOrder: nextTabOrder,
             tabs: state.tabs.map((tab) => {
               if (tab.id !== state.activeTabId) return tab;
               if (updates.id !== undefined && updates.id !== tab.id) {
@@ -6157,16 +6340,12 @@ export function createApiStore(
             };
           });
 
-          const nextSelectedExample =
-            state.selectedExample &&
-            state.selectedExample.collectionId === collectionId &&
-            deletedIds.has(state.selectedExample.itemId)
-              ? null
-              : state.selectedExample;
-
           return {
             collections,
-            selectedExample: nextSelectedExample,
+            ...pruneExampleTabsState(
+              state,
+              (sel) => !(sel.collectionId === collectionId && deletedIds.has(sel.itemId)),
+            ),
             pendingExampleIntents: prunePendingExampleIntentsForTarget(
               state.pendingExampleIntents,
               collectionId,
@@ -6467,6 +6646,9 @@ export function createApiStore(
             delete nextTabResponses[sourceTabId];
           }
           const nextActiveTabId = state.activeTabId === sourceTabId ? savedRequestId : state.activeTabId;
+          const nextTabOrder = sourceTabId !== savedRequestId
+            ? (state.tabOrder || []).map((tabId) => (tabId === sourceTabId ? savedRequestId : tabId))
+            : state.tabOrder;
           return {
             collections: nextCollections,
             tabs: state.tabs.map((tab) => tab.id === sourceTabId
@@ -6474,6 +6656,7 @@ export function createApiStore(
               : tab,
             ),
             activeTabId: nextActiveTabId,
+            tabOrder: nextTabOrder,
             tabResponses: nextTabResponses,
             activeResponse: nextActiveTabId === state.activeTabId
               ? state.activeResponse
@@ -6793,16 +6976,13 @@ export function createApiStore(
                   },
                 }
               : s.offlineScopeCache;
-          const nextSelectedExample =
-            s.selectedExample &&
-            s.selectedExample.collectionId === existingId &&
-            !isSelectedExampleStillPresent(nextCollections, s.selectedExample)
-              ? null
-              : s.selectedExample;
           return {
             collections: nextCollections,
             offlineScopeCache: nextOfflineCache,
-            selectedExample: nextSelectedExample,
+            ...pruneExampleTabsState(
+              s,
+              (sel) => sel.collectionId !== existingId || isSelectedExampleStillPresent(nextCollections, sel),
+            ),
           };
         });
 
@@ -7053,7 +7233,7 @@ export function createApiStore(
             if (!isAsyncOperationCurrent(operation)) return { success: false, error: 'Operation cancelled.' };
             set((state) => ({
               collections: state.collections.filter((c) => c.id !== id),
-              selectedExample: state.selectedExample?.collectionId === id ? null : state.selectedExample,
+              ...pruneExampleTabsState(state, (sel) => sel.collectionId !== id),
               pendingExampleIntents: prunePendingExampleIntentsForTarget(state.pendingExampleIntents, id),
             }));
             return { success: true };
@@ -7070,7 +7250,7 @@ export function createApiStore(
         }
         set((state) => ({
           collections: state.collections.filter((c) => c.id !== id),
-          selectedExample: state.selectedExample?.collectionId === id ? null : state.selectedExample,
+          ...pruneExampleTabsState(state, (sel) => sel.collectionId !== id),
           pendingExampleIntents: prunePendingExampleIntentsForTarget(state.pendingExampleIntents, id),
         }));
         return { success: true };
@@ -7672,8 +7852,7 @@ export function createApiStore(
             return {
               collections: remainingActive,
               offlineScopeCache: updatedOfflineCache,
-              selectedExample:
-                state.selectedExample?.collectionId === collectionId ? null : state.selectedExample,
+              ...pruneExampleTabsState(state, (sel) => sel.collectionId !== collectionId),
             };
           });
 
@@ -7975,7 +8154,87 @@ export function createApiStore(
       },
 
       selectSavedExample: (selection) => {
-        set({ selectedExample: selection });
+        if (!selection) {
+          set({ selectedExample: null });
+          return;
+        }
+        const tabId = makeExampleTabId(selection);
+        set((state) => {
+          const exists = (state.openExampleTabs || []).some((ex) => ex.id === tabId);
+          const nextOpenExampleTabs = exists
+            ? state.openExampleTabs
+            : [...(state.openExampleTabs || []), { id: tabId, ...selection }];
+          const currentOrder = syncVisualTabOrder(state.tabs, state.openExampleTabs, state.tabOrder);
+          const nextTabOrder = exists ? currentOrder : [...currentOrder, tabId];
+          return {
+            openExampleTabs: nextOpenExampleTabs,
+            tabOrder: nextTabOrder,
+            selectedExample: selection,
+            tabRevealRevision: state.tabRevealRevision + 1,
+          };
+        });
+      },
+
+      closeExampleTab: (tabId) => {
+        set((state) => {
+          const exists = (state.openExampleTabs || []).some((ex) => ex.id === tabId);
+          if (!exists) return state;
+
+          const ordered = buildOrderedVisualTabs(state.tabs, state.openExampleTabs, state.tabOrder);
+          const closingIndex = ordered.findIndex((entry) => entry.kind === 'example' && entry.id === tabId);
+          const nextOpenExampleTabs = (state.openExampleTabs || []).filter((ex) => ex.id !== tabId);
+          const remainingOrdered = ordered.filter((entry) => entry.id !== tabId);
+          const nextTabOrder = remainingOrdered.map((entry) => entry.id);
+
+          const wasActive = Boolean(state.selectedExample && makeExampleTabId(state.selectedExample) === tabId);
+          if (!wasActive) {
+            return {
+              openExampleTabs: nextOpenExampleTabs,
+              tabOrder: nextTabOrder,
+            };
+          }
+
+          const adj =
+            remainingOrdered[closingIndex] ||
+            remainingOrdered[closingIndex - 1] ||
+            remainingOrdered[0];
+
+          if (!adj) {
+            return {
+              openExampleTabs: nextOpenExampleTabs,
+              tabOrder: nextTabOrder,
+              selectedExample: null,
+              activeTabId: '',
+              activeResponse: null,
+              canUndoActiveRequest: false,
+              canRedoActiveRequest: false,
+            };
+          }
+
+          if (adj.kind === 'example') {
+            return {
+              openExampleTabs: nextOpenExampleTabs,
+              tabOrder: nextTabOrder,
+              selectedExample: {
+                collectionId: adj.exampleTab.collectionId,
+                itemId: adj.exampleTab.itemId,
+                exampleId: adj.exampleTab.exampleId,
+              },
+              tabRevealRevision: state.tabRevealRevision + 1,
+            };
+          }
+
+          return {
+            openExampleTabs: nextOpenExampleTabs,
+            tabOrder: nextTabOrder,
+            selectedExample: null,
+            activeTabId: adj.id,
+            activeResponse: state.tabResponses?.[adj.id] || null,
+            tabRevealRevision: state.tabRevealRevision + 1,
+            canUndoActiveRequest: (tabUndoHistory[adj.id]?.past?.length ?? 0) > 0,
+            canRedoActiveRequest: (tabUndoHistory[adj.id]?.future?.length ?? 0) > 0,
+          };
+        });
       },
 
       saveResponseAsExample: async ({ collectionId, itemId, name, response, fallbackRequest }) => {
@@ -8266,6 +8525,8 @@ export function createApiStore(
 
         const preMutationCollections = get().collections;
         const prevSelectedExample = get().selectedExample;
+        const prevOpenExampleTabs = get().openExampleTabs;
+        const prevTabOrder = get().tabOrder;
         const opId = generateId();
         const baseRevision = typeof existingTarget.revision === 'number' ? existingTarget.revision : 1;
         const ownerKey = isCloud ? cloudCacheOwnerKey(cloudConfig, normalizeCloudApiUrl) : null;
@@ -8285,6 +8546,14 @@ export function createApiStore(
             }
           : null;
 
+        const targetExampleTabId = makeExampleTabId({ collectionId, itemId, exampleId });
+        const deletedWasActive = Boolean(
+          prevSelectedExample && makeExampleTabId(prevSelectedExample) === targetExampleTabId,
+        );
+        if (deletedWasActive) {
+          get().closeExampleTab(targetExampleTabId);
+        }
+
         set((state) => ({
           collections: state.collections.map((c) => {
             if (c.id !== collectionId) return c;
@@ -8293,12 +8562,15 @@ export function createApiStore(
             );
             return res.found ? { ...c, items: res.items, updatedAt: Date.now() } : c;
           }),
-          selectedExample:
-            state.selectedExample?.collectionId === collectionId &&
-            state.selectedExample?.itemId === itemId &&
-            state.selectedExample?.exampleId === exampleId
-              ? null
-              : state.selectedExample,
+          ...pruneExampleTabsState(
+            state,
+            (sel) =>
+              !(
+                sel.collectionId === collectionId &&
+                sel.itemId === itemId &&
+                sel.exampleId === exampleId
+              ),
+          ),
           ...(intent
             ? {
                 pendingExampleIntents: {
@@ -8315,6 +8587,8 @@ export function createApiStore(
           set((state) => ({
             collections: preMutationCollections,
             selectedExample: prevSelectedExample,
+            openExampleTabs: prevOpenExampleTabs,
+            tabOrder: prevTabOrder,
             pendingExampleIntents: intent
               ? withoutPendingExampleIntent(state.pendingExampleIntents, opId)
               : state.pendingExampleIntents,
@@ -8375,7 +8649,7 @@ export function createApiStore(
           }
           if (err instanceof CloudApiError && err.status === 404) {
             set((state) => ({
-              selectedExample: state.selectedExample?.itemId === itemId ? null : state.selectedExample,
+              ...pruneExampleTabsState(state, (sel) => sel.itemId !== itemId),
             }));
             return { success: false, notFound: true, error: 'Item unavailable or deleted.' };
           }
@@ -9934,6 +10208,7 @@ export function createApiStore(
             activeTabId: newTab.id,
             activeResponse: initialResponse || null,
             selectedExample: null,
+            tabOrder: [...syncVisualTabOrder(state.tabs, state.openExampleTabs, state.tabOrder), newTab.id],
             tabResponses: nextTabResponses,
             tabRevealRevision: state.tabRevealRevision + 1,
             canUndoActiveRequest: false,
@@ -10357,6 +10632,9 @@ export function createApiStore(
         } else if (state.tabs.length === 0) {
           state.activeTabId = '';
         }
+        state.openExampleTabs = [];
+        state.selectedExample = null;
+        state.tabOrder = state.tabs.map((t) => t.id);
         };
       },
     }

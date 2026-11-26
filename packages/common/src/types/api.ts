@@ -141,6 +141,13 @@ export interface SavedExampleSummary {
   body_size_bytes: number;
 }
 
+export interface OpenExampleTab {
+  id: string;
+  collectionId: string;
+  itemId: string;
+  exampleId: string;
+}
+
 export interface CollectionItem {
   id: string;
   name: string;

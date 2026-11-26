@@ -1,10 +1,17 @@
 'use client';
 
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
-import { Plus, X, Layers, ArrowRight, Trash2, Copy, MoreVertical, AlertTriangle, Bookmark } from 'lucide-react';
+import { Plus, X, Layers, ArrowRight, Trash2, Copy, MoreVertical, AlertTriangle, Bookmark, BookOpen, ExternalLink } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
 import { MethodBadge } from './MethodBadge';
 import { isRequestModified, findSavedRequestInCollections, flattenCollectionRequests } from '../lib/requestDiff';
+import {
+  buildOrderedVisualTabs,
+  findCollectionItemById,
+  getDisplayExampleSummaries,
+  isExampleTabId,
+  makeExampleTabId,
+} from '../lib/examples';
 import { useBackHandler } from '../lib/backNavigation';
 import { hasScopePermission, canModifyCollection } from '../lib/jwt';
 import { usePlatformAdapter } from '../context';
@@ -38,10 +45,14 @@ interface ContextMenuPosition {
 
 export const TabBar: React.FC = () => {
   const tabs = useApiStore((state) => state.tabs);
+  const openExampleTabs = useApiStore((state) => state.openExampleTabs);
+  const tabOrder = useApiStore((state) => state.tabOrder);
   const collections = useApiStore((state) => state.collections);
   const activeTabId = useApiStore((state) => state.activeTabId);
   const selectedExample = useApiStore((state) => state.selectedExample);
   const selectSavedExample = useApiStore((state) => state.selectSavedExample);
+  const closeExampleTab = useApiStore((state) => state.closeExampleTab);
+  const openRequestInTab = useApiStore((state) => state.openRequestInTab);
   const tabRevealRevision = useApiStore((state) => state.tabRevealRevision);
   const setActiveTabId = useApiStore((state) => state.setActiveTabId);
   const createTab = useApiStore((state) => state.createTab);
@@ -94,17 +105,19 @@ export const TabBar: React.FC = () => {
   const tabIdsRef = useRef<string[]>([]);
   const overflowFrameRef = useRef<number | null>(null);
   const resizeFrameRef = useRef<number | null>(null);
-  const activeTabIdRef = useRef(activeTabId);
+  const visibleTabs = (tabs || []).filter(Boolean);
+  const visualTabs = buildOrderedVisualTabs(visibleTabs, openExampleTabs || [], tabOrder || []);
+  const activeVisualTabId = selectedExample ? makeExampleTabId(selectedExample) : activeTabId;
+  const activeTabIdRef = useRef(activeVisualTabId);
   const activeTabWasVisibleRef = useRef(true);
   const tabOverflowRef = useRef<TabOverflowCounts>(tabOverflow);
   const pendingRevealRef = useRef(false);
   const revealPassCountRef = useRef(0);
-  const visibleTabs = (tabs || []).filter(Boolean);
-  const hasTabs = visibleTabs.length > 0;
-  tabIdsRef.current = visibleTabs.map((tab) => tab.id);
-  activeTabIdRef.current = activeTabId;
+  const hasTabs = visualTabs.length > 0;
+  tabIdsRef.current = visualTabs.map((entry) => entry.id);
+  activeTabIdRef.current = activeVisualTabId;
   tabOverflowRef.current = tabOverflow;
-  const tabIds = visibleTabs.map((tab) => tab.id).join('|');
+  const tabIds = visualTabs.map((entry) => entry.id).join('|');
 
   const captureActiveTabVisibility = useCallback(() => {
     const viewport = tabViewportRef.current;
@@ -262,7 +275,7 @@ export const TabBar: React.FC = () => {
     if (!changed) {
       pendingRevealRef.current = false;
     }
-  }, [activeTabId, tabRevealRevision, tabIds, revealActiveTab, measureTabOverflow]);
+  }, [activeVisualTabId, tabRevealRevision, tabIds, revealActiveTab, measureTabOverflow]);
 
   useLayoutEffect(() => {
     if (!pendingRevealRef.current) return;
@@ -373,10 +386,15 @@ export const TabBar: React.FC = () => {
   }, [clearPendingCloseQueue, closeTab, setActiveTabId]);
 
   const handleRequestCloseScope = (scope: TabCloseScope) => {
+    if (scope.type === 'single' && isExampleTabId(scope.tabId)) {
+      closeExampleTab(scope.tabId);
+      return;
+    }
+
     const plan = buildTabClosePlan(
-      visibleTabs,
+      visualTabs,
       scope,
-      (tab) => isRequestModified(tab, collections),
+      (entry) => entry.kind === 'request' && isRequestModified(entry.tab, collections),
     );
     if (plan.targetTabs.length === 0) return;
 
@@ -395,7 +413,11 @@ export const TabBar: React.FC = () => {
     }
 
     for (const cleanId of plan.cleanTabIds) {
-      closeTab(cleanId);
+      if (isExampleTabId(cleanId)) {
+        closeExampleTab(cleanId);
+      } else {
+        closeTab(cleanId);
+      }
     }
 
     // Blur any focused editor/input before opening the confirmation modal so floating
@@ -404,10 +426,15 @@ export const TabBar: React.FC = () => {
       document.activeElement.blur();
     }
 
-    const [firstDirtyTab, ...remainingDirtyTabs] = plan.dirtyTabs;
+    const dirtyRequestTabs = plan.dirtyTabs
+      .filter((entry): entry is Extract<typeof entry, { kind: 'request' }> => entry.kind === 'request')
+      .map((entry) => entry.tab);
+    if (dirtyRequestTabs.length === 0) return;
+
+    const [firstDirtyTab, ...remainingDirtyTabs] = dirtyRequestTabs;
     const remainingIds = remainingDirtyTabs.map((tab) => tab.id);
     pendingCloseTabIdsRef.current = remainingIds;
-    setCloseBatchTotal(plan.dirtyTabs.length > 1 ? plan.dirtyTabs.length : 0);
+    setCloseBatchTotal(dirtyRequestTabs.length > 1 ? dirtyRequestTabs.length : 0);
     setCloseBatchRemainingCount(remainingIds.length);
     setActiveTabId(firstDirtyTab.id);
     setUnsavedConfirmTab(firstDirtyTab);
@@ -426,13 +453,17 @@ export const TabBar: React.FC = () => {
   selectedExampleRef.current = selectedExample;
   const lastNativeCloseAtRef = useRef(0);
 
-  // Close the active example viewer or request tab with Alt+W (all platforms) or Ctrl+W / Cmd+W (desktop)
+  // Close the active example tab or request tab with Alt+W (all platforms) or Ctrl+W / Cmd+W (desktop)
   useEffect(() => {
     const triggerCloseActiveTab = () => {
       if (shortcutBlockedRef.current || hasOpenBlockingModal()) return false;
 
       if (selectedExampleRef.current) {
-        selectSavedExample(null);
+        if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur();
+        }
+        setContextMenu(null);
+        closeExampleTab(makeExampleTabId(selectedExampleRef.current));
         return true;
       }
 
@@ -571,10 +602,20 @@ export const TabBar: React.FC = () => {
   };
 
   const activeContextTabIndex = contextMenu?.tabId
-    ? visibleTabs.findIndex((t) => t.id === contextMenu.tabId)
+    ? visualTabs.findIndex((t) => t.id === contextMenu.tabId)
     : -1;
-  const isOnlyTab = visibleTabs.length <= 1;
-  const isLastTab = activeContextTabIndex === visibleTabs.length - 1;
+  const contextExampleTab = contextMenu?.tabId && isExampleTabId(contextMenu.tabId)
+    ? (openExampleTabs || []).find((ex) => ex.id === contextMenu.tabId)
+    : undefined;
+  const contextExampleParentRequest = contextExampleTab
+    ? (() => {
+        const col = collections.find((c) => c.id === contextExampleTab.collectionId);
+        const item = col ? findCollectionItemById(col.items, contextExampleTab.itemId) : undefined;
+        return item?.type === 'request' ? item.request : undefined;
+      })()
+    : undefined;
+  const isOnlyTab = visualTabs.length <= 1;
+  const isLastTab = activeContextTabIndex === visualTabs.length - 1;
 
   const scrollTabsByPage = (direction: -1 | 1) => {
     const viewport = tabViewportRef.current;
@@ -612,8 +653,94 @@ export const TabBar: React.FC = () => {
           className={hasTabs ? 'min-w-0 overflow-x-auto scrollbar-none' : 'hidden'}
         >
           <div ref={tabTrackRef} className="flex w-max items-center gap-1.5">
-          {visibleTabs.map((tab) => {
-            const isActive = tab.id === activeTabId;
+          {visualTabs.map((entry) => {
+            if (entry.kind === 'example') {
+              const exTab = entry.exampleTab;
+              const isActive = entry.id === activeVisualTabId;
+              const col = collections.find((c) => c.id === exTab.collectionId);
+              const item = col ? findCollectionItemById(col.items, exTab.itemId) : undefined;
+              const fullEx = item?.examples?.find((e) => e.id === exTab.exampleId);
+              const summary = item ? getDisplayExampleSummaries(item).find((s) => s.id === exTab.exampleId) : undefined;
+              const exampleName = fullEx?.name ?? summary?.name ?? 'Saved Example';
+              const codeNumber = fullEx?.code ?? summary?.code;
+              const statusBadgeClass =
+                typeof codeNumber !== 'number'
+                  ? 'bg-sky-500/10 text-sky-600 dark:text-sky-300'
+                  : codeNumber >= 200 && codeNumber < 300
+                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                    : codeNumber >= 300 && codeNumber < 400
+                      ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400'
+                      : codeNumber >= 400 && codeNumber < 500
+                        ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                        : 'bg-rose-500/15 text-rose-600 dark:text-rose-400';
+              const tabTitle = item && col
+                ? `${exampleName} — ${item.name} (${col.name})`
+                : exampleName;
+
+              return (
+                <div
+                  key={entry.id}
+                  ref={(element) => {
+                    if (element) tabElementRefs.current.set(entry.id, element);
+                    else tabElementRefs.current.delete(entry.id);
+                  }}
+                  onClick={() =>
+                    selectSavedExample({
+                      collectionId: exTab.collectionId,
+                      itemId: exTab.itemId,
+                      exampleId: exTab.exampleId,
+                    })
+                  }
+                  onContextMenu={(e) => handleTabContextMenu(e, entry.id)}
+                  onAuxClick={(e) => handleTabAuxClick(e, entry.id)}
+                  className={`group flex shrink-0 items-center gap-1.5 max-w-[215px] cursor-pointer rounded-t-md border-t-2 px-2.5 py-1 text-xs font-medium transition-all select-none ${
+                    isActive
+                      ? 'border-sky-500 bg-card text-tx-primary shadow-xs'
+                      : 'border-transparent bg-element/50 text-tx-muted hover:bg-hover hover:text-tx-primary'
+                  }`}
+                >
+                  <BookOpen className="h-3 w-3 shrink-0 text-sky-500" />
+                  {typeof codeNumber === 'number' && (
+                    <span className={`shrink-0 rounded px-1 py-0.2 font-mono text-[10px] font-bold ${statusBadgeClass}`}>
+                      {codeNumber}
+                    </span>
+                  )}
+                  <span className="truncate max-w-[105px]" title={tabTitle}>
+                    {exampleName}
+                  </span>
+
+                  <button
+                    type="button"
+                    aria-label={`Actions for ${exampleName}`}
+                    className="rounded p-1 text-tx-muted hover:bg-hover md:hidden"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      setContextMenu({
+                        x: Math.max(10, Math.min(rect.left, window.innerWidth - 210)),
+                        y: Math.max(10, Math.min(rect.bottom, window.innerHeight - 230)),
+                        tabId: entry.id,
+                      });
+                    }}
+                  ><MoreVertical className="h-4 w-4" /></button>
+
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleRequestCloseTab(entry.id);
+                    }}
+                    className="ml-auto rounded p-0.5 text-tx-muted opacity-60 hover:bg-hover hover:text-tx-primary group-hover:opacity-100 transition"
+                    title={isActive ? `Close example tab (${closeTabShortcutLabel})` : 'Close example tab'}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              );
+            }
+
+            const tab = entry.tab;
+            const isActive = tab.id === activeVisualTabId;
             const displayName = tab.name || tab.url || 'Untitled Request';
             const isDirty = isRequestModified(tab, collections);
             const saved = findSavedRequestInCollections(collections, tab.id);
@@ -784,17 +911,33 @@ export const TabBar: React.FC = () => {
 
               <div className="h-px bg-line my-1 mx-1" />
 
-              <button
-                type="button"
-                onClick={() => {
-                  duplicateTab(contextMenu.tabId!);
-                  setContextMenu(null);
-                }}
-                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition text-left"
-              >
-                <Copy className="h-3.5 w-3.5 text-tx-muted" />
-                <span>Duplicate Tab</span>
-              </button>
+              {contextExampleTab ? (
+                contextExampleParentRequest && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      openRequestInTab(contextExampleParentRequest);
+                      setContextMenu(null);
+                    }}
+                    className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition text-left"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5 text-tx-muted" />
+                    <span>Open Parent Request</span>
+                  </button>
+                )
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    duplicateTab(contextMenu.tabId!);
+                    setContextMenu(null);
+                  }}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition text-left"
+                >
+                  <Copy className="h-3.5 w-3.5 text-tx-muted" />
+                  <span>Duplicate Tab</span>
+                </button>
+              )}
 
               <button
                 type="button"

@@ -4,8 +4,10 @@ import java.net.URI
 
 internal data class UpdateAsset(val name: String, val url: String, val size: Long, val digest: String?)
 
-/** Release and transfer rules without Android I/O, also used by JVM tests. */
+/** Release validation and ABI selection rules without Android I/O, also used by JVM tests. */
 internal object UpdatePolicy {
+    private const val OFFICIAL_REPO_PREFIX = "/adiputera/AirREST/releases"
+
     fun version(value: String): String {
         val normalized = value.replace(Regex("^(android-|desktop-)?v?"), "")
         require(Regex("[0-9]+\\.[0-9]+\\.[0-9]+").matches(normalized)) {
@@ -23,7 +25,32 @@ internal object UpdatePolicy {
         return parts[0] * 1_000_000 + parts[1] * 1_000 + parts[2]
     }
 
-    fun selectAsset(assets: List<UpdateAsset>, release: String, abis: List<String>): UpdateAsset {
+    private fun validateGitHubUri(url: String, expectedPath: String, errorMessage: String): String {
+        val uri = URI(url)
+        require(
+            uri.scheme == "https" &&
+                uri.host == "github.com" &&
+                uri.port == -1 &&
+                uri.userInfo == null &&
+                uri.query == null &&
+                uri.fragment == null &&
+                uri.rawPath == expectedPath
+        ) {
+            errorMessage
+        }
+        return url
+    }
+
+    fun validateReleaseUrl(url: String, release: String): String {
+        version(release)
+        return validateGitHubUri(
+            url,
+            "$OFFICIAL_REPO_PREFIX/tag/$release",
+            "The release page must come from the official AirREST repository.",
+        )
+    }
+
+    fun selectAssetOrNull(assets: List<UpdateAsset>, release: String, abis: List<String>): UpdateAsset? {
         val version = version(release)
         val architectures = abis.mapNotNull {
             when (it) {
@@ -34,13 +61,12 @@ internal object UpdatePolicy {
         }
         val asset = architectures.firstNotNullOfOrNull { arch ->
             assets.find { it.name == "airrest-$version-android-$arch.apk" }
-        } ?: throw IllegalArgumentException("No APK is available for this device's architecture.")
-        val uri = URI(asset.url)
-        require(uri.scheme == "https" && uri.host == "github.com" && uri.port == -1 &&
-            uri.userInfo == null && uri.query == null && uri.fragment == null &&
-            uri.rawPath == "/adiputera/AirREST/releases/download/$release/${asset.name}") {
-            "The APK must come from the official AirREST release."
-        }
+        } ?: return null
+        validateGitHubUri(
+            asset.url,
+            "$OFFICIAL_REPO_PREFIX/download/$release/${asset.name}",
+            "The APK must come from the official AirREST release.",
+        )
         require(asset.size > 0) { "The release does not contain a valid APK size." }
         require(asset.digest == null || Regex("sha256:[a-fA-F0-9]{64}").matches(asset.digest)) {
             "The release contains an invalid APK checksum."
@@ -48,18 +74,7 @@ internal object UpdatePolicy {
         return asset
     }
 
-    // DownloadManager states: pending, running, paused, successful, failed.
-    fun phase(status: Int): String = when (status) {
-        1 -> "pending"
-        2 -> "downloading"
-        4 -> "paused"
-        8 -> "verifying"
-        else -> "failed"
-    }
-
-    fun progress(bytes: Long, total: Long): Int? =
-        if (total <= 0) null else ((bytes.toDouble() / total) * 100).toInt().coerceIn(0, 99)
-
-    fun sameSigners(installed: Set<String>, archive: Set<String>): Boolean =
-        installed.isNotEmpty() && installed == archive
+    fun selectAsset(assets: List<UpdateAsset>, release: String, abis: List<String>): UpdateAsset =
+        selectAssetOrNull(assets, release, abis)
+            ?: throw IllegalArgumentException("No APK is available for this device's architecture.")
 }

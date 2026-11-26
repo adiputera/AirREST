@@ -1,15 +1,13 @@
 {
   "$schema": "../gen/schemas/android-schema.json",
   "identifier": "android-back",
-  "description": "Android navigation and native APK updates from the main window",
+  "description": "Android navigation and external-browser APK updates from the main window",
   "platforms": ["android"],
   "windows": ["main"],
   "permissions": [
     "core:app:allow-exit",
-    "android-update:allow-status",
-    "android-update:allow-start",
-    "android-update:allow-cancel",
-    "android-update:allow-install",
+    "android-update:allow-download",
+    "android-update:allow-browse",
     "native-credential:allow-read",
     "native-credential:allow-write",
     "native-credential:allow-remove"
