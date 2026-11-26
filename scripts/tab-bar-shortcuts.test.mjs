@@ -328,3 +328,60 @@ test('T-R5 & T-R6: native close-tab listener only registers on Apple desktop wit
   assert.equal(evalWithNav({ userAgentData: { platform: 'Linux' }, platform: 'Linux x86_64' }), false);
   assert.equal(evalWithNav({ userAgentData: { platform: 'Windows' }, platform: 'Win32' }), false);
 });
+
+test('getRequestShortcutLabels renders Ctrl+ shortcuts on Ubuntu/Windows and Command (⌘) shortcuts on macOS', () => {
+  const source = fs.readFileSync(
+    new URL('../packages/common/src/components/tabBarShortcuts.ts', import.meta.url),
+    'utf8',
+  );
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+
+  const evalLabels = (nav, explicitIsMac) => {
+    const exports = {};
+    vm.runInNewContext(compiled, { exports, navigator: nav });
+    const result = explicitIsMac === undefined
+      ? exports.getRequestShortcutLabels()
+      : exports.getRequestShortcutLabels(explicitIsMac);
+    return { ...result };
+  };
+
+  assert.deepEqual(evalLabels({ userAgentData: { platform: 'Linux' }, platform: 'Linux x86_64' }), {
+    send: 'Ctrl+Enter',
+    save: 'Ctrl+S',
+    undo: 'Ctrl+Z',
+    redo: 'Ctrl+Y',
+    paste: 'Ctrl+V',
+  });
+  assert.deepEqual(evalLabels({ userAgentData: { platform: 'Windows' }, platform: 'Win32' }), {
+    send: 'Ctrl+Enter',
+    save: 'Ctrl+S',
+    undo: 'Ctrl+Z',
+    redo: 'Ctrl+Y',
+    paste: 'Ctrl+V',
+  });
+  assert.deepEqual(evalLabels({ userAgentData: { platform: 'macOS' }, platform: 'MacIntel' }), {
+    send: '⌘+Enter',
+    save: '⌘+S',
+    undo: '⌘+Z',
+    redo: '⌘+Shift+Z',
+    paste: '⌘+V',
+  });
+  assert.equal(evalLabels(undefined, false).send, 'Ctrl+Enter');
+  assert.equal(evalLabels(undefined, true).send, '⌘+Enter');
+
+  const requestEditorSrc = fs.readFileSync(
+    new URL('../packages/common/src/components/RequestEditor.tsx', import.meta.url),
+    'utf8',
+  );
+  const emptyStudioSrc = fs.readFileSync(
+    new URL('../packages/common/src/components/EmptyStudioView.tsx', import.meta.url),
+    'utf8',
+  );
+  assert.match(requestEditorSrc, /getRequestShortcutLabels\(\)/);
+  assert.match(requestEditorSrc, /\{shortcutLabels\.send\}/);
+  assert.equal(requestEditorSrc.includes('>⌘+Enter</kbd>'), false);
+  assert.match(emptyStudioSrc, /getRequestShortcutLabels\(\)/);
+  assert.match(emptyStudioSrc, /\{shortcutLabels\.paste\}/);
+});

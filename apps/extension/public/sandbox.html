@@ -67,13 +67,17 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
         if (!event.source || event.source !== window.parent) return;
         if (!isValidOrigin(event.origin)) return;
         if (!event.data || typeof event.data !== 'object') return;
-        const { id, script, request, response, environment = {}, variables = {} } = event.data;
+        const { id, script, request, response, environment = {}, variables = {}, iterationData = {} } = event.data;
         if (!id || !script) return;
 
         const currentEnv = Object.create(null);
         Object.assign(currentEnv, environment || {});
         const currentVars = Object.create(null);
         Object.assign(currentVars, variables || {});
+        const currentIterationData = Object.create(null);
+        if (iterationData && typeof iterationData === 'object' && !Array.isArray(iterationData)) {
+          Object.assign(currentIterationData, iterationData);
+        }
 
         function isForbiddenKey(k) {
           return k === '__proto__' || k === 'constructor' || k === 'prototype';
@@ -367,6 +371,298 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
           };
         }
 
+        function deepEqualValues(a, b, seen) {
+          if (a === b) return true;
+          if (a !== a && b !== b) return true; // NaN
+          if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+          if (a instanceof Date && b instanceof Date) return a.getTime() === b.getTime();
+          if (a instanceof RegExp && b instanceof RegExp) return String(a) === String(b);
+          const aArr = Array.isArray(a);
+          const bArr = Array.isArray(b);
+          if (aArr !== bArr) return false;
+          const pairs = seen || [];
+          for (let i = 0; i < pairs.length; i++) {
+            if (pairs[i][0] === a && pairs[i][1] === b) return true;
+          }
+          pairs.push([a, b]);
+          if (aArr) {
+            if (a.length !== b.length) return false;
+            for (let i = 0; i < a.length; i++) {
+              if (!deepEqualValues(a[i], b[i], pairs)) return false;
+            }
+            return true;
+          }
+          const aKeys = Object.keys(a);
+          const bKeys = Object.keys(b);
+          if (aKeys.length !== bKeys.length) return false;
+          for (let i = 0; i < aKeys.length; i++) {
+            const k = aKeys[i];
+            if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
+            if (!deepEqualValues(a[k], b[k], pairs)) return false;
+          }
+          return true;
+        }
+
+        function formatExpectVal(v, depth) {
+          const d = depth || 0;
+          if (v === null) return 'null';
+          if (v === undefined) return 'undefined';
+          if (typeof v === 'string') return JSON.stringify(v);
+          if (typeof v !== 'object') return String(v);
+          if (d >= 2) return Array.isArray(v) ? '[Array]' : '[Object]';
+          try {
+            return JSON.stringify(v);
+          } catch {
+            return String(v);
+          }
+        }
+
+        function resolveTypeName(v) {
+          if (v === null) return 'null';
+          if (v === undefined) return 'undefined';
+          if (Array.isArray(v)) return 'array';
+          return typeof v;
+        }
+
+        function buildPmExpect(actual) {
+          const state = { inverted: false, deep: false };
+
+          function check(cond, posMsg, negMsg) {
+            const passed = state.inverted ? !cond : Boolean(cond);
+            if (!passed) {
+              throw new Error(state.inverted ? negMsg : posMsg);
+            }
+          }
+
+          function beAssertion(expected) {
+            const pass = state.deep ? deepEqualValues(actual, expected) : actual === expected;
+            check(
+              pass,
+              'Expected ' + formatExpectVal(actual) + ' to be ' + formatExpectVal(expected),
+              'Expected ' + formatExpectVal(actual) + ' not to be ' + formatExpectVal(expected)
+            );
+            return chain;
+          }
+
+          const chain = {};
+          const passThroughProps = ['to', 'been', 'is', 'that', 'which', 'and', 'has', 'have', 'with', 'at', 'of', 'same'];
+          for (let i = 0; i < passThroughProps.length; i++) {
+            const prop = passThroughProps[i];
+            Object.defineProperty(chain, prop, {
+              enumerable: true,
+              configurable: true,
+              get: function () { return chain; }
+            });
+          }
+
+          Object.defineProperty(chain, 'not', {
+            enumerable: true,
+            configurable: true,
+            get: function () { state.inverted = !state.inverted; return chain; }
+          });
+          Object.defineProperty(chain, 'deep', {
+            enumerable: true,
+            configurable: true,
+            get: function () { state.deep = true; return chain; }
+          });
+
+          const methods = {
+            a: function (expectedType) {
+              const t = String(expectedType || '').toLowerCase();
+              const actualType = resolveTypeName(actual);
+              check(
+                actualType === t,
+                'Expected ' + formatExpectVal(actual) + ' to be a ' + t + ' (got ' + actualType + ')',
+                'Expected ' + formatExpectVal(actual) + ' not to be a ' + t
+              );
+              return chain;
+            },
+            an: function (expectedType) { return methods.a(expectedType); },
+            equal: function (expected) {
+              const pass = state.deep ? deepEqualValues(actual, expected) : actual == expected;
+              check(
+                pass,
+                'Expected ' + formatExpectVal(actual) + ' to equal ' + formatExpectVal(expected),
+                'Expected ' + formatExpectVal(actual) + ' not to equal ' + formatExpectVal(expected)
+              );
+              return chain;
+            },
+            equals: function (expected) { return methods.equal(expected); },
+            eq: function (expected) {
+              const pass = state.deep ? deepEqualValues(actual, expected) : actual === expected;
+              check(
+                pass,
+                'Expected ' + formatExpectVal(actual) + ' to strictly equal ' + formatExpectVal(expected),
+                'Expected ' + formatExpectVal(actual) + ' not to strictly equal ' + formatExpectVal(expected)
+              );
+              return chain;
+            },
+            eql: function (expected) {
+              check(
+                deepEqualValues(actual, expected),
+                'Expected ' + formatExpectVal(actual) + ' to deeply equal ' + formatExpectVal(expected),
+                'Expected ' + formatExpectVal(actual) + ' not to deeply equal ' + formatExpectVal(expected)
+              );
+              return chain;
+            },
+            include: function (expected) {
+              let found = false;
+              if (typeof actual === 'string') {
+                found = actual.indexOf(String(expected)) >= 0;
+              } else if (Array.isArray(actual)) {
+                for (let i = 0; i < actual.length; i++) {
+                  if (state.deep ? deepEqualValues(actual[i], expected) : actual[i] === expected) {
+                    found = true;
+                    break;
+                  }
+                }
+              } else if (actual && typeof actual === 'object' && expected && typeof expected === 'object') {
+                found = true;
+                const keys = Object.keys(expected);
+                for (let i = 0; i < keys.length; i++) {
+                  const k = keys[i];
+                  if (!Object.prototype.hasOwnProperty.call(actual, k) || !deepEqualValues(actual[k], expected[k])) {
+                    found = false;
+                    break;
+                  }
+                }
+              }
+              check(
+                found,
+                'Expected ' + formatExpectVal(actual) + ' to include ' + formatExpectVal(expected),
+                'Expected ' + formatExpectVal(actual) + ' not to include ' + formatExpectVal(expected)
+              );
+              return chain;
+            },
+            includes: function (expected) { return methods.include(expected); },
+            contain: function (expected) { return methods.include(expected); },
+            contains: function (expected) { return methods.include(expected); },
+            property: function (propName, expectedVal) {
+              const key = String(propName);
+              const hasProp = actual !== null && actual !== undefined && Object.prototype.hasOwnProperty.call(Object(actual), key);
+              if (arguments.length >= 2 && hasProp) {
+                const valMatch = state.deep ? deepEqualValues(actual[key], expectedVal) : actual[key] === expectedVal;
+                check(
+                  hasProp && valMatch,
+                  'Expected property ' + key + ' to equal ' + formatExpectVal(expectedVal) + ' (got ' + formatExpectVal(actual[key]) + ')',
+                  'Expected property ' + key + ' not to equal ' + formatExpectVal(expectedVal)
+                );
+              } else {
+                check(
+                  hasProp,
+                  'Expected ' + formatExpectVal(actual) + ' to have property ' + key,
+                  'Expected ' + formatExpectVal(actual) + ' not to have property ' + key
+                );
+              }
+              return chain;
+            },
+            lengthOf: function (expectedLen) {
+              const actualLen = actual !== null && actual !== undefined && typeof actual.length === 'number'
+                ? actual.length
+                : (actual && typeof actual === 'object' ? Object.keys(actual).length : undefined);
+              check(
+                actualLen === expectedLen,
+                'Expected length ' + expectedLen + ' but got ' + actualLen,
+                'Expected length not to be ' + expectedLen
+              );
+              return chain;
+            },
+            above: function (n) {
+              check(typeof actual === 'number' && actual > n, 'Expected ' + actual + ' to be above ' + n, 'Expected ' + actual + ' not to be above ' + n);
+              return chain;
+            },
+            gt: function (n) { return methods.above(n); },
+            below: function (n) {
+              check(typeof actual === 'number' && actual < n, 'Expected ' + actual + ' to be below ' + n, 'Expected ' + actual + ' not to be below ' + n);
+              return chain;
+            },
+            lt: function (n) { return methods.below(n); },
+            least: function (n) {
+              check(typeof actual === 'number' && actual >= n, 'Expected ' + actual + ' to be at least ' + n, 'Expected ' + actual + ' not to be at least ' + n);
+              return chain;
+            },
+            gte: function (n) { return methods.least(n); },
+            most: function (n) {
+              check(typeof actual === 'number' && actual <= n, 'Expected ' + actual + ' to be at most ' + n, 'Expected ' + actual + ' not to be at most ' + n);
+              return chain;
+            },
+            lte: function (n) { return methods.most(n); },
+            match: function (regex) {
+              const re = regex instanceof RegExp ? regex : new RegExp(String(regex));
+              check(typeof actual === 'string' && re.test(actual), 'Expected ' + formatExpectVal(actual) + ' to match ' + String(re), 'Expected ' + formatExpectVal(actual) + ' not to match ' + String(re));
+              return chain;
+            },
+            oneOf: function (list) {
+              const arr = Array.isArray(list) ? list : [];
+              let found = false;
+              for (let i = 0; i < arr.length; i++) {
+                if (arr[i] === actual) { found = true; break; }
+              }
+              check(found, 'Expected ' + formatExpectVal(actual) + ' to be one of ' + formatExpectVal(arr), 'Expected ' + formatExpectVal(actual) + ' not to be one of ' + formatExpectVal(arr));
+              return chain;
+            }
+          };
+
+          const getterChecks = {
+            ok: function () { check(Boolean(actual), 'Expected ' + formatExpectVal(actual) + ' to be truthy', 'Expected ' + formatExpectVal(actual) + ' to be falsy'); return chain; },
+            true: function () { check(actual === true, 'Expected ' + formatExpectVal(actual) + ' to be true', 'Expected ' + formatExpectVal(actual) + ' not to be true'); return chain; },
+            false: function () { check(actual === false, 'Expected ' + formatExpectVal(actual) + ' to be false', 'Expected ' + formatExpectVal(actual) + ' not to be false'); return chain; },
+            null: function () { check(actual === null, 'Expected ' + formatExpectVal(actual) + ' to be null', 'Expected ' + formatExpectVal(actual) + ' not to be null'); return chain; },
+            undefined: function () { check(actual === undefined, 'Expected ' + formatExpectVal(actual) + ' to be undefined', 'Expected ' + formatExpectVal(actual) + ' not to be undefined'); return chain; },
+            exist: function () { check(actual !== null && actual !== undefined, 'Expected value to exist', 'Expected value not to exist'); return chain; },
+            empty: function () {
+              let isEmpty = false;
+              if (typeof actual === 'string' || Array.isArray(actual)) isEmpty = actual.length === 0;
+              else if (actual && typeof actual === 'object') isEmpty = Object.keys(actual).length === 0;
+              check(isEmpty, 'Expected ' + formatExpectVal(actual) + ' to be empty', 'Expected ' + formatExpectVal(actual) + ' not to be empty');
+              return chain;
+            }
+          };
+
+          const mKeys = Object.keys(methods);
+          for (let i = 0; i < mKeys.length; i++) {
+            const k = mKeys[i];
+            chain[k] = methods[k];
+            beAssertion[k] = methods[k];
+          }
+          const gKeys = Object.keys(getterChecks);
+          for (let i = 0; i < gKeys.length; i++) {
+            const gk = gKeys[i];
+            Object.defineProperty(chain, gk, { enumerable: true, configurable: true, get: getterChecks[gk] });
+            Object.defineProperty(beAssertion, gk, { enumerable: true, configurable: true, get: getterChecks[gk] });
+          }
+          for (let i = 0; i < passThroughProps.length; i++) {
+            const p = passThroughProps[i];
+            Object.defineProperty(beAssertion, p, { enumerable: true, configurable: true, get: function () { return chain; } });
+          }
+          Object.defineProperty(beAssertion, 'not', {
+            enumerable: true,
+            configurable: true,
+            get: function () { state.inverted = !state.inverted; return chain; }
+          });
+          Object.defineProperty(beAssertion, 'deep', {
+            enumerable: true,
+            configurable: true,
+            get: function () { state.deep = true; return chain; }
+          });
+          Object.defineProperty(chain, 'be', {
+            enumerable: true,
+            configurable: true,
+            get: function () { return beAssertion; }
+          });
+          Object.defineProperty(beAssertion, 'be', {
+            enumerable: true,
+            configurable: true,
+            get: function () { return beAssertion; }
+          });
+          chain.length = methods.lengthOf;
+          return chain;
+        }
+
+        const collectedTestResults = [];
+        let nextRequestSet = false;
+        let nextRequestTarget = null;
+
         const pm = {
           request: createPmRequest(request),
           environment: {
@@ -390,6 +686,7 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
           variables: {
             get: function (k) {
               if (Object.prototype.hasOwnProperty.call(currentVars, k)) return currentVars[k];
+              if (Object.prototype.hasOwnProperty.call(currentIterationData, k)) return currentIterationData[k];
               if (Object.prototype.hasOwnProperty.call(currentEnv, k)) return currentEnv[k];
               return undefined;
             },
@@ -405,9 +702,33 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
               return res;
             }
           },
+          iterationData: {
+            get: function (k) {
+              if (!k || isForbiddenKey(k)) return undefined;
+              return Object.prototype.hasOwnProperty.call(currentIterationData, k) ? currentIterationData[k] : undefined;
+            },
+            has: function (k) {
+              if (!k || isForbiddenKey(k)) return false;
+              return Object.prototype.hasOwnProperty.call(currentIterationData, k);
+            },
+            toObject: function () {
+              const res = {};
+              for (const key of Object.keys(currentIterationData)) {
+                if (!isForbiddenKey(key)) res[key] = currentIterationData[key];
+              }
+              return res;
+            }
+          },
+          execution: {
+            setNextRequest: function (target) {
+              nextRequestSet = true;
+              nextRequestTarget = target === null ? null : String(target);
+            }
+          },
           response: response ? {
             code: response.status,
             status: response.statusText,
+            responseTime: response.timeMs || 0,
             headers: response.headers || {},
             json: function () {
               return typeof response.data === 'object' && response.data !== null
@@ -420,16 +741,92 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
             to: {
               have: {
                 status: function (code) {
+                  if (typeof code === 'string') {
+                    if (String(response.statusText || '').toLowerCase() !== code.toLowerCase()) {
+                      throw new Error('Expected status "' + code + '" but got "' + response.statusText + '"');
+                    }
+                    return;
+                  }
                   if (response.status !== code) {
                     throw new Error('Expected status code ' + code + ' but got ' + response.status);
+                  }
+                },
+                header: function (key, expectedValue) {
+                  const targetKey = String(key || '').toLowerCase();
+                  const hdrs = response.headers || {};
+                  let matchedValue;
+                  let found = false;
+                  for (const hKey of Object.keys(hdrs)) {
+                    if (String(hKey).toLowerCase() === targetKey) {
+                      found = true;
+                      matchedValue = hdrs[hKey];
+                      break;
+                    }
+                  }
+                  if (!found) {
+                    throw new Error('Expected response header "' + key + '" to exist');
+                  }
+                  if (arguments.length >= 2 && String(matchedValue) !== String(expectedValue)) {
+                    throw new Error('Expected header "' + key + '" to equal "' + expectedValue + '" but got "' + matchedValue + '"');
+                  }
+                },
+                jsonBody: function (pathOrObj, expectedVal) {
+                  let parsed;
+                  try {
+                    parsed = typeof response.data === 'object' && response.data !== null
+                      ? response.data
+                      : JSON.parse(response.data || '');
+                  } catch {
+                    throw new Error('Expected response body to be valid JSON');
+                  }
+                  if (arguments.length === 0) return;
+                  if (typeof pathOrObj === 'string') {
+                    const segments = pathOrObj.split('.').filter(Boolean);
+                    let cursor = parsed;
+                    for (let i = 0; i < segments.length; i++) {
+                      if (cursor === null || cursor === undefined || !Object.prototype.hasOwnProperty.call(Object(cursor), segments[i])) {
+                        throw new Error('Expected JSON body to have path "' + pathOrObj + '"');
+                      }
+                      cursor = cursor[segments[i]];
+                    }
+                    if (arguments.length >= 2 && !deepEqualValues(cursor, expectedVal)) {
+                      throw new Error('Expected JSON body path "' + pathOrObj + '" to equal ' + formatExpectVal(expectedVal) + ' but got ' + formatExpectVal(cursor));
+                    }
+                  } else if (pathOrObj && typeof pathOrObj === 'object') {
+                    if (!deepEqualValues(parsed, pathOrObj)) {
+                      throw new Error('Expected JSON body to equal ' + formatExpectVal(pathOrObj));
+                    }
+                  }
+                },
+                body: function (expected) {
+                  const text = typeof response.data === 'string' ? response.data : JSON.stringify(response.data || '');
+                  if (arguments.length === 0) {
+                    if (!text) throw new Error('Expected response body not to be empty');
+                    return;
+                  }
+                  if (expected instanceof RegExp) {
+                    if (!expected.test(text)) throw new Error('Expected response body to match ' + String(expected));
+                    return;
+                  }
+                  if (text !== String(expected)) {
+                    throw new Error('Expected response body to equal ' + formatExpectVal(expected));
                   }
                 }
               }
             }
           } : undefined,
           test: function (name, fn) {
+            const testName = String(name || 'Unnamed Test');
+            const startedAt = Date.now();
             try {
               if (typeof fn === 'function') fn();
+              if (collectedTestResults.length < 250) {
+                collectedTestResults.push({
+                  name: testName,
+                  passed: true,
+                  durationMs: Math.max(0, Date.now() - startedAt)
+                });
+              }
             } catch (err) {
               let testErr = 'Test failed';
               try {
@@ -437,20 +834,18 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
               } catch {
                 testErr = 'Test failed';
               }
-              throw new Error('Test [' + name + '] failed: ' + testErr);
+              if (collectedTestResults.length < 250) {
+                collectedTestResults.push({
+                  name: testName,
+                  passed: false,
+                  error: testErr,
+                  durationMs: Math.max(0, Date.now() - startedAt)
+                });
+              }
             }
           },
           expect: function (actual) {
-            return {
-              to: {
-                be: function (expected) {
-                  if (actual !== expected) throw new Error('Expected ' + expected + ' but got ' + actual);
-                },
-                equal: function (expected) {
-                  if (actual != expected) throw new Error('Expected ' + expected + ' but got ' + actual);
-                }
-              }
-            };
+            return buildPmExpect(actual);
           }
         };
 
@@ -471,7 +866,11 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
           getGlobalVariable: function (k) {
             return Object.prototype.hasOwnProperty.call(currentVars, k) ? currentVars[k] : undefined;
           },
-          clearGlobalVariable: function (k) { delete currentVars[k]; }
+          clearGlobalVariable: function (k) { delete currentVars[k]; },
+          setNextRequest: function (target) {
+            nextRequestSet = true;
+            nextRequestTarget = target === null ? null : String(target);
+          }
         };
 
         const rawBody = response
@@ -482,6 +881,19 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
         const responseHeaders = response ? (response.headers || {}) : {};
         const tests = {};
         const targetOrigin = event.origin;
+
+        function appendLegacyTests() {
+          for (const key of Object.keys(tests)) {
+            if (isForbiddenKey(key)) continue;
+            if (collectedTestResults.length >= 250) break;
+            const passed = Boolean(tests[key]);
+            collectedTestResults.push({
+              name: String(key),
+              passed: passed,
+              ...(passed ? {} : { error: 'Legacy assertion "' + String(key) + '" evaluated to false' })
+            });
+          }
+        }
 
         try {
           const fn = new Function(
@@ -496,22 +908,32 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
             script
           );
           fn(pm, postman, rawBody, rawBody, responseCode, responseTime, responseHeaders, tests);
+          appendLegacyTests();
           const mutatedRequest = pm.request ? {
             url: pm.request.url.toString(),
             queryParams: pm.request.url.query.all(),
             headers: pm.request.headers.all()
           } : undefined;
 
+          const outPayload = {
+            id: id,
+            success: true,
+            environment: Object.assign({}, currentEnv),
+            variables: Object.assign({}, currentVars),
+            mutatedRequest: mutatedRequest
+          };
+          if (collectedTestResults.length > 0) {
+            outPayload.testResults = collectedTestResults;
+          }
+          if (nextRequestSet) {
+            outPayload.nextRequest = nextRequestTarget;
+          }
+
           if (event.source && typeof event.source.postMessage === 'function') {
-            event.source.postMessage({
-              id: id,
-              success: true,
-              environment: Object.assign({}, currentEnv),
-              variables: Object.assign({}, currentVars),
-              mutatedRequest: mutatedRequest
-            }, targetOrigin);
+            event.source.postMessage(outPayload, targetOrigin);
           }
         } catch (err) {
+          appendLegacyTests();
           let errorMessage = 'Script execution failed.';
           try {
             if (err && typeof err.message === 'string') {
@@ -523,14 +945,21 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
             errorMessage = 'Script execution failed.';
           }
           errorMessage = describeInternalParameterRedefinition(errorMessage, script);
+          const errPayload = {
+            id: id,
+            success: false,
+            error: errorMessage,
+            environment: Object.assign({}, currentEnv),
+            variables: Object.assign({}, currentVars)
+          };
+          if (collectedTestResults.length > 0) {
+            errPayload.testResults = collectedTestResults;
+          }
+          if (nextRequestSet) {
+            errPayload.nextRequest = nextRequestTarget;
+          }
           if (event.source && typeof event.source.postMessage === 'function') {
-            event.source.postMessage({
-              id: id,
-              success: false,
-              error: errorMessage,
-              environment: Object.assign({}, currentEnv),
-              variables: Object.assign({}, currentVars)
-            }, targetOrigin);
+            event.source.postMessage(errPayload, targetOrigin);
           }
         }
       });

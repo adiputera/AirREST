@@ -27,6 +27,8 @@ import {
   BookmarkPlus,
   Loader2,
   X,
+  FlaskConical,
+  XCircle,
 } from 'lucide-react';
 import { useApiStore, type SaveRequestToCollectionResult } from '../store/useApiStore';
 import { requestHostPermission } from '../lib/hostPermissions';
@@ -296,7 +298,7 @@ export const ResponseViewer: React.FC = () => {
   const netCategory = activeResponse?.netErrorCategory;
   const netCode = activeResponse?.netErrorCode;
 
-  const [activeTab, setActiveTab] = useState<'body' | 'headers' | 'scripts'>('body');
+  const [activeTab, setActiveTab] = useState<'body' | 'headers' | 'scripts' | 'tests'>('body');
   const [viewMode, setViewMode] = useState<'pretty' | 'raw'>('pretty');
   const [copied, setCopied] = useState(false);
   const [imgDimensions, setImgDimensions] = useState<{ width: number; height: number } | null>(null);
@@ -859,6 +861,34 @@ export const ResponseViewer: React.FC = () => {
                 {Object.keys(activeResponse.headers || {}).length}
               </span>
             </button>
+
+            {activeResponse.testResults && activeResponse.testResults.length > 0 && (() => {
+              const passed = activeResponse.testResults.filter((t) => t.passed).length;
+              const total = activeResponse.testResults.length;
+              const allPassed = passed === total;
+              return (
+                <button
+                  onClick={() => setActiveTab('tests')}
+                  className={`flex items-center gap-1.5 pb-1 border-b-2 transition ${
+                    activeTab === 'tests'
+                      ? 'border-sky-500 text-tx-primary font-semibold'
+                      : 'border-transparent hover:text-tx-secondary'
+                  }`}
+                >
+                  <FlaskConical className="h-3.5 w-3.5" />
+                  <span>Test Results</span>
+                  <span
+                    className={`rounded-full px-1.5 text-[10px] font-semibold ${
+                      allPassed
+                        ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                        : 'bg-rose-500/15 text-rose-600 dark:text-rose-400'
+                    }`}
+                  >
+                    {passed}/{total}
+                  </span>
+                </button>
+              );
+            })()}
           </div>
 
           {activeTab === 'body' && (
@@ -1415,6 +1445,55 @@ export const ResponseViewer: React.FC = () => {
               </div>
             )}
           </div>
+        ) : activeTab === 'tests' ? (
+          <div className="shrink-0 space-y-2">
+            {activeResponse.testResults && activeResponse.testResults.length > 0 ? (
+              activeResponse.testResults.map((t, idx) => (
+                <div
+                  key={`${t.name}-${idx}`}
+                  className={`rounded-xl border px-3.5 py-2.5 text-xs ${
+                    t.passed
+                      ? 'border-emerald-500/25 bg-emerald-500/5'
+                      : 'border-rose-500/30 bg-rose-500/5'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      {t.passed ? (
+                        <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+                      ) : (
+                        <XCircle className="h-4 w-4 shrink-0 text-rose-500" />
+                      )}
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                          t.passed
+                            ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                            : 'bg-rose-500/15 text-rose-600 dark:text-rose-400'
+                        }`}
+                      >
+                        {t.passed ? 'PASS' : 'FAIL'}
+                      </span>
+                      <span className="font-medium text-tx-primary break-words">{t.name}</span>
+                    </div>
+                    {typeof t.durationMs === 'number' && (
+                      <span className="shrink-0 font-mono text-[10px] text-tx-muted">
+                        {t.durationMs} ms
+                      </span>
+                    )}
+                  </div>
+                  {!t.passed && t.error && (
+                    <div className="mt-1.5 rounded-lg bg-rose-500/10 px-2.5 py-1.5 font-mono text-[11px] text-rose-600 dark:text-rose-300 break-words">
+                      {t.error}
+                    </div>
+                  )}
+                </div>
+              ))
+            ) : (
+              <div className="rounded-xl border border-dashed border-line p-6 text-center text-xs text-tx-muted">
+                No test assertions recorded for this response.
+              </div>
+            )}
+          </div>
         ) : (
           /* Response Headers Table */
           <div className="shrink-0 overflow-x-auto rounded-xl border border-line bg-surface">
@@ -1487,6 +1566,34 @@ export const ResponseViewer: React.FC = () => {
                       {Object.keys(activeResponse.headers || {}).length}
                     </span>
                   </button>
+                  {activeResponse.testResults && activeResponse.testResults.length > 0 && (() => {
+                    const passed = activeResponse.testResults.filter((t) => t.passed).length;
+                    const total = activeResponse.testResults.length;
+                    const allPassed = passed === total;
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('tests')}
+                        className={`flex items-center gap-1 pb-0.5 border-b-2 font-medium transition ${
+                          activeTab === 'tests'
+                            ? 'border-sky-500 text-tx-primary font-semibold'
+                            : 'border-transparent text-tx-muted hover:text-tx-secondary'
+                        }`}
+                      >
+                        <FlaskConical className="h-3.5 w-3.5" />
+                        <span>Test Results</span>
+                        <span
+                          className={`rounded-full px-1 text-[10px] font-semibold ${
+                            allPassed
+                              ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                              : 'bg-rose-500/15 text-rose-600 dark:text-rose-400'
+                          }`}
+                        >
+                          {passed}/{total}
+                        </span>
+                      </button>
+                    );
+                  })()}
                 </div>
 
                 {activeTab === 'body' && isJson && (
@@ -1623,6 +1730,55 @@ export const ResponseViewer: React.FC = () => {
                     className="h-full w-full"
                   />
                 )
+              ) : activeTab === 'tests' ? (
+                <div className="space-y-2 overflow-y-auto h-full pr-1">
+                  {activeResponse.testResults && activeResponse.testResults.length > 0 ? (
+                    activeResponse.testResults.map((t, idx) => (
+                      <div
+                        key={`${t.name}-${idx}`}
+                        className={`rounded-xl border px-3.5 py-2.5 text-xs ${
+                          t.passed
+                            ? 'border-emerald-500/25 bg-emerald-500/5'
+                            : 'border-rose-500/30 bg-rose-500/5'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            {t.passed ? (
+                              <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+                            ) : (
+                              <XCircle className="h-4 w-4 shrink-0 text-rose-500" />
+                            )}
+                            <span
+                              className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                                t.passed
+                                  ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                                  : 'bg-rose-500/15 text-rose-600 dark:text-rose-400'
+                              }`}
+                            >
+                              {t.passed ? 'PASS' : 'FAIL'}
+                            </span>
+                            <span className="font-medium text-tx-primary break-words">{t.name}</span>
+                          </div>
+                          {typeof t.durationMs === 'number' && (
+                            <span className="shrink-0 font-mono text-[10px] text-tx-muted">
+                              {t.durationMs} ms
+                            </span>
+                          )}
+                        </div>
+                        {!t.passed && t.error && (
+                          <div className="mt-1.5 rounded-lg bg-rose-500/10 px-2.5 py-1.5 font-mono text-[11px] text-rose-600 dark:text-rose-300 break-words">
+                            {t.error}
+                          </div>
+                        )}
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-line p-6 text-center text-xs text-tx-muted">
+                      No test assertions recorded for this response.
+                    </div>
+                  )}
+                </div>
               ) : (
                 <div className="overflow-hidden rounded-xl border border-line bg-surface">
                   <table className="w-full text-left text-xs font-mono">

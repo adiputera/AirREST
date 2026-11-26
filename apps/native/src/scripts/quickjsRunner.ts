@@ -121,10 +121,14 @@ export async function runQuickJsGuest(
         const _JSON_parse = JSON.parse;
         const _Object_assign = Object.assign;
         const _Object_keys = Object.keys;
+        const _Object_defineProperty = Object.defineProperty;
         const _Object_prototype_hasOwnProperty = Object.prototype.hasOwnProperty;
         const _Object_getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
         const _Array_isArray = Array.isArray;
+        const _RegExp = RegExp;
+        const _Date = Date;
         const _String = String;
+        const _Number_isNaN = Number.isNaN;
         const _String_prototype_charCodeAt = String.prototype.charCodeAt;
         const _String_prototype_slice = String.prototype.slice;
         const _String_prototype_toLowerCase = String.prototype.toLowerCase;
@@ -291,8 +295,35 @@ export async function runQuickJsGuest(
           return '{"url":' + urlJson + ',"queryParams":' + qJson + ',"headers":' + hJson + '}';
         }
 
+        function safeSerializeTestResults(list) {
+          if (!_Array_isArray(list) || list.length === 0) return 'null';
+          const count = list.length > 250 ? 250 : list.length;
+          let out = '[';
+          for (let i = 0; i < count; i++) {
+            if (i > 0) out += ',';
+            const t = list[i] || {};
+            const nameStr = _String(t.name || 'Unnamed Test');
+            const passedBool = t.passed === true ? 'true' : 'false';
+            let itemJson = '{"name":' + _JSON_stringify(nameStr) + ',"passed":' + passedBool;
+            if (typeof t.error === 'string' && t.error) {
+              let errStr = t.error;
+              if (_getUtf8ByteLength(errStr) > 4096) {
+                errStr = _truncateUtf8(errStr, 4096);
+              }
+              itemJson += ',"error":' + _JSON_stringify(errStr);
+            }
+            if (typeof t.durationMs === 'number' && t.durationMs >= 0) {
+              itemJson += ',"durationMs":' + _String(Math.round(t.durationMs));
+            }
+            itemJson += '}';
+            out += itemJson;
+          }
+          out += ']';
+          return out;
+        }
+
         // Safe envelope serialization that operates entirely on primitive strings
-        function safeSerializeEnvelope(success, error, env, vars, mutatedReq) {
+        function safeSerializeEnvelope(success, error, env, vars, mutatedReq, testResults, hasNextReq, nextReqVal) {
           const envJson = safeSerializeMap(env);
           const varsJson = safeSerializeMap(vars);
 
@@ -301,15 +332,20 @@ export async function runQuickJsGuest(
           }
 
           const mutJson = safeSerializeMutatedReq(mutatedReq);
+          const testsJson = safeSerializeTestResults(testResults);
+          const testsField = testsJson !== 'null' ? ',"testResults":' + testsJson : '';
+          const nextReqField = hasNextReq
+            ? ',"nextRequest":' + (nextReqVal === null ? 'null' : _JSON_stringify(_String(nextReqVal)))
+            : '';
 
           if (success) {
-            return '{"success":true,"environment":' + envJson + ',"variables":' + varsJson + ',"mutatedRequest":' + mutJson + '}';
+            return '{"success":true,"environment":' + envJson + ',"variables":' + varsJson + ',"mutatedRequest":' + mutJson + testsField + nextReqField + '}';
           } else {
             let errStr = _String(error || '');
             if (_getUtf8ByteLength(errStr) > 32768) {
               errStr = _truncateUtf8(errStr, 32768);
             }
-            return '{"success":false,"error":' + _JSON_stringify(errStr) + ',"environment":' + envJson + ',"variables":' + varsJson + '}';
+            return '{"success":false,"error":' + _JSON_stringify(errStr) + ',"environment":' + envJson + ',"variables":' + varsJson + testsField + nextReqField + '}';
           }
         }
 
@@ -646,13 +682,305 @@ export async function runQuickJsGuest(
           };
         }
 
+        function deepEqualValues(a, b, seen) {
+          if (a === b) return true;
+          if (a !== a && b !== b) return true;
+          if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+          if (a instanceof _Date && b instanceof _Date) return a.getTime() === b.getTime();
+          if (a instanceof _RegExp && b instanceof _RegExp) return _String(a) === _String(b);
+          const aArr = _Array_isArray(a);
+          const bArr = _Array_isArray(b);
+          if (aArr !== bArr) return false;
+          const pairs = seen || [];
+          for (let i = 0; i < pairs.length; i++) {
+            if (pairs[i][0] === a && pairs[i][1] === b) return true;
+          }
+          pairs.push([a, b]);
+          if (aArr) {
+            if (a.length !== b.length) return false;
+            for (let i = 0; i < a.length; i++) {
+              if (!deepEqualValues(a[i], b[i], pairs)) return false;
+            }
+            return true;
+          }
+          const aKeys = _Object_keys(a);
+          const bKeys = _Object_keys(b);
+          if (aKeys.length !== bKeys.length) return false;
+          for (let i = 0; i < aKeys.length; i++) {
+            const k = aKeys[i];
+            if (!_Reflect_apply(_Object_prototype_hasOwnProperty, b, [k])) return false;
+            if (!deepEqualValues(a[k], b[k], pairs)) return false;
+          }
+          return true;
+        }
+
+        function formatExpectVal(v, depth) {
+          const d = depth || 0;
+          if (v === null) return 'null';
+          if (v === undefined) return 'undefined';
+          if (typeof v === 'string') return _JSON_stringify(v);
+          if (typeof v !== 'object') return _String(v);
+          if (d >= 2) return _Array_isArray(v) ? '[Array]' : '[Object]';
+          try {
+            return _JSON_stringify(v);
+          } catch {
+            return _String(v);
+          }
+        }
+
+        function resolveTypeName(v) {
+          if (v === null) return 'null';
+          if (v === undefined) return 'undefined';
+          if (_Array_isArray(v)) return 'array';
+          return typeof v;
+        }
+
+        function buildPmExpect(actual) {
+          const state = { inverted: false, deep: false };
+
+          function check(cond, posMsg, negMsg) {
+            const passed = state.inverted ? !cond : Boolean(cond);
+            if (!passed) {
+              throw new Error(state.inverted ? negMsg : posMsg);
+            }
+          }
+
+          function beAssertion(expected) {
+            const pass = state.deep ? deepEqualValues(actual, expected) : actual === expected;
+            check(
+              pass,
+              'Expected ' + formatExpectVal(actual) + ' to be ' + formatExpectVal(expected),
+              'Expected ' + formatExpectVal(actual) + ' not to be ' + formatExpectVal(expected)
+            );
+            return chain;
+          }
+
+          const chain = {};
+          const passThroughProps = ['to', 'been', 'is', 'that', 'which', 'and', 'has', 'have', 'with', 'at', 'of', 'same'];
+          for (let i = 0; i < passThroughProps.length; i++) {
+            const prop = passThroughProps[i];
+            _Reflect_apply(_Object_defineProperty, Object, [chain, prop, {
+              enumerable: true,
+              configurable: true,
+              get: function() { return chain; }
+            }]);
+          }
+
+          _Reflect_apply(_Object_defineProperty, Object, [chain, 'not', {
+            enumerable: true,
+            configurable: true,
+            get: function() { state.inverted = !state.inverted; return chain; }
+          }]);
+          _Reflect_apply(_Object_defineProperty, Object, [chain, 'deep', {
+            enumerable: true,
+            configurable: true,
+            get: function() { state.deep = true; return chain; }
+          }]);
+
+          const methods = {
+            a: function(expectedType) {
+              const t = _Reflect_apply(_String_prototype_toLowerCase, _String(expectedType || ''), []);
+              const actualType = resolveTypeName(actual);
+              check(
+                actualType === t,
+                'Expected ' + formatExpectVal(actual) + ' to be a ' + t + ' (got ' + actualType + ')',
+                'Expected ' + formatExpectVal(actual) + ' not to be a ' + t
+              );
+              return chain;
+            },
+            an: function(expectedType) { return methods.a(expectedType); },
+            equal: function(expected) {
+              const pass = state.deep ? deepEqualValues(actual, expected) : actual == expected;
+              check(
+                pass,
+                'Expected ' + formatExpectVal(actual) + ' to equal ' + formatExpectVal(expected),
+                'Expected ' + formatExpectVal(actual) + ' not to equal ' + formatExpectVal(expected)
+              );
+              return chain;
+            },
+            equals: function(expected) { return methods.equal(expected); },
+            eq: function(expected) {
+              const pass = state.deep ? deepEqualValues(actual, expected) : actual === expected;
+              check(
+                pass,
+                'Expected ' + formatExpectVal(actual) + ' to strictly equal ' + formatExpectVal(expected),
+                'Expected ' + formatExpectVal(actual) + ' not to strictly equal ' + formatExpectVal(expected)
+              );
+              return chain;
+            },
+            eql: function(expected) {
+              check(
+                deepEqualValues(actual, expected),
+                'Expected ' + formatExpectVal(actual) + ' to deeply equal ' + formatExpectVal(expected),
+                'Expected ' + formatExpectVal(actual) + ' not to deeply equal ' + formatExpectVal(expected)
+              );
+              return chain;
+            },
+            include: function(expected) {
+              let found = false;
+              if (typeof actual === 'string') {
+                found = actual.indexOf(_String(expected)) >= 0;
+              } else if (_Array_isArray(actual)) {
+                for (let i = 0; i < actual.length; i++) {
+                  if (state.deep ? deepEqualValues(actual[i], expected) : actual[i] === expected) {
+                    found = true;
+                    break;
+                  }
+                }
+              } else if (actual && typeof actual === 'object' && expected && typeof expected === 'object') {
+                found = true;
+                const keys = _Object_keys(expected);
+                for (let i = 0; i < keys.length; i++) {
+                  const k = keys[i];
+                  if (!_Reflect_apply(_Object_prototype_hasOwnProperty, actual, [k]) || !deepEqualValues(actual[k], expected[k])) {
+                    found = false;
+                    break;
+                  }
+                }
+              }
+              check(
+                found,
+                'Expected ' + formatExpectVal(actual) + ' to include ' + formatExpectVal(expected),
+                'Expected ' + formatExpectVal(actual) + ' not to include ' + formatExpectVal(expected)
+              );
+              return chain;
+            },
+            includes: function(expected) { return methods.include(expected); },
+            contain: function(expected) { return methods.include(expected); },
+            contains: function(expected) { return methods.include(expected); },
+            property: function(propName, expectedVal) {
+              const key = _String(propName);
+              const hasProp = actual !== null && actual !== undefined && _Reflect_apply(_Object_prototype_hasOwnProperty, Object(actual), [key]);
+              if (arguments.length >= 2 && hasProp) {
+                const valMatch = state.deep ? deepEqualValues(actual[key], expectedVal) : actual[key] === expectedVal;
+                check(
+                  hasProp && valMatch,
+                  'Expected property ' + key + ' to equal ' + formatExpectVal(expectedVal) + ' (got ' + formatExpectVal(actual[key]) + ')',
+                  'Expected property ' + key + ' not to equal ' + formatExpectVal(expectedVal)
+                );
+              } else {
+                check(
+                  hasProp,
+                  'Expected ' + formatExpectVal(actual) + ' to have property ' + key,
+                  'Expected ' + formatExpectVal(actual) + ' not to have property ' + key
+                );
+              }
+              return chain;
+            },
+            lengthOf: function(expectedLen) {
+              const actualLen = actual !== null && actual !== undefined && typeof actual.length === 'number'
+                ? actual.length
+                : (actual && typeof actual === 'object' ? _Object_keys(actual).length : undefined);
+              check(
+                actualLen === expectedLen,
+                'Expected length ' + expectedLen + ' but got ' + actualLen,
+                'Expected length not to be ' + expectedLen
+              );
+              return chain;
+            },
+            above: function(n) {
+              check(typeof actual === 'number' && actual > n, 'Expected ' + actual + ' to be above ' + n, 'Expected ' + actual + ' not to be above ' + n);
+              return chain;
+            },
+            gt: function(n) { return methods.above(n); },
+            below: function(n) {
+              check(typeof actual === 'number' && actual < n, 'Expected ' + actual + ' to be below ' + n, 'Expected ' + actual + ' not to be below ' + n);
+              return chain;
+            },
+            lt: function(n) { return methods.below(n); },
+            least: function(n) {
+              check(typeof actual === 'number' && actual >= n, 'Expected ' + actual + ' to be at least ' + n, 'Expected ' + actual + ' not to be at least ' + n);
+              return chain;
+            },
+            gte: function(n) { return methods.least(n); },
+            most: function(n) {
+              check(typeof actual === 'number' && actual <= n, 'Expected ' + actual + ' to be at most ' + n, 'Expected ' + actual + ' not to be at most ' + n);
+              return chain;
+            },
+            lte: function(n) { return methods.most(n); },
+            match: function(regex) {
+              const re = regex instanceof _RegExp ? regex : new _RegExp(_String(regex));
+              check(typeof actual === 'string' && re.test(actual), 'Expected ' + formatExpectVal(actual) + ' to match ' + _String(re), 'Expected ' + formatExpectVal(actual) + ' not to match ' + _String(re));
+              return chain;
+            },
+            oneOf: function(list) {
+              const arr = _Array_isArray(list) ? list : [];
+              let found = false;
+              for (let i = 0; i < arr.length; i++) {
+                if (arr[i] === actual) { found = true; break; }
+              }
+              check(found, 'Expected ' + formatExpectVal(actual) + ' to be one of ' + formatExpectVal(arr), 'Expected ' + formatExpectVal(actual) + ' not to be one of ' + formatExpectVal(arr));
+              return chain;
+            }
+          };
+
+          const getterChecks = {
+            ok: function() { check(Boolean(actual), 'Expected ' + formatExpectVal(actual) + ' to be truthy', 'Expected ' + formatExpectVal(actual) + ' to be falsy'); return chain; },
+            true: function() { check(actual === true, 'Expected ' + formatExpectVal(actual) + ' to be true', 'Expected ' + formatExpectVal(actual) + ' not to be true'); return chain; },
+            false: function() { check(actual === false, 'Expected ' + formatExpectVal(actual) + ' to be false', 'Expected ' + formatExpectVal(actual) + ' not to be false'); return chain; },
+            null: function() { check(actual === null, 'Expected ' + formatExpectVal(actual) + ' to be null', 'Expected ' + formatExpectVal(actual) + ' not to be null'); return chain; },
+            undefined: function() { check(actual === undefined, 'Expected ' + formatExpectVal(actual) + ' to be undefined', 'Expected ' + formatExpectVal(actual) + ' not to be undefined'); return chain; },
+            exist: function() { check(actual !== null && actual !== undefined, 'Expected value to exist', 'Expected value not to exist'); return chain; },
+            empty: function() {
+              let isEmpty = false;
+              if (typeof actual === 'string' || _Array_isArray(actual)) isEmpty = actual.length === 0;
+              else if (actual && typeof actual === 'object') isEmpty = _Object_keys(actual).length === 0;
+              check(isEmpty, 'Expected ' + formatExpectVal(actual) + ' to be empty', 'Expected ' + formatExpectVal(actual) + ' not to be empty');
+              return chain;
+            }
+          };
+
+          const mKeys = _Object_keys(methods);
+          for (let i = 0; i < mKeys.length; i++) {
+            const k = mKeys[i];
+            chain[k] = methods[k];
+            beAssertion[k] = methods[k];
+          }
+          const gKeys = _Object_keys(getterChecks);
+          for (let i = 0; i < gKeys.length; i++) {
+            const gk = gKeys[i];
+            _Reflect_apply(_Object_defineProperty, Object, [chain, gk, { enumerable: true, configurable: true, get: getterChecks[gk] }]);
+            _Reflect_apply(_Object_defineProperty, Object, [beAssertion, gk, { enumerable: true, configurable: true, get: getterChecks[gk] }]);
+          }
+          for (let i = 0; i < passThroughProps.length; i++) {
+            const p = passThroughProps[i];
+            _Reflect_apply(_Object_defineProperty, Object, [beAssertion, p, { enumerable: true, configurable: true, get: function() { return chain; } }]);
+          }
+          _Reflect_apply(_Object_defineProperty, Object, [beAssertion, 'not', {
+            enumerable: true,
+            configurable: true,
+            get: function() { state.inverted = !state.inverted; return chain; }
+          }]);
+          _Reflect_apply(_Object_defineProperty, Object, [beAssertion, 'deep', {
+            enumerable: true,
+            configurable: true,
+            get: function() { state.deep = true; return chain; }
+          }]);
+          _Reflect_apply(_Object_defineProperty, Object, [chain, 'be', {
+            enumerable: true,
+            configurable: true,
+            get: function() { return beAssertion; }
+          }]);
+          _Reflect_apply(_Object_defineProperty, Object, [beAssertion, 'be', {
+            enumerable: true,
+            configurable: true,
+            get: function() { return beAssertion; }
+          }]);
+          chain.length = methods.lengthOf;
+          return chain;
+        }
+
         globalThis.__runAirrestScript = function(payloadJson) {
           const payload = _JSON_parse(payloadJson);
           const initialEnv = _Object_assign({}, payload.environment || {});
           const initialVars = _Object_assign({}, payload.variables || {});
           const currentEnv = _Object_assign({}, payload.environment || {});
           const currentVars = _Object_assign({}, payload.variables || {});
+          const currentIterationData = _Object_assign({}, payload.iterationData || {});
           const response = payload.response;
+          const collectedTestResults = [];
+          let nextRequestSet = false;
+          let nextRequestTarget = null;
 
           const pm = {
             request: createPmRequest(payload.request),
@@ -667,16 +995,50 @@ export async function runQuickJsGuest(
               toObject: function() { return _Object_assign({}, currentEnv); }
             },
             variables: {
-              get: function(k) { return currentVars[k] !== undefined ? currentVars[k] : currentEnv[k]; },
+              get: function(k) {
+                if (currentVars[k] !== undefined) return currentVars[k];
+                if (_Reflect_apply(_Object_prototype_hasOwnProperty, currentIterationData, [k]) && !isForbiddenKey(k)) {
+                  return currentIterationData[k];
+                }
+                return currentEnv[k];
+              },
               set: function(k, v) {
                 if (isForbiddenKey(k)) return;
                 currentVars[k] = _String(v);
               },
               toObject: function() { return _Object_assign({}, currentVars); }
             },
+            iterationData: {
+              get: function(k) {
+                if (!k || isForbiddenKey(k)) return undefined;
+                return _Reflect_apply(_Object_prototype_hasOwnProperty, currentIterationData, [k])
+                  ? currentIterationData[k]
+                  : undefined;
+              },
+              has: function(k) {
+                if (!k || isForbiddenKey(k)) return false;
+                return _Reflect_apply(_Object_prototype_hasOwnProperty, currentIterationData, [k]);
+              },
+              toObject: function() {
+                const res = {};
+                const keys = _Object_keys(currentIterationData);
+                for (let i = 0; i < keys.length; i++) {
+                  const k = keys[i];
+                  if (!isForbiddenKey(k)) res[k] = currentIterationData[k];
+                }
+                return res;
+              }
+            },
+            execution: {
+              setNextRequest: function(target) {
+                nextRequestSet = true;
+                nextRequestTarget = target === null ? null : _String(target);
+              }
+            },
             response: response ? {
               code: response.status,
               status: response.statusText,
+              responseTime: response.timeMs || 0,
               headers: response.headers || {},
               json: function() {
                 return typeof response.data === 'object' && response.data !== null
@@ -689,31 +1051,114 @@ export async function runQuickJsGuest(
               to: {
                 have: {
                   status: function(code) {
+                    if (typeof code === 'string') {
+                      const actualText = _Reflect_apply(_String_prototype_toLowerCase, _String(response.statusText || ''), []);
+                      const expectedText = _Reflect_apply(_String_prototype_toLowerCase, code, []);
+                      if (actualText !== expectedText) {
+                        throw new Error('Expected status "' + code + '" but got "' + response.statusText + '"');
+                      }
+                      return;
+                    }
                     if (response.status !== code) {
                       throw new Error('Expected status code ' + code + ' but got ' + response.status);
+                    }
+                  },
+                  header: function(key, expectedValue) {
+                    const targetKey = _Reflect_apply(_String_prototype_toLowerCase, _String(key || ''), []);
+                    const hdrs = response.headers || {};
+                    const hKeys = _Object_keys(hdrs);
+                    let found = false;
+                    let matchedValue;
+                    for (let i = 0; i < hKeys.length; i++) {
+                      const hk = hKeys[i];
+                      if (_Reflect_apply(_String_prototype_toLowerCase, _String(hk), []) === targetKey) {
+                        found = true;
+                        matchedValue = hdrs[hk];
+                        break;
+                      }
+                    }
+                    if (!found) {
+                      throw new Error('Expected response header "' + key + '" to exist');
+                    }
+                    if (arguments.length >= 2 && _String(matchedValue) !== _String(expectedValue)) {
+                      throw new Error('Expected header "' + key + '" to equal "' + expectedValue + '" but got "' + matchedValue + '"');
+                    }
+                  },
+                  jsonBody: function(pathOrObj, expectedVal) {
+                    let parsed;
+                    try {
+                      parsed = typeof response.data === 'object' && response.data !== null
+                        ? response.data
+                        : _JSON_parse(response.data || '');
+                    } catch {
+                      throw new Error('Expected response body to be valid JSON');
+                    }
+                    if (arguments.length === 0) return;
+                    if (typeof pathOrObj === 'string') {
+                      const rawSegs = pathOrObj.split('.');
+                      const segments = [];
+                      for (let i = 0; i < rawSegs.length; i++) {
+                        if (rawSegs[i]) segments.push(rawSegs[i]);
+                      }
+                      let cursor = parsed;
+                      for (let i = 0; i < segments.length; i++) {
+                        if (cursor === null || cursor === undefined || !_Reflect_apply(_Object_prototype_hasOwnProperty, Object(cursor), [segments[i]])) {
+                          throw new Error('Expected JSON body to have path "' + pathOrObj + '"');
+                        }
+                        cursor = cursor[segments[i]];
+                      }
+                      if (arguments.length >= 2 && !deepEqualValues(cursor, expectedVal)) {
+                        throw new Error('Expected JSON body path "' + pathOrObj + '" to equal ' + formatExpectVal(expectedVal) + ' but got ' + formatExpectVal(cursor));
+                      }
+                    } else if (pathOrObj && typeof pathOrObj === 'object') {
+                      if (!deepEqualValues(parsed, pathOrObj)) {
+                        throw new Error('Expected JSON body to equal ' + formatExpectVal(pathOrObj));
+                      }
+                    }
+                  },
+                  body: function(expected) {
+                    const text = typeof response.data === 'string' ? response.data : _JSON_stringify(response.data || '');
+                    if (arguments.length === 0) {
+                      if (!text) throw new Error('Expected response body not to be empty');
+                      return;
+                    }
+                    if (expected instanceof _RegExp) {
+                      if (!expected.test(text)) throw new Error('Expected response body to match ' + _String(expected));
+                      return;
+                    }
+                    if (text !== _String(expected)) {
+                      throw new Error('Expected response body to equal ' + formatExpectVal(expected));
                     }
                   }
                 }
               }
             } : undefined,
             test: function(name, fn) {
+              const testName = _String(name || 'Unnamed Test');
+              const startedAt = _Date.now();
               try {
                 if (typeof fn === 'function') fn();
+                if (collectedTestResults.length < 250) {
+                  collectedTestResults.push({
+                    name: testName,
+                    passed: true,
+                    durationMs: _Math_max(0, _Date.now() - startedAt)
+                  });
+                }
               } catch (err) {
-                throw new Error('Test [' + name + '] failed: ' + (err && err.message ? err.message : _String(err)));
+                const errMsg = _normalizeGuestError(err);
+                if (collectedTestResults.length < 250) {
+                  collectedTestResults.push({
+                    name: testName,
+                    passed: false,
+                    error: errMsg,
+                    durationMs: _Math_max(0, _Date.now() - startedAt)
+                  });
+                }
               }
             },
             expect: function(actual) {
-              return {
-                to: {
-                  be: function(expected) {
-                    if (actual !== expected) throw new Error('Expected ' + expected + ' but got ' + actual);
-                  },
-                  equal: function(expected) {
-                    if (actual != expected) throw new Error('Expected ' + expected + ' but got ' + actual);
-                  }
-                }
-              };
+              return buildPmExpect(actual);
             }
           };
 
@@ -729,7 +1174,11 @@ export async function runQuickJsGuest(
               currentVars[k] = _String(v);
             },
             getGlobalVariable: function(k) { return currentVars[k]; },
-            clearGlobalVariable: function(k) { delete currentVars[k]; }
+            clearGlobalVariable: function(k) { delete currentVars[k]; },
+            setNextRequest: function(target) {
+              nextRequestSet = true;
+              nextRequestTarget = target === null ? null : _String(target);
+            }
           };
 
           const rawBody = response
@@ -753,13 +1202,26 @@ export async function runQuickJsGuest(
             const userFn = new Function('pm', 'postman', 'response', 'responseBody', 'responseCode', 'responseTime', 'responseHeaders', 'tests', payload.script);
             userFn(pm, postman, rawBody, rawBody, responseCode, responseTime, responseHeaders, tests);
 
+            const legacyKeys = _Object_keys(tests);
+            for (let i = 0; i < legacyKeys.length; i++) {
+              const k = legacyKeys[i];
+              if (isForbiddenKey(k)) continue;
+              if (collectedTestResults.length >= 250) break;
+              const passed = Boolean(tests[k]);
+              collectedTestResults.push({
+                name: _String(k),
+                passed: passed,
+                error: passed ? undefined : ('Legacy assertion "' + _String(k) + '" evaluated to false')
+              });
+            }
+
             const mutatedReq = pm.request ? {
               url: pm.request.url.toString(),
               queryParams: pm.request.url.query.all(),
               headers: pm.request.headers.all(),
             } : null;
 
-            return safeSerializeEnvelope(true, null, currentEnv, currentVars, mutatedReq);
+            return safeSerializeEnvelope(true, null, currentEnv, currentVars, mutatedReq, collectedTestResults, nextRequestSet, nextRequestTarget);
           } catch (err) {
             throw err;
           }
@@ -890,6 +1352,7 @@ export async function runQuickJsGuest(
       script: input.script,
       environment: input.environment || {},
       variables: input.variables || {},
+      iterationData: input.iterationData || {},
       request: input.request,
       response: input.response,
     });

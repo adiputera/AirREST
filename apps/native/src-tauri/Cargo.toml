@@ -1,6 +1,6 @@
 [package]
 name = "airrest-desktop"
-version = "1.4.1"
+version = "1.5.0"
 description = "AirREST Desktop Client"
 authors = ["AirREST Team"]
 edition = "2024"
@@ -38,6 +38,13 @@ keyring = { version = "3.6.3", features = ["sync-secret-service", "crypto-rust",
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "deflate", "brotli", "multipart"] }
+tokio = { version = "1", features = ["sync", "time", "rt-multi-thread"] }
+url = "2.5"
+base64 = "0.22"
+
+[target.'cfg(all(unix, not(any(target_os = "android", target_os = "ios"))))'.dependencies]
+libc = "0.2"
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

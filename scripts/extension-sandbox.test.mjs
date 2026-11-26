@@ -29,7 +29,14 @@ function createSandboxHarness(location) {
   if (!messageListener) throw new Error('sandbox did not register a message listener');
 
   return {
-    dispatch({ origin, source = parent, script = "pm.environment.set('verified', 'yes');", request }) {
+    dispatch({
+      origin,
+      source = parent,
+      script = "pm.environment.set('verified', 'yes');",
+      request,
+      iterationData,
+      response = { status: 200, statusText: 'OK', data: '{}' },
+    }) {
       messageListener({
         origin,
         source,
@@ -38,8 +45,9 @@ function createSandboxHarness(location) {
           script,
           environment: {},
           variables: {},
+          iterationData,
           request,
-          response: { status: 200, statusText: 'OK', data: '{}' },
+          response,
         },
       });
     },
@@ -149,4 +157,67 @@ test('extension sandbox supports CryptoJS AES and SHA256 operations', () => {
   assert.equal(msg.success, true);
   assert.ok(msg.mutatedRequest);
   assert.ok(msg.mutatedRequest.queryParams.some((q) => q.key === 'encryptedPassword' && q.value === '4b4f02b6dfb678f85cd88823dc2d18d4'));
+});
+
+test('extension sandbox supports pm.iterationData and variable lookup precedence', () => {
+  const harness = createSandboxHarness({ protocol: 'chrome-extension:', hostname: 'example-extension' });
+  harness.dispatch({
+    origin: 'chrome-extension://abcdefghijklmnopabcdefghijklmnop',
+    iterationData: { userId: 'u-42', role: 'admin' },
+    script: `
+      pm.environment.set('userId', 'from-env');
+      pm.variables.set('localOnly', 'v-1');
+      pm.environment.set('resolvedUserId', pm.variables.get('userId'));
+      pm.environment.set('iterRole', pm.iterationData.get('role'));
+      pm.environment.set('hasRole', String(pm.iterationData.has('role')));
+      pm.environment.set('iterKeys', Object.keys(pm.iterationData.toObject()).sort().join(','));
+    `,
+  });
+
+  const env = harness.messages[0].message.environment;
+  assert.equal(env.resolvedUserId, 'u-42');
+  assert.equal(env.iterRole, 'admin');
+  assert.equal(env.hasRole, 'true');
+  assert.equal(env.iterKeys, 'role,userId');
+});
+
+test('extension sandbox supports structured pm.test, Chai subset, legacy tests[], and setNextRequest', () => {
+  const harness = createSandboxHarness({ protocol: 'chrome-extension:', hostname: 'example-extension' });
+  harness.dispatch({
+    origin: 'chrome-extension://abcdefghijklmnopabcdefghijklmnop',
+    response: {
+      status: 201,
+      statusText: 'Created',
+      headers: { 'X-Request-Id': 'req-9' },
+      data: JSON.stringify({ id: 7, items: ['a', 'b'], profile: { role: 'owner' } }),
+      timeMs: 24,
+    },
+    script: `
+      const json = pm.response.json();
+      pm.test("Intentional failure does not abort", () => {
+        pm.expect(json.id).to.be(999);
+      });
+      pm.test("Chai assertions and pm.response helpers", () => {
+        pm.response.to.have.status(201);
+        pm.response.to.have.header("x-request-id", "req-9");
+        pm.response.to.have.jsonBody("profile.role", "owner");
+        pm.expect(json.items).to.have.lengthOf(2).and.to.include("b");
+        pm.expect(json.profile).to.eql({ role: "owner" });
+        pm.expect(pm.response.responseTime).to.be.below(50);
+      });
+      tests["Legacy fail check"] = false;
+      pm.environment.set("persistedAfterFail", "ok");
+      pm.execution.setNextRequest("Next Endpoint");
+    `,
+  });
+
+  const msg = harness.messages[0].message;
+  assert.equal(msg.success, true, msg.error);
+  assert.equal(msg.environment.persistedAfterFail, 'ok');
+  assert.equal(msg.nextRequest, 'Next Endpoint');
+  assert.equal(msg.testResults.length, 3);
+  assert.equal(msg.testResults[0].passed, false);
+  assert.equal(msg.testResults[1].passed, true, msg.testResults[1].error);
+  assert.equal(msg.testResults[2].name, 'Legacy fail check');
+  assert.equal(msg.testResults[2].passed, false);
 });

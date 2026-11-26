@@ -30,9 +30,11 @@ import {
   GripVertical,
   Copy,
   BookOpen,
+  Flame,
+  Play,
 } from 'lucide-react';
 import { useApiStore, type SelectedSavedExample } from '../store/useApiStore';
-import { CollectionItem, ApiRequest, Collection } from '../types/api';
+import { CollectionItem, ApiRequest, Collection, RunnerMode } from '../types/api';
 import { MethodBadge } from './MethodBadge';
 import { exportPostmanCollection } from '../lib/postman';
 import {
@@ -52,6 +54,10 @@ import { DuplicateItemModal } from './DuplicateItemModal';
 import { PendingDuplicateRecovery } from './PendingDuplicateRecovery';
 import { ImportModal } from './ImportModal';
 import { findRequestAncestorIds, isDescendantOf } from '../lib/treeHelper';
+import {
+  buildCollectionPerformanceLaunchConfig,
+  buildFolderPerformanceLaunchConfig,
+} from '../lib/perfLaunch';
 import { canModifyCollection, hasScopePermission } from '../lib/jwt';
 
 import { ScopeSwitcher } from './ScopeSwitcher';
@@ -183,6 +189,7 @@ interface FolderItemProps {
   onRequestMove: (item: CollectionItem, collectionId: string) => void;
   onRequestMoveFolder?: (item: CollectionItem, collectionId: string) => void;
   onRequestDuplicateItem?: (item: CollectionItem, collectionId: string, trigger?: HTMLElement | null) => void;
+  onRunPerformanceFolder?: (folder: CollectionItem, collectionId: string, runnerMode?: RunnerMode) => void;
   draggedItem: DraggedItemState | null;
   setDraggedItem: (item: DraggedItemState | null) => void;
   onReorderItem: (
@@ -216,6 +223,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
   onRequestMove,
   onRequestMoveFolder,
   onRequestDuplicateItem,
+  onRunPerformanceFolder,
   draggedItem,
   setDraggedItem,
   onReorderItem,
@@ -631,6 +639,30 @@ const FolderItem: React.FC<FolderItemProps> = ({
                         onClick={(e) => {
                           e.stopPropagation();
                           setIsMenuOpen(false);
+                          onRunPerformanceFolder?.(item, collectionId, 'functional');
+                        }}
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-tx-secondary hover:bg-hover hover:text-emerald-500 transition"
+                      >
+                        <Play className="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400" />
+                        <span>Run Folder</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsMenuOpen(false);
+                          onRunPerformanceFolder?.(item, collectionId, 'performance');
+                        }}
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-tx-secondary hover:bg-hover hover:text-amber-500 transition"
+                      >
+                        <Flame className="h-3.5 w-3.5 text-amber-500 dark:text-amber-400" />
+                        <span>Performance Test</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsMenuOpen(false);
                           onExpandAllInFolder(item);
                         }}
                         className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-tx-secondary hover:bg-hover hover:text-tx-primary transition"
@@ -773,6 +805,7 @@ const FolderItem: React.FC<FolderItemProps> = ({
                 onRequestMove={onRequestMove}
                 onRequestMoveFolder={onRequestMoveFolder}
                 onRequestDuplicateItem={onRequestDuplicateItem}
+                onRunPerformanceFolder={onRunPerformanceFolder}
                 draggedItem={draggedItem}
                 setDraggedItem={setDraggedItem}
                 onReorderItem={onReorderItem}
@@ -1183,6 +1216,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
   const hydrateCollectionExamples = useApiStore((state) => state.hydrateCollectionExamples);
   const renameSavedExample = useApiStore((state) => state.renameSavedExample);
   const deleteSavedExample = useApiStore((state) => state.deleteSavedExample);
+  const openPerformanceTestTab = useApiStore((state) => state.openPerformanceTestTab);
   const syncStatus = useApiStore((state) => state.syncStatus);
   const lastDuplicateReveal = useApiStore((state) => state.lastDuplicateReveal);
 
@@ -1686,6 +1720,73 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
     }
   };
 
+  const handleRunPerformanceCollection = async (
+    e: React.MouseEvent,
+    col: Collection,
+    runnerMode: RunnerMode = 'performance'
+  ) => {
+    e.stopPropagation();
+    try {
+      let targetCol = resolveUnprunedCollection(col.id, col);
+      if (targetCol.isPartial && workspaceMode === 'cloud') {
+        const detailResult = await loadCollectionDetails(targetCol.id);
+        if (!detailResult.success || !detailResult.collection) {
+          setCollectionActionError(
+            detailResult.error || 'Failed to load collection details for Collection Runner.'
+          );
+          return;
+        }
+        targetCol = detailResult.collection;
+      }
+      const config = buildCollectionPerformanceLaunchConfig(targetCol, runtimeAdapter?.platformId, runnerMode);
+      if (config.items.length === 0) {
+        setCollectionActionError('This collection has no requests to test.');
+        return;
+      }
+      openPerformanceTestTab(config);
+      onClose?.();
+    } catch (err) {
+      setCollectionActionError(
+        err instanceof Error ? err.message : 'Failed to open collection runner.'
+      );
+    }
+  };
+
+  const handleRunPerformanceFolder = async (
+    folder: CollectionItem,
+    collectionId: string,
+    runnerMode: RunnerMode = 'performance'
+  ) => {
+    try {
+      let fullCol = (collections || []).find((c) => c.id === collectionId);
+      if (fullCol?.isPartial && workspaceMode === 'cloud') {
+        const detailResult = await loadCollectionDetails(fullCol.id);
+        if (detailResult.success && detailResult.collection) {
+          fullCol = detailResult.collection;
+        }
+      }
+      const targetFolder = fullCol
+        ? findUnprunedCollectionItem(fullCol.items || [], folder.id) || folder
+        : folder;
+      const config = buildFolderPerformanceLaunchConfig(
+        collectionId,
+        targetFolder,
+        runtimeAdapter?.platformId,
+        runnerMode
+      );
+      if (config.items.length === 0) {
+        setCollectionActionError('This folder has no requests to test.');
+        return;
+      }
+      openPerformanceTestTab(config);
+      onClose?.();
+    } catch (err) {
+      setCollectionActionError(
+        err instanceof Error ? err.message : 'Failed to open folder runner.'
+      );
+    }
+  };
+
   return (
     <aside
       className={`relative flex h-full ${
@@ -2150,6 +2251,28 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
                                     )}
                                     <button
                                       type="button"
+                                      onClick={(e) => {
+                                        setActiveAddMenuColId(null);
+                                        void handleRunPerformanceCollection(e, col, 'functional');
+                                      }}
+                                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-tx-secondary hover:bg-hover hover:text-emerald-500 dark:hover:text-emerald-400 transition"
+                                    >
+                                      <Play className="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400" />
+                                      <span>Run Collection</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        setActiveAddMenuColId(null);
+                                        void handleRunPerformanceCollection(e, col, 'performance');
+                                      }}
+                                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-tx-secondary hover:bg-hover hover:text-amber-500 dark:hover:text-amber-400 transition"
+                                    >
+                                      <Flame className="h-3.5 w-3.5 text-amber-500 dark:text-amber-400" />
+                                      <span>Performance Test</span>
+                                    </button>
+                                    <button
+                                      type="button"
                                       disabled={!isExportEnabled}
                                       onClick={(e) => {
                                         if (!isExportEnabled) return;
@@ -2321,6 +2444,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
                                     trigger,
                                   })
                                 }
+                                onRunPerformanceFolder={(targetFolder, colId, mode) => {
+                                  void handleRunPerformanceFolder(targetFolder, colId, mode);
+                                }}
                                 draggedItem={draggedItem}
                                 setDraggedItem={setDraggedItem}
                                 onReorderItem={reorderItem}

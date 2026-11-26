@@ -1,6 +1,7 @@
 import React from 'react';
 import { Send, Plus, FolderOpen, History, Layers } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
+import { getRequestShortcutLabels } from './tabBarShortcuts';
 
 interface EmptyStudioViewProps {
   onCreateTab: () => void;
@@ -10,6 +11,7 @@ export const EmptyStudioView: React.FC<EmptyStudioViewProps> = ({ onCreateTab })
   const setSidebarTab = useApiStore((state) => state.setSidebarTab);
   const collections = useApiStore((state) => state.collections);
   const history = useApiStore((state) => state.history);
+  const shortcutLabels = getRequestShortcutLabels();
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center p-8 bg-app text-tx-primary select-none">
@@ -69,7 +71,7 @@ export const EmptyStudioView: React.FC<EmptyStudioViewProps> = ({ onCreateTab })
             <span>Tip: Click any endpoint in the sidebar tree to open it in a tab</span>
           </div>
           <div>
-            <span>Or press Ctrl+V / ⌘+V anywhere to paste a cURL command as a new request</span>
+            <span>Or press {shortcutLabels.paste} anywhere to paste a cURL command as a new request</span>
           </div>
         </div>
       </div>

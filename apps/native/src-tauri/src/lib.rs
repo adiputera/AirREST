@@ -1,4 +1,9 @@
 #[cfg(desktop)]
+mod perf_histogram;
+#[cfg(desktop)]
+mod perf_runner;
+
+#[cfg(desktop)]
 const CREDENTIAL_SERVICE: &str = "airrest.native.credentials.v1";
 
 #[cfg(desktop)]
@@ -214,6 +219,7 @@ pub fn run() {
             updater_builder = updater_builder.pubkey(pubkey.trim());
         }
         builder
+            .manage(perf_runner::PerfRunnerManager::default())
             .plugin(
                 tauri::plugin::Builder::<tauri::Wry>::new("native-credential")
                     .invoke_handler(tauri::generate_handler![
@@ -225,10 +231,18 @@ pub fn run() {
             )
             .plugin(tauri_plugin_process::init())
             .plugin(updater_builder.build())
+            .invoke_handler(tauri::generate_handler![
+                perf_runner::start_performance_run,
+                perf_runner::stop_performance_run,
+                perf_runner::update_performance_variables,
+                perf_runner::check_performance_capacity,
+            ])
     };
 
+    #[cfg(not(desktop))]
+    let builder = builder.invoke_handler(tauri::generate_handler![]);
+
     builder
-        .invoke_handler(tauri::generate_handler![])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

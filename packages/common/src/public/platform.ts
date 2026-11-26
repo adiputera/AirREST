@@ -3,8 +3,15 @@ export type {
   ApiResponse,
   CloudTransport,
   FileOptions,
+  LoadProfileConfig,
   NetworkErrorCategory,
   OpenedFileResult,
+  PerformanceEndpointBreakdown,
+  PerformanceErrorGroup,
+  PerformanceErrorSample,
+  PerformanceMetricSnapshot,
+  PerformanceNetworkOptions,
+  PerformanceTimeBucket,
   PlatformAdapter,
   ScriptExecutor,
   ScriptInput,
@@ -13,6 +20,16 @@ export type {
   TestTransport,
   TransportInit,
 } from '../types';
+export type {
+  NativePerformanceAttachmentPayload,
+  NativePerformanceCallbacks,
+  NativePerformanceCompletePayload,
+  NativePerformanceRequestItem,
+  NativePerformanceRunHandle,
+  NativePerformanceRunInput,
+  NativePerformanceRunner,
+  NativePerformanceTickPayload,
+} from '../types/platform';
 export type { NativeCredentialRecord, NativeCredentialScope, NativeCredentialStorage } from '../types/credentials';
 export { categorizeNetworkError, getChromiumNetworkError } from '../lib/fetcher';
 export { hasHostPermission, requestHostPermission } from '../lib/hostPermissions';

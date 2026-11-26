@@ -6,6 +6,7 @@ import type {
   Collection,
   CollectionItem,
   OpenExampleTab,
+  OpenPerformanceTab,
   PendingExampleIntent,
   SavedExample,
   SavedExampleHeader,
@@ -13,6 +14,7 @@ import type {
 } from '../types/api';
 
 export const EXAMPLE_TAB_ID_PREFIX = 'example:';
+export const PERF_TAB_ID_PREFIX = 'perf:';
 
 export function makeExampleTabId(selection: {
   collectionId: string;
@@ -26,17 +28,27 @@ export function isExampleTabId(id: string | null | undefined): boolean {
   return typeof id === 'string' && id.startsWith(EXAMPLE_TAB_ID_PREFIX);
 }
 
+export function makePerformanceTabId(sourceType: 'collection' | 'folder' | 'request', sourceId: string): string {
+  return `${PERF_TAB_ID_PREFIX}${sourceType}:${sourceId}`;
+}
+
+export function isPerformanceTabId(id: string | null | undefined): boolean {
+  return typeof id === 'string' && id.startsWith(PERF_TAB_ID_PREFIX);
+}
+
 export type OrderedVisualTab<TRequestTab extends { id: string } = { id: string }> =
   | { kind: 'request'; id: string; tab: TRequestTab }
-  | { kind: 'example'; id: string; exampleTab: OpenExampleTab };
+  | { kind: 'example'; id: string; exampleTab: OpenExampleTab }
+  | { kind: 'performance'; id: string; performanceTab: OpenPerformanceTab };
 
 /**
- * Resolves the ordered list of request and example tabs for TabBar rendering and adjacent focus selection.
+ * Resolves the ordered list of request, example, and performance tabs for TabBar rendering and adjacent focus selection.
  */
 export function buildOrderedVisualTabs<TRequestTab extends { id: string }>(
   tabs: readonly TRequestTab[] = [],
   openExampleTabs: readonly OpenExampleTab[] = [],
   tabOrder: readonly string[] = [],
+  openPerformanceTabs: readonly OpenPerformanceTab[] = [],
 ): OrderedVisualTab<TRequestTab>[] {
   const requestMap = new Map<string, TRequestTab>();
   for (const tab of tabs) {
@@ -48,6 +60,12 @@ export function buildOrderedVisualTabs<TRequestTab extends { id: string }>(
   for (const exTab of openExampleTabs) {
     if (exTab?.id && !exampleMap.has(exTab.id)) {
       exampleMap.set(exTab.id, exTab);
+    }
+  }
+  const perfMap = new Map<string, OpenPerformanceTab>();
+  for (const perfTab of openPerformanceTabs) {
+    if (perfTab?.id && !perfMap.has(perfTab.id)) {
+      perfMap.set(perfTab.id, perfTab);
     }
   }
 
@@ -66,6 +84,12 @@ export function buildOrderedVisualTabs<TRequestTab extends { id: string }>(
     if (exTab) {
       seen.add(id);
       ordered.push({ kind: 'example', id, exampleTab: exTab });
+      continue;
+    }
+    const perfTab = perfMap.get(id);
+    if (perfTab) {
+      seen.add(id);
+      ordered.push({ kind: 'performance', id, performanceTab: perfTab });
     }
   }
 
@@ -83,6 +107,13 @@ export function buildOrderedVisualTabs<TRequestTab extends { id: string }>(
     }
   }
 
+  for (const perfTab of openPerformanceTabs) {
+    if (perfTab?.id && !seen.has(perfTab.id)) {
+      seen.add(perfTab.id);
+      ordered.push({ kind: 'performance', id: perfTab.id, performanceTab: perfTab });
+    }
+  }
+
   return ordered;
 }
 
@@ -90,8 +121,70 @@ export function syncVisualTabOrder(
   tabs: readonly { id: string }[] = [],
   openExampleTabs: readonly OpenExampleTab[] = [],
   tabOrder: readonly string[] = [],
+  openPerformanceTabs: readonly OpenPerformanceTab[] = [],
 ): string[] {
-  return buildOrderedVisualTabs(tabs, openExampleTabs, tabOrder).map((entry) => entry.id);
+  return buildOrderedVisualTabs(tabs, openExampleTabs, tabOrder, openPerformanceTabs).map((entry) => entry.id);
+}
+
+export interface ActivePerfRunController {
+  runId: string;
+  tabId: string;
+  stop: () => Promise<void>;
+}
+
+let activePerfRunController: ActivePerfRunController | null = null;
+let cloudPerfCleanupHandler: ((userId?: string | null) => Promise<void>) | null = null;
+let perfDataRowsCleanupHandler: ((tabId?: string) => void) | null = null;
+let functionalSessionCleanupHandler: ((tabId?: string) => void) | null = null;
+let functionalRunStopHandler: ((tabId?: string) => Promise<void> | void) | null = null;
+
+export function setActivePerformanceRunController(controller: ActivePerfRunController | null): void {
+  activePerfRunController = controller;
+}
+
+export function getActivePerformanceRun(): { runId: string; tabId: string } | null {
+  return activePerfRunController
+    ? { runId: activePerfRunController.runId, tabId: activePerfRunController.tabId }
+    : null;
+}
+
+export async function stopActivePerformanceRun(): Promise<void> {
+  if (!activePerfRunController) return;
+  await activePerfRunController.stop();
+}
+
+export function registerCloudPerfCleanup(handler: (userId?: string | null) => Promise<void>): void {
+  cloudPerfCleanupHandler = handler;
+}
+
+export function triggerCloudPerfCleanup(userId?: string | null): void {
+  if (cloudPerfCleanupHandler) {
+    void cloudPerfCleanupHandler(userId);
+  }
+}
+
+export function registerPerfDataRowsCleanup(handler: (tabId?: string) => void): void {
+  perfDataRowsCleanupHandler = handler;
+}
+
+export function clearPerformanceDataRowsHook(tabId?: string): void {
+  perfDataRowsCleanupHandler?.(tabId);
+}
+
+export function registerFunctionalSessionCleanup(handler: (tabId?: string) => void): void {
+  functionalSessionCleanupHandler = handler;
+}
+
+export function clearFunctionalSessionHook(tabId?: string): void {
+  functionalSessionCleanupHandler?.(tabId);
+}
+
+export function registerFunctionalStopHook(handler: (tabId?: string) => Promise<void> | void): void {
+  functionalRunStopHandler = handler;
+}
+
+export async function stopFunctionalRunHook(tabId?: string): Promise<void> {
+  await functionalRunStopHandler?.(tabId);
 }
 
 export const MAX_SAVED_EXAMPLE_NAME_RUNES = 150;

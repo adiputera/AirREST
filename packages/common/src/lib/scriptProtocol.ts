@@ -1,15 +1,18 @@
-import { ScriptInput, ScriptResult, ScriptRequest, ScriptMutatedRequest } from '../types/platform';
-export type { ScriptInput, ScriptResult, ScriptRequest, ScriptMutatedRequest };
+import { ScriptInput, ScriptResult, ScriptRequest, ScriptMutatedRequest, ScriptTestResult } from '../types/platform';
+export type { ScriptInput, ScriptResult, ScriptRequest, ScriptMutatedRequest, ScriptTestResult };
 
 export const SCRIPT_LIMITS = {
   MAX_SCRIPT_BYTES: 256 * 1024, // 256 KiB
   MAX_SERIALIZED_ENV_BYTES: 1024 * 1024, // 1 MiB
   MAX_SERIALIZED_VARS_BYTES: 1024 * 1024, // 1 MiB
+  MAX_SERIALIZED_ITERATION_DATA_BYTES: 512 * 1024, // 512 KiB
   MAX_RESPONSE_BYTES: 2 * 1024 * 1024, // 2 MiB
   MAX_HEAP_BYTES: 64 * 1024 * 1024, // 64 MiB
   MAX_STACK_BYTES: 512 * 1024, // 512 KiB
   DEFAULT_TIMEOUT_MS: 2000,
   STARTUP_TIMEOUT_MS: 5000,
+  MAX_TEST_RESULTS_COUNT: 250,
+  MAX_TEST_RESULT_MESSAGE_BYTES: 4096,
 } as const;
 
 export interface ScriptWorkerRequest {
@@ -127,6 +130,27 @@ export function validateScriptInput(input: ScriptInput): { valid: boolean; error
     };
   }
 
+  if (input.iterationData !== undefined) {
+    if (!input.iterationData || typeof input.iterationData !== 'object' || Array.isArray(input.iterationData)) {
+      return { valid: false, error: 'Input iterationData must be an object map.' };
+    }
+    for (const [k, v] of Object.entries(input.iterationData)) {
+      if (isForbiddenKey(k)) {
+        return { valid: false, error: `Input iterationData contains forbidden key "${k}".` };
+      }
+      if (typeof v !== 'string') {
+        return { valid: false, error: `Iteration data key "${k}" must have a string value.` };
+      }
+    }
+    const iterBytes = getUtf8ByteLength(JSON.stringify(input.iterationData));
+    if (iterBytes > SCRIPT_LIMITS.MAX_SERIALIZED_ITERATION_DATA_BYTES) {
+      return {
+        valid: false,
+        error: `Serialized iterationData size exceeded the 512 KiB limit.`,
+      };
+    }
+  }
+
   if (input.response?.data && typeof input.response.data === 'string') {
     if (getUtf8ByteLength(input.response.data) > SCRIPT_LIMITS.MAX_RESPONSE_BYTES) {
       input.response.data = truncateUtf8Bytes(input.response.data, SCRIPT_LIMITS.MAX_RESPONSE_BYTES);
@@ -177,6 +201,44 @@ export function validateScriptOutput(rawResult: unknown, initialInput?: ScriptIn
     };
   }
 
+  let sanitizedTestResults: ScriptTestResult[] | undefined;
+  if (Array.isArray(record.testResults)) {
+    const collected: ScriptTestResult[] = [];
+    for (const rawTest of record.testResults) {
+      if (collected.length >= SCRIPT_LIMITS.MAX_TEST_RESULTS_COUNT) break;
+      if (!rawTest || typeof rawTest !== 'object' || Array.isArray(rawTest)) continue;
+      const t = rawTest as Record<string, unknown>;
+      if (typeof t.name !== 'string' || typeof t.passed !== 'boolean') continue;
+      let errStr = typeof t.error === 'string' && t.error ? t.error : undefined;
+      if (errStr && getUtf8ByteLength(errStr) > SCRIPT_LIMITS.MAX_TEST_RESULT_MESSAGE_BYTES) {
+        errStr = truncateUtf8Bytes(errStr, SCRIPT_LIMITS.MAX_TEST_RESULT_MESSAGE_BYTES);
+      }
+      const durationMs =
+        typeof t.durationMs === 'number' && Number.isFinite(t.durationMs) && t.durationMs >= 0
+          ? Math.round(t.durationMs)
+          : undefined;
+      collected.push({
+        name: t.name.slice(0, 512),
+        passed: t.passed,
+        ...(errStr ? { error: errStr } : {}),
+        ...(durationMs !== undefined ? { durationMs } : {}),
+      });
+    }
+    if (collected.length > 0) {
+      sanitizedTestResults = collected;
+    }
+  }
+
+  const hasNextRequest = Object.prototype.hasOwnProperty.call(record, 'nextRequest');
+  let sanitizedNextRequest: string | null | undefined;
+  if (hasNextRequest) {
+    if (record.nextRequest === null) {
+      sanitizedNextRequest = null;
+    } else if (typeof record.nextRequest === 'string') {
+      sanitizedNextRequest = record.nextRequest.slice(0, 512);
+    }
+  }
+
   if (!record.success) {
     let rawError = typeof record.error === 'string' ? record.error : 'Script execution failed.';
     if (getUtf8ByteLength(rawError) > 32768) {
@@ -187,6 +249,8 @@ export function validateScriptOutput(rawResult: unknown, initialInput?: ScriptIn
       error: rawError,
       environment: fallbackEnv,
       variables: fallbackVars,
+      ...(sanitizedTestResults ? { testResults: sanitizedTestResults } : {}),
+      ...(sanitizedNextRequest !== undefined ? { nextRequest: sanitizedNextRequest } : {}),
     };
   }
 
@@ -302,5 +366,7 @@ export function validateScriptOutput(rawResult: unknown, initialInput?: ScriptIn
     environment: sanitizedEnv,
     variables: sanitizedVars,
     ...(sanitizedMutatedRequest ? { mutatedRequest: sanitizedMutatedRequest } : {}),
+    ...(sanitizedTestResults ? { testResults: sanitizedTestResults } : {}),
+    ...(sanitizedNextRequest !== undefined ? { nextRequest: sanitizedNextRequest } : {}),
   };
 }

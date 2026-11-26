@@ -6,6 +6,7 @@ import { TabBar } from './components/TabBar';
 import { RequestEditor } from './components/RequestEditor';
 import { ResponseViewer } from './components/ResponseViewer';
 import { SavedExampleViewer } from './components/SavedExampleViewer';
+import { PerformanceTabView } from './components/performance/PerformanceTabView';
 import { EmptyStudioView } from './components/EmptyStudioView';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ImportModal } from './components/ImportModal';
@@ -53,6 +54,7 @@ export const App: React.FC = () => {
   const tabs = activeStore((state) => state.tabs);
   const activeTabId = activeStore((state) => state.activeTabId);
   const selectedExample = activeStore((state) => state.selectedExample);
+  const selectedPerformanceTabId = activeStore((state) => state.selectedPerformanceTabId);
   const createTab = activeStore((state) => state.createTab);
   const workspaceMode = activeStore((state) => state.workspaceMode);
   const cloudToken = activeStore((state) => state.cloudConfig.token);
@@ -458,7 +460,7 @@ export const App: React.FC = () => {
     }
   }, [theme]);
 
-  useEffect(() => setSidebarOpen(false), [activeTabId, selectedExample]);
+  useEffect(() => setSidebarOpen(false), [activeTabId, selectedExample, selectedPerformanceTabId]);
 
   useEffect(() => {
     if (!sidebarOpen) return;
@@ -547,7 +549,9 @@ export const App: React.FC = () => {
           <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-app">
             <ErrorBoundary fallbackTitle="Studio Panel Error">
               <TabBar />
-              {selectedExample ? (
+              {selectedPerformanceTabId ? (
+                <PerformanceTabView />
+              ) : selectedExample ? (
                 <SavedExampleViewer />
               ) : tabs && tabs.length > 0 ? (
                 <div

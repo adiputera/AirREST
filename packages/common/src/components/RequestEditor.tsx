@@ -28,9 +28,12 @@ import {
   ChevronRight,
   Undo2,
   Redo2,
+  Flame,
 } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
 import { useStoreContext } from '../store/storeContext';
+import { usePlatformAdapter } from '../context';
+import { buildSingleRequestPerformanceLaunchConfig } from '../lib/perfLaunch';
 import { HttpMethod, BodyType, RawType, KeyValuePair } from '../types/api';
 import { KeyValueEditor, ReadonlyKeyValueRow } from './KeyValueEditor';
 import { METHOD_COLORS } from './MethodBadge';
@@ -59,6 +62,7 @@ import {
   setRequestEditorSection,
   type RequestEditorSection,
 } from './requestEditorSectionState';
+import { getRequestShortcutLabels, isApplePlatform } from './tabBarShortcuts';
 
 function formatFileSize(bytes: number): string {
   if (!bytes || bytes <= 0) return '0 B';
@@ -113,6 +117,8 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, 
   const redoActiveRequest = useApiStore((state) => state.redoActiveRequest);
   const canUndoActiveRequest = useApiStore((state) => state.canUndoActiveRequest);
   const canRedoActiveRequest = useApiStore((state) => state.canRedoActiveRequest);
+  const openPerformanceTestTab = useApiStore((state) => state.openPerformanceTestTab);
+  const runtimeAdapter = usePlatformAdapter();
 
   const [sectionsByRequestId, setSectionsByRequestId] = useState<Record<string, RequestEditorSection>>({});
   const activeTab = getRequestEditorSection(sectionsByRequestId, activeTabId);
@@ -187,6 +193,7 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, 
 
   const currentTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
   const isDirty = currentTab ? isRequestModified(currentTab, collections) : false;
+  const shortcutLabels = getRequestShortcutLabels();
 
   useEffect(() => {
     setSectionsByRequestId((sections) => pruneRequestEditorSections(sections, tabs.map((tab) => tab.id)));
@@ -269,7 +276,7 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.defaultPrevented) return;
 
-      const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+      const isMac = isApplePlatform();
       const modifier = isMac ? e.metaKey : e.ctrlKey;
       if (!modifier) return;
 
@@ -733,7 +740,7 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, 
                           ? 'text-amber-600 dark:text-amber-300 hover:bg-amber-500/10'
                           : 'text-tx-secondary hover:bg-hover hover:text-tx-primary'
                       }`}
-                      title="Save request (Ctrl+S / ⌘+S)"
+                      title={`Save request (${shortcutLabels.save})`}
                     >
                       {justSaved ? (
                         <>
@@ -804,7 +811,7 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, 
                   onClick={undoActiveRequest}
                   disabled={!canUndoActiveRequest}
                   className="flex items-center gap-1 rounded-md border border-line bg-card px-1.5 sm:px-2 py-0.5 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary disabled:opacity-30 disabled:cursor-not-allowed transition"
-                  title="Undo request changes (Ctrl+Z / ⌘+Z)"
+                  title={`Undo request changes (${shortcutLabels.undo})`}
                 >
                   <Undo2 className="h-3 w-3 text-tx-muted" />
                   <span className="hidden sm:inline">Undo</span>
@@ -815,12 +822,52 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, 
                     type="button"
                     onClick={redoActiveRequest}
                     className="flex items-center gap-1 rounded-md border border-line bg-card px-1.5 sm:px-2 py-0.5 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition animate-in fade-in duration-100"
-                    title="Redo request changes (Ctrl+Y / ⌘+Shift+Z)"
+                    title={`Redo request changes (${shortcutLabels.redo})`}
                   >
                     <Redo2 className="h-3 w-3 text-tx-muted" />
                     <span className="hidden sm:inline">Redo</span>
                   </button>
                 )}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!currentTab) return;
+                    const config = buildSingleRequestPerformanceLaunchConfig(
+                      currentTab,
+                      savedRequestInfo?.collection.id,
+                      runtimeAdapter?.platformId,
+                      'functional'
+                    );
+                    openPerformanceTestTab(config);
+                  }}
+                  disabled={!currentTab?.url?.trim()}
+                  className="flex items-center gap-1 rounded-md border border-line bg-card px-2 py-0.5 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                  title="Open Functional Runner for this request"
+                >
+                  <PlayCircle className="h-3 w-3 text-emerald-500" />
+                  <span className="hidden sm:inline">Run</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!currentTab) return;
+                    const config = buildSingleRequestPerformanceLaunchConfig(
+                      currentTab,
+                      savedRequestInfo?.collection.id,
+                      runtimeAdapter?.platformId,
+                      'performance'
+                    );
+                    openPerformanceTestTab(config);
+                  }}
+                  disabled={!currentTab?.url?.trim()}
+                  className="flex items-center gap-1 rounded-md border border-line bg-card px-2 py-0.5 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-amber-500 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                  title="Open Performance / Load Test for this request"
+                >
+                  <Flame className="h-3 w-3 text-amber-500" />
+                  <span className="hidden sm:inline">Load Test</span>
+                </button>
 
                 <button
                   type="button"
@@ -849,7 +896,7 @@ export const RequestEditor: React.FC<RequestEditorProps> = ({ onCollapseChange, 
                 </button>
 
                 <div className="text-[11px] text-tx-muted font-mono hidden lg:block">
-                  Press <kbd className="rounded border border-line bg-card px-1 py-0.5 text-tx-secondary">⌘+Enter</kbd> to send
+                  Press <kbd className="rounded border border-line bg-card px-1 py-0.5 text-tx-secondary">{shortcutLabels.send}</kbd> to send
                 </div>
               </div>
             </>

@@ -10,9 +10,16 @@ import {
   TransportInit,
   FileOptions,
   OpenedFileResult,
+  NativePerformanceRunner,
+  NativePerformanceRunInput,
+  NativePerformanceCallbacks,
+  NativePerformanceTickPayload,
+  NativePerformanceCompletePayload,
+  NativePerformanceRunHandle,
 } from '@airrest/common/platform';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { save as tauriSave, open as tauriOpen } from '@tauri-apps/plugin-dialog';
 import {
   writeFile as tauriWriteFile,
@@ -273,9 +280,12 @@ export function dialogFilters(options?: FileOptions & { mimeType?: string }): Fi
   if (options?.filters && options.filters.length > 0) {
     return options.filters.map((filter) => ({
       ...filter,
-      extensions: filter.extensions.map((extension) =>
-        extension.toLowerCase() === 'json' ? 'application/json' : extension,
-      ),
+      extensions: filter.extensions.map((extension) => {
+        const lower = extension.toLowerCase();
+        if (lower === 'json') return 'application/json';
+        if (lower === 'csv') return 'text/csv';
+        return extension;
+      }),
     }));
   }
   if (options?.mimeType) {
@@ -516,6 +526,261 @@ async function readValidatedTauriTextFile(filePath: string): Promise<{ filename:
   return { filename, content };
 }
 
+export function createReusableQuickJsPool(maxWorkers = 4): ScriptExecutor {
+  const idleWorkers: Worker[] = [];
+  const activeWorkers = new Set<Worker>();
+  const waitQueue: Array<(worker: Worker) => void> = [];
+  let disposed = false;
+
+  const acquireWorker = (): Promise<Worker> => {
+    if (idleWorkers.length > 0) {
+      const w = idleWorkers.pop()!;
+      activeWorkers.add(w);
+      return Promise.resolve(w);
+    }
+    if (activeWorkers.size + idleWorkers.length < maxWorkers) {
+      const w = new Worker(new URL('../scripts/quickjs.worker.ts', import.meta.url), {
+        type: 'module',
+      });
+      activeWorkers.add(w);
+      return Promise.resolve(w);
+    }
+    return new Promise<Worker>((resolve) => {
+      waitQueue.push(resolve);
+    });
+  };
+
+  const releaseWorker = (w: Worker, healthy: boolean) => {
+    activeWorkers.delete(w);
+    if (!healthy || disposed) {
+      try {
+        w.terminate();
+      } catch {
+        // ignore
+      }
+      if (!disposed && waitQueue.length > 0) {
+        const nextWaiter = waitQueue.shift()!;
+        const fresh = new Worker(new URL('../scripts/quickjs.worker.ts', import.meta.url), {
+          type: 'module',
+        });
+        activeWorkers.add(fresh);
+        nextWaiter(fresh);
+      }
+      return;
+    }
+
+    if (waitQueue.length > 0) {
+      const nextWaiter = waitQueue.shift()!;
+      activeWorkers.add(w);
+      nextWaiter(w);
+    } else {
+      idleWorkers.push(w);
+    }
+  };
+
+  return {
+    execute: async (input: ScriptInput, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<ScriptResult> => {
+      if (disposed || options?.signal?.aborted) {
+        return {
+          success: false,
+          error: 'Script execution was aborted before evaluation.',
+          environment: { ...(input.environment || {}) },
+          variables: { ...(input.variables || {}) },
+        };
+      }
+      const val = validateScriptInput(input);
+      if (!val.valid) {
+        return {
+          success: false,
+          error: val.error || 'Invalid script input.',
+          environment: { ...(input.environment || {}) },
+          variables: { ...(input.variables || {}) },
+        };
+      }
+      if (typeof Worker === 'undefined') {
+        return runQuickJsGuest(input, options);
+      }
+
+      const worker = await acquireWorker();
+      if (disposed || options?.signal?.aborted) {
+        releaseWorker(worker, true);
+        return {
+          success: false,
+          error: 'Script execution aborted.',
+          environment: { ...(input.environment || {}) },
+          variables: { ...(input.variables || {}) },
+        };
+      }
+
+      return new Promise<ScriptResult>((resolve) => {
+        let settled = false;
+        let evalWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
+        const reqId = `pool_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const timeoutMs = options?.timeoutMs ?? SCRIPT_LIMITS.DEFAULT_TIMEOUT_MS;
+
+        const startupTimer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          cleanup(false);
+          resolve({
+            success: false,
+            error: 'Pooled worker failed to start within 5000ms.',
+            environment: { ...(input.environment || {}) },
+            variables: { ...(input.variables || {}) },
+          });
+        }, 5000);
+
+        const cleanup = (healthy: boolean) => {
+          clearTimeout(startupTimer);
+          if (evalWatchdogTimer) {
+            clearTimeout(evalWatchdogTimer);
+            evalWatchdogTimer = null;
+          }
+          worker.onmessage = null;
+          worker.onerror = null;
+          if (options?.signal) {
+            options.signal.removeEventListener('abort', onAbort);
+          }
+          releaseWorker(worker, healthy);
+        };
+
+        const onAbort = () => {
+          if (settled) return;
+          settled = true;
+          cleanup(false);
+          resolve({
+            success: false,
+            error: 'Script execution aborted.',
+            environment: { ...(input.environment || {}) },
+            variables: { ...(input.variables || {}) },
+          });
+        };
+
+        if (options?.signal) {
+          options.signal.addEventListener('abort', onAbort, { once: true });
+        }
+
+        worker.onmessage = (e: MessageEvent<ScriptWorkerResponse>) => {
+          if (settled || !e.data || e.data.id !== reqId) return;
+          if (e.data.type === 'EVAL_START') {
+            clearTimeout(startupTimer);
+            if (!evalWatchdogTimer) {
+              evalWatchdogTimer = setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                cleanup(false);
+                resolve({
+                  success: false,
+                  error: 'Script execution timed out (host watchdog).',
+                  environment: { ...(input.environment || {}) },
+                  variables: { ...(input.variables || {}) },
+                });
+              }, timeoutMs + 200);
+            }
+            return;
+          }
+          if (e.data.type === 'RESULT') {
+            settled = true;
+            cleanup(true);
+            resolve(e.data.result);
+          }
+        };
+
+        worker.onerror = (err: ErrorEvent) => {
+          if (settled) return;
+          settled = true;
+          cleanup(false);
+          resolve({
+            success: false,
+            error: err.message || 'Pooled worker execution error.',
+            environment: { ...(input.environment || {}) },
+            variables: { ...(input.variables || {}) },
+          });
+        };
+
+        const req: ScriptWorkerRequest = {
+          id: reqId,
+          type: 'EXECUTE',
+          input,
+          timeoutMs,
+        };
+        worker.postMessage(req);
+      });
+    },
+    dispose: () => {
+      disposed = true;
+      for (const w of idleWorkers.splice(0, idleWorkers.length)) {
+        try {
+          w.terminate();
+        } catch {
+          // ignore
+        }
+      }
+      for (const w of activeWorkers) {
+        try {
+          w.terminate();
+        } catch {
+          // ignore
+        }
+      }
+      activeWorkers.clear();
+      waitQueue.length = 0;
+    },
+  };
+}
+
+export const tauriPerfScriptExecutor: ScriptExecutor = createReusableQuickJsPool(4);
+
+export const tauriPerformanceRunner: NativePerformanceRunner = {
+  maxVirtualUsers: 10000,
+  startRun: async (
+    input: NativePerformanceRunInput,
+    callbacks: NativePerformanceCallbacks
+  ): Promise<NativePerformanceRunHandle> => {
+    let unlistenTick: (() => void) | null = null;
+    let unlistenComplete: (() => void) | null = null;
+    const cleanup = () => {
+      if (unlistenTick) {
+        unlistenTick();
+        unlistenTick = null;
+      }
+      if (unlistenComplete) {
+        unlistenComplete();
+        unlistenComplete = null;
+      }
+    };
+
+    try {
+      unlistenTick = await listen<NativePerformanceTickPayload>('airrest:perf-tick', (event) => {
+        if (event.payload?.runId === input.runId) {
+          callbacks.onTick(event.payload);
+        }
+      });
+      unlistenComplete = await listen<NativePerformanceCompletePayload>('airrest:perf-complete', (event) => {
+        if (event.payload?.runId === input.runId) {
+          cleanup();
+          callbacks.onComplete(event.payload);
+        }
+      });
+
+      const handle = await invoke<NativePerformanceRunHandle>('start_performance_run', { input });
+      return handle;
+    } catch (err) {
+      cleanup();
+      throw err;
+    }
+  },
+  stopRun: async (runId: string) => {
+    await invoke('stop_performance_run', { runId });
+  },
+  updateVariables: async (runId: string, variables: Record<string, string>) => {
+    await invoke('update_performance_variables', { runId, variables });
+  },
+  checkCapacity: async () => {
+    return invoke<{ softFdLimit?: number; hardFdLimit?: number }>('check_performance_capacity');
+  },
+};
+
 export const tauriAdapter: PlatformAdapter = {
   platformId: typeof __AIRREST_ANDROID__ !== 'undefined' && __AIRREST_ANDROID__ ? 'android' : 'desktop',
   capabilities: {
@@ -528,6 +793,8 @@ export const tauriAdapter: PlatformAdapter = {
   cloudTransport: tauriCloudTransport,
   credentialStorage: tauriCredentialStorage,
   scriptExecutor: tauriScriptExecutor,
+  perfScriptExecutor: tauriPerfScriptExecutor,
+  performanceRunner: typeof __AIRREST_ANDROID__ !== 'undefined' && __AIRREST_ANDROID__ ? undefined : tauriPerformanceRunner,
   saveFile: async (filename: string, content: string | Uint8Array, options?: FileOptions & { mimeType?: string }) => {
     const isAndroid = typeof __AIRREST_ANDROID__ !== 'undefined' && __AIRREST_ANDROID__;
     const filterOptions = isAndroid
@@ -613,5 +880,6 @@ export const tauriAdapter: PlatformAdapter = {
   requestHostPermission: async () => true,
   dispose: () => {
     tauriScriptExecutor.dispose();
+    tauriPerfScriptExecutor.dispose();
   },
 };

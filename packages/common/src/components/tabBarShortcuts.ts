@@ -15,6 +15,14 @@ export interface CloseTabShortcutOptions {
   isMac: boolean;
 }
 
+export interface RequestShortcutLabels {
+  send: string;
+  save: string;
+  undo: string;
+  redo: string;
+  paste: string;
+}
+
 const BLOCKING_MODAL_SELECTOR =
   '[data-modal="true"], [role="dialog"], [data-payload-modal="true"], .fixed.inset-0[class*="z-50"]:not([data-non-blocking-overlay="true"]), .fixed.inset-0[class*="z-[60]"]:not([data-non-blocking-overlay="true"]), .fixed.inset-0[class*="z-[70]"]:not([data-non-blocking-overlay="true"])';
 
@@ -75,6 +83,22 @@ export function getCloseTabShortcutLabel(options: CloseTabShortcutOptions): stri
   const altLabel = options.isMac ? 'Option+W' : 'Alt+W';
   if (!options.isDesktop) return altLabel;
   return options.isMac ? `⌘+W / ${altLabel}` : `Ctrl+W / ${altLabel}`;
+}
+
+/**
+ * Formats platform-appropriate keyboard shortcut labels for request studio actions.
+ *
+ * @param isMac Whether the current platform uses Apple Command modifier conventions.
+ * @returns Display shortcut labels for send, save, undo, redo, and paste.
+ */
+export function getRequestShortcutLabels(isMac: boolean = isApplePlatform()): RequestShortcutLabels {
+  return {
+    send: isMac ? '⌘+Enter' : 'Ctrl+Enter',
+    save: isMac ? '⌘+S' : 'Ctrl+S',
+    undo: isMac ? '⌘+Z' : 'Ctrl+Z',
+    redo: isMac ? '⌘+Shift+Z' : 'Ctrl+Y',
+    paste: isMac ? '⌘+V' : 'Ctrl+V',
+  };
 }
 
 /**

@@ -234,8 +234,11 @@ test('Gate P0.3: pm.response failed assertion reports test failure', async () =>
     },
   });
 
-  assert.equal(result.success, false);
-  assert.match(result.error, /Expected status code 200 but got 404/);
+  assert.equal(result.success, true, result.error);
+  assert.ok(Array.isArray(result.testResults) && result.testResults.length === 1);
+  assert.equal(result.testResults[0].name, 'Status is 200');
+  assert.equal(result.testResults[0].passed, false);
+  assert.match(result.testResults[0].error || '', /Expected status code 200 but got 404/);
 });
 
 test('Gate P0.3: reserved sandbox parameter redeclaration explains how to fix it', async () => {
@@ -816,4 +819,95 @@ test('T-NAT-QUICKJS: QuickJS module cache resets on error and 2 MiB response exe
     new TextEncoder().encode(oversizedResponseInput.response.data).length <= 2 * 1024 * 1024,
     'Truncated response must be <= 2 MiB'
   );
+});
+
+test('Gate P2A: QuickJS sandbox supports pm.iterationData and variable lookup precedence', async () => {
+  const res = await runScriptInQuickJS({
+    script: `
+      pm.variables.set('fromVar', 'var-win');
+      pm.environment.set('fromIter', pm.iterationData.get('userId'));
+      pm.environment.set('hasSecret', String(pm.iterationData.has('secret')));
+      pm.environment.set('iterLookup', pm.variables.get('userId'));
+      pm.environment.set('varLookup', pm.variables.get('fromVar'));
+      pm.environment.set('iterObjKeys', Object.keys(pm.iterationData.toObject()).sort().join(','));
+    `,
+    environment: { userId: 'env-fallback', fromVar: 'env-val' },
+    variables: {},
+    iterationData: { userId: 'row-99', fromVar: 'row-val' },
+  });
+
+  assert.equal(res.success, true, res.error);
+  assert.equal(res.environment.fromIter, 'row-99');
+  assert.equal(res.environment.hasSecret, 'false');
+  assert.equal(res.environment.iterLookup, 'row-99');
+  assert.equal(res.environment.varLookup, 'var-win');
+  assert.equal(res.environment.iterObjKeys, 'fromVar,userId');
+
+  const badIter = validateScriptInput({
+    script: 'pm.iterationData.get("a");',
+    environment: {},
+    variables: {},
+    iterationData: JSON.parse('{"__proto__":"bad"}'),
+  });
+  assert.equal(badIter.valid, false);
+});
+
+test('Gate P2B: QuickJS sandbox structured pm.test, Chai subset, legacy tests[], and setNextRequest', async () => {
+  const res = await runScriptInQuickJS({
+    script: `
+      const data = pm.response.json();
+      pm.test("Should fail first test without aborting script", () => {
+        pm.expect(pm.response.code).to.be(500);
+      });
+      pm.test("Status, headers, jsonBody, and Chai matchers pass", () => {
+        pm.response.to.have.status(200);
+        pm.response.to.have.header("Content-Type", "application/json");
+        pm.response.to.have.jsonBody("user.name", "Alice");
+        pm.expect(pm.response.responseTime).to.be.below(100);
+        pm.expect(data.tags).to.be.an("array").and.to.have.lengthOf(2);
+        pm.expect(data.tags).to.include("admin");
+        pm.expect(data.user).to.have.property("name", "Alice");
+        pm.expect(data.meta).to.eql({ active: true, score: 12 });
+        pm.expect(data.meta.active).to.be.true;
+        pm.expect(data.meta.score).to.be.above(10).and.to.not.be.below(12);
+        pm.expect(data.user.name).to.match(/^Ali/);
+        pm.expect(data.nothing).to.be.null;
+      });
+      tests["Legacy ok flag"] = data.ok === true;
+      pm.environment.set("afterFailedTest", "yes");
+      postman.setNextRequest("Step Two");
+    `,
+    environment: {},
+    variables: {},
+    response: {
+      status: 200,
+      statusText: 'OK',
+      headers: { 'content-type': 'application/json' },
+      data: JSON.stringify({
+        ok: true,
+        user: { name: 'Alice' },
+        tags: ['admin', 'dev'],
+        meta: { active: true, score: 12 },
+        nothing: null,
+      }),
+      timeMs: 35,
+    },
+  });
+
+  assert.equal(res.success, true, res.error);
+  assert.equal(res.environment.afterFailedTest, 'yes');
+  assert.equal(res.nextRequest, 'Step Two');
+  assert.equal(res.testResults.length, 3);
+  assert.equal(res.testResults[0].passed, false);
+  assert.equal(res.testResults[1].passed, true, res.testResults[1].error);
+  assert.equal(res.testResults[2].name, 'Legacy ok flag');
+  assert.equal(res.testResults[2].passed, true);
+
+  const nullNextRes = await runScriptInQuickJS({
+    script: `pm.execution.setNextRequest(null);`,
+    environment: {},
+    variables: {},
+  });
+  assert.equal(nullNextRes.success, true, nullNextRes.error);
+  assert.equal(nullNextRes.nextRequest, null);
 });

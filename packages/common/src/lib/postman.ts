@@ -1445,7 +1445,7 @@ export function exportPostmanEnvironment(env: Environment): string {
       })),
     _postman_variable_scope: 'environment',
     _postman_exported_at: new Date().toISOString(),
-    _postman_exported_using: 'AirREST/1.4.1',
+    _postman_exported_using: 'AirREST/1.5.0',
   };
 
   return JSON.stringify(postmanFormat, null, 2);

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
-import { Plus, X, Layers, ArrowRight, Trash2, Copy, MoreVertical, AlertTriangle, Bookmark, BookOpen, ExternalLink } from 'lucide-react';
+import { Plus, X, Layers, ArrowRight, Trash2, Copy, MoreVertical, AlertTriangle, Bookmark, BookOpen, ExternalLink, Flame, Play } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
 import { MethodBadge } from './MethodBadge';
 import { isRequestModified, findSavedRequestInCollections, flattenCollectionRequests } from '../lib/requestDiff';
@@ -10,6 +10,7 @@ import {
   findCollectionItemById,
   getDisplayExampleSummaries,
   isExampleTabId,
+  isPerformanceTabId,
   makeExampleTabId,
 } from '../lib/examples';
 import { useBackHandler } from '../lib/backNavigation';
@@ -46,12 +47,16 @@ interface ContextMenuPosition {
 export const TabBar: React.FC = () => {
   const tabs = useApiStore((state) => state.tabs);
   const openExampleTabs = useApiStore((state) => state.openExampleTabs);
+  const openPerformanceTabs = useApiStore((state) => state.openPerformanceTabs);
   const tabOrder = useApiStore((state) => state.tabOrder);
   const collections = useApiStore((state) => state.collections);
   const activeTabId = useApiStore((state) => state.activeTabId);
   const selectedExample = useApiStore((state) => state.selectedExample);
+  const selectedPerformanceTabId = useApiStore((state) => state.selectedPerformanceTabId);
   const selectSavedExample = useApiStore((state) => state.selectSavedExample);
   const closeExampleTab = useApiStore((state) => state.closeExampleTab);
+  const selectPerformanceTab = useApiStore((state) => state.selectPerformanceTab);
+  const closePerformanceTab = useApiStore((state) => state.closePerformanceTab);
   const openRequestInTab = useApiStore((state) => state.openRequestInTab);
   const tabRevealRevision = useApiStore((state) => state.tabRevealRevision);
   const setActiveTabId = useApiStore((state) => state.setActiveTabId);
@@ -106,8 +111,12 @@ export const TabBar: React.FC = () => {
   const overflowFrameRef = useRef<number | null>(null);
   const resizeFrameRef = useRef<number | null>(null);
   const visibleTabs = (tabs || []).filter(Boolean);
-  const visualTabs = buildOrderedVisualTabs(visibleTabs, openExampleTabs || [], tabOrder || []);
-  const activeVisualTabId = selectedExample ? makeExampleTabId(selectedExample) : activeTabId;
+  const visualTabs = buildOrderedVisualTabs(visibleTabs, openExampleTabs || [], tabOrder || [], openPerformanceTabs || []);
+  const activeVisualTabId = selectedPerformanceTabId
+    ? selectedPerformanceTabId
+    : selectedExample
+      ? makeExampleTabId(selectedExample)
+      : activeTabId;
   const activeTabIdRef = useRef(activeVisualTabId);
   const activeTabWasVisibleRef = useRef(true);
   const tabOverflowRef = useRef<TabOverflowCounts>(tabOverflow);
@@ -386,6 +395,10 @@ export const TabBar: React.FC = () => {
   }, [clearPendingCloseQueue, closeTab, setActiveTabId]);
 
   const handleRequestCloseScope = (scope: TabCloseScope) => {
+    if (scope.type === 'single' && isPerformanceTabId(scope.tabId)) {
+      closePerformanceTab(scope.tabId);
+      return;
+    }
     if (scope.type === 'single' && isExampleTabId(scope.tabId)) {
       closeExampleTab(scope.tabId);
       return;
@@ -413,7 +426,9 @@ export const TabBar: React.FC = () => {
     }
 
     for (const cleanId of plan.cleanTabIds) {
-      if (isExampleTabId(cleanId)) {
+      if (isPerformanceTabId(cleanId)) {
+        closePerformanceTab(cleanId);
+      } else if (isExampleTabId(cleanId)) {
         closeExampleTab(cleanId);
       } else {
         closeTab(cleanId);
@@ -451,12 +466,23 @@ export const TabBar: React.FC = () => {
   shortcutBlockedRef.current = Boolean(isSwitchingWorkspace || unsavedConfirmTab || isSaveModalOpen);
   const selectedExampleRef = useRef(selectedExample);
   selectedExampleRef.current = selectedExample;
+  const selectedPerfTabIdRef = useRef(selectedPerformanceTabId);
+  selectedPerfTabIdRef.current = selectedPerformanceTabId;
   const lastNativeCloseAtRef = useRef(0);
 
-  // Close the active example tab or request tab with Alt+W (all platforms) or Ctrl+W / Cmd+W (desktop)
+  // Close the active performance, example, or request tab with Alt+W (all platforms) or Ctrl+W / Cmd+W (desktop)
   useEffect(() => {
     const triggerCloseActiveTab = () => {
       if (shortcutBlockedRef.current || hasOpenBlockingModal()) return false;
+
+      if (selectedPerfTabIdRef.current) {
+        if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur();
+        }
+        setContextMenu(null);
+        closePerformanceTab(selectedPerfTabIdRef.current);
+        return true;
+      }
 
       if (selectedExampleRef.current) {
         if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
@@ -607,6 +633,9 @@ export const TabBar: React.FC = () => {
   const contextExampleTab = contextMenu?.tabId && isExampleTabId(contextMenu.tabId)
     ? (openExampleTabs || []).find((ex) => ex.id === contextMenu.tabId)
     : undefined;
+  const contextPerfTab = contextMenu?.tabId && isPerformanceTabId(contextMenu.tabId)
+    ? (openPerformanceTabs || []).find((p) => p.id === contextMenu.tabId)
+    : undefined;
   const contextExampleParentRequest = contextExampleTab
     ? (() => {
         const col = collections.find((c) => c.id === contextExampleTab.collectionId);
@@ -654,6 +683,74 @@ export const TabBar: React.FC = () => {
         >
           <div ref={tabTrackRef} className="flex w-max items-center gap-1.5">
           {visualTabs.map((entry) => {
+            if (entry.kind === 'performance') {
+              const perfTab = entry.performanceTab;
+              const isActive = entry.id === activeVisualTabId;
+              const isRunning = perfTab.viewMode === 'running';
+              const isFunctional = perfTab.runnerMode === 'functional';
+              return (
+                <div
+                  key={entry.id}
+                  ref={(element) => {
+                    if (element) tabElementRefs.current.set(entry.id, element);
+                    else tabElementRefs.current.delete(entry.id);
+                  }}
+                  onClick={() => selectPerformanceTab(perfTab.id)}
+                  onContextMenu={(e) => handleTabContextMenu(e, entry.id)}
+                  onAuxClick={(e) => handleTabAuxClick(e, entry.id)}
+                  className={`group flex shrink-0 items-center gap-1.5 max-w-[225px] cursor-pointer rounded-t-md border-t-2 px-2.5 py-1 text-xs font-medium transition-all select-none ${
+                    isActive
+                      ? `${isFunctional ? 'border-emerald-500' : 'border-amber-500'} bg-card text-tx-primary shadow-xs`
+                      : 'border-transparent bg-element/50 text-tx-muted hover:bg-hover hover:text-tx-primary'
+                  }`}
+                >
+                  {isFunctional ? (
+                    <Play className="h-3 w-3 shrink-0 text-emerald-500" />
+                  ) : (
+                    <Flame className="h-3 w-3 shrink-0 text-amber-500" />
+                  )}
+                  {isRunning && (
+                    <span
+                      className={`h-1.5 w-1.5 shrink-0 rounded-full animate-ping ${
+                        isFunctional ? 'bg-emerald-400' : 'bg-amber-400'
+                      }`}
+                      title={isFunctional ? 'Running functional collection run' : 'Running performance test'}
+                    />
+                  )}
+                  <span className="truncate max-w-[130px]" title={perfTab.title}>
+                    {perfTab.title}
+                  </span>
+
+                  <button
+                    type="button"
+                    aria-label={`Actions for ${perfTab.title}`}
+                    className="rounded p-1 text-tx-muted hover:bg-hover md:hidden"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      setContextMenu({
+                        x: Math.max(10, Math.min(rect.left, window.innerWidth - 210)),
+                        y: Math.max(10, Math.min(rect.bottom, window.innerHeight - 230)),
+                        tabId: entry.id,
+                      });
+                    }}
+                  ><MoreVertical className="h-4 w-4" /></button>
+
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleRequestCloseTab(entry.id);
+                    }}
+                    className="ml-auto rounded p-0.5 text-tx-muted opacity-60 hover:bg-hover hover:text-tx-primary group-hover:opacity-100 transition"
+                    title={isActive ? `Close performance tab (${closeTabShortcutLabel})` : 'Close performance tab'}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              );
+            }
+
             if (entry.kind === 'example') {
               const exTab = entry.exampleTab;
               const isActive = entry.id === activeVisualTabId;
@@ -911,7 +1008,7 @@ export const TabBar: React.FC = () => {
 
               <div className="h-px bg-line my-1 mx-1" />
 
-              {contextExampleTab ? (
+              {contextPerfTab ? null : contextExampleTab ? (
                 contextExampleParentRequest && (
                   <button
                     type="button"

@@ -1,3 +1,5 @@
+import type { ScriptTestResult } from './platform';
+
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS';
 
 export interface KeyValuePair {
@@ -108,6 +110,7 @@ export interface ApiResponse {
   netErrorCode?: string;
   netErrorCategory?: NetworkErrorCategory;
   failureKind?: RequestFailureKind;
+  testResults?: ScriptTestResult[];
 }
 
 export interface SavedExampleHeader {
@@ -364,4 +367,381 @@ export interface DuplicateActionResult {
   detailsUnavailable?: boolean;
   detailsError?: string;
   revealPathIds?: string[];
+}
+
+export type LoadProfileType = 'fixed' | 'ramp_up' | 'spike' | 'peak' | 'staircase';
+
+export type PerformanceExecutionMode = 'sequential' | 'pre_run_setup';
+
+export type PerformanceDurationUnit = 'seconds' | 'minutes';
+
+export type PerformanceEngineMode = 'rust_native' | 'hybrid_pool' | 'js_bounded';
+
+export type PerformanceLatencyMetric = 'avg' | 'p90' | 'p95' | 'p99' | 'min' | 'max';
+
+export interface StaircaseStep {
+  /** Normalized end position in (0, 1]; final step ends at 1. */
+  endNorm: number;
+  /** Target virtual users for this step plateau. */
+  virtualUsers: number;
+}
+
+export interface LoadProfileConfig {
+  profile: LoadProfileType;
+  virtualUsers: number;
+  baseLoad: number;
+  durationValue: number;
+  durationUnit: PerformanceDurationUnit;
+  /** Normalized handle positions in (0, 1) keyed by profile type. */
+  handles: Record<LoadProfileType, number[]>;
+  /** Editable 2D steps for the staircase profile (duration boundaries + per-step VU). */
+  staircaseSteps?: StaircaseStep[];
+  thinkTimeMs: number;
+}
+
+export type RunnerMode = 'functional' | 'performance';
+
+export type FunctionalStopOnErrorMode = 'never' | 'request_or_script_error' | 'failed_test';
+
+export interface PerformanceNetworkOptions {
+  requestTimeoutMs: number;
+  /** When true (default), auto-syncs timeout to min(60_000 ms, testDurationMs). */
+  requestTimeoutAuto?: boolean;
+  followRedirects: boolean;
+  ignoreSslErrors: boolean;
+}
+
+export interface FunctionalRunnerConfig {
+  iterations: number;
+  delayMs: number;
+  persistResponses: boolean;
+  keepVariableValues: boolean;
+  stopOnError: FunctionalStopOnErrorMode;
+  requestTimeoutMs: number;
+  followRedirects: boolean;
+  ignoreSslErrors: boolean;
+}
+
+export type FunctionalStepStatus = 'passed' | 'failed' | 'error' | 'skipped';
+
+export interface FunctionalCapturedExchange {
+  requestMethod: HttpMethod;
+  requestUrl: string;
+  requestHeaders: Record<string, string>;
+  requestBody?: string;
+  requestBodyTruncated?: boolean;
+  responseHeaders: Record<string, string>;
+  responseBody: string;
+  responseBodyTruncated?: boolean;
+  dataRow?: Record<string, string>;
+}
+
+export interface FunctionalStepResult {
+  id: string;
+  iteration: number;
+  stepIndex: number;
+  itemId: string;
+  name: string;
+  method: HttpMethod;
+  url: string;
+  status: FunctionalStepStatus;
+  httpStatus: number;
+  statusText: string;
+  timeMs: number;
+  sizeBytes: number;
+  testResults: ScriptTestResult[];
+  testsPassed: number;
+  testsFailed: number;
+  errorMessage?: string;
+  scriptError?: string;
+  scriptErrorStage?: ScriptErrorStage;
+  nextRequestTarget?: string | null;
+  dataRowIndex?: number;
+  hasCapturedExchange?: boolean;
+  captureSkippedReason?: 'disabled' | 'step_limit' | 'memory_budget';
+  timestamp: number;
+}
+
+export type FunctionalRunStatus = 'running' | 'completed' | 'stopped' | 'failed';
+
+export interface FunctionalRunReport {
+  id: string;
+  tabId: string;
+  title: string;
+  sourceType: 'collection' | 'folder' | 'request';
+  sourceId: string;
+  status: FunctionalRunStatus;
+  startedAt: number;
+  finishedAt?: number;
+  durationMs: number;
+  config: FunctionalRunnerConfig;
+  dataFile?: Omit<PerformanceDataFileMeta, 'previewRows'>;
+  plannedIterations: number;
+  completedIterations: number;
+  totalRequestsExecuted: number;
+  requestsPassed: number;
+  requestsFailed: number;
+  requestsErrored: number;
+  requestsSkipped: number;
+  totalTests: number;
+  testsPassed: number;
+  testsFailed: number;
+  avgResponseTimeMs: number;
+  steps: FunctionalStepResult[];
+  failedItemIds: string[];
+  updatedEnvVars?: string[];
+  stopReason?: string;
+  captureBudgetExhausted?: boolean;
+}
+
+export type PerformanceDataFileFormat = 'csv' | 'json';
+
+export type PerformanceDataFileReadMode = 'sequential' | 'random' | 'per_vu';
+
+export interface PerformanceDataFileMeta {
+  filename: string;
+  format: PerformanceDataFileFormat;
+  fileBytes: number;
+  rowCount: number;
+  columns: string[];
+  previewRows: Array<Record<string, string>>;
+  readMode: PerformanceDataFileReadMode;
+}
+
+export type PerformanceThresholdMetric =
+  | 'avgMs'
+  | 'p90Ms'
+  | 'p95Ms'
+  | 'p99Ms'
+  | 'errorRatePct'
+  | 'requestsPerSec'
+  | 'maxRequestsPerSec';
+
+export type PerformanceThresholdOperator = 'lt' | 'lte' | 'gt' | 'gte';
+
+export interface PerformanceThresholdRule {
+  id: string;
+  enabled: boolean;
+  /** 'overall' or a loop requestId */
+  targetRequestId: string;
+  metric: PerformanceThresholdMetric;
+  operator: PerformanceThresholdOperator;
+  value: number;
+  abortOnFail?: boolean;
+}
+
+export interface PerformanceThresholdConfig {
+  rules: PerformanceThresholdRule[];
+  abortGracePeriodSec: number;
+  abortConsecutiveBreaches: number;
+}
+
+export interface PerformanceThresholdEvaluation {
+  ruleId: string;
+  targetRequestId: string;
+  targetLabel: string;
+  metric: PerformanceThresholdMetric;
+  operator: PerformanceThresholdOperator;
+  expected: number;
+  actual: number;
+  passed: boolean;
+  abortOnFail: boolean;
+  triggeredAbort?: boolean;
+}
+
+export interface PerformanceSlaSummary {
+  status: 'passed' | 'failed';
+  passedCount: number;
+  failedCount: number;
+  totalCount: number;
+  autoAborted: boolean;
+  autoAbortedReason?: string;
+  results: PerformanceThresholdEvaluation[];
+}
+
+export interface PerformanceSetupRefreshConfig {
+  enabled: boolean;
+  intervalValue: number;
+  intervalUnit: PerformanceDurationUnit;
+  refreshOn401: boolean;
+  cooldownSec: number;
+}
+
+export interface PerformanceSetupRefreshStats {
+  attempts: number;
+  successes: number;
+  failures: number;
+  lastRefreshedAt?: number;
+  lastError?: string;
+}
+
+export interface PerformanceRequestDescriptor {
+  id: string;
+  itemId: string;
+  name: string;
+  method: HttpMethod;
+  path: string;
+  request: ApiRequest;
+  selected: boolean;
+}
+
+export interface OpenPerformanceTab {
+  id: string;
+  title: string;
+  runnerMode: RunnerMode;
+  sourceType: 'collection' | 'folder' | 'request';
+  sourceId: string;
+  collectionId?: string;
+  items: PerformanceRequestDescriptor[];
+  executionMode: PerformanceExecutionMode;
+  setupItemIds: string[];
+  setupRefresh?: PerformanceSetupRefreshConfig;
+  runInLoopScripts: boolean;
+  loadProfile: LoadProfileConfig;
+  network: PerformanceNetworkOptions;
+  functionalConfig: FunctionalRunnerConfig;
+  dataFile?: PerformanceDataFileMeta;
+  thresholds?: PerformanceThresholdConfig;
+  viewMode: 'setup' | 'running' | 'report';
+  activeRunId?: string | null;
+  viewingReportId?: string | null;
+  activeFunctionalRunId?: string | null;
+  viewingFunctionalReportId?: string | null;
+  createdAt: number;
+}
+
+export interface PerformanceMetricSnapshot {
+  totalRequests: number;
+  errorCount: number;
+  errorRatePct: number;
+  requestsPerSec: number;
+  maxRequestsPerSec?: number;
+  avgMs: number;
+  minMs: number;
+  maxMs: number;
+  p90Ms: number;
+  p95Ms: number;
+  p99Ms: number;
+  bytesReceived: number;
+}
+
+export interface PerformanceRequestBucketMetrics {
+  totalRequests: number;
+  errorCount: number;
+  errorRatePct: number;
+  requestsPerSec: number;
+  avgMs: number;
+  minMs: number;
+  maxMs: number;
+  p90Ms: number;
+  p95Ms: number;
+  p99Ms: number;
+}
+
+export interface PerformanceTimeBucket {
+  second: number;
+  timestampMs: number;
+  virtualUsers: number;
+  totalRequests: number;
+  errorCount: number;
+  errorRatePct: number;
+  requestsPerSec: number;
+  avgMs: number;
+  minMs: number;
+  maxMs: number;
+  p90Ms: number;
+  p95Ms: number;
+  p99Ms: number;
+  byRequest?: Record<string, PerformanceRequestBucketMetrics>;
+}
+
+export interface PerformanceEndpointBreakdown {
+  requestId: string;
+  name: string;
+  method: HttpMethod;
+  path: string;
+  totalRequests: number;
+  errorCount: number;
+  errorRatePct: number;
+  requestsPerSec: number;
+  maxRequestsPerSec?: number;
+  avgMs: number;
+  minMs: number;
+  maxMs: number;
+  p90Ms: number;
+  p95Ms: number;
+  p99Ms: number;
+  bytesReceived: number;
+}
+
+export interface PerformanceErrorGroup {
+  key: string;
+  status: number;
+  category: string;
+  label: string;
+  count: number;
+  requestIds: string[];
+}
+
+export interface PerformanceErrorSample {
+  id: string;
+  timestampMs: number;
+  requestId: string;
+  requestName: string;
+  method: HttpMethod;
+  url: string;
+  status: number;
+  statusText: string;
+  category: string;
+  message: string;
+  responseSnippet?: string;
+  timeMs: number;
+}
+
+export interface PerformanceSetupStepResult {
+  requestId: string;
+  name: string;
+  method: HttpMethod;
+  url: string;
+  status: number;
+  timeMs: number;
+  success: boolean;
+  error?: string;
+  updatedVariables: string[];
+}
+
+export interface PerformanceRunReport {
+  id: string;
+  tabId: string;
+  title: string;
+  sourceType: 'collection' | 'folder' | 'request';
+  sourceId: string;
+  startedAt: number;
+  finishedAt: number;
+  durationMs: number;
+  status: 'running' | 'completed' | 'stopped' | 'failed';
+  engineMode: PerformanceEngineMode;
+  platformId: 'desktop' | 'extension' | 'android' | 'web';
+  executionMode: PerformanceExecutionMode;
+  setupResults?: PerformanceSetupStepResult[];
+  setupRefreshStats?: PerformanceSetupRefreshStats;
+  failureReason?: string;
+  autoAborted?: boolean;
+  slaResult?: PerformanceSlaSummary;
+  configSnapshot: {
+    loadProfile: LoadProfileConfig;
+    network: PerformanceNetworkOptions;
+    requestCount: number;
+    setupRequestCount: number;
+    runInLoopScripts: boolean;
+    dataFile?: Omit<PerformanceDataFileMeta, 'previewRows'>;
+    thresholds?: PerformanceThresholdConfig;
+    setupRefresh?: PerformanceSetupRefreshConfig;
+  };
+  summary: PerformanceMetricSnapshot;
+  timeSeries: PerformanceTimeBucket[];
+  endpoints: PerformanceEndpointBreakdown[];
+  errorGroups: PerformanceErrorGroup[];
+  errorSamples: PerformanceErrorSample[];
+  warnings: string[];
 }
