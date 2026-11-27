@@ -860,11 +860,11 @@ func (r *DuplicateRepository) DuplicateItem(
 			projID    *uuid.UUID
 			deletedAt *time.Time
 		}
-		colIDs := []uuid.UUID{sourceCollectionID}
+		colIDs := []string{sourceCollectionID.String()}
 		if targetCollectionID != sourceCollectionID {
-			colIDs = append(colIDs, targetCollectionID)
+			colIDs = append(colIDs, targetCollectionID.String())
 		}
-		rows, err := tx.Query(ctx, `SELECT id, workspace_id, project_id, deleted_at FROM collections WHERE id = ANY($1)`, colIDs)
+		rows, err := tx.Query(ctx, `SELECT id, workspace_id, project_id, deleted_at FROM collections WHERE id = ANY($1::text[]::uuid[])`, colIDs)
 		if err != nil {
 			return err
 		}
@@ -907,7 +907,7 @@ func (r *DuplicateRepository) DuplicateItem(
 		lockRows, err := tx.Query(ctx, `
 			SELECT id, workspace_id, project_id, min_role, version, deleted_at
 			FROM collections
-			WHERE id = ANY($1)
+			WHERE id = ANY($1::text[]::uuid[])
 			ORDER BY id FOR UPDATE
 		`, colIDs)
 		if err != nil {

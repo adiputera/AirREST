@@ -704,12 +704,21 @@ test('F01 & F02 ImportModal component harness: close/scope-switch cancellation, 
 
   const urlParamsMod = loadReal('packages/common/src/lib/urlParams.ts');
   const examplesMod = loadReal('packages/common/src/lib/examples.ts');
+  const perfMetricsMod = loadReal('packages/common/src/lib/perfMetrics.ts');
+  const perfComparisonMod = loadReal('packages/common/src/lib/perfComparison.ts', {
+    './perfMetrics': perfMetricsMod,
+  });
+  const reportShareMod = loadReal('packages/common/src/lib/reportShare.ts', {
+    './examples': examplesMod,
+    './perfComparison': perfComparisonMod,
+  });
   const postmanMod = loadReal('packages/common/src/lib/postman.ts', {
     './urlParams': urlParamsMod,
     './examples': examplesMod,
   });
   const importBatchMod = loadReal('packages/common/src/lib/importBatch.ts', {
     './postman': postmanMod,
+    './reportShare': reportShareMod,
   });
   const requestDiffMod = loadReal('packages/common/src/lib/requestDiff.ts', {
     './examples': examplesMod,
@@ -816,6 +825,17 @@ test('F01 & F02 ImportModal component harness: close/scope-switch cancellation, 
       './requestEditorSectionState': {
         queueInitialRequestEditorSection: () => { },
         resolveInitialCurlSection: () => 'params',
+      },
+      '../lib/reportShare': reportShareMod,
+      './performance/ReportImportResolveModal': { ReportImportResolveModal: () => null },
+      './performance/useReportImporter': {
+        useReportImporter: () => ({
+          resolvePrompt: null,
+          handleResolveChoice: () => { },
+          importReportContent: async () => ({ ok: true }),
+          attachSessionReportToCollection: async () => ({ ok: true }),
+          pickReportFileContent: async () => null,
+        }),
       },
     };
     fn(

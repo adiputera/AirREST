@@ -402,13 +402,17 @@ export const DuplicateCollectionModal: React.FC<DuplicateCollectionModalProps> =
 
   const ownedRecoveryIntents = useMemo(() => {
     if (!collection) return [];
-    return getOwnedPendingDuplicateIntents(pendingDuplicateIntents, cloudConfig, isOfflineOnly).filter(
+    return getOwnedPendingDuplicateIntents(pendingDuplicateIntents, cloudConfig, isOfflineOnly, {
+      workspaceMode,
+      activeScope: cloudConfig?.activeScope ?? null,
+      activeOfflineWorkspaceId,
+    }).filter(
       (intent) =>
         (intent.kind === 'collection' || intent.kind === 'import_duplicate') &&
         intent.sourceCollectionId === collection.id &&
         (!reconcilePending || intent.operationId !== pendingOpIdRef.current),
     );
-  }, [collection, pendingDuplicateIntents, cloudConfig, isOfflineOnly, reconcilePending]);
+  }, [collection, pendingDuplicateIntents, cloudConfig, isOfflineOnly, workspaceMode, activeOfflineWorkspaceId, reconcilePending]);
 
   if (!isOpen || !collection) return null;
 

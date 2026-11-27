@@ -46,6 +46,7 @@ export const DuplicateItemModal: React.FC<DuplicateItemModalProps> = ({
   const isOfflineOnly = !productPolicy.workspace.cloud;
   const collections = useApiStore((state) => state.collections);
   const workspaceMode = useApiStore((state) => state.workspaceMode);
+  const activeOfflineWorkspaceId = useApiStore((state) => state.activeOfflineWorkspaceId);
   const cloudConfig = useApiStore((state) => state.cloudConfig);
   const duplicateCollectionItem = useApiStore((state) => state.duplicateCollectionItem);
   const loadCollectionDetails = useApiStore((state) => state.loadCollectionDetails);
@@ -163,26 +164,48 @@ export const DuplicateItemModal: React.FC<DuplicateItemModalProps> = ({
     [collections, selectedCollectionId],
   );
 
-  // Lazy-fetch details when target collection in active workspace is isPartial
+  // Lazy-fetch details when source or target collection in active workspace is isPartial
   useEffect(() => {
-    if (!isOpen || !item || isCreatingCollection || !targetCollection || !targetCollection.isPartial) {
+    if (!isOpen || !item) {
+      setIsLoadingFolders(false);
+      return;
+    }
+    const idsToLoad: string[] = [];
+    if (sourceCollection?.isPartial) {
+      idsToLoad.push(sourceCollection.id);
+    }
+    if (!isCreatingCollection && targetCollection?.isPartial && !idsToLoad.includes(targetCollection.id)) {
+      idsToLoad.push(targetCollection.id);
+    }
+    if (idsToLoad.length === 0) {
       setIsLoadingFolders(false);
       return;
     }
     let active = true;
     setIsLoadingFolders(true);
     setFolderLoadError(null);
-    void loadCollectionDetails(targetCollection.id).then((res) => {
+    void Promise.all(idsToLoad.map((id) => loadCollectionDetails(id))).then((results) => {
       if (!active) return;
       setIsLoadingFolders(false);
-      if (!res.success) {
-        setFolderLoadError(res.error || 'Failed to load target collection folders.');
+      const failed = results.find((res) => !res.success);
+      if (failed) {
+        setFolderLoadError(failed.error || 'Failed to load collection details.');
       }
     });
     return () => {
       active = false;
     };
-  }, [isOpen, item?.id, isCreatingCollection, targetCollection?.id, targetCollection?.isPartial, folderReloadNonce, loadCollectionDetails]);
+  }, [
+    isOpen,
+    item?.id,
+    isCreatingCollection,
+    sourceCollection?.id,
+    sourceCollection?.isPartial,
+    targetCollection?.id,
+    targetCollection?.isPartial,
+    folderReloadNonce,
+    loadCollectionDetails,
+  ]);
 
   const canCreateInScope = hasScopePermission(
     cloudConfig.activeScope,
@@ -293,14 +316,18 @@ export const DuplicateItemModal: React.FC<DuplicateItemModalProps> = ({
 
   const ownedRecoveryIntents = useMemo(() => {
     if (!item) return [];
-    return getOwnedPendingDuplicateIntents(pendingDuplicateIntents, cloudConfig, isOfflineOnly).filter(
+    return getOwnedPendingDuplicateIntents(pendingDuplicateIntents, cloudConfig, isOfflineOnly, {
+      workspaceMode,
+      activeScope: cloudConfig?.activeScope ?? null,
+      activeOfflineWorkspaceId,
+    }).filter(
       (intent) =>
         intent.kind === 'item' &&
         intent.sourceCollectionId === sourceCollectionId &&
         intent.sourceItemId === item.id &&
         (!reconcilePending || intent.operationId !== pendingOpIdRef.current),
     );
-  }, [item, sourceCollectionId, pendingDuplicateIntents, cloudConfig, isOfflineOnly, reconcilePending]);
+  }, [item, sourceCollectionId, pendingDuplicateIntents, cloudConfig, isOfflineOnly, workspaceMode, activeOfflineWorkspaceId, reconcilePending]);
 
   if (!isOpen || !item) return null;
 
@@ -359,6 +386,18 @@ export const DuplicateItemModal: React.FC<DuplicateItemModalProps> = ({
     }
   };
 
+  const isSourcePartial = Boolean(sourceCollection?.isPartial);
+  const isTargetPartial = !isCreatingCollection && Boolean(targetCollection?.isPartial);
+  const sourceNeedsMoveReconciliation = Boolean(sourceCollection?._needsMoveReconciliation);
+  const targetNeedsMoveReconciliation = !isCreatingCollection && Boolean(targetCollection?._needsMoveReconciliation);
+  const sourceHasPendingSync = workspaceMode === 'cloud' && sourceCollection?._syncStatus === 'pending';
+  const targetHasPendingSync = workspaceMode === 'cloud' && !isCreatingCollection && targetCollection?._syncStatus === 'pending';
+  const sourceReadinessError = sourceNeedsMoveReconciliation || targetNeedsMoveReconciliation
+    ? 'Sync the workspace to confirm the previous move before duplicating.'
+    : sourceHasPendingSync || targetHasPendingSync
+      ? 'Sync pending changes in both collections before duplicating.'
+      : null;
+
   const handleConfirmDuplicate = async () => {
     if (!canEditSource) {
       setErrorMsg('Cannot duplicate: source collection is read-only for your role.');
@@ -371,7 +410,15 @@ export const DuplicateItemModal: React.FC<DuplicateItemModalProps> = ({
     if (isSubmitting || resumingOpId !== null || validationPreview.error) {
       return;
     }
-    if (!isCreatingCollection && (!targetCollection || targetCollection.isPartial || isLoadingFolders)) {
+    if (sourceReadinessError) {
+      setErrorMsg(sourceReadinessError);
+      return;
+    }
+    if (isSourcePartial || isTargetPartial || isLoadingFolders) {
+      setErrorMsg('Load collection details before duplicating.');
+      return;
+    }
+    if (!isCreatingCollection && !targetCollection) {
       return;
     }
     if (isCreatingCollection && !newCollectionName.trim()) {
@@ -667,7 +714,7 @@ export const DuplicateItemModal: React.FC<DuplicateItemModalProps> = ({
               <label htmlFor="duplicate-target-folder" className="block text-xs font-semibold text-tx-secondary">
                 Target Folder
               </label>
-              {!isCreatingCollection && folderLoadError && (
+              {folderLoadError && (
                 <button
                   type="button"
                   onClick={() => setFolderReloadNonce((n) => n + 1)}
@@ -730,6 +777,13 @@ export const DuplicateItemModal: React.FC<DuplicateItemModalProps> = ({
             </div>
           )}
 
+          {sourceReadinessError && (
+            <div className="flex items-center gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-500 dark:text-rose-300">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              <span>{sourceReadinessError}</span>
+            </div>
+          )}
+
           {validationPreview.error && (
             <div className="flex items-center gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-500 dark:text-rose-300">
               <AlertCircle className="h-4 w-4 shrink-0" />
@@ -774,7 +828,10 @@ export const DuplicateItemModal: React.FC<DuplicateItemModalProps> = ({
             disabled={
               isSubmitting ||
               resumingOpId !== null ||
-              (!isCreatingCollection && (isLoadingFolders || Boolean(targetCollection?.isPartial))) ||
+              isLoadingFolders ||
+              isSourcePartial ||
+              isTargetPartial ||
+              Boolean(sourceReadinessError) ||
               (isCreatingCollection && Boolean(validationPreview.requiresNewCollectionName)) ||
               !canEditSource ||
               !canEditTarget ||

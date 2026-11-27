@@ -133,7 +133,7 @@ export const FunctionalConfigPanel: React.FC<FunctionalConfigPanelProps> = ({
               <div className="font-semibold text-tx-primary">Keep variable values</div>
               <div className="mt-0.5 text-[11px] text-tx-muted">
                 {activeEnvironmentName
-                  ? `Persist pm.environment.set() / unset() mutations back to "${activeEnvironmentName}" currentValue when run finishes.`
+                  ? `Persist pm.environment.set() / unset() mutations back to "${activeEnvironmentName}" currentValue when run finishes (skipped if manually stopped).`
                   : 'Persist pm.environment.set() updates to active environment (select an active environment first).'}
               </div>
             </div>
@@ -141,6 +141,23 @@ export const FunctionalConfigPanel: React.FC<FunctionalConfigPanelProps> = ({
               type="checkbox"
               checked={config.keepVariableValues}
               onChange={(e) => onChange({ ...config, keepVariableValues: e.target.checked })}
+              className="mt-0.5 h-4 w-4 shrink-0 accent-emerald-500"
+            />
+          </label>
+        </div>
+
+        <div className="border-t border-line pt-3">
+          <label className="flex items-start justify-between gap-3 cursor-pointer">
+            <div>
+              <div className="font-semibold text-tx-primary">Fail on HTTP 4xx/5xx</div>
+              <div className="mt-0.5 text-[11px] text-tx-muted">
+                Treat HTTP 4xx/5xx responses as failed steps even when no <code className="rounded bg-element px-1 font-mono text-[10px]">pm.test()</code> assertions fail (default off, matching Postman behavior).
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              checked={Boolean(config.failOnHttpError)}
+              onChange={(e) => onChange({ ...config, failOnHttpError: e.target.checked })}
               className="mt-0.5 h-4 w-4 shrink-0 accent-emerald-500"
             />
           </label>

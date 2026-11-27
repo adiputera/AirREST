@@ -40,6 +40,10 @@ export function createDefaultThresholdConfig(): PerformanceThresholdConfig {
   };
 }
 
+export function isSampleDependentMetric(metric: PerformanceThresholdMetric): boolean {
+  return metric !== 'requestsPerSec' && metric !== 'maxRequestsPerSec';
+}
+
 export function compareMetricValue(
   actual: number,
   operator: PerformanceThresholdOperator,
@@ -62,30 +66,34 @@ export function extractThresholdMetricValue(
   report: Pick<PerformanceRunReport, 'summary' | 'timeSeries' | 'endpoints'>,
   targetRequestId: string,
   metric: PerformanceThresholdMetric
-): { value: number; targetLabel: string } | null {
+): { value: number; targetLabel: string; sampleCount: number } | null {
   if (targetRequestId === 'overall') {
+    const sampleCount = report.summary.totalRequests ?? 0;
     if (metric === 'maxRequestsPerSec') {
       const peak = computePeakRpsMetrics(report);
-      return { value: peak.overallMaxRps, targetLabel: 'All requests (Overall)' };
+      return { value: peak.overallMaxRps, targetLabel: 'All requests (Overall)', sampleCount };
     }
     return {
       value: report.summary[metric] ?? 0,
       targetLabel: 'All requests (Overall)',
+      sampleCount,
     };
   }
 
   const ep = report.endpoints.find((e) => e.requestId === targetRequestId);
   if (!ep) return null;
+  const sampleCount = ep.totalRequests ?? 0;
 
   if (metric === 'maxRequestsPerSec') {
     const peak = computePeakRpsMetrics(report);
     const val = peak.byRequestMaxRps[ep.requestId] ?? ep.maxRequestsPerSec ?? 0;
-    return { value: val, targetLabel: `${ep.method} ${ep.name}` };
+    return { value: val, targetLabel: `${ep.method} ${ep.name}`, sampleCount };
   }
 
   return {
     value: ep[metric] ?? 0,
     targetLabel: `${ep.method} ${ep.name}`,
+    sampleCount,
   };
 }
 
@@ -117,10 +125,32 @@ export function evaluatePerformanceThresholds(
 
   const results: PerformanceThresholdEvaluation[] = enabledRules.map((rule) => {
     const extracted = extractThresholdMetricValue(report, rule.targetRequestId, rule.metric);
-    const actual = extracted?.value ?? 0;
     const targetLabel =
       extracted?.targetLabel ?? (rule.targetRequestId === 'overall' ? 'All requests (Overall)' : rule.targetRequestId);
     const triggeredAbort = Boolean(autoAbortMeta && autoAbortMeta.ruleId === rule.id);
+    const missingSamples =
+      !extracted || (isSampleDependentMetric(rule.metric) && extracted.sampleCount === 0);
+
+    if (!triggeredAbort && missingSamples) {
+      return {
+        ruleId: rule.id,
+        targetRequestId: rule.targetRequestId,
+        targetLabel,
+        metric: rule.metric,
+        operator: rule.operator,
+        expected: rule.value,
+        actual: 0,
+        passed: false,
+        notEvaluated: true,
+        notEvaluatedReason: !extracted
+          ? 'Target endpoint was not part of this run'
+          : 'No completed requests (0 samples)',
+        abortOnFail: Boolean(rule.abortOnFail),
+        triggeredAbort: false,
+      };
+    }
+
+    const actual = extracted?.value ?? 0;
     const passed = triggeredAbort ? false : compareMetricValue(actual, rule.operator, rule.value);
 
     return {
@@ -138,12 +168,21 @@ export function evaluatePerformanceThresholds(
   });
 
   const passedCount = results.filter((r) => r.passed).length;
-  const failedCount = results.length - passedCount;
+  const inconclusiveCount = results.filter((r) => r.notEvaluated).length;
+  const failedCount = results.filter((r) => !r.passed && !r.notEvaluated).length;
+  const totalRunRequests = report.summary.totalRequests ?? 0;
+
+  const overallFailed =
+    Boolean(autoAbortMeta) ||
+    failedCount > 0 ||
+    totalRunRequests === 0 ||
+    (passedCount === 0 && inconclusiveCount > 0);
 
   return {
-    status: failedCount === 0 && !autoAbortMeta ? 'passed' : 'failed',
+    status: overallFailed ? 'failed' : 'passed',
     passedCount,
     failedCount,
+    ...(inconclusiveCount > 0 ? { inconclusiveCount } : {}),
     totalCount: results.length,
     autoAborted: Boolean(autoAbortMeta),
     autoAbortedReason: autoAbortMeta?.reason,
@@ -158,7 +197,8 @@ export interface AutoStopTickDecision {
 }
 
 /**
- * Tracks consecutive 1 Hz SLA breaches on rules marked `abortOnFail`, ignoring warm-up ticks.
+ * Tracks consecutive 1 Hz SLA breaches on rules marked `abortOnFail`, ignoring warm-up ticks
+ * and skipping sample-dependent rules (latency / error rate) when target sample count is 0.
  */
 export function createAutoStopTracker(config?: PerformanceThresholdConfig): {
   evaluateTick: (
@@ -187,7 +227,7 @@ export function createAutoStopTracker(config?: PerformanceThresholdConfig): {
 
       for (const rule of abortRules) {
         const extracted = extractThresholdMetricValue(liveReport, rule.targetRequestId, rule.metric);
-        if (!extracted) {
+        if (!extracted || (isSampleDependentMetric(rule.metric) && extracted.sampleCount === 0)) {
           streaks.set(rule.id, 0);
           continue;
         }

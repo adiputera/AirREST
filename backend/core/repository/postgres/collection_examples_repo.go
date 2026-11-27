@@ -415,7 +415,7 @@ func (r *CollectionRepository) ReplaceCollectionAtomic(
 	if err != nil {
 		return nil, err
 	}
-	var toDelete []uuid.UUID
+	var toDelete []string
 	for existingRows.Next() {
 		var eid uuid.UUID
 		if err := existingRows.Scan(&eid); err != nil {
@@ -423,7 +423,7 @@ func (r *CollectionRepository) ReplaceCollectionAtomic(
 			return nil, err
 		}
 		if _, keep := incomingSet[eid]; !keep {
-			toDelete = append(toDelete, eid)
+			toDelete = append(toDelete, eid.String())
 		}
 	}
 	if err := existingRows.Err(); err != nil {
@@ -437,7 +437,7 @@ func (r *CollectionRepository) ReplaceCollectionAtomic(
 		if _, err := tx.Exec(ctx, `
 			UPDATE collection_items
 			SET deleted_at = $1, updated_at = $1, last_modified_by = $2, version = version + 1
-			WHERE collection_id = $3 AND id = ANY($4) AND deleted_at IS NULL
+			WHERE collection_id = $3 AND id = ANY($4::text[]::uuid[]) AND deleted_at IS NULL
 		`, now, actorID, collectionID, toDelete); err != nil {
 			return nil, fmt.Errorf("failed to soft-delete replaced items: %w", err)
 		}

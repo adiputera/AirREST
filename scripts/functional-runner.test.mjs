@@ -532,3 +532,312 @@ test('reorderRunnerItems moves dragged items before or after any target cleanly'
   // No-op when active === target
   assert.equal(perfLaunch.reorderRunnerItems(list, 'b', 'b', 'before'), list);
 });
+
+test('functionalRunner handles failOnHttpError toggle, 3xx warning when followRedirects=false, and JUnit XML failure emission', async () => {
+  const { functionalRunner, functionalReportExporter } = loadFunctionalModules();
+
+  const server = http.createServer((req, res) => {
+    if (req.url === '/err500') {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'boom' }));
+      return;
+    }
+    if (req.url === '/redir302') {
+      res.writeHead(302, { Location: 'https://example.com/next' });
+      res.end();
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    const items = [
+      makeDescriptor('s500', 'Server 500', 'GET', `${baseUrl}/err500`),
+      makeDescriptor('s302', 'Redirect 302', 'GET', `${baseUrl}/redir302`),
+    ];
+
+    // 1. Default Postman behavior: failOnHttpError=false -> 500 with 0 tests stays 'passed'; 302 with followRedirects=false -> 'warning'
+    const repDefault = await new Promise((resolve) => {
+      void functionalRunner.startFunctionalRun({
+        tabId: 'func:edge1',
+        title: 'Edge Default',
+        sourceType: 'collection',
+        sourceId: 'c1',
+        items,
+        config: {
+          iterations: 1,
+          delayMs: 0,
+          persistResponses: false,
+          keepVariableValues: false,
+          failOnHttpError: false,
+          stopOnError: 'never',
+          requestTimeoutMs: 5000,
+          followRedirects: false,
+          ignoreSslErrors: false,
+        },
+        initialVariables: {},
+        onUpdate: () => {},
+        onFinish: resolve,
+      });
+    });
+
+    assert.equal(repDefault.status, 'completed');
+    assert.equal(repDefault.requestsPassed, 1);
+    assert.equal(repDefault.requestsWarned, 1);
+    assert.equal(repDefault.requestsFailed, 0);
+    assert.equal(repDefault.steps[0].status, 'passed');
+    assert.equal(repDefault.steps[1].status, 'warning');
+    assert.match(repDefault.steps[1].warningMessage, /302/);
+
+    // 2. Opt-in failOnHttpError=true -> 500 with 0 tests becomes 'failed' & JUnit XML emits <failure>
+    const repStrict = await new Promise((resolve) => {
+      void functionalRunner.startFunctionalRun({
+        tabId: 'func:edge2',
+        title: 'Edge Strict HTTP',
+        sourceType: 'collection',
+        sourceId: 'c1',
+        items: [items[0]],
+        config: {
+          iterations: 1,
+          delayMs: 0,
+          persistResponses: false,
+          keepVariableValues: false,
+          failOnHttpError: true,
+          stopOnError: 'never',
+          requestTimeoutMs: 5000,
+          followRedirects: true,
+          ignoreSslErrors: false,
+        },
+        initialVariables: {},
+        onUpdate: () => {},
+        onFinish: resolve,
+      });
+    });
+
+    assert.equal(repStrict.status, 'failed');
+    assert.equal(repStrict.requestsFailed, 1);
+    assert.equal(repStrict.steps[0].status, 'failed');
+    const junit = functionalReportExporter.exportFunctionalReportJunitXml(repStrict);
+    assert.match(junit, /failures="1"/);
+    assert.match(junit, /<failure message="HTTP 500/);
+  } finally {
+    server.close();
+  }
+});
+
+test('functionalRunner skips keepVariableValues on manual Stop, supports session-backed Re-run Failed with onlyIterations, and caps stored steps while prioritizing failures', async () => {
+  const { functionalRunner, functionalSessionStore } = loadFunctionalModules();
+
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://127.0.0.1');
+    if (u.pathname === '/login') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ token: 'chained-tok-77' }));
+      return;
+    }
+    if (u.pathname === '/check') {
+      const auth = req.headers.authorization || '';
+      const user = u.searchParams.get('user') || '';
+      if (user === 'bad' || auth !== 'Bearer chained-tok-77') {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    if (u.pathname === '/slow') {
+      setTimeout(() => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end('{}');
+      }, 150);
+      return;
+    }
+    res.writeHead(200);
+    res.end('ok');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  const mockAdapter = {
+    platformId: 'web',
+    transport: {
+      fetch: (url, init) => fetch(url, init),
+      classifyError: async (err) => ({ category: 'other', detail: String(err) }),
+    },
+    scriptExecutor: {
+      execute: async (input) => {
+        const env = { ...input.environment };
+        if (input.script.includes('SAVE_TOKEN')) {
+          env.token = 'chained-tok-77';
+        }
+        if (input.script.includes('MARK_STOP_VAR')) {
+          env.partialVar = 'should-not-commit';
+        }
+        return { success: true, environment: env, variables: { ...input.variables }, testResults: [] };
+      },
+      dispose: () => {},
+    },
+  };
+
+  try {
+    // 1. Manual Stop must NOT commit keepVariableValues
+    let commitCalledOnStop = false;
+    const stopItems = [
+      makeDescriptor('st1', 'Set Var', 'GET', `${baseUrl}/login`, { postResponseScript: 'MARK_STOP_VAR' }),
+      makeDescriptor('st2', 'Slow Step', 'GET', `${baseUrl}/slow`),
+    ];
+    const stopReport = await new Promise((resolve) => {
+      void functionalRunner.startFunctionalRun({
+        tabId: 'func:stop',
+        title: 'Stop Test',
+        sourceType: 'collection',
+        sourceId: 'c1',
+        items: stopItems,
+        config: {
+          iterations: 1,
+          delayMs: 50,
+          persistResponses: false,
+          keepVariableValues: true,
+          stopOnError: 'never',
+          requestTimeoutMs: 5000,
+          followRedirects: true,
+          ignoreSslErrors: false,
+        },
+        initialVariables: {},
+        adapter: mockAdapter,
+        onCommitEnvironmentUpdates: () => {
+          commitCalledOnStop = true;
+          return ['partialVar'];
+        },
+        onUpdate: (live) => {
+          if (live.totalRequestsExecuted >= 1) {
+            void functionalRunner.stopActiveFunctionalRun();
+          }
+        },
+        onFinish: resolve,
+      });
+    });
+    assert.equal(stopReport.status, 'stopped');
+    assert.equal(commitCalledOnStop, false, 'Manual stop must skip committing keepVariableValues');
+
+    // 2. Session env snapshot + failedIterations for Re-run Failed
+    const chainItems = [
+      makeDescriptor('c-login', 'Login', 'GET', `${baseUrl}/login`, { postResponseScript: 'SAVE_TOKEN' }),
+      makeDescriptor('c-check', 'Check', 'GET', `${baseUrl}/check?user={{user}}`, {
+        headers: [{ id: 'h1', key: 'Authorization', value: 'Bearer {{token}}', enabled: true }],
+      }),
+    ];
+    const dataRows = [{ user: 'good1' }, { user: 'bad' }, { user: 'good2' }];
+    const initialRun = await new Promise((resolve) => {
+      void functionalRunner.startFunctionalRun({
+        tabId: 'func:chain',
+        title: 'Chain Run',
+        sourceType: 'collection',
+        sourceId: 'c1',
+        items: chainItems,
+        config: {
+          iterations: 3,
+          delayMs: 0,
+          persistResponses: false,
+          keepVariableValues: false,
+          failOnHttpError: true,
+          stopOnError: 'never',
+          requestTimeoutMs: 5000,
+          followRedirects: true,
+          ignoreSslErrors: false,
+        },
+        dataFileMeta: { filename: 'u.csv', format: 'csv', fileBytes: 30, rowCount: 3, columns: ['user'], previewRows: [], readMode: 'sequential' },
+        dataRows,
+        initialVariables: {},
+        adapter: mockAdapter,
+        onUpdate: () => {},
+        onFinish: resolve,
+      });
+    });
+    assert.equal(initialRun.failedItemIds.join(','), 'c-check');
+    assert.equal(initialRun.failedIterations.join(','), '2');
+    const savedEnv = functionalSessionStore.getFunctionalRunEnvSnapshot(initialRun.id);
+    assert.equal(savedEnv?.token, 'chained-tok-77');
+
+    // Re-run ONLY failed iteration 2 with fixed data row using chained session token
+    const rerunReport = await new Promise((resolve) => {
+      void functionalRunner.startFunctionalRun({
+        tabId: 'func:chain',
+        title: 'Chain Rerun',
+        sourceType: 'collection',
+        sourceId: 'c1',
+        items: chainItems,
+        onlyItemIds: initialRun.failedItemIds,
+        onlyIterations: initialRun.failedIterations,
+        config: {
+          iterations: 3,
+          delayMs: 0,
+          persistResponses: false,
+          keepVariableValues: false,
+          failOnHttpError: true,
+          stopOnError: 'never',
+          requestTimeoutMs: 5000,
+          followRedirects: true,
+          ignoreSslErrors: false,
+        },
+        dataFileMeta: { filename: 'u.csv', format: 'csv', fileBytes: 30, rowCount: 3, columns: ['user'], previewRows: [], readMode: 'sequential' },
+        dataRows: [{ user: 'good1' }, { user: 'now-fixed' }, { user: 'good2' }],
+        initialVariables: savedEnv,
+        adapter: mockAdapter,
+        onUpdate: () => {},
+        onFinish: resolve,
+      });
+    });
+    assert.equal(rerunReport.plannedIterations, 1);
+    assert.equal(rerunReport.steps.length, 1);
+    assert.equal(rerunReport.steps[0].iteration, 2);
+    assert.equal(rerunReport.steps[0].status, 'passed');
+
+    // 3. Step retention cap prioritizes failed steps while keeping total summary counters exact
+    const capItems = [
+      makeDescriptor('ok-1', 'Pass Step', 'GET', `${baseUrl}/login`),
+      makeDescriptor('fail-1', 'Fail Step', 'GET', `${baseUrl}/check?user=bad`),
+    ];
+    const capReport = await new Promise((resolve) => {
+      void functionalRunner.startFunctionalRun({
+        tabId: 'func:cap',
+        title: 'Cap Run',
+        sourceType: 'collection',
+        sourceId: 'c1',
+        items: capItems,
+        maxStoredSteps: 4,
+        config: {
+          iterations: 4,
+          delayMs: 0,
+          persistResponses: false,
+          keepVariableValues: false,
+          failOnHttpError: true,
+          stopOnError: 'never',
+          requestTimeoutMs: 5000,
+          followRedirects: true,
+          ignoreSslErrors: false,
+        },
+        initialVariables: {},
+        adapter: mockAdapter,
+        onUpdate: () => {},
+        onFinish: resolve,
+      });
+    });
+    assert.equal(capReport.totalRequestsExecuted, 8);
+    assert.equal(capReport.requestsPassed, 4);
+    assert.equal(capReport.requestsFailed, 4);
+    assert.equal(capReport.stepsTruncated, true);
+    assert.equal(capReport.totalStepsRecorded, 8);
+    assert.equal(capReport.steps.length, 4);
+    assert.equal(capReport.steps.every((s) => s.status === 'failed'), true, 'All 4 retained slots must keep prioritized failed steps');
+  } finally {
+    server.close();
+  }
+});

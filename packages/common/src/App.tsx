@@ -25,6 +25,7 @@ import {
   isStrictPostmanImportJson,
   readBrowserFiles,
 } from './lib/importBatch';
+import { isStrictAirrestReportJson } from './lib/reportShare';
 import {
   queueInitialRequestEditorSection,
   resolveInitialCurlSection,
@@ -163,8 +164,8 @@ export const App: React.FC = () => {
         }
       }
 
-      // 3. Pasted Postman Collection or Environment JSON text (only outside editable inputs/editors)
-      if (!isEditing && isStrictPostmanImportJson(pastedText)) {
+      // 3. Pasted Postman Collection, Environment, or AirREST Report JSON text (only outside editable inputs/editors)
+      if (!isEditing && (isStrictPostmanImportJson(pastedText) || isStrictAirrestReportJson(pastedText))) {
         event.preventDefault();
         event.stopPropagation();
         setGlobalImportFiles([{ filename: 'pasted.json', content: pastedText }]);

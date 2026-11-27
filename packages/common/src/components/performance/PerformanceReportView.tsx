@@ -13,6 +13,7 @@ import {
   KeyRound,
   Play,
   Settings,
+  Share2,
   ShieldAlert,
   ShieldCheck,
   Square,
@@ -22,6 +23,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import type {
+  Collection,
   PerformanceLatencyMetric,
   PerformanceRunReport,
   PerformanceTimeBucket,
@@ -34,11 +36,15 @@ import {
 } from '../../lib/perfComparison';
 import { formatThresholdRuleExpression } from '../../lib/perfThresholds';
 import { MethodBadge } from '../MethodBadge';
+import { SessionOnlyReportBanner } from './SessionOnlyReportBanner';
 
 interface PerformanceReportViewProps {
   report: PerformanceRunReport;
   recentReports: PerformanceRunReport[];
   isAnotherRunActive: boolean;
+  isSessionOnlyImported?: boolean;
+  sessionOnlyReason?: string;
+  availableCollections?: Collection[];
   onStopRun: () => void;
   onRunAgain: () => void;
   onBackToSetup: () => void;
@@ -49,6 +55,9 @@ interface PerformanceReportViewProps {
   onExportJson: (report: PerformanceRunReport) => void;
   onExportEndpointsCsv: (report: PerformanceRunReport) => void;
   onExportTimeSeriesCsv: (report: PerformanceRunReport) => void;
+  onShareReport?: (report: PerformanceRunReport) => void;
+  onImportReportFile?: () => void;
+  onAttachToCollection?: (collection: Collection) => void;
 }
 
 const CHART_W = 960;
@@ -111,6 +120,9 @@ export const PerformanceReportView: React.FC<PerformanceReportViewProps> = ({
   report,
   recentReports,
   isAnotherRunActive,
+  isSessionOnlyImported = false,
+  sessionOnlyReason,
+  availableCollections = [],
   onStopRun,
   onRunAgain,
   onBackToSetup,
@@ -121,6 +133,9 @@ export const PerformanceReportView: React.FC<PerformanceReportViewProps> = ({
   onExportJson,
   onExportEndpointsCsv,
   onExportTimeSeriesCsv,
+  onShareReport,
+  onImportReportFile,
+  onAttachToCollection,
 }) => {
   const [activeTab, setActiveTab] = useState<'summary' | 'errors'>('summary');
   const [requestFilterId, setRequestFilterId] = useState<string>('all');
@@ -338,7 +353,16 @@ export const PerformanceReportView: React.FC<PerformanceReportViewProps> = ({
     {
       label: 'Error rate',
       value: `${report.summary.errorRatePct.toFixed(2)} %`,
-      tone: report.summary.errorRatePct > 0 ? 'text-rose-500' : 'text-emerald-500',
+      tone:
+        report.summary.errorRatePct > 0
+          ? 'text-rose-500'
+          : (report.summary.warningCount ?? 0) > 0
+            ? 'text-amber-500'
+            : 'text-emerald-500',
+      subcaption:
+        (report.summary.warningCount ?? 0) > 0
+          ? `${(report.summary.warningCount ?? 0).toLocaleString()} redirect warn`
+          : undefined,
       delta: comparison?.kpis.errorRatePct,
       deltaDecimals: 2,
       deltaUnit: '%',
@@ -394,6 +418,18 @@ export const PerformanceReportView: React.FC<PerformanceReportViewProps> = ({
             <span className="rounded-md border border-line bg-card px-2 py-0.5 text-[11px] font-medium text-tx-muted">
               {engineLabel}
             </span>
+            {report.imported && (
+              <span
+                className="rounded-md border border-violet-500/35 bg-violet-500/10 px-2 py-0.5 text-[11px] font-semibold text-violet-600 dark:text-violet-300"
+                title={
+                  report.importedFilename
+                    ? `Imported from ${report.importedFilename}`
+                    : 'Imported report'
+                }
+              >
+                Imported
+              </span>
+            )}
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-tx-muted">
             <span>{report.configSnapshot.loadProfile.virtualUsers.toLocaleString()} VUs</span>
@@ -428,10 +464,16 @@ export const PerformanceReportView: React.FC<PerformanceReportViewProps> = ({
             <>
               <button
                 type="button"
-                disabled={isAnotherRunActive}
+                disabled={isAnotherRunActive || isSessionOnlyImported}
                 onClick={onRunAgain}
                 className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-gradient-to-r from-sky-500 to-blue-600 px-3 text-xs font-semibold text-white hover:from-sky-400 hover:to-blue-500 disabled:opacity-45 disabled:cursor-not-allowed transition shadow-sm"
-                title={isAnotherRunActive ? 'Another performance test is currently running' : 'Re-run with the same configuration'}
+                title={
+                  isSessionOnlyImported
+                    ? 'Attach this report to a collection to enable running again'
+                    : isAnotherRunActive
+                      ? 'Another performance test is currently running'
+                      : 'Re-run with the same configuration'
+                }
               >
                 <Play className="h-3.5 w-3.5 fill-current" />
                 <span>Run Again</span>
@@ -439,8 +481,14 @@ export const PerformanceReportView: React.FC<PerformanceReportViewProps> = ({
 
               <button
                 type="button"
+                disabled={isSessionOnlyImported}
                 onClick={onBackToSetup}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-card px-3 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition"
+                title={
+                  isSessionOnlyImported
+                    ? 'Attach this report to a collection to edit test configuration'
+                    : undefined
+                }
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-card px-3 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary disabled:opacity-45 disabled:cursor-not-allowed transition"
               >
                 <Settings className="h-3.5 w-3.5" />
                 <span>Configure</span>
@@ -560,7 +608,20 @@ export const PerformanceReportView: React.FC<PerformanceReportViewProps> = ({
                 {historyMenuOpen && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setHistoryMenuOpen(false)} />
-                    <div className="absolute right-0 top-full mt-1 z-50 w-72 max-h-80 overflow-y-auto rounded-xl border border-line bg-surface p-1.5 shadow-2xl">
+                    <div className="absolute right-0 top-full mt-1 z-50 w-76 max-h-80 overflow-y-auto rounded-xl border border-line bg-surface p-1.5 shadow-2xl">
+                      {onImportReportFile && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setHistoryMenuOpen(false);
+                            onImportReportFile();
+                          }}
+                          className="mb-1.5 flex w-full items-center gap-2 rounded-lg border border-dashed border-sky-500/35 bg-sky-500/5 px-2.5 py-2 text-left text-xs font-medium text-sky-600 dark:text-sky-300 hover:bg-sky-500/15 transition"
+                        >
+                          <Upload className="h-3.5 w-3.5 shrink-0" />
+                          <span>Import Report (.airrest-report.json)...</span>
+                        </button>
+                      )}
                       {recentReports.length === 0 ? (
                         <div className="px-3 py-4 text-center text-xs text-tx-muted">No saved runs in this workspace yet.</div>
                       ) : (
@@ -579,7 +640,14 @@ export const PerformanceReportView: React.FC<PerformanceReportViewProps> = ({
                               }}
                               className="min-w-0 flex-1 text-left"
                             >
-                              <div className="truncate font-semibold">{item.title}</div>
+                              <div className="flex items-center gap-1.5 font-semibold">
+                                <span className="truncate">{item.title}</span>
+                                {item.imported && (
+                                  <span className="shrink-0 rounded border border-violet-500/30 bg-violet-500/10 px-1 py-px text-[9px] font-semibold text-violet-600 dark:text-violet-300">
+                                    Imported
+                                  </span>
+                                )}
+                              </div>
                               <div className="text-[10px] text-tx-muted">
                                 {new Date(item.startedAt).toLocaleString()} • {item.summary.totalRequests} reqs • {item.summary.errorRatePct.toFixed(1)}% err
                               </div>
@@ -622,7 +690,20 @@ export const PerformanceReportView: React.FC<PerformanceReportViewProps> = ({
                 {exportMenuOpen && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setExportMenuOpen(false)} />
-                    <div className="absolute right-0 top-full mt-1 z-50 w-60 rounded-xl border border-line bg-surface p-1.5 shadow-2xl space-y-0.5 text-xs">
+                    <div className="absolute right-0 top-full mt-1 z-50 w-64 rounded-xl border border-line bg-surface p-1.5 shadow-2xl space-y-0.5 text-xs">
+                      {onShareReport && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setExportMenuOpen(false);
+                            onShareReport(report);
+                          }}
+                          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left font-medium text-sky-600 dark:text-sky-300 hover:bg-sky-500/10"
+                        >
+                          <Share2 className="h-3.5 w-3.5 shrink-0" />
+                          <span>Share (.airrest-report.json)</span>
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => {
@@ -684,6 +765,14 @@ export const PerformanceReportView: React.FC<PerformanceReportViewProps> = ({
             <X className="h-3.5 w-3.5" />
           </button>
         </div>
+      )}
+
+      {isSessionOnlyImported && (
+        <SessionOnlyReportBanner
+          reason={sessionOnlyReason}
+          availableCollections={availableCollections}
+          onAttachToCollection={onAttachToCollection}
+        />
       )}
 
       {/* Auto-Abort Banner */}
@@ -835,7 +924,11 @@ export const PerformanceReportView: React.FC<PerformanceReportViewProps> = ({
                     <ShieldAlert className="h-4 w-4 text-rose-500" />
                   )}
                   <span>
-                    SLA Thresholds ({report.slaResult.passedCount}/{report.slaResult.totalCount} Passed)
+                    SLA Thresholds ({report.slaResult.passedCount}/{report.slaResult.totalCount} Passed
+                    {(report.slaResult.inconclusiveCount ?? 0) > 0
+                      ? `, ${report.slaResult.inconclusiveCount} Not Evaluated`
+                      : ''}
+                    )
                   </span>
                 </div>
                 <span
@@ -852,13 +945,17 @@ export const PerformanceReportView: React.FC<PerformanceReportViewProps> = ({
                   <div
                     key={r.ruleId}
                     className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-xs ${
-                      r.passed
-                        ? 'border-emerald-500/25 bg-emerald-500/5 text-tx-primary'
-                        : 'border-rose-500/30 bg-rose-500/10 text-tx-primary'
+                      r.notEvaluated
+                        ? 'border-amber-500/30 bg-amber-500/10 text-tx-primary'
+                        : r.passed
+                          ? 'border-emerald-500/25 bg-emerald-500/5 text-tx-primary'
+                          : 'border-rose-500/30 bg-rose-500/10 text-tx-primary'
                     }`}
                   >
                     <div className="flex items-center gap-2 min-w-0">
-                      {r.passed ? (
+                      {r.notEvaluated ? (
+                        <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                      ) : r.passed ? (
                         <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
                       ) : (
                         <XCircle className="h-3.5 w-3.5 shrink-0 text-rose-500" />
@@ -871,11 +968,20 @@ export const PerformanceReportView: React.FC<PerformanceReportViewProps> = ({
                       </div>
                     </div>
                     <div className="shrink-0 text-right font-mono text-[11px]">
-                      <div className={r.passed ? 'font-semibold text-emerald-500' : 'font-bold text-rose-500'}>
-                        actual: {r.actual}
-                      </div>
-                      {r.triggeredAbort && (
-                        <div className="text-[10px] font-semibold text-rose-500">Auto-aborted</div>
+                      {r.notEvaluated ? (
+                        <>
+                          <div className="font-semibold text-amber-600 dark:text-amber-300">Not evaluated</div>
+                          <div className="text-[10px] text-tx-muted">0 samples</div>
+                        </>
+                      ) : (
+                        <>
+                          <div className={r.passed ? 'font-semibold text-emerald-500' : 'font-bold text-rose-500'}>
+                            actual: {r.actual}
+                          </div>
+                          {r.triggeredAbort && (
+                            <div className="text-[10px] font-semibold text-rose-500">Auto-aborted</div>
+                          )}
+                        </>
                       )}
                     </div>
                   </div>

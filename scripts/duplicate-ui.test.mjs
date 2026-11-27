@@ -1568,3 +1568,228 @@ test('C9 (P3): DuplicateItemModal honors isOfflineOnly owner scoping, DuplicateC
   assert.match(envConflictSrc, /e\.preventDefault\(\);\s*e\.stopPropagation\(\);\s*onClose\(\);/);
   assert.match(envModalSrc, /if \(conflict \|\| showDeleteConfirm \|\| isPermModalOpen \|\| isNewEnvPermModalOpen\) \{\s*return;\s*\}/);
 });
+
+test('PendingDuplicateRecovery filters failed duplicates by active workspace/scope and isolates Resume outcomes across workspace switches', async () => {
+  const harness = createModalHarness();
+  const resolvers = {};
+  const scopeA = { id: 'ws-a', type: 'workspace', name: 'Workspace A', role: 'owner' };
+  const scopeB = { id: 'ws-b', type: 'workspace', name: 'Workspace B', role: 'owner' };
+  const scopeC = { id: 'proj-c', type: 'project', name: 'Project C', role: 'contributor' };
+
+  const state = {
+    workspaceMode: 'cloud',
+    activeOfflineWorkspaceId: 'offline-1',
+    cloudConfig: {
+      apiUrl: 'https://api.example.com',
+      sessionKind: 'provider',
+      user: { id: 'alice', role: 'user' },
+      activeScope: scopeA,
+    },
+    activeDuplicateOperationIds: {},
+    pendingDuplicateIntents: {
+      'op-item-a': {
+        operationId: 'op-item-a',
+        ownerKey: '["https://api.example.com","alice"]',
+        kind: 'item',
+        sourceCollectionId: 'c-a',
+        sourceItemId: 'r-a',
+        sourceName: 'get token',
+        sourceItemType: 'request',
+        sourceScope: scopeA,
+        targetScope: scopeA,
+        targetCollectionId: 'c-a',
+        targetCollectionName: 'Test123',
+        createdAt: 400,
+        status: 'reconcile_required',
+        lastError: 'duplicate operation failed',
+      },
+      'op-col-ab': {
+        operationId: 'op-col-ab',
+        ownerKey: '["https://api.example.com","alice"]',
+        kind: 'collection',
+        sourceCollectionId: 'col-a',
+        sourceName: 'Cross Scope Col',
+        sourceScope: scopeA,
+        targetScope: scopeB,
+        createdAt: 300,
+        status: 'reconcile_required',
+      },
+      'op-import-off1-b': {
+        operationId: 'op-import-off1-b',
+        ownerKey: '["https://api.example.com","alice"]',
+        kind: 'import_duplicate',
+        sourceCollectionId: 'off-col-1',
+        sourceName: 'Offline Upload',
+        sourceOfflineWorkspaceId: 'offline-1',
+        targetScope: scopeB,
+        createdAt: 200,
+        status: 'reconcile_required',
+      },
+    },
+    retryPendingDuplicateIntent: (opId) => new Promise((resolve) => {
+      resolvers[opId] = resolve;
+    }),
+    clearPendingDuplicateIntent: () => {},
+  };
+
+  const Banner = loadPendingDuplicateRecovery(harness, state);
+  const inst = harness.mount(Banner, {});
+  await inst.flush();
+
+  // Workspace A shows its item intent and cross-scope A->B collection intent, but NOT offline-1->B import intent
+  const textA = collectText(inst.tree);
+  assert.equal(textA.includes('get token'), true);
+  assert.equal(textA.includes('Cross Scope Col'), true);
+  assert.equal(textA.includes('Offline Upload'), false);
+
+  // Start Resume on op-item-a in Workspace A, then switch to Workspace B before it settles
+  const resumeBtnA = findElements(inst.tree, (n) => n.type === 'button' && collectText(n) === 'Resume')[0];
+  resumeBtnA.props.onClick();
+  await inst.flush(1);
+
+  state.cloudConfig = { ...state.cloudConfig, activeScope: scopeB };
+  inst.rerender();
+  await inst.flush();
+
+  // Delayed Workspace A Resume outcome settles while in Workspace B -> must NOT render Workspace A outcome in Workspace B
+  resolvers['op-item-a']({ success: true, operationId: 'op-item-a', name: 'get token' });
+  await inst.flush();
+
+  // Workspace B shows A->B collection & offline-1->B import, but hides Workspace A's item duplicate
+  const textB = collectText(inst.tree);
+  assert.equal(textB.includes('get token'), false);
+  assert.equal(textB.includes('Committed: get token'), false);
+  assert.equal(textB.includes('Cross Scope Col'), true);
+  assert.equal(textB.includes('Offline Upload'), true);
+
+  // Workspace C (unrelated cloud project) hides all of them
+  state.cloudConfig = { ...state.cloudConfig, activeScope: scopeC };
+  inst.rerender();
+  await inst.flush();
+  assert.equal(inst.tree, null);
+
+  // Offline Workspace 1 shows only offline-1->B import intent, hiding cloud intents
+  state.workspaceMode = 'offline';
+  state.activeOfflineWorkspaceId = 'offline-1';
+  inst.rerender();
+  await inst.flush();
+  const textOff1 = collectText(inst.tree);
+  assert.equal(textOff1.includes('Offline Upload'), true);
+  assert.equal(textOff1.includes('get token'), false);
+  assert.equal(textOff1.includes('Cross Scope Col'), false);
+
+  // Offline Workspace 2 hides offline-1->B import intent too
+  state.activeOfflineWorkspaceId = 'offline-2';
+  inst.rerender();
+  await inst.flush();
+  assert.equal(inst.tree, null);
+
+  // Switching back to Workspace A still shows get token (intent remained persisted)
+  state.workspaceMode = 'cloud';
+  state.cloudConfig = { ...state.cloudConfig, activeScope: scopeA };
+  inst.rerender();
+  await inst.flush();
+  assert.equal(collectText(inst.tree).includes('get token'), true);
+});
+
+test('Regression (UI): DuplicateItemModal lazy-loads partial sourceCollection and blocks New Collection creation while source is partial or pending sync', async () => {
+  const harness = createModalHarness();
+  let createCalls = 0;
+  let dupCalls = 0;
+  let loadCalls = 0;
+  let remainingLoadFailures = 2;
+
+  const storeState = {
+    workspaceMode: 'cloud',
+    cloudConfig: {
+      apiUrl: 'https://cloud.example.com',
+      token: 'tok',
+      user: { id: 'u1', role: 'owner' },
+      activeScope: { id: 'ws-1', name: 'Personal', type: 'workspace', role: 'owner' },
+    },
+    collections: [
+      {
+        id: 'col-src',
+        name: 'Source Col',
+        minRole: 'reader',
+        isPartial: true,
+        _syncStatus: 'pending',
+        items: [
+          {
+            id: 'req-1',
+            type: 'request',
+            name: 'Ping',
+            request: { id: 'req-1', method: 'GET', url: 'https://httpbin.org/get', headers: [], params: [] },
+          },
+        ],
+      },
+    ],
+    loadCollectionDetails: async (colId) => {
+      loadCalls += 1;
+      if (remainingLoadFailures > 0) {
+        remainingLoadFailures -= 1;
+        return { success: false, error: 'Source details failed' };
+      }
+      storeState.collections = storeState.collections.map((c) =>
+        c.id === colId ? { ...c, isPartial: false } : c,
+      );
+      return { success: true };
+    },
+    createCollectionAsync: async (name) => {
+      createCalls += 1;
+      const newCol = { id: 'col-new', name, minRole: 'reader', isPartial: false, _syncStatus: 'synced', items: [] };
+      storeState.collections = [newCol, ...storeState.collections];
+      return { success: true, collectionId: newCol.id };
+    },
+    duplicateCollectionItem: async () => {
+      dupCalls += 1;
+      return { success: true };
+    },
+  };
+
+  const Modal = loadDuplicateItemModal(harness, storeState);
+  const inst = harness.mount(Modal, {
+    isOpen: true,
+    onClose: () => { },
+    item: storeState.collections[0].items[0],
+    sourceCollectionId: 'col-src',
+  });
+  await inst.flush();
+  assert.equal(loadCalls, 1);
+
+  // Switch to New Collection while sourceCollection is still partial & pending sync
+  const toggleBtn = findElements(inst.tree, (n) => n.type === 'button' && collectText(n).includes('New Collection'))[0];
+  toggleBtn.props.onClick();
+  await inst.flush();
+
+  const nameInput = findElements(inst.tree, (n) => n.type === 'input' && n.props?.id === 'duplicate-new-collection-name')[0];
+  nameInput.props.onChange({ target: { value: 'New Target' } });
+  await inst.flush();
+
+  // Confirm button must stay disabled and never create an orphan collection
+  const blockedBtn = findElements(inst.tree, (n) => n.type === 'button' && collectText(n).includes('Duplicate Request')).pop();
+  assert.equal(blockedBtn.props.disabled, true);
+  assert.match(collectText(inst.tree), /Sync pending changes in both collections before duplicating/);
+  await blockedBtn.props.onClick();
+  await inst.flush();
+  assert.equal(createCalls, 0);
+  assert.equal(dupCalls, 0);
+
+  // Clear pending sync -> Retry button must still be visible in New Collection mode to reload partial sourceCollection
+  storeState.collections = storeState.collections.map((c) => ({ ...c, _syncStatus: 'synced' }));
+  inst.rerender();
+  await inst.flush();
+  const retryLoadBtn = findElements(inst.tree, (n) => n.type === 'button' && collectText(n) === 'Retry')[0];
+  assert.ok(retryLoadBtn, 'Retry button should stay accessible in New Collection mode when sourceCollection failed to load');
+  retryLoadBtn.props.onClick();
+  await inst.flush();
+  assert.equal(loadCalls, 3);
+
+  // Now sourceCollection is hydrated & synced -> creating New Collection and duplicating succeeds cleanly
+  const readyBtn = findElements(inst.tree, (n) => n.type === 'button' && collectText(n).includes('Duplicate Request')).pop();
+  assert.equal(readyBtn.props.disabled, false);
+  await readyBtn.props.onClick();
+  await inst.flush();
+  assert.equal(createCalls, 1);
+  assert.equal(dupCalls, 1);
+});

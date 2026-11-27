@@ -97,6 +97,7 @@ function loadCommonModules() {
     perfThresholds: load('packages/common/src/lib/perfThresholds.ts'),
     perfComparison: load('packages/common/src/lib/perfComparison.ts'),
     perfStorage: load('packages/common/src/lib/perfStorage.ts'),
+    perfLaunch: load('packages/common/src/lib/perfLaunch.ts'),
     perfReportExporter: load('packages/common/src/lib/perfReportExporter.ts'),
     examples: load('packages/common/src/lib/examples.ts'),
     perfRunner: load('packages/common/src/lib/perfRunner.ts'),
@@ -1027,4 +1028,334 @@ test('computeDefaultPerformanceTimeoutMs & clampPerformanceTimeoutMs track 1-min
   assert.equal(loadProfileMath.clampPerformanceTimeoutMs(15_000, 60), 15_000);
   assert.equal(loadProfileMath.clampPerformanceTimeoutMs(200, 10), 500);
   assert.equal(loadProfileMath.clampPerformanceTimeoutMs(400_000, 600), 300_000);
+});
+
+test('perfThresholds marks 0-sample latency/error rules as notEvaluated and prevents false PASS or live auto-stop', () => {
+  const { perfThresholds, perfReportExporter } = loadCommonModules();
+
+  const zeroReport = {
+    summary: {
+      totalRequests: 0,
+      errorCount: 0,
+      warningCount: 0,
+      errorRatePct: 0,
+      requestsPerSec: 0,
+      maxRequestsPerSec: 0,
+      avgMs: 0,
+      minMs: 0,
+      maxMs: 0,
+      p90Ms: 0,
+      p95Ms: 0,
+      p99Ms: 0,
+      bytesReceived: 0,
+    },
+    timeSeries: [],
+    endpoints: [
+      {
+        requestId: 'ep-zero',
+        name: 'Slow Endpoint',
+        method: 'GET',
+        path: '/slow',
+        totalRequests: 0,
+        errorCount: 0,
+        warningCount: 0,
+        errorRatePct: 0,
+        requestsPerSec: 0,
+        maxRequestsPerSec: 0,
+        avgMs: 0,
+        minMs: 0,
+        maxMs: 0,
+        p90Ms: 0,
+        p95Ms: 0,
+        p99Ms: 0,
+        bytesReceived: 0,
+      },
+    ],
+  };
+
+  // Live auto-stop skips sample-dependent rules when 0 requests completed
+  const tracker = perfThresholds.createAutoStopTracker({
+    abortGracePeriodSec: 0,
+    abortConsecutiveBreaches: 2,
+    rules: [
+      { id: 'r-lat', enabled: true, targetRequestId: 'overall', metric: 'avgMs', operator: 'lt', value: 500, abortOnFail: true },
+      { id: 'r-err', enabled: true, targetRequestId: 'overall', metric: 'errorRatePct', operator: 'lt', value: 1, abortOnFail: true },
+    ],
+  });
+  assert.equal(tracker.evaluateTick(zeroReport, 5).shouldAbort, false);
+  assert.equal(tracker.evaluateTick(zeroReport, 6).shouldAbort, false);
+
+  // Final evaluation marks 0-sample rules as notEvaluated and fails overall when run had 0 requests
+  const finalSla = perfThresholds.evaluatePerformanceThresholds(zeroReport, {
+    abortGracePeriodSec: 0,
+    abortConsecutiveBreaches: 2,
+    rules: [
+      { id: 'r-lat', enabled: true, targetRequestId: 'overall', metric: 'avgMs', operator: 'lt', value: 500 },
+      { id: 'r-ep', enabled: true, targetRequestId: 'ep-zero', metric: 'errorRatePct', operator: 'lt', value: 1 },
+    ],
+  });
+  assert.equal(finalSla.status, 'failed');
+  assert.equal(finalSla.passedCount, 0);
+  assert.equal(finalSla.inconclusiveCount, 2);
+  assert.equal(finalSla.results[0].notEvaluated, true);
+  assert.equal(finalSla.results[0].passed, false);
+
+  const html = perfReportExporter.exportPerformanceReportHtml({
+    id: 'zero-sla',
+    tabId: 'perf:1',
+    title: 'Zero Sample Test',
+    sourceType: 'collection',
+    sourceId: 'c1',
+    startedAt: Date.now(),
+    finishedAt: Date.now(),
+    durationMs: 1000,
+    status: 'stopped',
+    engineMode: 'js_bounded',
+    platformId: 'extension',
+    executionMode: 'sequential',
+    slaResult: finalSla,
+    configSnapshot: {
+      loadProfile: { profile: 'fixed', virtualUsers: 2, baseLoad: 0, durationValue: 5, durationUnit: 'seconds', handles: {}, thinkTimeMs: 0 },
+      network: { requestTimeoutMs: 5000, followRedirects: true, ignoreSslErrors: false },
+      requestCount: 1,
+      setupRequestCount: 0,
+      runInLoopScripts: false,
+    },
+    summary: zeroReport.summary,
+    timeSeries: [],
+    endpoints: zeroReport.endpoints,
+    errorGroups: [],
+    errorSamples: [],
+    warnings: [],
+  });
+  assert.match(html, /NOT EVALUATED/);
+});
+
+test('perfRunner counts HTTP 3xx as warnings (not errors) when followRedirects is false and blocks concurrent functional run', async () => {
+  const { perfRunner, loadProfileMath, examples } = loadCommonModules();
+
+  // Cross-runner lock check
+  examples.setActiveFunctionalRunState({ runId: 'func-busy', tabId: 'perf:other' });
+  try {
+    const blocked = await perfRunner.startPerformanceTest({
+      tabId: 'perf:1',
+      title: 'Blocked Test',
+      sourceType: 'collection',
+      sourceId: 'c1',
+      items: [
+        {
+          id: 'r1',
+          itemId: 'r1',
+          name: 'Get',
+          method: 'GET',
+          path: '/get',
+          selected: true,
+          request: {
+            id: 'r1',
+            name: 'Get',
+            method: 'GET',
+            url: 'https://example.com/get',
+            headers: [],
+            params: [],
+            auth: { type: 'none' },
+            bodyType: 'none',
+            bodyContent: '',
+            bodyFormData: [],
+            bodyUrlEncoded: [],
+          },
+        },
+      ],
+      executionMode: 'sequential',
+      setupItemIds: [],
+      runInLoopScripts: false,
+      loadProfile: loadProfileMath.createDefaultLoadProfileConfig(10),
+      network: { requestTimeoutMs: 5000, followRedirects: true, ignoreSslErrors: false },
+      initialVariables: {},
+      onUpdate: () => {},
+      onFinish: () => {},
+    });
+    assert.equal(blocked.started, false);
+    assert.match(blocked.error, /functional collection run/i);
+  } finally {
+    examples.setActiveFunctionalRunState(null);
+  }
+
+  // HTTP 302 with followRedirects=false -> warningCount > 0, errorCount === 0
+  const server = http.createServer((_req, res) => {
+    res.writeHead(302, { Location: 'https://example.com/target' });
+    res.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    const cfg = loadProfileMath.createDefaultLoadProfileConfig(10);
+    cfg.virtualUsers = 1;
+    cfg.durationUnit = 'seconds';
+    cfg.durationValue = 5;
+    cfg.thinkTimeMs = 80;
+
+    const rep = await new Promise((resolve) => {
+      void perfRunner
+        .startPerformanceTest({
+          tabId: 'perf:redir',
+          title: 'Redirect Warn Test',
+          sourceType: 'collection',
+          sourceId: 'c1',
+          items: [
+            {
+              id: 'r-redir',
+              itemId: 'r-redir',
+              name: 'Redirect Step',
+              method: 'GET',
+              path: '/redirect',
+              selected: true,
+              request: {
+                id: 'r-redir',
+                name: 'Redirect Step',
+                method: 'GET',
+                url: `${baseUrl}/redirect`,
+                headers: [],
+                params: [],
+                auth: { type: 'none' },
+                bodyType: 'none',
+                bodyContent: '',
+                bodyFormData: [],
+                bodyUrlEncoded: [],
+              },
+            },
+          ],
+          executionMode: 'sequential',
+          setupItemIds: [],
+          runInLoopScripts: false,
+          loadProfile: cfg,
+          network: { requestTimeoutMs: 5000, followRedirects: false, ignoreSslErrors: false },
+          initialVariables: {},
+          onUpdate: (live) => {
+            if (live.summary.totalRequests >= 2) {
+              void perfRunner.stopActivePerformanceRun();
+            }
+          },
+          onFinish: resolve,
+        });
+    });
+
+    assert.ok(rep.summary.totalRequests >= 1);
+    assert.equal(rep.summary.errorCount, 0);
+    assert.equal(rep.summary.errorRatePct, 0);
+    assert.equal(rep.summary.warningCount, rep.summary.totalRequests);
+    assert.equal(rep.endpoints[0].warningCount, rep.summary.totalRequests);
+    assert.ok(rep.warnings.some((w) => /3xx redirect/i.test(w)));
+  } finally {
+    server.close();
+  }
+});
+
+test('perfStorage isolates identical report IDs across distinct scopes and syncRunnerTabItemsFromSource + validateRunnerPreflight enforce integrity', async () => {
+  const { perfStorage, perfLaunch } = loadCommonModules();
+
+  const scopeA = 'offline:ws-a';
+  const scopeB = 'offline:ws-b';
+  const sharedId = 'shared-report-id-99';
+
+  await perfStorage.savePerfReport(scopeA, { id: sharedId, startedAt: 1000, title: 'Report in A' });
+  await perfStorage.savePerfReport(scopeB, { id: sharedId, startedAt: 2000, title: 'Report in B' });
+
+  assert.equal((await perfStorage.getPerfReportById(sharedId, scopeA))?.title, 'Report in A');
+  assert.equal((await perfStorage.getPerfReportById(sharedId, scopeB))?.title, 'Report in B');
+  assert.equal(await perfStorage.hasPerfReportInScope(scopeA, sharedId), true);
+  assert.equal(await perfStorage.hasPerfReportInScope(scopeB, sharedId), true);
+
+  await perfStorage.deletePerfReport(sharedId, scopeA);
+  assert.equal(await perfStorage.hasPerfReportInScope(scopeA, sharedId), false);
+  assert.equal(await perfStorage.hasPerfReportInScope(scopeB, sharedId), true);
+
+  // syncRunnerTabItemsFromSource refreshes edited URL/headers while keeping order, selected, setupItemIds, and drops deleted items
+  const liveCollections = [
+    {
+      id: 'col-1',
+      name: 'API',
+      items: [
+        {
+          id: 'req-1',
+          name: 'Auth v2',
+          type: 'request',
+          request: { id: 'req-1', name: 'Auth v2', method: 'POST', url: 'https://example.com/v2/auth', headers: [], params: [], auth: { type: 'none' }, bodyType: 'none', bodyContent: '', bodyFormData: [], bodyUrlEncoded: [] },
+        },
+        {
+          id: 'req-2',
+          name: 'Orders v2',
+          type: 'request',
+          request: { id: 'req-2', name: 'Orders v2', method: 'GET', url: 'https://example.com/v2/orders', headers: [], params: [], auth: { type: 'none' }, bodyType: 'none', bodyContent: '', bodyFormData: [], bodyUrlEncoded: [] },
+        },
+        {
+          id: 'req-new',
+          name: 'New Endpoint',
+          type: 'request',
+          request: { id: 'req-new', name: 'New Endpoint', method: 'GET', url: 'https://example.com/new', headers: [], params: [], auth: { type: 'none' }, bodyType: 'none', bodyContent: '', bodyFormData: [], bodyUrlEncoded: [] },
+        },
+      ],
+    },
+  ];
+  const synced = perfLaunch.syncRunnerTabItemsFromSource(
+    {
+      sourceType: 'collection',
+      sourceId: 'col-1',
+      collectionId: 'col-1',
+      setupItemIds: ['req-1', 'req-deleted'],
+      items: [
+        { id: 'req-2', itemId: 'req-2', name: 'Orders old', method: 'GET', path: '/old', selected: false, request: { id: 'req-2', method: 'GET', url: 'https://example.com/old' } },
+        { id: 'req-deleted', itemId: 'req-deleted', name: 'Deleted', method: 'GET', path: '/del', selected: true, request: { id: 'req-deleted', method: 'GET', url: 'https://example.com/del' } },
+        { id: 'req-1', itemId: 'req-1', name: 'Auth old', method: 'POST', path: '/old-auth', selected: true, request: { id: 'req-1', method: 'POST', url: 'https://example.com/old-auth' } },
+      ],
+    },
+    liveCollections
+  );
+  assert.equal(synced.items.map((x) => x.id).join(','), 'req-2,req-1,req-new');
+  assert.equal(synced.items[0].request.url, 'https://example.com/v2/orders');
+  assert.equal(synced.items[0].selected, false);
+  assert.equal(synced.items[1].request.url, 'https://example.com/v2/auth');
+  assert.equal(synced.items[1].selected, true);
+  assert.equal(synced.items[2].selected, false, 'Newly added collection items append unselected');
+  assert.equal(synced.setupItemIds.join(','), 'req-1');
+  assert.equal(synced.removedNames.join(','), 'Deleted');
+
+  // validateRunnerPreflight blocks missing RAM dataFile rows & missing binary/form-data file blobs
+  const missingDataRes = perfLaunch.validateRunnerPreflight({
+    items: synced.items,
+    dataFile: { filename: 'users.csv', format: 'csv', fileBytes: 120, rowCount: 5, columns: ['id'], previewRows: [], readMode: 'sequential' },
+    dataRows: undefined,
+  });
+  assert.equal(missingDataRes.ok, false);
+  assert.match(missingDataRes.error, /users\.csv/i);
+
+  const missingBlobRes = perfLaunch.validateRunnerPreflight({
+    items: [
+      {
+        id: 'bin-1',
+        itemId: 'bin-1',
+        name: 'Upload Doc',
+        method: 'POST',
+        path: '/upload',
+        selected: true,
+        request: {
+          id: 'bin-1',
+          name: 'Upload Doc',
+          method: 'POST',
+          url: 'https://example.com/upload',
+          headers: [],
+          params: [],
+          auth: { type: 'none' },
+          bodyType: 'binary',
+          bodyContent: '',
+          bodyBinaryFile: { name: 'doc.pdf', size: 1024, type: 'application/pdf' },
+          bodyFormData: [],
+          bodyUrlEncoded: [],
+        },
+      },
+    ],
+  });
+  assert.equal(missingBlobRes.ok, false);
+  assert.match(missingBlobRes.error, /doc\.pdf/i);
 });

@@ -22,8 +22,9 @@ func (r *CollectionRepository) MoveItem(ctx context.Context, id uuid.UUID, sourc
 		return err
 	}
 	defer tx.Rollback(ctx)
+	colIDs := []string{source.ID.String(), target.ID.String()}
 	rows, err := tx.Query(ctx, `SELECT id, workspace_id, project_id, min_role FROM collections
-		WHERE id = ANY($1) AND deleted_at IS NULL ORDER BY id FOR UPDATE`, []uuid.UUID{source.ID, target.ID})
+		WHERE id = ANY($1::text[]::uuid[]) AND deleted_at IS NULL ORDER BY id FOR UPDATE`, colIDs)
 	if err != nil {
 		return err
 	}
@@ -134,7 +135,7 @@ func (r *CollectionRepository) MoveItem(ctx context.Context, id uuid.UUID, sourc
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `UPDATE collections SET version=version+1, updated_at=$2, last_modified_by=$3 WHERE id=ANY($1)`, []uuid.UUID{source.ID, target.ID}, now, userID)
+	_, err = tx.Exec(ctx, `UPDATE collections SET version=version+1, updated_at=$2, last_modified_by=$3 WHERE id=ANY($1::text[]::uuid[])`, colIDs, now, userID)
 	if err != nil {
 		return err
 	}

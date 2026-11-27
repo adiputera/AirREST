@@ -12,7 +12,13 @@ interface RunCaptureBucket {
   exchanges: Map<string, FunctionalCapturedExchange>;
 }
 
+interface RunEnvSnapshotEntry {
+  tabId: string;
+  env: Record<string, string>;
+}
+
 const sessionCaptures = new Map<string, RunCaptureBucket>();
+const sessionEnvSnapshots = new Map<string, RunEnvSnapshotEntry>();
 
 function utf8ByteLength(str: string): number {
   return new TextEncoder().encode(str).length;
@@ -113,16 +119,36 @@ export function getFunctionalSessionStats(runId: string): {
   };
 }
 
+export function saveFunctionalRunEnvSnapshot(
+  runId: string,
+  tabId: string,
+  env: Record<string, string>
+): void {
+  if (!runId) return;
+  sessionEnvSnapshots.set(runId, { tabId, env: { ...env } });
+}
+
+export function getFunctionalRunEnvSnapshot(runId: string): Record<string, string> | undefined {
+  const entry = sessionEnvSnapshots.get(runId);
+  return entry ? { ...entry.env } : undefined;
+}
+
 export function clearFunctionalSessionForTab(tabId: string): void {
   for (const [runId, bucket] of sessionCaptures.entries()) {
     if (bucket.tabId === tabId) {
       sessionCaptures.delete(runId);
     }
   }
+  for (const [runId, entry] of sessionEnvSnapshots.entries()) {
+    if (entry.tabId === tabId) {
+      sessionEnvSnapshots.delete(runId);
+    }
+  }
 }
 
 export function clearAllFunctionalSessions(): void {
   sessionCaptures.clear();
+  sessionEnvSnapshots.clear();
 }
 
 registerFunctionalSessionCleanup((tabId?: string) => {

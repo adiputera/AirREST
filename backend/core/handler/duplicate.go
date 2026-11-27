@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/adiputera/airrest-backend/core/middleware"
@@ -209,6 +210,7 @@ func writeDuplicateError(w http.ResponseWriter, err error) {
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 		response.Error(w, http.StatusServiceUnavailable, "request deadline exceeded", "REQUEST_TIMEOUT")
 	default:
+		slog.Error("duplicate operation failed", "error", err)
 		response.Error(w, http.StatusInternalServerError, "duplicate operation failed", "SERVER_ERROR")
 	}
 }

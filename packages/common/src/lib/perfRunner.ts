@@ -29,6 +29,7 @@ import type {
   ScriptRequest,
 } from '../types/platform';
 import {
+  getActiveFunctionalRunState,
   getActivePerformanceRun,
   setActivePerformanceRunController,
   stopActivePerformanceRun,
@@ -182,6 +183,7 @@ export interface SingleHttpExecutionResult {
   headers: Record<string, string>;
   data: string;
   isError: boolean;
+  isWarning?: boolean;
   errorCategory: string;
   errorMessage: string;
   errorSnippet?: string;
@@ -302,7 +304,9 @@ export async function executePerfHttpStep(
         cache: 'no-store',
       });
 
-    const isHttpError = !response.ok;
+    const isRedirectWarning =
+      network.followRedirects === false && response.status >= 300 && response.status < 400;
+    const isHttpError = !response.ok && !isRedirectWarning;
     const { sizeBytes, textData, errorSnippet } = await readAndDiscardOrSample(response, controller, {
       method: request.method,
       needTextBody: needTextBody || false,
@@ -325,6 +329,7 @@ export async function executePerfHttpStep(
       headers,
       data: textData,
       isError: isHttpError,
+      isWarning: isRedirectWarning,
       errorCategory: isHttpError ? `http_${Math.floor(response.status / 100)}xx` : '',
       errorMessage: isHttpError ? `HTTP ${response.status} ${response.statusText || ''}`.trim() : '',
       errorSnippet: isHttpError ? errorSnippet : undefined,
@@ -567,6 +572,7 @@ class EndpointAccumulator {
   readonly hist = new PerfHistogram();
   totalRequests = 0;
   errorCount = 0;
+  warningCount = 0;
   bytesReceived = 0;
 
   constructor(item: PerformanceRequestDescriptor) {
@@ -576,9 +582,10 @@ class EndpointAccumulator {
     this.path = item.path;
   }
 
-  record(timeMs: number, bytes: number, isError: boolean): void {
+  record(timeMs: number, bytes: number, isError: boolean, isWarning = false): void {
     this.totalRequests += 1;
     if (isError) this.errorCount += 1;
+    if (isWarning) this.warningCount += 1;
     this.bytesReceived += bytes;
     this.hist.record(timeMs);
   }
@@ -593,6 +600,7 @@ class EndpointAccumulator {
       path: this.path,
       totalRequests: this.totalRequests,
       errorCount: this.errorCount,
+      warningCount: this.warningCount,
       errorRatePct: this.totalRequests > 0 ? Number(((this.errorCount / this.totalRequests) * 100).toFixed(2)) : 0,
       requestsPerSec: Number((this.totalRequests / safeSec).toFixed(2)),
       avgMs: h.avgMs,
@@ -768,6 +776,12 @@ export async function startPerformanceTest(params: StartPerformanceRunParams): P
       error: 'Another performance test is already running. Stop it before starting a new run.',
     };
   }
+  if (getActiveFunctionalRunState()) {
+    return {
+      started: false,
+      error: 'A functional collection run is currently in progress. Stop it before starting a performance test.',
+    };
+  }
 
   const adapter = params.adapter || getDefaultPlatformAdapter() || undefined;
   const platformId = adapter?.platformId || 'web';
@@ -925,6 +939,7 @@ export async function startPerformanceTest(params: StartPerformanceRunParams): P
     summary: {
       totalRequests: 0,
       errorCount: 0,
+      warningCount: 0,
       errorRatePct: 0,
       requestsPerSec: 0,
       avgMs: 0,
@@ -943,6 +958,7 @@ export async function startPerformanceTest(params: StartPerformanceRunParams): P
       path: it.path,
       totalRequests: 0,
       errorCount: 0,
+      warningCount: 0,
       errorRatePct: 0,
       requestsPerSec: 0,
       avgMs: 0,
@@ -1064,8 +1080,20 @@ export async function startPerformanceTest(params: StartPerformanceRunParams): P
         Boolean(params.setupRefresh?.enabled || params.setupRefresh?.refreshOn401);
       const refreshCooldownMs = Math.max(15, params.setupRefresh?.cooldownSec ?? 15) * 1000;
 
+      const MAX_CONSECUTIVE_REFRESH_FAILURES = 3;
+      let consecutiveRefreshFailures = 0;
+      let refreshDisabledByFailures = false;
+
       const triggerSetupRefresh = async (trigger: 'interval' | 'http_401') => {
-        if (!canRefreshSetup || isRefreshingSetup || abortController.signal.aborted || autoAbortMeta) return;
+        if (
+          !canRefreshSetup ||
+          refreshDisabledByFailures ||
+          isRefreshingSetup ||
+          abortController.signal.aborted ||
+          autoAbortMeta
+        ) {
+          return;
+        }
         const now = Date.now();
         if (trigger === 'http_401' && now - lastRefreshAttemptAt < refreshCooldownMs) return;
         isRefreshingSetup = true;
@@ -1077,9 +1105,10 @@ export async function startPerformanceTest(params: StartPerformanceRunParams): P
             signal: abortController.signal,
             adapter,
             scriptExecutor: adapter?.perfScriptExecutor || adapter?.scriptExecutor,
-            network: params.network,
+            network: effectiveNetwork,
           });
           if (outcome.success) {
+            consecutiveRefreshFailures = 0;
             runVariables = outcome.variables;
             sharedBaseVarsRef.current = { ...outcome.variables };
             sharedBaseVarsRef.version += 1;
@@ -1090,16 +1119,36 @@ export async function startPerformanceTest(params: StartPerformanceRunParams): P
               await adapter.performanceRunner.updateVariables(activeNativeRunId, outcome.variables).catch(() => { });
             }
           } else {
+            consecutiveRefreshFailures += 1;
             refreshStats.failures += 1;
             refreshStats.lastError = outcome.error || 'Setup refresh failed.';
             const warnMsg = `Token refresh (${trigger === 'http_401' ? '401 recovery' : 'periodic'}) failed: ${refreshStats.lastError}. Keeping previous variables.`;
             if (!warnings.includes(warnMsg)) warnings.push(warnMsg);
+            if (consecutiveRefreshFailures >= MAX_CONSECUTIVE_REFRESH_FAILURES) {
+              refreshDisabledByFailures = true;
+              if (refreshTimer) {
+                clearInterval(refreshTimer);
+                refreshTimer = null;
+              }
+              const pauseMsg = `Token refresh paused after ${MAX_CONSECUTIVE_REFRESH_FAILURES} consecutive failures. Keeping last valid variables.`;
+              if (!warnings.includes(pauseMsg)) warnings.push(pauseMsg);
+            }
           }
         } catch (err) {
+          consecutiveRefreshFailures += 1;
           refreshStats.failures += 1;
           refreshStats.lastError = err instanceof Error ? err.message : String(err);
           const warnMsg = `Token refresh failed: ${refreshStats.lastError}. Keeping previous variables.`;
           if (!warnings.includes(warnMsg)) warnings.push(warnMsg);
+          if (consecutiveRefreshFailures >= MAX_CONSECUTIVE_REFRESH_FAILURES) {
+            refreshDisabledByFailures = true;
+            if (refreshTimer) {
+              clearInterval(refreshTimer);
+              refreshTimer = null;
+            }
+            const pauseMsg = `Token refresh paused after ${MAX_CONSECUTIVE_REFRESH_FAILURES} consecutive failures. Keeping last valid variables.`;
+            if (!warnings.includes(pauseMsg)) warnings.push(pauseMsg);
+          }
         } finally {
           isRefreshingSetup = false;
         }
@@ -1315,6 +1364,7 @@ async function runJsPerformanceEngine(params: {
 
   let totalRequests = 0;
   let errorCount = 0;
+  let warningCount = 0;
   let unauthorizedCount = 0;
   let totalBytes = 0;
   let seqRowCounter = 0;
@@ -1337,15 +1387,17 @@ async function runJsPerformanceEngine(params: {
     timeMs: number,
     bytes: number,
     isError: boolean,
-    errInfo?: { status: number; statusText: string; category: string; message: string; snippet?: string; url: string }
+    errInfo?: { status: number; statusText: string; category: string; message: string; snippet?: string; url: string },
+    isWarning = false
   ) => {
     const elapsedSec = Math.min(durationSec - 1, Math.max(0, Math.floor((performance.now() - runStartPerf) / 1000)));
     totalRequests += 1;
     if (isError) errorCount += 1;
+    if (isWarning) warningCount += 1;
     if (errInfo?.status === 401) unauthorizedCount += 1;
     totalBytes += bytes;
     totalHist.record(timeMs);
-    endpointMap.get(item.id)?.record(timeMs, bytes, isError);
+    endpointMap.get(item.id)?.record(timeMs, bytes, isError, isWarning);
     getBucket(elapsedSec).record(item.id, timeMs, isError);
 
     if (isError && errInfo) {
@@ -1394,6 +1446,7 @@ async function runJsPerformanceEngine(params: {
       summary: {
         totalRequests,
         errorCount,
+        warningCount,
         errorRatePct: totalRequests > 0 ? Number(((errorCount / totalRequests) * 100).toFixed(2)) : 0,
         requestsPerSec: Number((totalRequests / elapsedSec).toFixed(2)),
         maxRequestsPerSec,
@@ -1564,7 +1617,7 @@ async function runJsPerformanceEngine(params: {
             }
           }
 
-          recordOutcome(item, res.timeMs, res.sizeBytes, finalIsError, errMeta);
+          recordOutcome(item, res.timeMs, res.sizeBytes, finalIsError, errMeta, Boolean(res.isWarning && !finalIsError));
         }
 
         if (
@@ -1662,9 +1715,16 @@ async function runJsPerformanceEngine(params: {
 
   const totalElapsedMs = Math.min(durationSec * 1000, Math.max(1, performance.now() - runStartPerf));
   const finalSnap = buildSnapshot(totalElapsedMs);
+  const runWarnings = [...(baseReport.warnings || [])];
+  if (warningCount > 0) {
+    runWarnings.push(
+      `Received ${warningCount.toLocaleString()} HTTP 3xx redirect response(s) while "Follow HTTP redirects" was disabled (counted as warnings, not errors).`
+    );
+  }
   return {
     ...baseReport,
     ...finalSnap,
+    warnings: Array.from(new Set(runWarnings)),
     status: params.stoppedByUser() ? 'stopped' : 'completed',
     finishedAt: Date.now(),
   };

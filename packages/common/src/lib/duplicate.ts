@@ -1,4 +1,5 @@
 import {
+  ActiveScope,
   ApiRequest,
   AuthConfig,
   BinaryFileData,
@@ -8,6 +9,7 @@ import {
   FormDataItem,
   KeyValuePair,
   PendingDuplicateIntent,
+  WorkspaceMode,
 } from '../types/api';
 import {
   buildExampleSummariesFromExamples,
@@ -683,19 +685,74 @@ export function getPendingDuplicateOwnerKey(
   return JSON.stringify([apiUrl, userId]);
 }
 
+export interface PendingDuplicateWorkspaceContext {
+  workspaceMode?: WorkspaceMode;
+  activeScope?: ActiveScope | null;
+  activeOfflineWorkspaceId?: string | null;
+}
+
+function pendingDuplicateScopesMatch(
+  a?: ActiveScope | null,
+  b?: ActiveScope | null,
+): boolean {
+  return Boolean(a && b && a.type === b.type && a.id === b.id);
+}
+
 /**
- * Returns only pending duplicate intents owned by the active cloud session.
+ * Checks whether a pending duplicate intent is relevant to the currently active workspace/scope.
+ */
+export function isPendingDuplicateIntentVisibleInWorkspace(
+  intent: PendingDuplicateIntent,
+  workspaceContext?: PendingDuplicateWorkspaceContext,
+): boolean {
+  if (!workspaceContext?.workspaceMode) return true;
+
+  if (workspaceContext.workspaceMode === 'offline') {
+    if (intent.kind !== 'import_duplicate') return false;
+    if (intent.sourceOfflineWorkspaceId && workspaceContext.activeOfflineWorkspaceId) {
+      return intent.sourceOfflineWorkspaceId === workspaceContext.activeOfflineWorkspaceId;
+    }
+    return true;
+  }
+
+  const activeScope = workspaceContext.activeScope;
+  if (!activeScope) return false;
+
+  if (intent.kind === 'import_duplicate') {
+    return pendingDuplicateScopesMatch(intent.targetScope, activeScope);
+  }
+
+  if (intent.sourceScope || intent.targetScope) {
+    return (
+      pendingDuplicateScopesMatch(intent.sourceScope, activeScope) ||
+      pendingDuplicateScopesMatch(intent.targetScope, activeScope)
+    );
+  }
+
+  return true;
+}
+
+/**
+ * Returns only pending duplicate intents owned by the active cloud session
+ * and relevant to the active workspace/scope when provided.
  */
 export function getOwnedPendingDuplicateIntents(
   intents: Record<string, PendingDuplicateIntent> | undefined | null,
   cloudConfig?: Pick<CloudConfig, 'apiUrl' | 'user' | 'token' | 'sessionKind'> | null,
   isOfflineOnly = false,
+  workspaceContext?: PendingDuplicateWorkspaceContext,
 ): PendingDuplicateIntent[] {
   if (isOfflineOnly) return [];
   const ownerKey = getPendingDuplicateOwnerKey(cloudConfig);
   if (!ownerKey || !intents) return [];
   return Object.values(intents)
-    .filter((intent): intent is PendingDuplicateIntent => Boolean(intent && intent.ownerKey === ownerKey))
+    .filter((intent): intent is PendingDuplicateIntent =>
+      Boolean(
+        intent &&
+          intent.ownerKey === ownerKey &&
+          isPendingDuplicateIntentVisibleInWorkspace(intent, workspaceContext),
+      ),
+    )
     .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 }
 

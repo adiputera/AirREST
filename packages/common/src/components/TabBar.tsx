@@ -720,6 +720,17 @@ export const TabBar: React.FC = () => {
                   <span className="truncate max-w-[130px]" title={perfTab.title}>
                     {perfTab.title}
                   </span>
+                  {perfTab.isSessionOnlyImported && (
+                    <span
+                      className="shrink-0 rounded border border-amber-500/35 bg-amber-500/10 px-1 py-px text-[9px] font-semibold text-amber-600 dark:text-amber-300"
+                      title={
+                        perfTab.sessionOnlyReason ||
+                        'Temporary session-only imported report (closes without saving)'
+                      }
+                    >
+                      Session
+                    </span>
+                  )}
 
                   <button
                     type="button"

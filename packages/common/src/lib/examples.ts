@@ -28,7 +28,10 @@ export function isExampleTabId(id: string | null | undefined): boolean {
   return typeof id === 'string' && id.startsWith(EXAMPLE_TAB_ID_PREFIX);
 }
 
-export function makePerformanceTabId(sourceType: 'collection' | 'folder' | 'request', sourceId: string): string {
+export function makePerformanceTabId(
+  sourceType: 'collection' | 'folder' | 'request' | 'imported',
+  sourceId: string
+): string {
   return `${PERF_TAB_ID_PREFIX}${sourceType}:${sourceId}`;
 }
 
@@ -133,6 +136,7 @@ export interface ActivePerfRunController {
 }
 
 let activePerfRunController: ActivePerfRunController | null = null;
+let activeFunctionalRunState: { runId: string; tabId: string } | null = null;
 let cloudPerfCleanupHandler: ((userId?: string | null) => Promise<void>) | null = null;
 let perfDataRowsCleanupHandler: ((tabId?: string) => void) | null = null;
 let functionalSessionCleanupHandler: ((tabId?: string) => void) | null = null;
@@ -146,6 +150,14 @@ export function getActivePerformanceRun(): { runId: string; tabId: string } | nu
   return activePerfRunController
     ? { runId: activePerfRunController.runId, tabId: activePerfRunController.tabId }
     : null;
+}
+
+export function setActiveFunctionalRunState(state: { runId: string; tabId: string } | null): void {
+  activeFunctionalRunState = state;
+}
+
+export function getActiveFunctionalRunState(): { runId: string; tabId: string } | null {
+  return activeFunctionalRunState ? { ...activeFunctionalRunState } : null;
 }
 
 export async function stopActivePerformanceRun(): Promise<void> {

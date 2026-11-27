@@ -24,6 +24,7 @@ export function exportFunctionalReportJson(report: FunctionalRunReport): string 
 
 function formatStepStatusLabel(status: FunctionalStepResult['status']): string {
   if (status === 'passed') return 'PASSED';
+  if (status === 'warning') return 'WARNING';
   if (status === 'failed') return 'FAILED';
   if (status === 'error') return 'ERROR';
   return 'SKIPPED';
@@ -46,9 +47,11 @@ export function exportFunctionalReportHtml(report: FunctionalRunReport): string 
           const badgeClass =
             step.status === 'passed'
               ? 'badge-pass'
-              : step.status === 'skipped'
-                ? 'badge-skip'
-                : 'badge-fail';
+              : step.status === 'warning'
+                ? 'badge-warn'
+                : step.status === 'skipped'
+                  ? 'badge-skip'
+                  : 'badge-fail';
           const testsHtml =
             step.testResults.length > 0
               ? `<ul class="tests-list">${step.testResults
@@ -65,7 +68,9 @@ export function exportFunctionalReportHtml(report: FunctionalRunReport): string 
           const stepErr = step.scriptError || step.errorMessage;
           const errHtml = stepErr
             ? `<div class="err-detail">${escapeHtml(stepErr)}</div>`
-            : '';
+            : step.warningMessage
+              ? `<div class="warn-detail">${escapeHtml(step.warningMessage)}</div>`
+              : '';
           return `
             <tr>
               <td><span class="method">${escapeHtml(step.method)}</span></td>
@@ -130,12 +135,14 @@ export function exportFunctionalReportHtml(report: FunctionalRunReport): string 
     .req-url { font-family: ui-monospace, monospace; font-size: 11px; color: #94a3b8; word-break: break-all; }
     .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 10px; font-weight: 700; }
     .badge-pass { background: rgba(16, 185, 129, 0.16); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.35); }
+    .badge-warn { background: rgba(245, 158, 11, 0.16); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.35); }
     .badge-fail { background: rgba(244, 63, 94, 0.16); color: #fb7185; border: 1px solid rgba(244, 63, 94, 0.35); }
     .badge-skip { background: rgba(148, 163, 184, 0.16); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.35); }
     .tests-list { margin: 8px 0 0; padding-left: 16px; }
     .test-pass { color: #34d399; margin-bottom: 2px; }
     .test-fail { color: #fb7185; margin-bottom: 4px; }
     .err-detail { margin-top: 4px; padding: 6px 8px; border-radius: 6px; background: rgba(244, 63, 94, 0.12); color: #fda4af; font-family: ui-monospace, monospace; font-size: 11px; white-space: pre-wrap; }
+    .warn-detail { margin-top: 4px; padding: 6px 8px; border-radius: 6px; background: rgba(245, 158, 11, 0.12); color: #fcd34d; font-family: ui-monospace, monospace; font-size: 11px; white-space: pre-wrap; }
   </style>
 </head>
 <body>
@@ -203,6 +210,16 @@ export function exportFunctionalReportJunitXml(report: FunctionalRunReport): str
         const msg = step.scriptError || step.errorMessage || 'Request execution error';
         cases.push(
           `    <testcase classname="${escapeXml(classname)}" name="${escapeXml(step.name)}" time="${stepTimeSec.toFixed(3)}"><error message="${escapeXml(msg)}">${escapeXml(msg)}</error></testcase>`
+        );
+        continue;
+      }
+
+      if (step.status === 'failed' && step.testResults.length === 0) {
+        suiteTests += 1;
+        suiteFailures += 1;
+        const msg = step.errorMessage || `HTTP ${step.httpStatus || 0} ${step.statusText || 'Request failed'}`.trim();
+        cases.push(
+          `    <testcase classname="${escapeXml(classname)}" name="${escapeXml(`${step.name} (${step.httpStatus || 0})`)}" time="${stepTimeSec.toFixed(3)}"><failure message="${escapeXml(msg)}">${escapeXml(msg)}</failure></testcase>`
         );
         continue;
       }

@@ -17,6 +17,8 @@ import {
   Plus,
   ArrowLeft,
   FolderGit2,
+  Flame,
+  Play,
 } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
 import { useStoreContext } from '../store/storeContext';
@@ -66,6 +68,9 @@ import {
   queueInitialRequestEditorSection,
   resolveInitialCurlSection,
 } from './requestEditorSectionState';
+import { isStrictAirrestReportJson } from '../lib/reportShare';
+import { ReportImportResolveModal } from './performance/ReportImportResolveModal';
+import { useReportImporter } from './performance/useReportImporter';
 
 interface ImportModalProps {
   isOpen: boolean;
@@ -77,6 +82,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
   const runtimeAdapter = usePlatformAdapter();
   const contextStore = useStoreContext();
   const activeStore = contextStore || useApiStore;
+  const reportImporter = useReportImporter();
   const [activeImportTab, setActiveImportTab] = useState<'postman' | 'curl'>('postman');
   const [jsonText, setJsonText] = useState('');
   const [curlText, setCurlText] = useState('');
@@ -534,7 +540,11 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
     if (stats.failed.length > 0) {
       const failDetails = stats.failed.map((f) => `${f.name}: ${f.error}`).join(' | ');
       setErrorMsg(`${summary} ${failDetails}`);
-      if (stats.collectionsImported > 0 || stats.environmentsImported > 0) {
+      if (
+        stats.collectionsImported > 0 ||
+        stats.environmentsImported > 0 ||
+        (stats.reportsImported ?? 0) > 0
+      ) {
         setSuccessMsg(summary);
       }
       return;
@@ -557,6 +567,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
     const currentStats: ImportBatchStats = {
       collectionsImported: initialStats.collectionsImported,
       environmentsImported: initialStats.environmentsImported,
+      reportsImported: initialStats.reportsImported ?? 0,
       skipped: initialStats.skipped,
       failed: [...initialStats.failed],
     };
@@ -732,6 +743,38 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
             error: errMsg,
           });
         }
+      } else if (
+        (item.type === 'performance_report' || item.type === 'functional_report') &&
+        item.rawReportContent
+      ) {
+        try {
+          const outcome = await reportImporter.importReportContent(item.rawReportContent, {
+            filename: item.filename,
+          });
+          if (!isRunCurrent(runId, target)) return;
+          if (outcome.cancelled) {
+            markBatchItemOutcome(item.id, 'skipped');
+            currentStats.skipped += 1;
+          } else if (!outcome.ok) {
+            const errMsg = outcome.error || 'Failed to import report.';
+            markBatchItemOutcome(item.id, 'failed', { error: errMsg, retryTargetKey: targetKey });
+            currentStats.failed.push({
+              name: item.name,
+              error: errMsg,
+            });
+          } else {
+            markBatchItemOutcome(item.id, 'imported');
+            currentStats.reportsImported = (currentStats.reportsImported ?? 0) + 1;
+          }
+        } catch (err: unknown) {
+          if (!isRunCurrent(runId, target)) return;
+          const errMsg = err instanceof Error ? err.message : 'Failed to import report.';
+          markBatchItemOutcome(item.id, 'failed', { error: errMsg, retryTargetKey: targetKey });
+          currentStats.failed.push({
+            name: item.name,
+            error: errMsg,
+          });
+        }
       }
     }
 
@@ -756,6 +799,13 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
       return;
     }
 
+    // Always process collections and environments before reports so attached report matching works inside mixed batches
+    const orderedItems = [...selectedItems].sort((a, b) => {
+      const aRank = a.type === 'performance_report' || a.type === 'functional_report' ? 1 : 0;
+      const bRank = b.type === 'performance_report' || b.type === 'functional_report' ? 1 : 0;
+      return aRank - bRank;
+    });
+
     const runId = ++importRunIdRef.current;
     const target = captureImportTarget(activeStore.getState());
     activeTargetRef.current = target;
@@ -764,10 +814,11 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
     batchImportedIdsRef.current = new Set();
     try {
       await processBatchQueue(
-        selectedItems,
+        orderedItems,
         {
           collectionsImported: 0,
           environmentsImported: 0,
+          reportsImported: 0,
           skipped: 0,
           failed: [],
         },
@@ -805,8 +856,27 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
       const detected = detectPostmanJsonType(jsonText);
 
       if (detected === 'unknown') {
+        if (isStrictAirrestReportJson(jsonText)) {
+          const reportRes = await reportImporter.importReportContent(jsonText, {
+            filename: 'pasted.airrest-report.json',
+          });
+          if (!isRunCurrent(runId, target)) return;
+          if (reportRes.cancelled) return;
+          if (!reportRes.ok) {
+            setErrorMsg(reportRes.error || 'Failed to import AirREST report JSON.');
+            return;
+          }
+          setSuccessMsg(reportRes.message || 'AirREST report imported!');
+          clearCloseTimer();
+          closeTimerRef.current = setTimeout(() => {
+            if (!isRunCurrent(runId, target)) return;
+            setJsonText('');
+            handleModalClose();
+          }, 900);
+          return;
+        }
         invalidateActiveRun();
-        setErrorMsg('Unrecognized JSON format. Expected a Postman Collection or Environment JSON.');
+        setErrorMsg('Unrecognized JSON format. Expected a Postman Collection, Environment, or AirREST Report JSON.');
         return;
       }
 
@@ -934,6 +1004,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
         baseStats.collectionsImported + (outcome === 'collection' ? 1 : 0),
       environmentsImported:
         baseStats.environmentsImported + (outcome === 'environment' ? 1 : 0),
+      reportsImported: baseStats.reportsImported ?? 0,
       skipped: baseStats.skipped + (outcome === 'skipped' ? 1 : 0),
       failed: [...baseStats.failed],
     };
@@ -1764,7 +1835,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
                 <div>
                   <h2 className="text-base font-semibold text-tx-primary">Review Files to Import</h2>
                   <p className="text-xs text-tx-muted">
-                    Choose which Collections and Environments to import into your workspace
+                    Choose which Collections, Environments, and AirREST Reports to import
                   </p>
                 </div>
               </div>
@@ -1821,6 +1892,8 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
               {batchItems.map((item) => {
                 const isCollection = item.type === 'collection';
                 const isEnvironment = item.type === 'environment';
+                const isPerfReport = item.type === 'performance_report';
+                const isFuncReport = item.type === 'functional_report';
                 return (
                   <label
                     key={item.id}
@@ -1866,6 +1939,18 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
                           <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-300">
                             <Globe className="h-3 w-3" />
                             <span>Environment</span>
+                          </span>
+                        )}
+                        {isPerfReport && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-300">
+                            <Flame className="h-3 w-3" />
+                            <span>Perf Report</span>
+                          </span>
+                        )}
+                        {isFuncReport && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-teal-500/25 bg-teal-500/10 px-2 py-0.5 text-[10px] font-semibold text-teal-600 dark:text-teal-300">
+                            <Play className="h-3 w-3" />
+                            <span>Func Report</span>
                           </span>
                         )}
                         {item.type === 'invalid' && (
@@ -1993,8 +2078,8 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
                   <Upload className="h-5 w-5" />
                 </div>
                 <div>
-                  <h2 className="text-base font-semibold text-tx-primary">Import Requests & Environments</h2>
-                  <p className="text-xs text-tx-muted">Import Postman Collections, Environments, or raw cURL commands</p>
+                  <h2 className="text-base font-semibold text-tx-primary">Import Files, Reports &amp; Requests</h2>
+                  <p className="text-xs text-tx-muted">Import Postman Collections, Environments, AirREST Reports, or cURL commands</p>
                 </div>
               </div>
               <button
@@ -2020,7 +2105,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
                 }`}
               >
                 <FileJson className="h-4 w-4 text-sky-500 dark:text-sky-400" />
-                <span>Postman Collection or Environment (.json)</span>
+                <span>Collection, Environment, or Report (.json)</span>
               </button>
 
               <button
@@ -2065,9 +2150,9 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
                   className="flex cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-line bg-card/60 p-4 text-center transition hover:border-sky-500/50 hover:bg-hover focus:outline-none focus:ring-1 focus:ring-sky-500"
                 >
                   <div className="flex items-center gap-2">
-                    <FileJson className="h-5 w-5 text-sky-500 dark:text-sky-400" />
+                      <FileJson className="h-5 w-5 text-sky-500 dark:text-sky-400" />
                     <span className="text-xs font-medium text-tx-secondary">
-                      Choose or drag Postman Collection or Environment .json files
+                      Choose or drag Collection, Environment, or .airrest-report.json files
                     </span>
                   </div>
                   <span className="text-[11px] text-tx-faint">
@@ -2077,7 +2162,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
 
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-tx-secondary">
-                    Or paste Postman Collection or Environment JSON directly:
+                    Or paste Collection, Environment, or AirREST Report JSON directly:
                   </label>
                   <textarea
                     value={jsonText}
@@ -2087,7 +2172,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
                         onChange: (val) => setJsonText(val),
                       })
                     }
-                    placeholder='Paste Postman Collection JSON (with "info", "item") OR Postman Environment JSON (with "name", "values"). Auto-detected automatically!'
+                    placeholder='Paste Postman Collection JSON, Environment JSON, or AirREST Report (.airrest-report.json). Auto-detected!'
                     className="h-44 w-full rounded-xl border border-line bg-card p-3 font-mono text-xs text-tx-primary placeholder-tx-faint focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition resize-none"
                   />
                 </div>
@@ -2152,7 +2237,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
                   ) : (
                     <>
                       <Upload className="h-3.5 w-3.5" />
-                      Import Postman File
+                      Import JSON File
                     </>
                   )}
                 </button>
@@ -2169,6 +2254,10 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
           </div>
         )}
       </div>
+      <ReportImportResolveModal
+        prompt={reportImporter.resolvePrompt}
+        onResolve={reportImporter.handleResolveChoice}
+      />
     </div>
   );
 };

@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import path from 'path';
 import fs from 'fs';
+import pkg from './package.json' with { type: 'json' };
 
 export default defineConfig(({ mode }) => {
   const isOffline = mode === 'offline';
@@ -58,6 +59,7 @@ export default defineConfig(({ mode }) => {
       },
     ],
     define: {
+      __AIRREST_VERSION__: JSON.stringify(pkg.version),
       'import.meta.env.VITE_APP_EDITION': JSON.stringify(isOffline ? 'offline' : 'full'),
       'import.meta.env.VITE_AIRREST_EDITION': JSON.stringify(isOffline ? 'offline' : 'full'),
     },

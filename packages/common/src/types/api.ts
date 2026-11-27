@@ -324,6 +324,8 @@ export interface PendingDuplicateIntent {
   sourceItemId?: string;
   sourceName?: string;
   sourceItemType?: 'folder' | 'request';
+  sourceScope?: ActiveScope;
+  sourceOfflineWorkspaceId?: string;
   targetScope?: ActiveScope;
   targetCollectionId?: string;
   targetCollectionName?: string;
@@ -416,13 +418,15 @@ export interface FunctionalRunnerConfig {
   delayMs: number;
   persistResponses: boolean;
   keepVariableValues: boolean;
+  /** Treat HTTP 4xx/5xx responses as failed steps even without pm.test() failures (default false, Postman behavior). */
+  failOnHttpError?: boolean;
   stopOnError: FunctionalStopOnErrorMode;
   requestTimeoutMs: number;
   followRedirects: boolean;
   ignoreSslErrors: boolean;
 }
 
-export type FunctionalStepStatus = 'passed' | 'failed' | 'error' | 'skipped';
+export type FunctionalStepStatus = 'passed' | 'warning' | 'failed' | 'error' | 'skipped';
 
 export interface FunctionalCapturedExchange {
   requestMethod: HttpMethod;
@@ -453,6 +457,7 @@ export interface FunctionalStepResult {
   testsPassed: number;
   testsFailed: number;
   errorMessage?: string;
+  warningMessage?: string;
   scriptError?: string;
   scriptErrorStage?: ScriptErrorStage;
   nextRequestTarget?: string | null;
@@ -470,6 +475,12 @@ export interface FunctionalRunReport {
   title: string;
   sourceType: 'collection' | 'folder' | 'request';
   sourceId: string;
+  sourceCollectionId?: string;
+  sourceCollectionName?: string;
+  sourceName?: string;
+  imported?: boolean;
+  importedAt?: number;
+  importedFilename?: string;
   status: FunctionalRunStatus;
   startedAt: number;
   finishedAt?: number;
@@ -480,6 +491,7 @@ export interface FunctionalRunReport {
   completedIterations: number;
   totalRequestsExecuted: number;
   requestsPassed: number;
+  requestsWarned?: number;
   requestsFailed: number;
   requestsErrored: number;
   requestsSkipped: number;
@@ -489,6 +501,9 @@ export interface FunctionalRunReport {
   avgResponseTimeMs: number;
   steps: FunctionalStepResult[];
   failedItemIds: string[];
+  failedIterations?: number[];
+  stepsTruncated?: boolean;
+  totalStepsRecorded?: number;
   updatedEnvVars?: string[];
   stopReason?: string;
   captureBudgetExhausted?: boolean;
@@ -545,6 +560,8 @@ export interface PerformanceThresholdEvaluation {
   expected: number;
   actual: number;
   passed: boolean;
+  notEvaluated?: boolean;
+  notEvaluatedReason?: string;
   abortOnFail: boolean;
   triggeredAbort?: boolean;
 }
@@ -553,6 +570,7 @@ export interface PerformanceSlaSummary {
   status: 'passed' | 'failed';
   passedCount: number;
   failedCount: number;
+  inconclusiveCount?: number;
   totalCount: number;
   autoAborted: boolean;
   autoAbortedReason?: string;
@@ -589,7 +607,7 @@ export interface OpenPerformanceTab {
   id: string;
   title: string;
   runnerMode: RunnerMode;
-  sourceType: 'collection' | 'folder' | 'request';
+  sourceType: 'collection' | 'folder' | 'request' | 'imported';
   sourceId: string;
   collectionId?: string;
   items: PerformanceRequestDescriptor[];
@@ -607,12 +625,15 @@ export interface OpenPerformanceTab {
   viewingReportId?: string | null;
   activeFunctionalRunId?: string | null;
   viewingFunctionalReportId?: string | null;
+  isSessionOnlyImported?: boolean;
+  sessionOnlyReason?: string;
   createdAt: number;
 }
 
 export interface PerformanceMetricSnapshot {
   totalRequests: number;
   errorCount: number;
+  warningCount?: number;
   errorRatePct: number;
   requestsPerSec: number;
   maxRequestsPerSec?: number;
@@ -662,6 +683,7 @@ export interface PerformanceEndpointBreakdown {
   path: string;
   totalRequests: number;
   errorCount: number;
+  warningCount?: number;
   errorRatePct: number;
   requestsPerSec: number;
   maxRequestsPerSec?: number;
@@ -716,6 +738,12 @@ export interface PerformanceRunReport {
   title: string;
   sourceType: 'collection' | 'folder' | 'request';
   sourceId: string;
+  sourceCollectionId?: string;
+  sourceCollectionName?: string;
+  sourceName?: string;
+  imported?: boolean;
+  importedAt?: number;
+  importedFilename?: string;
   startedAt: number;
   finishedAt: number;
   durationMs: number;

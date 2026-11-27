@@ -24,13 +24,24 @@ import {
   saveFunctionalReport,
   savePerfReport,
 } from '../../lib/perfStorage';
-import { createDefaultFunctionalRunnerConfig } from '../../lib/perfLaunch';
+import {
+  createDefaultFunctionalRunnerConfig,
+  syncRunnerTabItemsFromSource,
+  validateRunnerPreflight,
+} from '../../lib/perfLaunch';
+import { getFunctionalRunEnvSnapshot } from '../../lib/functionalSessionStore';
 import {
   clearPerformanceTabDataRows,
   getPerformanceTabDataRows,
   setPerformanceTabDataRows,
 } from '../../lib/perfDataFile';
 import { parseImportedPerformanceReport } from '../../lib/perfComparison';
+import {
+  AIRREST_REPORT_FILE_EXTENSION,
+  buildSourceMetaFromContext,
+  exportShareableFunctionalReport,
+  exportShareablePerformanceReport,
+} from '../../lib/reportShare';
 import {
   exportFunctionalReportHtml,
   exportFunctionalReportJson,
@@ -50,14 +61,18 @@ import { DataFilePanel } from './DataFilePanel';
 import { ThresholdRulesEditor } from './ThresholdRulesEditor';
 import { PerformanceReportView } from './PerformanceReportView';
 import { FunctionalReportView } from './FunctionalReportView';
+import { ReportImportResolveModal } from './ReportImportResolveModal';
+import { useReportImporter } from './useReportImporter';
 
 export const PerformanceTabView: React.FC = () => {
   const contextStore = useStoreContext();
   const activeStore = contextStore || useApiStore;
   const adapter = usePlatformAdapter();
+  const reportImporter = useReportImporter();
 
   const selectedPerformanceTabId = activeStore((s) => s.selectedPerformanceTabId);
   const openPerformanceTabs = activeStore((s) => s.openPerformanceTabs);
+  const openTabs = activeStore((s) => s.tabs);
   const performanceReports = activeStore((s) => s.performanceReports);
   const functionalReports = activeStore((s) => s.functionalReports);
   const collections = activeStore((s) => s.collections);
@@ -114,7 +129,12 @@ export const PerformanceTabView: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [scopeKey]);
+  }, [scopeKey, tab?.viewingReportId, tab?.viewingFunctionalReportId]);
+
+  const refreshSavedReports = () => {
+    void listPerfReports(scopeKey).then(setRecentReports);
+    void listFunctionalReports(scopeKey).then(setRecentFunctionalReports);
+  };
 
   if (!tab) return null;
 
@@ -169,16 +189,40 @@ export const PerformanceTabView: React.FC = () => {
   };
 
   const handleStartRun = async () => {
+    if (tab.isSessionOnlyImported || tab.sourceType === 'imported') return;
     setStartError(null);
+
+    const synced = syncRunnerTabItemsFromSource(tab, collections, openTabs);
+    const effectiveItems = synced.items;
+    const effectiveSetupIds = synced.setupItemIds;
+    if (synced.changed) {
+      updatePerformanceTab(tab.id, {
+        items: effectiveItems,
+        setupItemIds: effectiveSetupIds,
+      });
+    }
+
+    const preflight = validateRunnerPreflight({
+      items: effectiveItems,
+      executionMode: tab.executionMode,
+      setupItemIds: effectiveSetupIds,
+      dataFile: tab.dataFile,
+      dataRows: dataRowsInMemory,
+    });
+    if (!preflight.ok) {
+      setStartError(preflight.error || 'Pre-flight check failed.');
+      return;
+    }
+
     const initialVariables = resolveActiveEnvVariables();
     const res = await startPerformanceTest({
       tabId: tab.id,
       title: tab.title,
       sourceType: tab.sourceType,
       sourceId: tab.sourceId,
-      items: tab.items,
+      items: effectiveItems,
       executionMode: tab.executionMode,
-      setupItemIds: tab.setupItemIds,
+      setupItemIds: effectiveSetupIds,
       setupRefresh: tab.setupRefresh,
       runInLoopScripts: tab.runInLoopScripts,
       loadProfile: tab.loadProfile,
@@ -216,16 +260,51 @@ export const PerformanceTabView: React.FC = () => {
     });
   };
 
-  const handleStartFunctional = async (onlyItemIds?: string[]) => {
+  const handleStartFunctional = async (
+    onlyItemIds?: string[],
+    options?: { sourceReportId?: string; onlyIterations?: number[] }
+  ) => {
+    if (tab.isSessionOnlyImported || tab.sourceType === 'imported') return;
     setStartError(null);
-    const initialVariables = resolveActiveEnvVariables();
+
+    const synced = syncRunnerTabItemsFromSource(tab, collections, openTabs);
+    const effectiveItems = synced.items;
+    const effectiveSetupIds = synced.setupItemIds;
+    if (synced.changed) {
+      updatePerformanceTab(tab.id, {
+        items: effectiveItems,
+        setupItemIds: effectiveSetupIds,
+      });
+    }
+
+    const preflight = validateRunnerPreflight({
+      items: effectiveItems,
+      onlyItemIds,
+      dataFile: tab.dataFile,
+      dataRows: dataRowsInMemory,
+    });
+    if (!preflight.ok) {
+      setStartError(preflight.error || 'Pre-flight check failed.');
+      return;
+    }
+
+    const baseEnvVariables = resolveActiveEnvVariables();
+    const chainedSnapshot =
+      onlyItemIds && options?.sourceReportId
+        ? getFunctionalRunEnvSnapshot(options.sourceReportId)
+        : undefined;
+    const initialVariables = chainedSnapshot
+      ? { ...baseEnvVariables, ...chainedSnapshot }
+      : baseEnvVariables;
+
     const res = await startFunctionalRun({
       tabId: tab.id,
       title: tab.title,
       sourceType: tab.sourceType,
       sourceId: tab.sourceId,
-      items: tab.items,
+      items: effectiveItems,
       onlyItemIds,
+      onlyIterations: options?.onlyIterations,
       config: functionalConfig,
       dataFileMeta: tab.dataFile,
       dataRows: dataRowsInMemory,
@@ -288,6 +367,48 @@ export const PerformanceTabView: React.FC = () => {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
+  const downloadShareBundle = async (
+    report: PerformanceRunReport | FunctionalRunReport,
+    kind: 'performance' | 'functional'
+  ) => {
+    const slug = (report.title || `${kind}-report`).toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const dateTag = new Date(report.startedAt).toISOString().slice(0, 10);
+    const filename = `${slug}-${dateTag}${AIRREST_REPORT_FILE_EXTENSION}`;
+    const sourceMeta = buildSourceMetaFromContext(report, collections);
+    const content =
+      kind === 'functional'
+        ? exportShareableFunctionalReport(report as FunctionalRunReport, sourceMeta)
+        : exportShareablePerformanceReport(report as PerformanceRunReport, sourceMeta);
+
+    if (adapter?.saveFile) {
+      await adapter.saveFile(filename, content, {
+        filters: [{ name: 'AirREST Report Bundle', extensions: ['json'] }],
+        mimeType: 'application/json',
+      });
+      return;
+    }
+    const blob = new Blob([content], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const handleImportReportFromRunner = async () => {
+    setStartError(null);
+    const picked = await reportImporter.pickReportFileContent();
+    if (!picked) return;
+    const res = await reportImporter.importReportContent(picked.content, {
+      filename: picked.filename,
+      onAttachedSaved: refreshSavedReports,
+    });
+    if (!res.ok && !res.cancelled && res.error) {
+      setStartError(res.error);
+    }
+  };
+
   const handleLoadBaselineJson = async (): Promise<{
     report?: PerformanceRunReport;
     error?: string;
@@ -330,61 +451,86 @@ export const PerformanceTabView: React.FC = () => {
 
   if ((tab.viewMode === 'running' || tab.viewMode === 'report') && isFunctionalMode && viewingFunctionalReport) {
     return (
-      <FunctionalReportView
-        report={viewingFunctionalReport}
-        recentReports={recentFunctionalReports}
-        isAnotherRunActive={isAnotherRunActive}
-        onStopRun={() => void stopActiveFunctionalRun()}
-        onRunAgain={() => void handleStartFunctional()}
-        onRerunFailed={(failedIds) => void handleStartFunctional(failedIds)}
-        onBackToSetup={() =>
-          updatePerformanceTab(tab.id, {
-            viewMode: 'setup',
-          })
-        }
-        onSelectHistoryReport={(selected) => {
-          setFunctionalReport(selected);
-          updatePerformanceTab(tab.id, {
-            viewMode: 'report',
-            viewingFunctionalReportId: selected.id,
-          });
-        }}
-        onDeleteHistoryReport={(reportId) => {
-          void deleteFunctionalReport(reportId).then(() => {
-            void listFunctionalReports(scopeKey).then(setRecentFunctionalReports);
-          });
-        }}
-        onExportHtml={(r) =>
-          void downloadExportArtifact(
-            r,
-            'html',
-            'functional',
-            exportFunctionalReportHtml(r),
-            'HTML Report',
-            'text/html'
-          )
-        }
-        onExportJson={(r) =>
-          void downloadExportArtifact(
-            r,
-            'json',
-            'functional',
-            exportFunctionalReportJson(r),
-            'JSON Report',
-            'application/json'
-          )
-        }
-        onExportJunitXml={(r) =>
-          void downloadExportArtifact(
-            r,
-            'xml',
-            'junit',
-            exportFunctionalReportJunitXml(r),
-            'JUnit XML Report',
-            'application/xml'
-          )
-        }
-      />
+      <>
+        <FunctionalReportView
+          report={viewingFunctionalReport}
+          recentReports={recentFunctionalReports}
+          isAnotherRunActive={isAnotherRunActive}
+          isSessionOnlyImported={Boolean(tab.isSessionOnlyImported)}
+          sessionOnlyReason={tab.sessionOnlyReason}
+          availableCollections={collections}
+          onStopRun={() => void stopActiveFunctionalRun()}
+          onRunAgain={() => void handleStartFunctional()}
+          onRerunFailed={(payload) =>
+            void handleStartFunctional(payload.failedItemIds, {
+              sourceReportId: payload.sourceReportId,
+              onlyIterations: payload.onlyIterations,
+            })
+          }
+          onBackToSetup={() =>
+            updatePerformanceTab(tab.id, {
+              viewMode: 'setup',
+            })
+          }
+          onSelectHistoryReport={(selected) => {
+            setFunctionalReport(selected);
+            updatePerformanceTab(tab.id, {
+              viewMode: 'report',
+              viewingFunctionalReportId: selected.id,
+            });
+          }}
+          onDeleteHistoryReport={(reportId) => {
+            void deleteFunctionalReport(reportId, scopeKey).then(() => {
+              void listFunctionalReports(scopeKey).then(setRecentFunctionalReports);
+            });
+          }}
+          onExportHtml={(r) =>
+            void downloadExportArtifact(
+              r,
+              'html',
+              'functional',
+              exportFunctionalReportHtml(r),
+              'HTML Report',
+              'text/html'
+            )
+          }
+          onExportJson={(r) =>
+            void downloadExportArtifact(
+              r,
+              'json',
+              'functional',
+              exportFunctionalReportJson(r),
+              'JSON Report',
+              'application/json'
+            )
+          }
+          onExportJunitXml={(r) =>
+            void downloadExportArtifact(
+              r,
+              'xml',
+              'junit',
+              exportFunctionalReportJunitXml(r),
+              'JUnit XML Report',
+              'application/xml'
+            )
+          }
+          onShareReport={(r) => void downloadShareBundle(r, 'functional')}
+          onImportReportFile={() => void handleImportReportFromRunner()}
+          onAttachToCollection={(col) =>
+            void reportImporter.attachSessionReportToCollection({
+              kind: 'functional',
+              funcReport: viewingFunctionalReport,
+              collection: col,
+              currentTabId: tab.id,
+              onAttachedSaved: refreshSavedReports,
+            })
+          }
+        />
+        <ReportImportResolveModal
+          prompt={reportImporter.resolvePrompt}
+          onResolve={reportImporter.handleResolveChoice}
+        />
+      </>
     );
   }
 
@@ -402,6 +548,9 @@ export const PerformanceTabView: React.FC = () => {
           report={viewingReport}
           recentReports={recentReports}
           isAnotherRunActive={isAnotherRunActive}
+          isSessionOnlyImported={Boolean(tab.isSessionOnlyImported)}
+          sessionOnlyReason={tab.sessionOnlyReason}
+          availableCollections={collections}
           onStopRun={() => void stopActivePerformanceRun()}
           onRunAgain={() => void handleStartRun()}
           onBackToSetup={() =>
@@ -417,7 +566,7 @@ export const PerformanceTabView: React.FC = () => {
             });
           }}
           onDeleteHistoryReport={(reportId) => {
-            void deletePerfReport(reportId).then(() => {
+            void deletePerfReport(reportId, scopeKey).then(() => {
               void listPerfReports(scopeKey).then(setRecentReports);
             });
           }}
@@ -462,6 +611,21 @@ export const PerformanceTabView: React.FC = () => {
               'text/csv'
             )
           }
+          onShareReport={(r) => void downloadShareBundle(r, 'performance')}
+          onImportReportFile={() => void handleImportReportFromRunner()}
+          onAttachToCollection={(col) =>
+            void reportImporter.attachSessionReportToCollection({
+              kind: 'performance',
+              perfReport: viewingReport,
+              collection: col,
+              currentTabId: tab.id,
+              onAttachedSaved: refreshSavedReports,
+            })
+          }
+        />
+        <ReportImportResolveModal
+          prompt={reportImporter.resolvePrompt}
+          onResolve={reportImporter.handleResolveChoice}
         />
       </>
     );
@@ -718,6 +882,10 @@ export const PerformanceTabView: React.FC = () => {
           )}
         </div>
       </div>
+      <ReportImportResolveModal
+        prompt={reportImporter.resolvePrompt}
+        onResolve={reportImporter.handleResolveChoice}
+      />
     </div>
   );
 };

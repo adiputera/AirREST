@@ -108,6 +108,7 @@ import {
   countCollectionSavedExamples,
   evaluateResponseExampleEligibility,
   findCollectionItemById,
+  getActiveFunctionalRunState,
   getActivePerformanceRun,
   getExampleUtf8ByteLength,
   getItemExampleCount,
@@ -772,6 +773,7 @@ export interface ApiStoreState {
   clearCloudCredentials: (scope?: NativeCredentialScope) => Promise<void>;
   setNativeCredentialState: (state?: NativeCredentialState) => void;
   /** Persists the current redacted native state to both legacy persistence copies. */
+  persistStoreState: () => Promise<void>;
   persistNativeCredentialState: () => Promise<void>;
   /** Retries physical-copy redaction and clears the cleanup journal only after both copies succeed. */
   completePendingCredentialCleanup: () => Promise<boolean>;
@@ -2202,6 +2204,9 @@ export function createApiStore(
             });
           },
           setNativeCredentialState: (nativeCredentialState) => set({ nativeCredentialState }),
+          persistStoreState: async () => {
+            await flushStorePersistence();
+          },
           persistNativeCredentialState: async () => {
             const options = store.persist.getOptions();
             const partialize = options.partialize;
@@ -2636,6 +2641,9 @@ export function createApiStore(
 
             if (!isSameScope || forceSync) invalidateAsyncOperations();
             void stopActivePerformanceRun?.();
+            clearPerformanceDataRowsHook?.();
+            clearFunctionalSessionHook?.();
+            void stopFunctionalRunHook?.();
 
             revokeUnreferencedTabBlobs(get().tabResponses, get().activeResponse, [
               transition.targetCache?.history,
@@ -4732,6 +4740,9 @@ export function createApiStore(
 
           closeAllTabs: () => {
             void stopActivePerformanceRun?.();
+            clearPerformanceDataRowsHook?.();
+            clearFunctionalSessionHook?.();
+            void stopFunctionalRunHook?.();
             if (activeRequestOperation) {
               activeRequestOperation.controller.abort();
               activeRequestOperation = null;
@@ -4797,6 +4808,10 @@ export function createApiStore(
               const activePerf = getActivePerformanceRun?.();
               if (activePerf && !remainingPerfIds.has(activePerf.tabId)) {
                 void stopActivePerformanceRun?.();
+              }
+              const activeFunc = getActiveFunctionalRunState?.();
+              if (activeFunc && !remainingPerfIds.has(activeFunc.tabId)) {
+                void stopFunctionalRunHook?.(activeFunc.tabId);
               }
 
               for (const key of Object.keys(tabUndoHistory)) {
@@ -6083,7 +6098,7 @@ export function createApiStore(
                 };
               });
               try {
-                await get().persistNativeCredentialState();
+                await get().persistStoreState();
                 return { success: true, collectionId: newCol.id };
               } catch {
                 set((state) => {
@@ -8433,12 +8448,24 @@ export function createApiStore(
                   items: config.items,
                   collectionId: config.collectionId ?? existing.collectionId,
                   functionalConfig: existing.functionalConfig || config.functionalConfig,
+                  ...(config.viewingReportId !== undefined ? { viewingReportId: config.viewingReportId } : {}),
+                  ...(config.viewingFunctionalReportId !== undefined
+                    ? { viewingFunctionalReportId: config.viewingFunctionalReportId }
+                    : {}),
+                  ...(config.isSessionOnlyImported !== undefined
+                    ? { isSessionOnlyImported: config.isSessionOnlyImported }
+                    : {}),
+                  ...(config.sessionOnlyReason !== undefined
+                    ? { sessionOnlyReason: config.sessionOnlyReason }
+                    : {}),
                   viewMode:
                     existing.viewMode === 'running'
                       ? 'running'
-                      : config.runnerMode && config.runnerMode !== existing.runnerMode
-                        ? 'setup'
-                        : existing.viewMode,
+                      : config.viewMode
+                        ? config.viewMode
+                        : config.runnerMode && config.runnerMode !== existing.runnerMode
+                          ? 'setup'
+                          : existing.viewMode,
                 }
                 : {
                   ...config,
@@ -8493,8 +8520,26 @@ export function createApiStore(
             clearFunctionalSessionHook?.(tabId);
             void stopFunctionalRunHook?.(tabId);
             set((state) => {
-              const exists = (state.openPerformanceTabs || []).some((p) => p.id === tabId);
-              if (!exists) return state;
+              const closingTab = (state.openPerformanceTabs || []).find((p) => p.id === tabId);
+              if (!closingTab) return state;
+
+              let nextPerformanceReports = state.performanceReports;
+              let nextFunctionalReports = state.functionalReports;
+              if (closingTab.isSessionOnlyImported) {
+                if (closingTab.viewingReportId && state.performanceReports?.[closingTab.viewingReportId]) {
+                  const restPerf = { ...state.performanceReports };
+                  delete restPerf[closingTab.viewingReportId];
+                  nextPerformanceReports = restPerf;
+                }
+                if (
+                  closingTab.viewingFunctionalReportId &&
+                  state.functionalReports?.[closingTab.viewingFunctionalReportId]
+                ) {
+                  const restFunc = { ...state.functionalReports };
+                  delete restFunc[closingTab.viewingFunctionalReportId];
+                  nextFunctionalReports = restFunc;
+                }
+              }
 
               const ordered = buildOrderedVisualTabs(state.tabs, state.openExampleTabs, state.tabOrder, state.openPerformanceTabs);
               const closingIndex = ordered.findIndex((entry) => entry.kind === 'performance' && entry.id === tabId);
@@ -8507,6 +8552,8 @@ export function createApiStore(
                 return {
                   openPerformanceTabs: nextPerfTabs,
                   tabOrder: nextTabOrder,
+                  performanceReports: nextPerformanceReports,
+                  functionalReports: nextFunctionalReports,
                 };
               }
 
@@ -8519,6 +8566,8 @@ export function createApiStore(
                 return {
                   openPerformanceTabs: nextPerfTabs,
                   tabOrder: nextTabOrder,
+                  performanceReports: nextPerformanceReports,
+                  functionalReports: nextFunctionalReports,
                   selectedExample: null,
                   selectedPerformanceTabId: null,
                   activeTabId: '',
@@ -8532,6 +8581,8 @@ export function createApiStore(
                 return {
                   openPerformanceTabs: nextPerfTabs,
                   tabOrder: nextTabOrder,
+                  performanceReports: nextPerformanceReports,
+                  functionalReports: nextFunctionalReports,
                   selectedExample: {
                     collectionId: adj.exampleTab.collectionId,
                     itemId: adj.exampleTab.itemId,
@@ -8546,6 +8597,8 @@ export function createApiStore(
                 return {
                   openPerformanceTabs: nextPerfTabs,
                   tabOrder: nextTabOrder,
+                  performanceReports: nextPerformanceReports,
+                  functionalReports: nextFunctionalReports,
                   selectedExample: null,
                   selectedPerformanceTabId: adj.id,
                   tabRevealRevision: state.tabRevealRevision + 1,
@@ -8555,6 +8608,8 @@ export function createApiStore(
               return {
                 openPerformanceTabs: nextPerfTabs,
                 tabOrder: nextTabOrder,
+                performanceReports: nextPerformanceReports,
+                functionalReports: nextFunctionalReports,
                 selectedExample: null,
                 selectedPerformanceTabId: null,
                 activeTabId: adj.id,
@@ -9247,7 +9302,7 @@ export function createApiStore(
 
           duplicateCollection: async (collectionId, targetScope, actionOptions) => {
             const flushPersisted = async () => {
-              await get().persistNativeCredentialState();
+              await get().persistStoreState();
             };
             const findCollectionNodePath = (col: Collection): string[] => [col.id];
             const stateAtStart = get();
@@ -9792,6 +9847,7 @@ export function createApiStore(
                 kind: 'import_duplicate',
                 sourceCollectionId: sourceCol.id,
                 sourceName: sourceCol.name,
+                sourceOfflineWorkspaceId: activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID,
                 targetScope,
                 sanitizedPayload,
                 createdAt: Date.now(),
@@ -9928,6 +9984,7 @@ export function createApiStore(
               kind: 'collection',
               sourceCollectionId: collectionId,
               sourceName: sourceCol.name,
+              sourceScope: activeScope,
               targetScope,
               createdAt: Date.now(),
               status: 'pending',
@@ -10030,7 +10087,7 @@ export function createApiStore(
 
           duplicateCollectionItem: async (sourceCollectionId, itemId, targetCollectionId, targetParentId, actionOptions) => {
             const flushPersisted = async () => {
-              await get().persistNativeCredentialState();
+              await get().persistStoreState();
             };
             const findSavedItemInTree = (items: CollectionItem[]): CollectionItem | null => {
               for (const it of items) {
@@ -10475,6 +10532,8 @@ export function createApiStore(
               sourceItemId: savedItem.id,
               sourceName: savedItem.name,
               sourceItemType: savedItem.type,
+              sourceScope: scope,
+              targetScope: scope,
               targetCollectionId,
               targetCollectionName: targetCol.name,
               targetParentId,

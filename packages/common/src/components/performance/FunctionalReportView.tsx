@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
   ChevronDown,
   Database,
@@ -13,32 +14,46 @@ import {
   RotateCcw,
   Search,
   Settings,
+  Share2,
   Square,
   Trash2,
+  Upload,
   X,
   XCircle,
 } from 'lucide-react';
 import type {
+  Collection,
   FunctionalRunReport,
   FunctionalStepResult,
   FunctionalStepStatus,
 } from '../../types/api';
 import { getFunctionalCapturedExchange } from '../../lib/functionalSessionStore';
 import { MethodBadge } from '../MethodBadge';
+import { SessionOnlyReportBanner } from './SessionOnlyReportBanner';
 
 interface FunctionalReportViewProps {
   report: FunctionalRunReport;
   recentReports: FunctionalRunReport[];
   isAnotherRunActive: boolean;
+  isSessionOnlyImported?: boolean;
+  sessionOnlyReason?: string;
+  availableCollections?: Collection[];
   onStopRun: () => void;
   onRunAgain: () => void;
-  onRerunFailed: (failedItemIds: string[]) => void;
+  onRerunFailed: (payload: {
+    failedItemIds: string[];
+    sourceReportId: string;
+    onlyIterations?: number[];
+  }) => void;
   onBackToSetup: () => void;
   onSelectHistoryReport: (report: FunctionalRunReport) => void;
   onDeleteHistoryReport: (reportId: string) => void;
   onExportHtml: (report: FunctionalRunReport) => void;
   onExportJson: (report: FunctionalRunReport) => void;
   onExportJunitXml: (report: FunctionalRunReport) => void;
+  onShareReport?: (report: FunctionalRunReport) => void;
+  onImportReportFile?: () => void;
+  onAttachToCollection?: (collection: Collection) => void;
 }
 
 type StepFilter = 'all' | FunctionalStepStatus;
@@ -65,6 +80,9 @@ export const FunctionalReportView: React.FC<FunctionalReportViewProps> = ({
   report,
   recentReports,
   isAnotherRunActive,
+  isSessionOnlyImported = false,
+  sessionOnlyReason,
+  availableCollections = [],
   onStopRun,
   onRunAgain,
   onRerunFailed,
@@ -74,6 +92,9 @@ export const FunctionalReportView: React.FC<FunctionalReportViewProps> = ({
   onExportHtml,
   onExportJson,
   onExportJunitXml,
+  onShareReport,
+  onImportReportFile,
+  onAttachToCollection,
 }) => {
   const [statusFilter, setStatusFilter] = useState<StepFilter>('all');
   const [iterFilter, setIterFilter] = useState<number | 'all'>('all');
@@ -144,6 +165,12 @@ export const FunctionalReportView: React.FC<FunctionalReportViewProps> = ({
         cls: 'border-rose-500/35 bg-rose-500/15 text-rose-600 dark:text-rose-300',
       };
     }
+    if ((report.requestsWarned ?? 0) > 0) {
+      return {
+        label: 'Passed (Warnings)',
+        cls: 'border-amber-500/35 bg-amber-500/15 text-amber-700 dark:text-amber-300',
+      };
+    }
     return {
       label: 'All Passed',
       cls: 'border-emerald-500/35 bg-emerald-500/15 text-emerald-600 dark:text-emerald-300',
@@ -167,6 +194,18 @@ export const FunctionalReportView: React.FC<FunctionalReportViewProps> = ({
               <span className="rounded bg-element px-1.5 py-0.5 font-mono text-[10px] text-tx-muted">
                 Functional
               </span>
+              {report.imported && (
+                <span
+                  className="rounded-md border border-violet-500/35 bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-violet-600 dark:text-violet-300"
+                  title={
+                    report.importedFilename
+                      ? `Imported from ${report.importedFilename}`
+                      : 'Imported report'
+                  }
+                >
+                  Imported
+                </span>
+              )}
             </div>
             <p className="text-[11px] text-tx-muted">
               {report.completedIterations}/{report.plannedIterations} iterations •{' '}
@@ -190,9 +229,23 @@ export const FunctionalReportView: React.FC<FunctionalReportViewProps> = ({
               {report.failedItemIds.length > 0 && (
                 <button
                   type="button"
-                  disabled={isAnotherRunActive}
-                  onClick={() => onRerunFailed(report.failedItemIds)}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-rose-500/35 bg-rose-500/10 px-3 text-xs font-semibold text-rose-600 dark:text-rose-300 hover:bg-rose-500/20 disabled:opacity-45 transition"
+                  disabled={isAnotherRunActive || isSessionOnlyImported}
+                  onClick={() =>
+                    onRerunFailed({
+                      failedItemIds: report.failedItemIds,
+                      sourceReportId: report.id,
+                      onlyIterations:
+                        report.dataFile && report.failedIterations && report.failedIterations.length > 0
+                          ? report.failedIterations
+                          : undefined,
+                    })
+                  }
+                  title={
+                    isSessionOnlyImported
+                      ? 'Attach this report to a collection to enable re-running requests'
+                      : undefined
+                  }
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-rose-500/35 bg-rose-500/10 px-3 text-xs font-semibold text-rose-600 dark:text-rose-300 hover:bg-rose-500/20 disabled:opacity-45 disabled:cursor-not-allowed transition"
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
                   <span>Re-run Failed ({report.failedItemIds.length})</span>
@@ -201,9 +254,14 @@ export const FunctionalReportView: React.FC<FunctionalReportViewProps> = ({
 
               <button
                 type="button"
-                disabled={isAnotherRunActive}
+                disabled={isAnotherRunActive || isSessionOnlyImported}
                 onClick={onRunAgain}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-600 px-3 text-xs font-semibold text-white shadow-sm hover:from-emerald-400 hover:to-teal-500 disabled:opacity-45 transition"
+                title={
+                  isSessionOnlyImported
+                    ? 'Attach this report to a collection to enable running again'
+                    : undefined
+                }
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-600 px-3 text-xs font-semibold text-white shadow-sm hover:from-emerald-400 hover:to-teal-500 disabled:opacity-45 disabled:cursor-not-allowed transition"
               >
                 <Play className="h-3 w-3 fill-current" />
                 <span>Run Again</span>
@@ -211,8 +269,14 @@ export const FunctionalReportView: React.FC<FunctionalReportViewProps> = ({
 
               <button
                 type="button"
+                disabled={isSessionOnlyImported}
                 onClick={onBackToSetup}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-card px-2.5 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition"
+                title={
+                  isSessionOnlyImported
+                    ? 'Attach this report to a collection to edit runner configuration'
+                    : undefined
+                }
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-card px-2.5 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary disabled:opacity-45 disabled:cursor-not-allowed transition"
               >
                 <Settings className="h-3.5 w-3.5" />
                 <span>Configure</span>
@@ -221,7 +285,7 @@ export const FunctionalReportView: React.FC<FunctionalReportViewProps> = ({
           )}
 
           {/* History Dropdown */}
-          {!isRunning && recentReports.length > 0 && (
+          {!isRunning && (recentReports.length > 0 || Boolean(onImportReportFile)) && (
             <div className="relative">
               <button
                 type="button"
@@ -236,50 +300,74 @@ export const FunctionalReportView: React.FC<FunctionalReportViewProps> = ({
                 <ChevronDown className="h-3 w-3 opacity-70" />
               </button>
               {historyOpen && (
-                <div className="absolute right-0 z-30 mt-1.5 w-72 rounded-xl border border-line bg-surface p-1.5 shadow-2xl">
+                <div className="absolute right-0 z-30 mt-1.5 w-76 rounded-xl border border-line bg-surface p-1.5 shadow-2xl">
+                  {onImportReportFile && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setHistoryOpen(false);
+                        onImportReportFile();
+                      }}
+                      className="mb-1.5 flex w-full items-center gap-2 rounded-lg border border-dashed border-sky-500/35 bg-sky-500/5 px-2.5 py-2 text-left text-xs font-medium text-sky-600 dark:text-sky-300 hover:bg-sky-500/15 transition"
+                    >
+                      <Upload className="h-3.5 w-3.5 shrink-0" />
+                      <span>Import Report (.airrest-report.json)...</span>
+                    </button>
+                  )}
                   <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-tx-muted">
                     Saved Functional Runs
                   </div>
                   <div className="max-h-64 space-y-1 overflow-y-auto">
-                    {recentReports.map((r) => {
-                      const active = r.id === report.id;
-                      const ok = r.requestsFailed === 0 && r.requestsErrored === 0 && r.testsFailed === 0;
-                      return (
-                        <div
-                          key={r.id}
-                          className={`flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-xs transition ${
-                            active ? 'bg-emerald-500/15 text-tx-primary' : 'hover:bg-hover text-tx-secondary'
-                          }`}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => {
-                              onSelectHistoryReport(r);
-                              setHistoryOpen(false);
-                            }}
-                            className="min-w-0 flex-1 text-left"
+                    {recentReports.length === 0 ? (
+                      <div className="px-2.5 py-3 text-center text-[11px] text-tx-muted">
+                        No saved runs in this workspace yet.
+                      </div>
+                    ) : (
+                      recentReports.map((r) => {
+                        const active = r.id === report.id;
+                        const ok = r.requestsFailed === 0 && r.requestsErrored === 0 && r.testsFailed === 0;
+                        return (
+                          <div
+                            key={r.id}
+                            className={`flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-xs transition ${
+                              active ? 'bg-emerald-500/15 text-tx-primary' : 'hover:bg-hover text-tx-secondary'
+                            }`}
                           >
-                            <div className="flex items-center gap-1.5 truncate font-medium">
-                              <span
-                                className={`h-1.5 w-1.5 rounded-full ${ok ? 'bg-emerald-500' : 'bg-rose-500'}`}
-                              />
-                              <span className="truncate">{r.title}</span>
-                            </div>
-                            <div className="text-[10px] text-tx-muted">
-                              {r.testsPassed}/{r.totalTests} tests • {new Date(r.startedAt).toLocaleTimeString()}
-                            </div>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onDeleteHistoryReport(r.id)}
-                            className="rounded p-1 text-tx-muted hover:bg-hover hover:text-rose-500"
-                            title="Delete saved run"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </button>
-                        </div>
-                      );
-                    })}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onSelectHistoryReport(r);
+                                setHistoryOpen(false);
+                              }}
+                              className="min-w-0 flex-1 text-left"
+                            >
+                              <div className="flex items-center gap-1.5 truncate font-medium">
+                                <span
+                                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${ok ? 'bg-emerald-500' : 'bg-rose-500'}`}
+                                />
+                                <span className="truncate">{r.title}</span>
+                                {r.imported && (
+                                  <span className="shrink-0 rounded border border-violet-500/30 bg-violet-500/10 px-1 py-px text-[9px] font-semibold text-violet-600 dark:text-violet-300">
+                                    Imported
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[10px] text-tx-muted">
+                                {r.testsPassed}/{r.totalTests} tests • {new Date(r.startedAt).toLocaleTimeString()}
+                              </div>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onDeleteHistoryReport(r.id)}
+                              className="rounded p-1 text-tx-muted hover:bg-hover hover:text-rose-500"
+                              title="Delete saved run"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </button>
+                          </div>
+                        );
+                      })
+                    )}
                   </div>
                 </div>
               )}
@@ -302,7 +390,20 @@ export const FunctionalReportView: React.FC<FunctionalReportViewProps> = ({
                 <ChevronDown className="h-3 w-3 opacity-70" />
               </button>
               {exportOpen && (
-                <div className="absolute right-0 z-30 mt-1.5 w-48 rounded-xl border border-line bg-surface p-1 shadow-2xl">
+                <div className="absolute right-0 z-30 mt-1.5 w-60 rounded-xl border border-line bg-surface p-1 shadow-2xl">
+                  {onShareReport && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onShareReport(report);
+                        setExportOpen(false);
+                      }}
+                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-sky-600 dark:text-sky-300 hover:bg-sky-500/10"
+                    >
+                      <Share2 className="h-3.5 w-3.5 shrink-0" />
+                      <span>Share (.airrest-report.json)</span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => {
@@ -343,12 +444,32 @@ export const FunctionalReportView: React.FC<FunctionalReportViewProps> = ({
         </div>
       </div>
 
+      {isSessionOnlyImported && (
+        <div className="px-4 pt-3 shrink-0">
+          <SessionOnlyReportBanner
+            reason={sessionOnlyReason}
+            availableCollections={availableCollections}
+            onAttachToCollection={onAttachToCollection}
+          />
+        </div>
+      )}
+
       {/* Banners & KPI Strip */}
       <div className="space-y-3 border-b border-line bg-surface/60 px-4 py-3 shrink-0">
         {report.stopReason && (
           <div className="flex items-center gap-2 rounded-lg border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
             <AlertCircle className="h-4 w-4 shrink-0" />
             <span>{report.stopReason}</span>
+          </div>
+        )}
+
+        {report.stepsTruncated && (
+          <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            <span>
+              Showing {report.steps.length.toLocaleString()} prioritized steps out of{' '}
+              {(report.totalStepsRecorded ?? report.totalRequestsExecuted).toLocaleString()} total steps (all failed, errored, and warning steps kept first; summary totals reflect all steps).
+            </span>
           </div>
         )}
 
@@ -432,6 +553,9 @@ export const FunctionalReportView: React.FC<FunctionalReportViewProps> = ({
               [
                 { id: 'all', label: `All (${report.steps.length})` },
                 { id: 'passed', label: `Passed (${report.requestsPassed})` },
+                ...((report.requestsWarned ?? 0) > 0
+                  ? [{ id: 'warning' as StepFilter, label: `Warning (${report.requestsWarned ?? 0})` }]
+                  : []),
                 { id: 'failed', label: `Failed (${report.requestsFailed})` },
                 { id: 'error', label: `Error (${report.requestsErrored})` },
                 { id: 'skipped', label: `Skipped (${report.requestsSkipped})` },
@@ -520,6 +644,8 @@ export const FunctionalReportView: React.FC<FunctionalReportViewProps> = ({
                           <div className="flex items-center gap-2 min-w-0 flex-1">
                             {step.status === 'passed' ? (
                               <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+                            ) : step.status === 'warning' ? (
+                              <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
                             ) : step.status === 'skipped' ? (
                               <Info className="h-4 w-4 shrink-0 text-tx-muted" />
                             ) : (
@@ -549,9 +675,11 @@ export const FunctionalReportView: React.FC<FunctionalReportViewProps> = ({
                             {step.httpStatus > 0 && (
                               <span
                                 className={`rounded px-1.5 py-0.5 ${
-                                  step.httpStatus >= 200 && step.httpStatus < 400
-                                    ? 'bg-sky-500/10 text-sky-600 dark:text-sky-300'
-                                    : 'bg-rose-500/10 text-rose-600 dark:text-rose-300'
+                                  step.status === 'warning' || (step.httpStatus >= 300 && step.httpStatus < 400)
+                                    ? 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
+                                    : step.httpStatus >= 200 && step.httpStatus < 300
+                                      ? 'bg-sky-500/10 text-sky-600 dark:text-sky-300'
+                                      : 'bg-rose-500/15 font-semibold text-rose-600 dark:text-rose-300'
                                 }`}
                               >
                                 {step.httpStatus} {step.statusText}
@@ -569,6 +697,12 @@ export const FunctionalReportView: React.FC<FunctionalReportViewProps> = ({
                         {stepErr && (
                           <div className="mt-1.5 ml-6 rounded border border-rose-500/25 bg-rose-500/10 px-2.5 py-1 font-mono text-[11px] text-rose-600 dark:text-rose-300">
                             {stepErr}
+                          </div>
+                        )}
+
+                        {!stepErr && step.warningMessage && (
+                          <div className="mt-1.5 ml-6 rounded border border-amber-500/25 bg-amber-500/10 px-2.5 py-1 font-mono text-[11px] text-amber-700 dark:text-amber-300">
+                            {step.warningMessage}
                           </div>
                         )}
 

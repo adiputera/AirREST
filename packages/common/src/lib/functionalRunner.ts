@@ -14,9 +14,19 @@ import {
   executePerfHttpStep,
   toScriptRequest,
 } from './perfRunner';
-import { captureFunctionalExchange } from './functionalSessionStore';
-import { registerFunctionalStopHook } from './examples';
+import {
+  captureFunctionalExchange,
+  saveFunctionalRunEnvSnapshot,
+} from './functionalSessionStore';
+import {
+  getActivePerformanceRun,
+  registerFunctionalStopHook,
+  setActiveFunctionalRunState,
+} from './examples';
 import { executePostResponseScript, executePreRequestScript } from './scriptRunner';
+
+export const MAX_FUNCTIONAL_STORED_STEPS = 5_000;
+const FUNCTIONAL_UI_THROTTLE_MS = 200;
 
 export interface ActiveFunctionalRunController {
   runId: string;
@@ -87,6 +97,10 @@ export interface StartFunctionalRunParams {
   items: PerformanceRequestDescriptor[];
   /** Optional subset of item IDs to execute (used by Re-run Failed). */
   onlyItemIds?: string[];
+  /** Optional subset of 1-based iteration numbers to execute (used by Re-run Failed with Data File). */
+  onlyIterations?: number[];
+  /** Optional step retention cap override (defaults to MAX_FUNCTIONAL_STORED_STEPS = 5,000). */
+  maxStoredSteps?: number;
   config: FunctionalRunnerConfig;
   dataFileMeta?: PerformanceDataFileMeta;
   dataRows?: Array<Record<string, string>>;
@@ -106,55 +120,8 @@ export interface StartFunctionalRunOutcome {
   error?: string;
 }
 
-function recomputeReportMetrics(
-  base: FunctionalRunReport,
-  steps: FunctionalStepResult[],
-  startedAt: number
-): FunctionalRunReport {
-  let requestsPassed = 0;
-  let requestsFailed = 0;
-  let requestsErrored = 0;
-  let requestsSkipped = 0;
-  let testsPassed = 0;
-  let testsFailed = 0;
-  let executedCount = 0;
-  let totalLatencyMs = 0;
-  const failedItemSet = new Set<string>();
-
-  for (const s of steps) {
-    testsPassed += s.testsPassed;
-    testsFailed += s.testsFailed;
-    if (s.status === 'skipped') {
-      requestsSkipped += 1;
-    } else {
-      executedCount += 1;
-      totalLatencyMs += s.timeMs;
-      if (s.status === 'passed') requestsPassed += 1;
-      else if (s.status === 'failed') {
-        requestsFailed += 1;
-        failedItemSet.add(s.itemId);
-      } else if (s.status === 'error') {
-        requestsErrored += 1;
-        failedItemSet.add(s.itemId);
-      }
-    }
-  }
-
-  return {
-    ...base,
-    durationMs: Math.max(0, Date.now() - startedAt),
-    totalRequestsExecuted: executedCount,
-    requestsPassed,
-    requestsFailed,
-    requestsErrored,
-    requestsSkipped,
-    totalTests: testsPassed + testsFailed,
-    testsPassed,
-    testsFailed,
-    avgResponseTimeMs: executedCount > 0 ? Math.round(totalLatencyMs / executedCount) : 0,
-    steps: [...steps],
-    failedItemIds: Array.from(failedItemSet),
-  };
+function isPriorityRetainedStatus(status: FunctionalStepResult['status']): boolean {
+  return status === 'failed' || status === 'error' || status === 'warning';
 }
 
 export async function startFunctionalRun(
@@ -164,6 +131,12 @@ export async function startFunctionalRun(
     return {
       started: false,
       error: 'Another functional runner execution is already in progress. Stop it first.',
+    };
+  }
+  if (getActivePerformanceRun()) {
+    return {
+      started: false,
+      error: 'A performance test is currently running. Stop it before starting a functional collection run.',
     };
   }
 
@@ -216,13 +189,34 @@ export async function startFunctionalRun(
   const safeIterations = Math.max(1, Math.min(10_000, Math.round(params.config.iterations || 1)));
   const safeDelayMs = Math.max(0, Math.min(60_000, Math.round(params.config.delayMs || 0)));
   const safeTimeoutMs = Math.max(500, Math.min(300_000, Math.round(params.config.requestTimeoutMs || 60_000)));
+  const maxStoredSteps = Math.max(
+    1,
+    Math.min(MAX_FUNCTIONAL_STORED_STEPS, Math.round(params.maxStoredSteps || MAX_FUNCTIONAL_STORED_STEPS))
+  );
   const effectiveConfig: FunctionalRunnerConfig = {
     ...params.config,
     iterations: safeIterations,
     delayMs: safeDelayMs,
     requestTimeoutMs: safeTimeoutMs,
+    failOnHttpError: Boolean(params.config.failOnHttpError),
   };
   const safeDataRows = params.dataRows && params.dataRows.length > 0 ? params.dataRows : undefined;
+
+  const normalizedOnlyIterations =
+    params.onlyIterations && params.onlyIterations.length > 0
+      ? Array.from(
+          new Set(
+            params.onlyIterations
+              .map((n) => Math.round(n))
+              .filter((n) => Number.isFinite(n) && n >= 1 && n <= 10_000)
+          )
+        ).sort((a, b) => a - b)
+      : null;
+
+  const iterationPlan: number[] =
+    normalizedOnlyIterations && normalizedOnlyIterations.length > 0
+      ? normalizedOnlyIterations
+      : Array.from({ length: safeIterations }, (_, i) => i + 1);
 
   const baseReport: FunctionalRunReport = {
     id: runId,
@@ -245,10 +239,11 @@ export async function startFunctionalRun(
             readMode: params.dataFileMeta.readMode,
           }
         : undefined,
-    plannedIterations: safeIterations,
+    plannedIterations: iterationPlan.length,
     completedIterations: 0,
     totalRequestsExecuted: 0,
     requestsPassed: 0,
+    requestsWarned: 0,
     requestsFailed: 0,
     requestsErrored: 0,
     requestsSkipped: 0,
@@ -258,6 +253,7 @@ export async function startFunctionalRun(
     avgResponseTimeMs: 0,
     steps: [],
     failedItemIds: [],
+    failedIterations: [],
   };
 
   let stoppedByUser = false;
@@ -269,10 +265,12 @@ export async function startFunctionalRun(
       abortController.abort();
     },
   };
+  setActiveFunctionalRunState({ runId, tabId: params.tabId });
 
   const clearRunIfCurrent = () => {
     if (activeFunctionalRun?.runId === runId) {
       activeFunctionalRun = null;
+      setActiveFunctionalRunState(null);
     }
   };
 
@@ -280,6 +278,60 @@ export async function startFunctionalRun(
 
   void (async () => {
     const steps: FunctionalStepResult[] = [];
+    let requestsPassed = 0;
+    let requestsWarned = 0;
+    let requestsFailed = 0;
+    let requestsErrored = 0;
+    let requestsSkipped = 0;
+    let testsPassed = 0;
+    let testsFailed = 0;
+    let executedCount = 0;
+    let totalLatencyMs = 0;
+    let totalStepsRecorded = 0;
+    let stepsTruncated = false;
+    const failedItemSet = new Set<string>();
+    const failedIterationSet = new Set<number>();
+
+    const recordStep = (step: FunctionalStepResult) => {
+      totalStepsRecorded += 1;
+      testsPassed += step.testsPassed;
+      testsFailed += step.testsFailed;
+
+      if (step.status === 'skipped') {
+        requestsSkipped += 1;
+      } else {
+        executedCount += 1;
+        totalLatencyMs += step.timeMs;
+        if (step.status === 'passed') {
+          requestsPassed += 1;
+        } else if (step.status === 'warning') {
+          requestsWarned += 1;
+        } else if (step.status === 'failed') {
+          requestsFailed += 1;
+          failedItemSet.add(step.itemId);
+          failedIterationSet.add(step.iteration);
+        } else if (step.status === 'error') {
+          requestsErrored += 1;
+          failedItemSet.add(step.itemId);
+          failedIterationSet.add(step.iteration);
+        }
+      }
+
+      if (steps.length < maxStoredSteps) {
+        steps.push(step);
+        return;
+      }
+
+      stepsTruncated = true;
+      if (isPriorityRetainedStatus(step.status)) {
+        const evictIdx = steps.findIndex((s) => !isPriorityRetainedStatus(s.status));
+        if (evictIdx >= 0) {
+          steps.splice(evictIdx, 1);
+          steps.push(step);
+        }
+      }
+    };
+
     const network: PerformanceNetworkOptions = {
       requestTimeoutMs: effectiveConfig.requestTimeoutMs,
       followRedirects: effectiveConfig.followRedirects,
@@ -291,18 +343,81 @@ export async function startFunctionalRun(
     let completedIterations = 0;
     let stopReason: string | undefined;
     let captureBudgetExhausted = false;
+    let lastEmitAt = Date.now();
+
+    const buildSnapshot = (extra?: Partial<FunctionalRunReport>): FunctionalRunReport => ({
+      ...baseReport,
+      durationMs: Math.max(0, Date.now() - startedAt),
+      completedIterations,
+      totalRequestsExecuted: executedCount,
+      requestsPassed,
+      requestsWarned,
+      requestsFailed,
+      requestsErrored,
+      requestsSkipped,
+      totalTests: testsPassed + testsFailed,
+      testsPassed,
+      testsFailed,
+      avgResponseTimeMs: executedCount > 0 ? Math.round(totalLatencyMs / executedCount) : 0,
+      steps: [...steps],
+      failedItemIds: Array.from(failedItemSet),
+      failedIterations: Array.from(failedIterationSet).sort((a, b) => a - b),
+      ...(stepsTruncated ? { stepsTruncated: true, totalStepsRecorded } : {}),
+      ...(stopReason ? { stopReason } : {}),
+      ...(captureBudgetExhausted ? { captureBudgetExhausted } : {}),
+      ...extra,
+    });
+
+    const emitLiveUpdate = (force = false) => {
+      const now = Date.now();
+      if (!force && now - lastEmitAt < FUNCTIONAL_UI_THROTTLE_MS) return;
+      lastEmitAt = now;
+      params.onUpdate(buildSnapshot());
+    };
 
     try {
       const maxStepsPerIteration = Math.max(selectedItems.length * 10, 100);
 
-      outerLoop: for (let iterIdx = 0; iterIdx < safeIterations; iterIdx++) {
+      outerLoop: for (let planIdx = 0; planIdx < iterationPlan.length; planIdx++) {
         if (abortController.signal.aborted) break;
-        const iterationNum = iterIdx + 1;
-        const dataRowIndex = safeDataRows ? iterIdx % safeDataRows.length : undefined;
+        const iterationNum = iterationPlan[planIdx];
+        const dataRowIndex = safeDataRows ? (iterationNum - 1) % safeDataRows.length : undefined;
         const dataRow = safeDataRows && dataRowIndex !== undefined ? safeDataRows[dataRowIndex] : undefined;
 
         let cursor = 0;
         let iterStepCount = 0;
+        const executedInIteration = new Set<string>();
+
+        const markRemainingSkipped = (reasonText: string) => {
+          let skipOffset = 1;
+          for (let rem = cursor + 1; rem < selectedItems.length; rem++) {
+            const remItem = selectedItems[rem];
+            // Never mark already-executed steps as skipped when setNextRequest() jumped backwards
+            if (executedInIteration.has(remItem.id)) continue;
+            recordStep({
+              id: `${runId}_i${iterationNum}_skip_${rem}`,
+              iteration: iterationNum,
+              stepIndex: iterStepCount + skipOffset,
+              itemId: remItem.itemId,
+              name: remItem.name,
+              method: remItem.request.method,
+              url: remItem.request.url || '',
+              status: 'skipped',
+              httpStatus: 0,
+              statusText: 'Skipped',
+              timeMs: 0,
+              sizeBytes: 0,
+              testResults: [],
+              testsPassed: 0,
+              testsFailed: 0,
+              errorMessage: reasonText,
+              dataRowIndex,
+              hasCapturedExchange: false,
+              timestamp: Date.now(),
+            });
+            skipOffset += 1;
+          }
+        };
 
         while (cursor >= 0 && cursor < selectedItems.length) {
           if (abortController.signal.aborted) break outerLoop;
@@ -313,6 +428,7 @@ export async function startFunctionalRun(
           }
 
           const item = selectedItems[cursor];
+          executedInIteration.add(item.id);
           const stepId = `${runId}_i${iterationNum}_s${iterStepCount}`;
           const preScript = item.request.preRequestScript || '';
           const postScript = item.request.postResponseScript || '';
@@ -354,7 +470,7 @@ export async function startFunctionalRun(
           if (abortController.signal.aborted) break outerLoop;
 
           if (preScriptError) {
-            const errStep: FunctionalStepResult = {
+            recordStep({
               id: stepId,
               iteration: iterationNum,
               stepIndex: iterStepCount,
@@ -375,38 +491,15 @@ export async function startFunctionalRun(
               dataRowIndex,
               hasCapturedExchange: false,
               timestamp: Date.now(),
-            };
-            steps.push(errStep);
-            params.onUpdate(recomputeReportMetrics({ ...baseReport, completedIterations }, steps, startedAt));
+            });
 
             if (effectiveConfig.stopOnError !== 'never') {
               stopReason = `Stopped on pre-request script error in "${item.name}".`;
-              for (let rem = cursor + 1; rem < selectedItems.length; rem++) {
-                const remItem = selectedItems[rem];
-                steps.push({
-                  id: `${runId}_i${iterationNum}_skip_${rem}`,
-                  iteration: iterationNum,
-                  stepIndex: iterStepCount + (rem - cursor),
-                  itemId: remItem.itemId,
-                  name: remItem.name,
-                  method: remItem.request.method,
-                  url: remItem.request.url || '',
-                  status: 'skipped',
-                  httpStatus: 0,
-                  statusText: 'Skipped',
-                  timeMs: 0,
-                  sizeBytes: 0,
-                  testResults: [],
-                  testsPassed: 0,
-                  testsFailed: 0,
-                  errorMessage: 'Skipped due to earlier error',
-                  dataRowIndex,
-                  hasCapturedExchange: false,
-                  timestamp: Date.now(),
-                });
-              }
+              markRemainingSkipped('Skipped due to earlier error');
+              emitLiveUpdate(true);
               break outerLoop;
             }
+            emitLiveUpdate(false);
             iterStepCount += 1;
             cursor += 1;
             continue;
@@ -461,12 +554,18 @@ export async function startFunctionalRun(
           const testsPassedCount = mergedTestResults.filter((t) => t.passed).length;
           const testsFailedCount = mergedTestResults.filter((t) => !t.passed).length;
 
+          const isRedirectWarning =
+            effectiveConfig.followRedirects === false && httpRes.status >= 300 && httpRes.status < 400;
+          const isHttpStatusFailure = Boolean(effectiveConfig.failOnHttpError) && httpRes.status >= 400;
           const hasRequestOrScriptError = hadTransportFailure || Boolean(postScriptError);
+
           const stepStatus: FunctionalStepResult['status'] = hasRequestOrScriptError
             ? 'error'
-            : testsFailedCount > 0
+            : testsFailedCount > 0 || isHttpStatusFailure
               ? 'failed'
-              : 'passed';
+              : isRedirectWarning
+                ? 'warning'
+                : 'passed';
 
           let hasCapturedExchange = false;
           let captureSkippedReason: FunctionalStepResult['captureSkippedReason'];
@@ -489,7 +588,17 @@ export async function startFunctionalRun(
             }
           }
 
-          steps.push({
+          const stepErrorMessage = hadTransportFailure
+            ? httpRes.errorMessage
+            : isHttpStatusFailure && testsFailedCount === 0
+              ? `HTTP ${httpRes.status} ${httpRes.statusText || ''}`.trim()
+              : undefined;
+          const stepWarningMessage =
+            stepStatus === 'warning'
+              ? `HTTP ${httpRes.status} redirect not followed (Follow HTTP redirects is disabled).`
+              : undefined;
+
+          recordStep({
             id: stepId,
             iteration: iterationNum,
             stepIndex: iterStepCount,
@@ -505,7 +614,8 @@ export async function startFunctionalRun(
             testResults: mergedTestResults,
             testsPassed: testsPassedCount,
             testsFailed: testsFailedCount,
-            errorMessage: hadTransportFailure ? httpRes.errorMessage : undefined,
+            errorMessage: stepErrorMessage,
+            warningMessage: stepWarningMessage,
             scriptError: postScriptError,
             scriptErrorStage: postScriptError ? 'post-response' : undefined,
             nextRequestTarget: nextReqDirective,
@@ -517,54 +627,21 @@ export async function startFunctionalRun(
 
           const shouldStopOnThisStep =
             (effectiveConfig.stopOnError === 'request_or_script_error' && hasRequestOrScriptError) ||
-            (effectiveConfig.stopOnError === 'failed_test' && (hasRequestOrScriptError || testsFailedCount > 0));
+            (effectiveConfig.stopOnError === 'failed_test' &&
+              (hasRequestOrScriptError || testsFailedCount > 0 || isHttpStatusFailure));
 
           if (shouldStopOnThisStep) {
             stopReason = hasRequestOrScriptError
               ? `Stopped on ${hadTransportFailure ? 'request' : 'script'} error in "${item.name}".`
-              : `Stopped on failed test assertion in "${item.name}".`;
-            for (let rem = cursor + 1; rem < selectedItems.length; rem++) {
-              const remItem = selectedItems[rem];
-              steps.push({
-                id: `${runId}_i${iterationNum}_skip_${rem}`,
-                iteration: iterationNum,
-                stepIndex: iterStepCount + (rem - cursor),
-                itemId: remItem.itemId,
-                name: remItem.name,
-                method: remItem.request.method,
-                url: remItem.request.url || '',
-                status: 'skipped',
-                httpStatus: 0,
-                statusText: 'Skipped',
-                timeMs: 0,
-                sizeBytes: 0,
-                testResults: [],
-                testsPassed: 0,
-                testsFailed: 0,
-                errorMessage: 'Skipped due to Stop run on error',
-                dataRowIndex,
-                hasCapturedExchange: false,
-                timestamp: Date.now(),
-              });
-            }
-            params.onUpdate(
-              recomputeReportMetrics(
-                { ...baseReport, completedIterations, stopReason, captureBudgetExhausted },
-                steps,
-                startedAt
-              )
-            );
+              : isHttpStatusFailure && testsFailedCount === 0
+                ? `Stopped on HTTP ${httpRes.status} failure in "${item.name}".`
+                : `Stopped on failed test assertion in "${item.name}".`;
+            markRemainingSkipped('Skipped due to Stop run on error');
+            emitLiveUpdate(true);
             break outerLoop;
           }
 
-          params.onUpdate(
-            recomputeReportMetrics(
-              { ...baseReport, completedIterations, captureBudgetExhausted },
-              steps,
-              startedAt
-            )
-          );
-
+          emitLiveUpdate(false);
           iterStepCount += 1;
 
           if (nextReqDirective === null) {
@@ -586,14 +663,20 @@ export async function startFunctionalRun(
           }
         }
 
-        completedIterations = iterationNum;
-        if (safeDelayMs > 0 && iterIdx + 1 < safeIterations && !abortController.signal.aborted) {
+        completedIterations += 1;
+        if (safeDelayMs > 0 && planIdx + 1 < iterationPlan.length && !abortController.signal.aborted) {
           await abortableDelay(safeDelayMs, abortController.signal);
         }
       }
 
+      // Always keep runEnv in volatile session memory so Re-run Failed can reuse chained variables
+      if (executedCount > 0 || totalStepsRecorded > 0) {
+        saveFunctionalRunEnvSnapshot(runId, params.tabId, runEnv);
+      }
+
+      // Do NOT commit partial variable updates to Active Environment when user manually clicked Stop
       let updatedEnvVars: string[] | undefined;
-      if (effectiveConfig.keepVariableValues && params.onCommitEnvironmentUpdates) {
+      if (!stoppedByUser && effectiveConfig.keepVariableValues && params.onCommitEnvironmentUpdates) {
         const unsetKeys = Object.keys(params.initialVariables).filter(
           (k) => !Object.prototype.hasOwnProperty.call(runEnv, k)
         );
@@ -603,44 +686,32 @@ export async function startFunctionalRun(
         }
       }
 
-      const computed = recomputeReportMetrics(
-        { ...baseReport, completedIterations, stopReason, captureBudgetExhausted },
-        steps,
-        startedAt
-      );
       const finalStatus = stoppedByUser
         ? 'stopped'
-        : stopReason || computed.requestsErrored > 0 || computed.requestsFailed > 0
+        : stopReason || requestsErrored > 0 || requestsFailed > 0
           ? 'failed'
           : 'completed';
 
-      const finalReport: FunctionalRunReport = {
-        ...computed,
+      const finalReport = buildSnapshot({
         status: finalStatus,
         finishedAt: Date.now(),
         durationMs: Math.max(0, Date.now() - startedAt),
         ...(updatedEnvVars ? { updatedEnvVars } : {}),
-      };
+      });
       clearRunIfCurrent();
       params.onFinish(finalReport);
     } catch (err) {
-      const computed = recomputeReportMetrics(
-        {
-          ...baseReport,
-          completedIterations,
-          stopReason: err instanceof Error ? err.message : String(err),
-          captureBudgetExhausted,
-        },
-        steps,
-        startedAt
-      );
-      clearRunIfCurrent();
-      params.onFinish({
-        ...computed,
+      stopReason = err instanceof Error ? err.message : String(err);
+      if (executedCount > 0 || totalStepsRecorded > 0) {
+        saveFunctionalRunEnvSnapshot(runId, params.tabId, runEnv);
+      }
+      const finalReport = buildSnapshot({
         status: stoppedByUser ? 'stopped' : 'failed',
         finishedAt: Date.now(),
         durationMs: Math.max(0, Date.now() - startedAt),
       });
+      clearRunIfCurrent();
+      params.onFinish(finalReport);
     }
   })();
 

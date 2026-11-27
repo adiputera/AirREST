@@ -796,7 +796,7 @@ test('Regression (Codex Review): provider-session pendingDuplicateIntents surviv
       offlineWorkspaces: [{ id: 'a', name: 'A', createdAt: 1, updatedAt: 1 }, { id: 'b', name: 'B', createdAt: 1, updatedAt: 1 }],
       offlineScopeCache: {},
       collections: [{ id: 'c1', name: 'A col', items: [], createdAt: 1, updatedAt: 1, _origin: 'offline' }],
-      persistNativeCredentialState: () => flush,
+      persistStoreState: () => flush,
     });
     const op = s.getState().duplicateCollection('c1', { id: 'a', name: 'A', type: 'offline_workspace' });
     s.getState().switchOfflineWorkspace('b');
@@ -890,7 +890,7 @@ test('V1, V2, V3: entity-level offline rollback preserves concurrent edits acros
     const h = createStoreHarness();
     const s = await h.createStore();
     const flush = deferred();
-    s.setState({ ...baseOffline(), persistNativeCredentialState: () => flush.promise });
+    s.setState({ ...baseOffline(), persistStoreState: () => flush.promise });
 
     const op = kind === 'collection'
       ? s.getState().duplicateCollection('c1', { id: 'a', name: 'A', type: 'offline_workspace' })
@@ -916,7 +916,7 @@ test('V1, V2, V3: entity-level offline rollback preserves concurrent edits acros
     const h = createStoreHarness();
     const s = await h.createStore();
     const flush = deferred();
-    s.setState({ ...baseOffline(), persistNativeCredentialState: () => flush.promise });
+    s.setState({ ...baseOffline(), persistStoreState: () => flush.promise });
 
     const op = s.getState().duplicateCollection('c1', { id: 'b', name: 'B', type: 'offline_workspace' });
     s.getState().switchOfflineWorkspace('b');
@@ -928,7 +928,7 @@ test('V1, V2, V3: entity-level offline rollback preserves concurrent edits acros
     assert.equal(s.getState().activeOfflineWorkspaceId, 'b');
     assert.equal(s.getState().collections.length, 0);
     assert.equal((s.getState().offlineScopeCache.b?.collections || []).length, 0);
-    await s.getState().persistNativeCredentialState().catch(() => {});
+    await s.getState().persistStoreState().catch(() => {});
     const reloaded = await h.createStore();
     assert.equal(reloaded.getState().collections.length, 0);
   }
@@ -938,7 +938,7 @@ test('V1, V2, V3: entity-level offline rollback preserves concurrent edits acros
     const h = createStoreHarness();
     const s = await h.createStore();
     const flush = deferred();
-    s.setState({ ...baseOffline(), persistNativeCredentialState: () => flush.promise });
+    s.setState({ ...baseOffline(), persistStoreState: () => flush.promise });
 
     const op = s.getState().duplicateCollection('c1', { id: 'a', name: 'A', type: 'offline_workspace' });
     s.getState().switchOfflineWorkspace('b');
@@ -1103,7 +1103,7 @@ test('V4, V5, V6: atomic per-operation pendingDuplicateIntents preserve concurre
       workspaceMode: 'cloud',
       cloudConfig: cfg(),
       collections: [col('c1'), col('c2')],
-      persistNativeCredentialState: () => (++flushCalls === 1 ? flushA.promise : flushB.promise),
+      persistStoreState: () => (++flushCalls === 1 ? flushA.promise : flushB.promise),
     });
 
     const opA = s.getState().duplicateCollection('c1', cfg().activeScope, { operationId: 'op-a' });
@@ -1363,7 +1363,7 @@ test('Follow-up P2 (upload-session-flush): offline->cloud upload cancels with ze
     workspaceMode: 'offline',
     cloudConfig: aliceCfg,
     collections: [{ id: 'c1', name: 'Source', items: [], createdAt: 1, updatedAt: 1, _origin: 'offline' }],
-    persistNativeCredentialState: async () => {
+    persistStoreState: async () => {
       if (holdFirstFlush) {
         holdFirstFlush = false;
         flushEntered();
@@ -1484,5 +1484,164 @@ test('C8 (P3): same-session scope switch during post-commit duplicate GET clears
     undefined,
     'Same-session post-commit scope switch must invalidate stale scopeCache[ws-a]',
   );
+  s.dispose();
+});
+
+test('PendingDuplicateIntent records origin scope metadata (sourceScope / targetScope / sourceOfflineWorkspaceId) across item, collection, and import_duplicate failures', async () => {
+  const h = createStoreHarness({
+    cloudClientOverrides: {
+      duplicateScopeItem: async () => {
+        throw new Error('duplicate operation failed');
+      },
+      duplicateScopeCollection: async () => {
+        throw new Error('duplicate collection failed');
+      },
+      importDuplicateCollection: async () => {
+        throw new Error('import duplicate failed');
+      },
+    },
+  });
+
+  const s = await h.createStore();
+  const scopeA = { type: 'workspace', id: 'ws-a', name: 'Workspace A', role: 'owner' };
+  const scopeB = { type: 'workspace', id: 'ws-b', name: 'Workspace B', role: 'owner' };
+
+  s.setState({
+    workspaceMode: 'cloud',
+    cloudConfig: {
+      apiUrl: 'https://api.example.com',
+      token: 'tok-scope',
+      user: { id: 'alice', email: 'alice@example.com', name: 'Alice', role: 'owner' },
+      activeScope: scopeA,
+    },
+    collections: [
+      {
+        id: 'col-a',
+        name: 'Test123',
+        minRole: 'reader',
+        version: 1,
+        items: [{ id: 'req-1', name: 'get token', type: 'request', request: makeSampleRequest('req-1', 'get token') }],
+        createdAt: 1,
+        updatedAt: 1,
+        _origin: 'cloud',
+      },
+    ],
+  });
+
+  const itemFail = await s.getState().duplicateCollectionItem('col-a', 'req-1', 'col-a', null);
+  assert.equal(itemFail.success, false);
+  assert.equal(itemFail.reconcilePending, true);
+  const itemIntent = s.getState().pendingDuplicateIntents[itemFail.operationId];
+  assert.deepEqual(toPlain(itemIntent.sourceScope), scopeA);
+  assert.deepEqual(toPlain(itemIntent.targetScope), scopeA);
+
+  const colFail = await s.getState().duplicateCollection('col-a', scopeB);
+  assert.equal(colFail.success, false);
+  assert.equal(colFail.reconcilePending, true);
+  const colIntent = s.getState().pendingDuplicateIntents[colFail.operationId];
+  assert.deepEqual(toPlain(colIntent.sourceScope), scopeA);
+  assert.deepEqual(toPlain(colIntent.targetScope), scopeB);
+
+  s.setState({
+    workspaceMode: 'offline',
+    activeOfflineWorkspaceId: 'offline-1',
+    offlineWorkspaces: [{ id: 'offline-1', name: 'Offline 1', createdAt: 1, updatedAt: 1 }],
+    collections: [
+      {
+        id: 'off-col',
+        name: 'Offline Col',
+        items: [],
+        createdAt: 1,
+        updatedAt: 1,
+        _origin: 'offline',
+      },
+    ],
+  });
+
+  const importFail = await s.getState().duplicateCollection('off-col', scopeB);
+  assert.equal(importFail.success, false);
+  assert.equal(importFail.reconcilePending, true);
+  const importIntent = s.getState().pendingDuplicateIntents[importFail.operationId];
+  assert.equal(importIntent.sourceOfflineWorkspaceId, 'offline-1');
+  assert.deepEqual(toPlain(importIntent.targetScope), scopeB);
+  s.dispose();
+});
+
+test('Regression: duplicate operations flush via persistStoreState (appStorage.setItem) instead of strict setItemInAllPersistenceCopies', async () => {
+  let setAllCalls = 0;
+  let setItemCalls = 0;
+  const h = createStoreHarness({
+    cloudClientOverrides: {
+      duplicateScopeItem: async (_api, _tok, _itemId, _srcCol, targetCol, targetParent, opId) => ({
+        operation_id: opId,
+        status: 'committed',
+        root_item_id: 'dup-req-id',
+        target_collection_id: targetCol,
+        target_parent_id: targetParent ?? null,
+        target_collection_version: 2,
+        name: 'Ping',
+        item_count: 1,
+      }),
+      fetchCollectionById: async (_api, _tok, colId) => ({
+        id: colId,
+        workspace_id: 'ws-a',
+        name: 'Target Col',
+        min_role: 'reader',
+        version: 2,
+        items: [{ id: 'dup-req-id', type: 'request', name: 'Ping', method: 'GET', url: 'https://httpbin.org/get' }],
+      }),
+    },
+  });
+
+  const origSetItem = h.storage.setItem;
+  h.storage.setItem = async (k, v) => {
+    setItemCalls += 1;
+    return origSetItem(k, v);
+  };
+
+  const s = await h.createStore();
+  // Simulate setItemInAllPersistenceCopies throwing QuotaExceededError via persistNativeCredentialState
+  s.setState({
+    persistNativeCredentialState: async () => {
+      setAllCalls += 1;
+      throw new Error('QuotaExceededError: localStorage full');
+    },
+    workspaceMode: 'cloud',
+    cloudConfig: {
+      apiUrl: 'https://api.example.com',
+      token: 'tok-quota',
+      user: { id: 'alice', email: 'alice@example.com', name: 'Alice', role: 'owner' },
+      activeScope: { type: 'workspace', id: 'ws-a', name: 'WS A', role: 'owner' },
+    },
+    collections: [
+      {
+        id: 'col-src',
+        name: 'Source Col',
+        minRole: 'reader',
+        version: 1,
+        items: [{ id: 'req-1', name: 'Ping', type: 'request', request: makeSampleRequest('req-1', 'Ping') }],
+        createdAt: 1,
+        updatedAt: 1,
+        _origin: 'cloud',
+      },
+      {
+        id: 'col-new',
+        name: 'Target Col',
+        minRole: 'reader',
+        version: 1,
+        isPartial: false,
+        items: [],
+        createdAt: 1,
+        updatedAt: 1,
+        _origin: 'cloud',
+        _syncStatus: 'synced',
+      },
+    ],
+  });
+
+  const res = await s.getState().duplicateCollectionItem('col-src', 'req-1', 'col-new', null);
+  assert.equal(res.success, true);
+  assert.equal(setAllCalls, 0, 'duplicateCollectionItem must not call persistNativeCredentialState / setItemInAllPersistenceCopies');
+  assert.ok(setItemCalls > 0, 'duplicateCollectionItem must flush via persistStoreState / customStorage.setItem');
   s.dispose();
 });

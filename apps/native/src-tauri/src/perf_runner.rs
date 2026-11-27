@@ -190,6 +190,7 @@ pub struct StartRunResult {
 pub struct MetricSnapshotOut {
     pub total_requests: u64,
     pub error_count: u64,
+    pub warning_count: u64,
     pub error_rate_pct: f64,
     pub requests_per_sec: f64,
     pub max_requests_per_sec: u64,
@@ -245,6 +246,7 @@ pub struct EndpointBreakdownOut {
     pub path: String,
     pub total_requests: u64,
     pub error_count: u64,
+    pub warning_count: u64,
     pub error_rate_pct: f64,
     pub requests_per_sec: f64,
     pub max_requests_per_sec: u64,
@@ -322,6 +324,7 @@ struct EndpointAcc {
     hist: PerfHistogram,
     total_requests: u64,
     error_count: u64,
+    warning_count: u64,
     bytes_received: u64,
 }
 
@@ -355,6 +358,7 @@ struct PerfRunMetrics {
     total_hist: PerfHistogram,
     total_requests: u64,
     error_count: u64,
+    warning_count: u64,
     unauthorized_count: u64,
     bytes_received: u64,
     endpoints: Vec<EndpointAcc>,
@@ -378,6 +382,7 @@ impl PerfRunMetrics {
                 hist: PerfHistogram::new(),
                 total_requests: 0,
                 error_count: 0,
+                warning_count: 0,
                 bytes_received: 0,
             });
         }
@@ -387,6 +392,7 @@ impl PerfRunMetrics {
             total_hist: PerfHistogram::new(),
             total_requests: 0,
             error_count: 0,
+            warning_count: 0,
             unauthorized_count: 0,
             bytes_received: 0,
             endpoints,
@@ -430,6 +436,7 @@ impl PerfRunMetrics {
         status: u16,
         status_text: &str,
         is_error: bool,
+        is_warning: bool,
         err_category: &str,
         err_msg: &str,
         err_snippet: Option<String>,
@@ -438,6 +445,9 @@ impl PerfRunMetrics {
         self.total_requests += 1;
         if is_error {
             self.error_count += 1;
+        }
+        if is_warning {
+            self.warning_count += 1;
         }
         if status == 401 {
             self.unauthorized_count += 1;
@@ -450,6 +460,9 @@ impl PerfRunMetrics {
             ep.total_requests += 1;
             if is_error {
                 ep.error_count += 1;
+            }
+            if is_warning {
+                ep.warning_count += 1;
             }
             ep.bytes_received += bytes;
             ep.hist.record(time_ms);
@@ -535,6 +548,7 @@ impl PerfRunMetrics {
         MetricSnapshotOut {
             total_requests: self.total_requests,
             error_count: self.error_count,
+            warning_count: self.warning_count,
             error_rate_pct: err_pct,
             requests_per_sec: rps,
             max_requests_per_sec: max_rps,
@@ -622,6 +636,7 @@ impl PerfRunMetrics {
                     path: ep.path.clone(),
                     total_requests: ep.total_requests,
                     error_count: ep.error_count,
+                    warning_count: ep.warning_count,
                     error_rate_pct: err_pct,
                     requests_per_sec: rps,
                     max_requests_per_sec: max_rps,
@@ -1346,6 +1361,12 @@ fn prepare_reqwest(
     Ok((builder.headers(headers), final_url))
 }
 
+fn classify_http_status_outcome(status: reqwest::StatusCode, follow_redirects: bool) -> (bool, bool) {
+    let is_warning = !follow_redirects && status.is_redirection();
+    let is_error = !status.is_success() && !is_warning;
+    (is_error, is_warning)
+}
+
 fn classify_reqwest_error(err: &reqwest::Error) -> (&'static str, &'static str) {
     if err.is_timeout() {
         ("timeout", "Request Timed Out")
@@ -1585,8 +1606,9 @@ pub async fn start_performance_run(
     });
     let seq_row_counter = Arc::new(AtomicUsize::new(0));
     let peak_vus_usize = (peak_vus as usize).max(1);
+    let follow_redirects = input.network.follow_redirects;
     let profile = input.load_profile.clone();
-    let run_warnings = warnings.clone();
+    let mut run_warnings = warnings.clone();
     let app_clone = app.clone();
 
     tauri::async_runtime::spawn(async move {
@@ -1684,6 +1706,7 @@ pub async fn start_performance_run(
                                             0,
                                             "Invalid URL",
                                             true,
+                                            false,
                                             "invalid_url",
                                             &err_msg,
                                             None,
@@ -1694,7 +1717,7 @@ pub async fn start_performance_run(
                                     let send_fut = async {
                                         let mut resp = req_builder.send().await?;
                                         let status = resp.status();
-                                        let is_err = !status.is_success();
+                                        let (is_err, _is_warn) = classify_http_status_outcome(status, follow_redirects);
                                         let mut bytes_received: u64 = 0;
                                         let mut snippet_buf: Vec<u8> = Vec::new();
                                         while let Some(chunk) = resp.chunk().await? {
@@ -1724,7 +1747,7 @@ pub async fn start_performance_run(
                                                 Ok((status, bytes_received, snippet)) => {
                                                     let code = status.as_u16();
                                                     let reason = status.canonical_reason().unwrap_or("");
-                                                    let is_err = !status.is_success();
+                                                    let (is_err, is_warn) = classify_http_status_outcome(status, follow_redirects);
                                                     let cat = if is_err {
                                                         format!("http_{}xx", code / 100)
                                                     } else {
@@ -1747,6 +1770,7 @@ pub async fn start_performance_run(
                                                             code,
                                                             reason,
                                                             is_err,
+                                                            is_warn,
                                                             &cat,
                                                             &msg,
                                                             snippet,
@@ -1767,6 +1791,7 @@ pub async fn start_performance_run(
                                                             0,
                                                             st_text,
                                                             true,
+                                                            false,
                                                             cat,
                                                             &err.to_string(),
                                                             None,
@@ -1848,6 +1873,12 @@ pub async fn start_performance_run(
         }
 
         if let Ok(guard) = metrics.lock() {
+            if guard.warning_count > 0 {
+                run_warnings.push(format!(
+                    "Received {} HTTP 3xx redirect response(s) while \"Follow HTTP redirects\" was disabled (counted as warnings, not errors).",
+                    guard.warning_count
+                ));
+            }
             let complete = PerfCompleteEvent {
                 run_id: run_id.clone(),
                 status: if stopped { "stopped" } else { "completed" }.to_string(),
@@ -2028,5 +2059,29 @@ mod tests {
         let long_duration_ms = (u64::from(get_duration_seconds(&long_cfg)).saturating_mul(1000)).clamp(500, 300_000);
         assert_eq!(long_duration_ms, 300_000);
         assert_eq!(long_duration_ms.min(60_000).clamp(500, long_duration_ms), 60_000);
+    }
+
+    #[test]
+    fn classifies_3xx_as_warning_when_follow_redirects_disabled() {
+        assert_eq!(
+            classify_http_status_outcome(reqwest::StatusCode::FOUND, false),
+            (false, true)
+        );
+        assert_eq!(
+            classify_http_status_outcome(reqwest::StatusCode::MOVED_PERMANENTLY, false),
+            (false, true)
+        );
+        assert_eq!(
+            classify_http_status_outcome(reqwest::StatusCode::FOUND, true),
+            (true, false)
+        );
+        assert_eq!(
+            classify_http_status_outcome(reqwest::StatusCode::INTERNAL_SERVER_ERROR, false),
+            (true, false)
+        );
+        assert_eq!(
+            classify_http_status_outcome(reqwest::StatusCode::OK, false),
+            (false, false)
+        );
     }
 }

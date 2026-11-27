@@ -90,6 +90,8 @@ function mapRecoveryOutcome(
 export const PendingDuplicateRecovery: React.FC = () => {
   const productPolicy = useProductPolicy();
   const isOfflineOnly = !productPolicy.workspace.cloud;
+  const workspaceMode = useApiStore((state) => state.workspaceMode);
+  const activeOfflineWorkspaceId = useApiStore((state) => state.activeOfflineWorkspaceId);
   const cloudConfig = useApiStore((state) => state.cloudConfig);
   const pendingDuplicateIntents = useApiStore((state) => state.pendingDuplicateIntents);
   const activeDuplicateOperationIds = useApiStore((state) => state.activeDuplicateOperationIds) || {};
@@ -103,16 +105,25 @@ export const PendingDuplicateRecovery: React.FC = () => {
     () => (isOfflineOnly ? null : getPendingDuplicateOwnerKey(cloudConfig)),
     [isOfflineOnly, cloudConfig],
   );
+  const recoveryContextKey = useMemo(() => {
+    if (!ownerKey) return null;
+    if (!workspaceMode) return ownerKey;
+    if (workspaceMode === 'offline') {
+      return `${ownerKey}|offline|${activeOfflineWorkspaceId || ''}`;
+    }
+    const scope = cloudConfig?.activeScope;
+    return `${ownerKey}|cloud|${scope ? `${scope.type}:${scope.id}` : ''}`;
+  }, [ownerKey, workspaceMode, activeOfflineWorkspaceId, cloudConfig?.activeScope]);
 
   const sessionGenRef = useRef(0);
-  const prevOwnerKeyRef = useRef<string | null>(ownerKey);
-  const ownerKeyRef = useRef<string | null>(ownerKey);
+  const prevContextKeyRef = useRef<string | null>(recoveryContextKey);
+  const contextKeyRef = useRef<string | null>(recoveryContextKey);
   const requestSeqRef = useRef(0);
   const activeAttemptRef = useRef<{ sessionGen: number; requestId: number } | null>(null);
 
-  ownerKeyRef.current = ownerKey;
-  if (prevOwnerKeyRef.current !== ownerKey) {
-    prevOwnerKeyRef.current = ownerKey;
+  contextKeyRef.current = recoveryContextKey;
+  if (prevContextKeyRef.current !== recoveryContextKey) {
+    prevContextKeyRef.current = recoveryContextKey;
     sessionGenRef.current += 1;
     activeAttemptRef.current = null;
   }
@@ -120,14 +131,23 @@ export const PendingDuplicateRecovery: React.FC = () => {
   useEffect(() => {
     setOutcome(null);
     setRetryingOpId(null);
-  }, [ownerKey]);
+  }, [recoveryContextKey]);
 
-  const ownedIntents = useMemo(
-    () => getOwnedPendingDuplicateIntents(pendingDuplicateIntents, cloudConfig, isOfflineOnly),
-    [pendingDuplicateIntents, cloudConfig, isOfflineOnly],
+  const workspaceContext = useMemo(
+    () => ({
+      workspaceMode,
+      activeScope: cloudConfig?.activeScope ?? null,
+      activeOfflineWorkspaceId,
+    }),
+    [workspaceMode, cloudConfig?.activeScope, activeOfflineWorkspaceId],
   );
 
-  const visibleOutcome = outcome && outcome.ownerKey === ownerKey ? outcome : null;
+  const ownedIntents = useMemo(
+    () => getOwnedPendingDuplicateIntents(pendingDuplicateIntents, cloudConfig, isOfflineOnly, workspaceContext),
+    [pendingDuplicateIntents, cloudConfig, isOfflineOnly, workspaceContext],
+  );
+
+  const visibleOutcome = outcome && outcome.ownerKey === recoveryContextKey ? outcome : null;
 
   if (ownedIntents.length === 0 && !visibleOutcome) {
     return null;
@@ -146,7 +166,7 @@ export const PendingDuplicateRecovery: React.FC = () => {
       return;
     }
     const capturedSessionGen = sessionGenRef.current;
-    const capturedOwnerKey = ownerKeyRef.current;
+    const capturedContextKey = contextKeyRef.current;
     const requestId = ++requestSeqRef.current;
     activeAttemptRef.current = { sessionGen: capturedSessionGen, requestId };
     setRetryingOpId(intent.operationId);
@@ -154,17 +174,17 @@ export const PendingDuplicateRecovery: React.FC = () => {
       const res = await retryPendingDuplicateIntent(intent.operationId);
       if (
         sessionGenRef.current !== capturedSessionGen ||
-        ownerKeyRef.current !== capturedOwnerKey
+        contextKeyRef.current !== capturedContextKey
       ) {
         return;
       }
-      setOutcome(mapRecoveryOutcome(capturedOwnerKey, intent, res));
+      setOutcome(mapRecoveryOutcome(capturedContextKey, intent, res));
     } finally {
       if (
         activeAttemptRef.current?.sessionGen === capturedSessionGen &&
         activeAttemptRef.current?.requestId === requestId &&
         sessionGenRef.current === capturedSessionGen &&
-        ownerKeyRef.current === capturedOwnerKey
+        contextKeyRef.current === capturedContextKey
       ) {
         activeAttemptRef.current = null;
         setRetryingOpId(null);

@@ -200,9 +200,11 @@ export function exportPerformanceReportHtml(
                 (r) => `<tr>
                   <td class="name-col">${escapeHtml(r.targetLabel)}</td>
                   <td>${escapeHtml(formatThresholdRuleExpression(r))}</td>
-                  <td class="num">${r.actual}</td>
-                  <td class="num" style="font-weight:700;color:${r.passed ? 'var(--emerald)' : 'var(--rose)'}">${
-                    r.passed ? 'PASSED' : r.triggeredAbort ? 'ABORTED' : 'FAILED'
+                  <td class="num">${r.notEvaluated ? '-' : r.actual}</td>
+                  <td class="num" style="font-weight:700;color:${
+                    r.notEvaluated ? 'var(--amber)' : r.passed ? 'var(--emerald)' : 'var(--rose)'
+                  }">${
+                    r.notEvaluated ? 'NOT EVALUATED' : r.passed ? 'PASSED' : r.triggeredAbort ? 'ABORTED' : 'FAILED'
                   }</td>
                 </tr>`
               )

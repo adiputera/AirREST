@@ -1,16 +1,28 @@
-import { Collection, CollectionItem, Environment } from '../types/api';
+import {
+  Collection,
+  CollectionItem,
+  Environment,
+  FunctionalRunReport,
+  PerformanceRunReport,
+} from '../types/api';
 import { OpenedFileResult } from '../types/platform';
 import {
   detectPostmanJsonType,
   importPostmanCollectionWithSummary,
   importPostmanEnvironment,
 } from './postman';
+import { AirRESTReportSourceMeta, parseShareableReportJson } from './reportShare';
 
 export const MAX_IMPORT_FILE_BYTES = 16 * 1024 * 1024; // 16 MiB
 export const MAX_IMPORT_BATCH_FILES = 50;
 export const MAX_IMPORT_BATCH_TOTAL_BYTES = 64 * 1024 * 1024; // 64 MiB
 
-export type ImportBatchItemType = 'collection' | 'environment' | 'invalid';
+export type ImportBatchItemType =
+  | 'collection'
+  | 'environment'
+  | 'performance_report'
+  | 'functional_report'
+  | 'invalid';
 export type ImportBatchItemOutcome = 'imported' | 'skipped' | 'failed';
 
 export interface ImportTargetBinding {
@@ -54,6 +66,10 @@ export interface ImportBatchItem {
   retryTargetKey?: string;
   parsedCollection?: Collection;
   parsedEnvironment?: Environment;
+  parsedPerfReport?: PerformanceRunReport;
+  parsedFuncReport?: FunctionalRunReport;
+  reportSourceMeta?: AirRESTReportSourceMeta;
+  rawReportContent?: string;
 }
 
 export interface ParseImportBatchContext {
@@ -68,6 +84,7 @@ export interface ParseImportBatchContext {
 export interface ImportBatchStats {
   collectionsImported: number;
   environmentsImported: number;
+  reportsImported?: number;
   skipped: number;
   failed: Array<{ name: string; error: string }>;
 }
@@ -226,9 +243,42 @@ export function parseImportBatchFiles(
     try {
       const detected = detectPostmanJsonType(file.content);
       if (detected === 'unknown') {
+        const parsedReport = parseShareableReportJson(file.content);
+        if (!parsedReport.error && parsedReport.perfReport) {
+          const perfReport = parsedReport.perfReport;
+          return {
+            id: generateBatchItemId(),
+            filename,
+            name: perfReport.title || 'Performance Report',
+            type: 'performance_report',
+            checked: true,
+            disabled: false,
+            hasConflict: false,
+            itemCountLabel: `${perfReport.summary.totalRequests} reqs • Performance`,
+            parsedPerfReport: perfReport,
+            reportSourceMeta: parsedReport.sourceMeta,
+            rawReportContent: file.content,
+          };
+        }
+        if (!parsedReport.error && parsedReport.funcReport) {
+          const funcReport = parsedReport.funcReport;
+          return {
+            id: generateBatchItemId(),
+            filename,
+            name: funcReport.title || 'Functional Report',
+            type: 'functional_report',
+            checked: true,
+            disabled: false,
+            hasConflict: false,
+            itemCountLabel: `${funcReport.totalTests} tests • Functional`,
+            parsedFuncReport: funcReport,
+            reportSourceMeta: parsedReport.sourceMeta,
+            rawReportContent: file.content,
+          };
+        }
         return createInvalidBatchItem(
           filename,
-          'Unrecognized JSON format. Expected a Postman Collection or Environment.'
+          'Unrecognized JSON format. Expected a Postman Collection, Environment, or AirREST Report.'
         );
       }
 
@@ -306,7 +356,12 @@ export function recomputeBatchConflicts(
 
   return items.map((item) => {
     let updatedItem = item;
-    if (permissions && item.type !== 'invalid' && item.outcome !== 'imported' && item.outcome !== 'skipped') {
+    if (
+      permissions &&
+      (item.type === 'collection' || item.type === 'environment') &&
+      item.outcome !== 'imported' &&
+      item.outcome !== 'skipped'
+    ) {
       const canWrite =
         item.type === 'collection' ? permissions.canWriteCollection : permissions.canWriteEnvironment;
       const disabled = !canWrite;
@@ -440,12 +495,21 @@ export function formatBatchImportSummary(stats: ImportBatchStats): string {
       `${stats.environmentsImported} ${stats.environmentsImported === 1 ? 'environment' : 'environments'}`
     );
   }
+  if ((stats.reportsImported ?? 0) > 0) {
+    importedParts.push(
+      `${stats.reportsImported} ${stats.reportsImported === 1 ? 'report' : 'reports'}`
+    );
+  }
 
   if (importedParts.length === 0 && stats.skipped > 0 && stats.failed.length === 0) {
     return `No items imported (${stats.skipped} skipped).`;
   }
 
-  let message = importedParts.length > 0 ? `Imported ${importedParts.join(' and ')}` : 'Import completed';
+  const joinedParts =
+    importedParts.length <= 2
+      ? importedParts.join(' and ')
+      : `${importedParts.slice(0, -1).join(', ')}, and ${importedParts[importedParts.length - 1]}`;
+  let message = importedParts.length > 0 ? `Imported ${joinedParts}` : 'Import completed';
   const notes: string[] = [];
   if (stats.skipped > 0) notes.push(`${stats.skipped} skipped`);
   if (stats.failed.length > 0) notes.push(`${stats.failed.length} failed`);

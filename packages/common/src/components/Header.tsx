@@ -13,6 +13,7 @@ import { ScopeSwitcher } from './ScopeSwitcher';
 import { UserMenu } from './UserMenu';
 import { DesktopThemeToggle } from './ThemeToggle';
 import { hasScopePermission } from '../lib/jwt';
+import { formatAppVersionBadge, getAppVersion } from '../lib/appVersion';
 import { usePlatformAdapter, useProductPolicy } from '../context';
 import { useBackHandler } from '../lib/backNavigation';
 
@@ -22,6 +23,14 @@ export const Header: React.FC<{ onOpenSidebar?: () => void }> = ({ onOpenSidebar
   const runtimeAdapter = usePlatformAdapter();
   const isDesktop = runtimeAdapter?.platformId === 'desktop';
   const isAndroid = runtimeAdapter?.platformId === 'android';
+  const platformLabel = isOfflineOnly
+    ? 'Offline Edition'
+    : isDesktop
+    ? 'Desktop App'
+    : isAndroid
+    ? 'Android App'
+    : 'Extension';
+  const versionBadge = formatAppVersionBadge(getAppVersion());
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [isEnvModalOpen, setIsEnvModalOpen] = useState(false);
   const [isModeSelectorOpen, setIsModeSelectorOpen] = useState(false);
@@ -114,17 +123,20 @@ export const Header: React.FC<{ onOpenSidebar?: () => void }> = ({ onOpenSidebar
               alt="AirREST"
               className="h-8 w-auto rounded-lg object-contain shadow-sm"
             />
-            <span
-              className={`hidden xl:inline-block rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
-                isOfflineOnly
-                  ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                  : isDesktop
-                  ? 'border-indigo-500/30 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400'
-                  : 'border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-400'
-              }`}
-            >
-              {isOfflineOnly ? 'Offline Edition' : isDesktop ? 'Desktop App' : isAndroid ? 'Android App' : 'Extension'}
-            </span>
+            {versionBadge && (
+              <span
+                title={`AirREST ${versionBadge} (${platformLabel})`}
+                className={`hidden lg:inline-block rounded-full border px-2 py-0.5 font-mono text-[10px] font-semibold tabular-nums ${
+                  isOfflineOnly
+                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                    : isDesktop
+                    ? 'border-indigo-500/30 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400'
+                    : 'border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-400'
+                }`}
+              >
+                {versionBadge}
+              </span>
+            )}
           </div>
 
           {/* Desktop Scope & Workspace Switcher (Desktop only) */}
