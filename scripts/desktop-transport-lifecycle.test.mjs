@@ -1,10 +1,31 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
+import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
 import zlib from 'node:zlib';
 import ts from 'typescript';
+
+const DESKTOP_TEST_DIR = path.dirname(new URL(import.meta.url).pathname);
+const STORE_MODULE_ROOT = path.resolve(DESKTOP_TEST_DIR, '../packages/common/src/store');
+
+function resolveLocalStoreSubmodule(id, callerRelPath, runModuleFn) {
+  if (!id.startsWith('.')) return null;
+  const callerAbs = path.resolve(DESKTOP_TEST_DIR, callerRelPath);
+  const candidateAbs = path.resolve(path.dirname(callerAbs), `${id}.ts`);
+  if (!candidateAbs.startsWith(STORE_MODULE_ROOT + path.sep)) return null;
+  const relFromStore = path.relative(STORE_MODULE_ROOT, candidateAbs).split(path.sep).join('/');
+  if (
+    relFromStore === 'storeTypes.ts' ||
+    relFromStore === 'storeHelpers.ts' ||
+    relFromStore === 'sliceContext.ts' ||
+    relFromStore.startsWith('slices/')
+  ) {
+    return runModuleFn(`../packages/common/src/store/${relFromStore}`);
+  }
+  return null;
+}
 
 // NOTE: This test harness exercises production algorithms (readResponseBody, normalizeCloudApiUrl)
 // within a Node test environment using local HTTP test servers. Native Tauri IPC and WebView capabilities
@@ -812,6 +833,8 @@ test('D3 (P2): Multi-runtime isolation with production runtime and store instanc
       if (id === 'zustand') return zustand;
       if (id === 'zustand/middleware') return zustandMiddleware;
       if (id === 'react') return React;
+      const storeSubmodule = resolveLocalStoreSubmodule(id, filePath, (p) => runModule(p, sandbox));
+      if (storeSubmodule) return storeSubmodule;
       if (id.includes('storeContext')) return runModule('../packages/common/src/store/storeContext.ts', sandbox);
       if (id.includes('asyncOperationCoordinator')) return runModule('../packages/common/src/store/asyncOperationCoordinator.ts', sandbox);
       if (id.includes('scopeCache')) return runModule('../packages/common/src/workspace/scopeCache.ts', sandbox);
@@ -1027,6 +1050,8 @@ test('V1 (P1): Cross-origin refresh isolation - separate origins do not join or 
         if (id === 'zustand') return zustand;
         if (id === 'zustand/middleware') return zustandMiddleware;
         if (id === 'react') return React;
+        const storeSubmodule = resolveLocalStoreSubmodule(id, filePath, runModule);
+        if (storeSubmodule) return storeSubmodule;
         if (id.includes('storeContext')) return runModule('../packages/common/src/store/storeContext.ts');
         if (id.includes('asyncOperationCoordinator')) return runModule('../packages/common/src/store/asyncOperationCoordinator.ts');
         if (id.includes('scopeCache')) return runModule('../packages/common/src/workspace/scopeCache.ts');
@@ -1165,6 +1190,8 @@ test('V2 (P2): Retried 401 after silent token rotation evicts the rotated token 
       if (id === 'zustand') return zustand;
       if (id === 'zustand/middleware') return zustandMiddleware;
       if (id === 'react') return React;
+      const storeSubmodule = resolveLocalStoreSubmodule(id, filePath, runModule);
+      if (storeSubmodule) return storeSubmodule;
       if (id.includes('storeContext')) return runModule('../packages/common/src/store/storeContext.ts');
       if (id.includes('asyncOperationCoordinator')) return runModule('../packages/common/src/store/asyncOperationCoordinator.ts');
       if (id.includes('scopeCache')) return runModule('../packages/common/src/workspace/scopeCache.ts');
@@ -1352,6 +1379,8 @@ test('V5 (P2): runtime.dispose() aborts in-flight request signals and prevents l
       if (id === 'zustand') return zustand;
       if (id === 'zustand/middleware') return zustandMiddleware;
       if (id === 'react') return React;
+      const storeSubmodule = resolveLocalStoreSubmodule(id, filePath, runModule);
+      if (storeSubmodule) return storeSubmodule;
       if (id.includes('storeContext')) return runModule('../packages/common/src/store/storeContext.ts');
       if (id.includes('asyncOperationCoordinator')) return runModule('../packages/common/src/store/asyncOperationCoordinator.ts');
       if (id.includes('scopeCache')) return runModule('../packages/common/src/workspace/scopeCache.ts');
@@ -1488,6 +1517,8 @@ test('R2 (P2): debounced environment cloud sync pending in transport is aborted 
       if (id === 'zustand') return zustand;
       if (id === 'zustand/middleware') return zustandMiddleware;
       if (id === 'react') return React;
+      const storeSubmodule = resolveLocalStoreSubmodule(id, filePath, runModule);
+      if (storeSubmodule) return storeSubmodule;
       if (id.includes('storeContext')) return runModule('../packages/common/src/store/storeContext.ts');
       if (id.includes('asyncOperationCoordinator')) return runModule('../packages/common/src/store/asyncOperationCoordinator.ts');
       if (id.includes('scopeCache')) return runModule('../packages/common/src/workspace/scopeCache.ts');
@@ -1633,6 +1664,8 @@ export async function setupRuntimeModules(customStorage = null) {
       if (id === 'zustand') return zustand;
       if (id === 'zustand/middleware') return zustandMiddleware;
       if (id === 'react') return React;
+      const storeSubmodule = resolveLocalStoreSubmodule(id, filePath, runModule);
+      if (storeSubmodule) return storeSubmodule;
       if (id.includes('storeContext')) return runModule('../packages/common/src/store/storeContext.ts');
       if (id.includes('asyncOperationCoordinator')) return runModule('../packages/common/src/store/asyncOperationCoordinator.ts');
       if (id.includes('scopeCache')) return runModule('../packages/common/src/workspace/scopeCache.ts');

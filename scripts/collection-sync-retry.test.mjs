@@ -8,7 +8,7 @@ test('Collection Sync & Retry: Collection interface defines _syncStatus', () => 
 });
 
 test('Collection Sync & Retry: addCollection tags pending and rethrows on cloud sync error', () => {
-  const content = fs.readFileSync(new URL('../packages/common/src/store/useApiStore.ts', import.meta.url), 'utf8');
+  const content = fs.readFileSync(new URL('../packages/common/src/store/slices/collectionCrudMoveSlice.ts', import.meta.url), 'utf8');
   
   // Verify addCollection sets pending status
   assert.match(content, /_syncStatus:\s*isCloud\s*\?\s*'pending'\s*:\s*'synced'/);
@@ -21,7 +21,7 @@ test('Collection Sync & Retry: addCollection tags pending and rethrows on cloud 
 });
 
 test('Collection Sync & Retry: replaceCollection tags pending and rethrows on cloud sync error', () => {
-  const content = fs.readFileSync(new URL('../packages/common/src/store/useApiStore.ts', import.meta.url), 'utf8');
+  const content = fs.readFileSync(new URL('../packages/common/src/store/slices/collectionCrudMoveSlice.ts', import.meta.url), 'utf8');
 
   // Verify replaceCollection sets pending status and rethrows on failure
   assert.match(
@@ -32,7 +32,7 @@ test('Collection Sync & Retry: replaceCollection tags pending and rethrows on cl
 
 test('Collection Sync & Retry: ImportModal protects pending collections with conflict checks and explicit retry tracking', () => {
   const modalContent = fs.readFileSync(new URL('../packages/common/src/components/ImportModal.tsx', import.meta.url), 'utf8');
-  const storeContent = fs.readFileSync(new URL('../packages/common/src/store/useApiStore.ts', import.meta.url), 'utf8');
+  const storeContent = fs.readFileSync(new URL('../packages/common/src/store/slices/collectionCrudMoveSlice.ts', import.meta.url), 'utf8');
 
   // Verify ImportModal tracks explicit retryCollectionId per item and checks _syncStatus === 'pending' only for explicit retry
   assert.match(modalContent, /item\.retryCollectionId/);

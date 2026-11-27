@@ -299,8 +299,12 @@ test('Folder move execution: moves folders cleanly across collections and subfol
 });
 
 test('Static contract: useApiStore exports moveFolder with RBAC and cloud sync', () => {
-  const storePath = path.resolve(rootDir, 'packages/common/src/store/useApiStore.ts');
-  const content = fs.readFileSync(storePath, 'utf-8');
+  const storeTypesPath = path.resolve(rootDir, 'packages/common/src/store/storeTypes.ts');
+  const collectionSlicePath = path.resolve(rootDir, 'packages/common/src/store/slices/collectionCrudMoveSlice.ts');
+  const content = [
+    fs.readFileSync(storeTypesPath, 'utf-8'),
+    fs.readFileSync(collectionSlicePath, 'utf-8'),
+  ].join('\n');
 
   // Must declare moveFolder in ApiStoreState
   assert.match(content, /moveFolder:\s*\([\s\S]*?sourceCollectionId:\s*string,[\s\S]*?folderId:\s*string,[\s\S]*?targetCollectionId:\s*string,[\s\S]*?targetFolderId:\s*string \| null[\s\S]*?\)\s*=>\s*Promise<{ success: boolean; error\?: string }>/);

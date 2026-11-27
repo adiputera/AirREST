@@ -1,9 +1,52 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
+import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
+
+const TAB_CACHE_TEST_DIR = path.dirname(new URL(import.meta.url).pathname);
+const TAB_CACHE_STORE_ROOT = path.resolve(TAB_CACHE_TEST_DIR, '../packages/common/src/store');
+
+function loadStoreModuleGraph(modules, globals) {
+  const cache = new Map();
+  const loadFile = (relOrAbs) => {
+    const abs = path.isAbsolute(relOrAbs) ? relOrAbs : path.resolve(TAB_CACHE_TEST_DIR, relOrAbs);
+    if (cache.has(abs)) return cache.get(abs);
+    const src = fs.readFileSync(abs, 'utf8').replaceAll('import.meta.env', '({})');
+    const out = ts.transpileModule(src, {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    const modExports = {};
+    cache.set(abs, modExports);
+    const resolveForFile = (id) => {
+      if (id.startsWith('.')) {
+        const candidate = path.resolve(path.dirname(abs), `${id}.ts`);
+        if (candidate.startsWith(TAB_CACHE_STORE_ROOT + path.sep)) {
+          const relFromStore = path.relative(TAB_CACHE_STORE_ROOT, candidate).split(path.sep).join('/');
+          if (
+            relFromStore === 'storeTypes.ts' ||
+            relFromStore === 'storeHelpers.ts' ||
+            relFromStore === 'sliceContext.ts' ||
+            relFromStore.startsWith('slices/')
+          ) {
+            return loadFile(candidate);
+          }
+        }
+      }
+      for (const [key, mod] of Object.entries(modules)) {
+        if (id === key || id.endsWith(`/${key}`) || id.endsWith(`@/lib/${key}`)) {
+          return mod;
+        }
+      }
+      return require(id);
+    };
+    vm.runInNewContext(out, { exports: modExports, require: resolveForFile, ...globals }, { filename: abs });
+    return modExports;
+  };
+  return loadFile('../packages/common/src/store/useApiStore.ts');
+}
 
 const require = createRequire(import.meta.url);
 
@@ -20,13 +63,6 @@ function loadUrlParamsModule() {
 }
 
 function loadStore({ executeApiRequest = async () => ({ status: 200, statusText: 'OK', data: '{"ok":true}', timeMs: 50, sizeBytes: 10, headers: {} }), cloudClient, storage, productPolicy, credentialStorage } = {}) {
-  const source = fs
-    .readFileSync(new URL('../packages/common/src/store/useApiStore.ts', import.meta.url), 'utf8')
-    .replaceAll('import.meta.env', '({})');
-  const compiled = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  const exports = {};
   const appStorage = storage || {
     getItem: async () => null,
     setItem: async () => { },
@@ -294,19 +330,8 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
   modules.persistence.serializeCloudCacheArchives = cachePersistence.serializeCloudCacheArchives;
   modules.persistence.normalizeCloudCacheArchives = cachePersistence.normalizeCloudCacheArchives;
 
-  const resolveModule = (id) => {
-    for (const [key, mod] of Object.entries(modules)) {
-      if (id === key || id.endsWith(`/${key}`) || id.endsWith(`@/lib/${key}`)) {
-        return mod;
-      }
-    }
-    return require(id);
-  };
-
   let uuidCounter = 0;
-  vm.runInNewContext(compiled, {
-    exports,
-    require: resolveModule,
+  const exports = loadStoreModuleGraph(modules, {
     console,
     crypto: { randomUUID: () => `uuid-${++uuidCounter}` },
     Date,
@@ -320,7 +345,7 @@ function loadStore({ executeApiRequest = async () => ({ status: 200, statusText:
     URLSearchParams,
     TextEncoder,
     TextDecoder,
-  }, { filename: 'packages/common/src/store/useApiStore.ts' });
+  });
 
   return cloudClient || productPolicy || credentialStorage
     ? exports.createApiStore({ storage: appStorage, cloudClient, credentialStorage, productPolicy: productPolicy || { edition: 'full', workspace: { cloud: true, offline: true } } })
@@ -1334,13 +1359,6 @@ function loadStoreWithRealBlobManager({ executeApiRequest, productPolicy } = {})
     Uint8Array,
   }, { filename: 'packages/common/src/lib/blobManager.ts' });
 
-  const source = fs
-    .readFileSync(new URL('../packages/common/src/store/useApiStore.ts', import.meta.url), 'utf8')
-    .replaceAll('import.meta.env', '({})');
-  const compiled = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  const exports = {};
   const noop = () => { };
   const appStorage = { getItem: async () => null, setItem: async () => { }, removeItem: async () => { } };
   const modules = {
@@ -1475,18 +1493,11 @@ function loadStoreWithRealBlobManager({ executeApiRequest, productPolicy } = {})
   modules.persistence.normalizeCloudCacheArchives = cachePersistence.normalizeCloudCacheArchives;
 
   let uuid = 0;
-  vm.runInNewContext(compiled, {
-    exports,
-    require: (id) => {
-      for (const [k, m] of Object.entries(modules)) {
-        if (id === k || id.endsWith(`/${k}`) || id.endsWith(`@/lib/${k}`)) return m;
-      }
-      return require(id);
-    },
+  const exports = loadStoreModuleGraph(modules, {
     console,
     crypto: { randomUUID: () => `uuid-${++uuid}` },
     Date, JSON, Math, Promise, AbortController, setTimeout, clearTimeout, URL, URLSearchParams, TextEncoder, TextDecoder,
-  }, { filename: 'packages/common/src/store/useApiStore.ts' });
+  });
 
   const store = exports.createApiStore({
     storage: appStorage,

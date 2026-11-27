@@ -232,14 +232,20 @@ test('native credential scopes require both deployment and signed-in identity', 
 });
 
 test('native platforms redact cloud tokens from shared persistence while extensions retain their current storage', () => {
-  const source = fs.readFileSync(new URL('../packages/common/src/store/useApiStore.ts', import.meta.url), 'utf8');
+  const source = [
+    fs.readFileSync(new URL('../packages/common/src/store/useApiStore.ts', import.meta.url), 'utf8'),
+    fs.readFileSync(new URL('../packages/common/src/store/slices/cloudAuthWorkspaceSlice.ts', import.meta.url), 'utf8'),
+  ].join('\n');
   assert.match(source, /const persistCloudCredentials = credentialStorage === undefined/);
   assert.match(source, /token: undefined,[\s\S]*refreshToken: undefined,[\s\S]*tokenExpiresAt: undefined/);
   assert.match(source, /setCloudSession: async/);
 });
 
 test('native migration retains a public identity, retries cleanup, and requires both legacy copies', () => {
-  const store = fs.readFileSync(new URL('../packages/common/src/store/useApiStore.ts', import.meta.url), 'utf8');
+  const store = [
+    fs.readFileSync(new URL('../packages/common/src/store/useApiStore.ts', import.meta.url), 'utf8'),
+    fs.readFileSync(new URL('../packages/common/src/store/slices/cloudAuthWorkspaceSlice.ts', import.meta.url), 'utf8'),
+  ].join('\n');
   const storage = fs.readFileSync(new URL('../packages/common/src/lib/storage.ts', import.meta.url), 'utf8');
   const runtime = fs.readFileSync(new URL('../packages/common/src/runtime.ts', import.meta.url), 'utf8');
 
@@ -279,7 +285,7 @@ test('the native shell waits for credential recovery before exposing the applica
 test('both UserMenu and ScopeSwitcher route sign-out through the unified credential-clearing action', () => {
   const userMenu = fs.readFileSync(new URL('../packages/common/src/components/UserMenu.tsx', import.meta.url), 'utf8');
   const scopeSwitcher = fs.readFileSync(new URL('../packages/common/src/components/ScopeSwitcher.tsx', import.meta.url), 'utf8');
-  const store = fs.readFileSync(new URL('../packages/common/src/store/useApiStore.ts', import.meta.url), 'utf8');
+  const store = fs.readFileSync(new URL('../packages/common/src/store/slices/cloudAuthWorkspaceSlice.ts', import.meta.url), 'utf8');
 
   assert.match(userMenu, /signOutCloud/);
   assert.match(scopeSwitcher, /signOutCloud/);

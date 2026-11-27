@@ -1,15 +1,21 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
+import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
 
+const AUTH_TEST_DIR = path.dirname(new URL(import.meta.url).pathname);
+const AUTH_STORE_ROOT = path.resolve(AUTH_TEST_DIR, '../packages/common/src/store');
+
 const require = createRequire(import.meta.url);
 
-function transpileRun(relativePath, resolveModule, extraGlobals = {}) {
-  const fileUrl = new URL(relativePath, import.meta.url);
-  const source = fs.readFileSync(fileUrl, 'utf8').replaceAll('import.meta.env', '({})');
+function transpileRun(relativePathOrAbs, resolveModule, extraGlobals = {}) {
+  const absPath = path.isAbsolute(relativePathOrAbs)
+    ? relativePathOrAbs
+    : new URL(relativePathOrAbs, import.meta.url).pathname;
+  const source = fs.readFileSync(absPath, 'utf8').replaceAll('import.meta.env', '({})');
   const compiled = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
   }).outputText;
@@ -18,7 +24,7 @@ function transpileRun(relativePath, resolveModule, extraGlobals = {}) {
     compiled,
     {
       exports,
-      require: resolveModule,
+      require: (id) => resolveModule(id, absPath),
       console,
       setTimeout,
       clearTimeout,
@@ -46,7 +52,7 @@ function transpileRun(relativePath, resolveModule, extraGlobals = {}) {
       JSON,
       ...extraGlobals,
     },
-    { filename: fileUrl.pathname }
+    { filename: absPath }
   );
   return exports;
 }
@@ -212,7 +218,25 @@ function setupStoreHarness({ fetchImpl, preScriptImpl }) {
     storeContext: { StoreContext: {} },
   };
 
-  const resolveModule = (id) => {
+  const storeSubmoduleCache = new Map();
+  const resolveModule = (id, callerAbsPath) => {
+    if (id.startsWith('.') && callerAbsPath) {
+      const cand = path.resolve(path.dirname(callerAbsPath), `${id}.ts`);
+      if (cand.startsWith(AUTH_STORE_ROOT + path.sep)) {
+        const relFromStore = path.relative(AUTH_STORE_ROOT, cand).split(path.sep).join('/');
+        if (
+          relFromStore === 'storeTypes.ts' ||
+          relFromStore === 'storeHelpers.ts' ||
+          relFromStore === 'sliceContext.ts' ||
+          relFromStore.startsWith('slices/')
+        ) {
+          if (!storeSubmoduleCache.has(cand)) {
+            storeSubmoduleCache.set(cand, transpileRun(cand, resolveModule));
+          }
+          return storeSubmoduleCache.get(cand);
+        }
+      }
+    }
     if (id === 'zustand' || id === 'zustand/middleware' || id === 'react') {
       return require(id);
     }

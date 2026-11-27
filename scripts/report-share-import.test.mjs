@@ -502,7 +502,7 @@ test('parseImportBatchFiles handles mixed Postman + report files cleanly regardl
 });
 
 test('UI & store contracts for report share, import modal ordering, session banner, and tab cleanup', () => {
-  const storeSrc = fs.readFileSync(path.join(ROOT, 'packages/common/src/store/useApiStore.ts'), 'utf8');
+  const storeSrc = fs.readFileSync(path.join(ROOT, 'packages/common/src/store/slices/examplesAndPerformanceSlice.ts'), 'utf8');
   const appSrc = fs.readFileSync(path.join(ROOT, 'packages/common/src/App.tsx'), 'utf8');
   const importModalSrc = fs.readFileSync(path.join(ROOT, 'packages/common/src/components/ImportModal.tsx'), 'utf8');
   const tabViewSrc = fs.readFileSync(

@@ -55,8 +55,16 @@ test('PayloadBuilder two-way sync and modal marker verification', () => {
 
 test('useApiStore undo/redo state and mutation tracking contract', () => {
   const storePath = path.resolve(__dirname, '../packages/common/src/store/useApiStore.ts');
+  const storeTypesPath = path.resolve(__dirname, '../packages/common/src/store/storeTypes.ts');
+  const requestTabsSlicePath = path.resolve(__dirname, '../packages/common/src/store/slices/requestTabsSlice.ts');
   assert.ok(fs.existsSync(storePath), `File exists: ${storePath}`);
-  const content = fs.readFileSync(storePath, 'utf-8');
+  assert.ok(fs.existsSync(storeTypesPath), `File exists: ${storeTypesPath}`);
+  assert.ok(fs.existsSync(requestTabsSlicePath), `File exists: ${requestTabsSlicePath}`);
+  const content = [
+    fs.readFileSync(storeTypesPath, 'utf-8'),
+    fs.readFileSync(storePath, 'utf-8'),
+    fs.readFileSync(requestTabsSlicePath, 'utf-8'),
+  ].join('\n');
 
   // 1. ApiStoreState defines canUndoActiveRequest, canRedoActiveRequest, undoActiveRequest, redoActiveRequest
   assert.ok(content.includes('canUndoActiveRequest: boolean;'), 'ApiStoreState defines canUndoActiveRequest');

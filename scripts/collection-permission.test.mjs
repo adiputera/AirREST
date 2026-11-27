@@ -49,7 +49,7 @@ test('Collection Permission: Sidebar integrates Permission option in 3-dots menu
 
 test('Collection Permission: store and cloudApi support updating min_role', () => {
   for (const filePath of [
-    'packages/common/src/store/useApiStore.ts',
+    'packages/common/src/store/slices/collectionCrudMoveSlice.ts',
   ]) {
     const content = fs.readFileSync(new URL(`../${filePath}`, import.meta.url), 'utf8');
     assert.match(content, /updateCollectionPermission:\s*async\s*\(collectionId,\s*minRole\)/);

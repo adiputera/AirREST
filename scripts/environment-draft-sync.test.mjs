@@ -55,8 +55,8 @@ test('Environment Modal: Draft state management and inline save/cancel controls'
 });
 
 test('useApiStore: scheduleEnvironmentCloudSync debounce and in-flight concurrency protection', () => {
-  const storePath = path.resolve(__dirname, '../packages/common/src/store/useApiStore.ts');
-  assert.ok(fs.existsSync(storePath), `useApiStore exists at ${storePath}`);
+  const storePath = path.resolve(__dirname, '../packages/common/src/store/slices/environmentSlice.ts');
+  assert.ok(fs.existsSync(storePath), `environmentSlice exists at ${storePath}`);
   const content = fs.readFileSync(storePath, 'utf-8');
 
   // 1. Must define in-flight and queued tracking dictionaries

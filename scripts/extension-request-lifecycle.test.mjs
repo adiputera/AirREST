@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
+import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
@@ -8,13 +9,6 @@ import ts from 'typescript';
 const require = createRequire(import.meta.url);
 
 function loadStore({ executePreRequestScript, executeApiRequest, cloudApi = {}, isOfflineOnly = true }) {
-  const source = fs
-    .readFileSync(new URL('../packages/common/src/store/useApiStore.ts', import.meta.url), 'utf8')
-    .replaceAll('import.meta.env', '({})');
-  const compiled = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  const exports = {};
   const appStorage = {
     getItem: async () => null,
     setItem: async () => {},
@@ -331,34 +325,62 @@ function loadStore({ executePreRequestScript, executeApiRequest, cloudApi = {}, 
   modules.persistence.serializeCloudCacheArchives = cachePersistence.serializeCloudCacheArchives;
   modules.persistence.normalizeCloudCacheArchives = cachePersistence.normalizeCloudCacheArchives;
 
-  const resolveModule = (id) => {
-    for (const [key, mod] of Object.entries(modules)) {
-      if (id === key || id.endsWith(`/${key}`) || id.endsWith(`@/lib/${key}`)) {
-        return mod;
+  const testDir = path.dirname(new URL(import.meta.url).pathname);
+  const storeRoot = path.resolve(testDir, '../packages/common/src/store');
+  const compiledCache = new Map();
+
+  const loadStoreFile = (relOrAbs) => {
+    const abs = path.isAbsolute(relOrAbs) ? relOrAbs : path.resolve(testDir, relOrAbs);
+    if (compiledCache.has(abs)) return compiledCache.get(abs);
+    const fileSrc = fs.readFileSync(abs, 'utf8').replaceAll('import.meta.env', '({})');
+    const fileOut = ts.transpileModule(fileSrc, {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    const modExports = {};
+    compiledCache.set(abs, modExports);
+    const resolveForFile = (id) => {
+      if (id.startsWith('.')) {
+        const cand = path.resolve(path.dirname(abs), `${id}.ts`);
+        if (cand.startsWith(storeRoot + path.sep)) {
+          const relFromStore = path.relative(storeRoot, cand).split(path.sep).join('/');
+          if (
+            relFromStore === 'storeTypes.ts' ||
+            relFromStore === 'storeHelpers.ts' ||
+            relFromStore === 'sliceContext.ts' ||
+            relFromStore.startsWith('slices/')
+          ) {
+            return loadStoreFile(cand);
+          }
+        }
       }
-    }
-    return require(id);
+      for (const [key, mod] of Object.entries(modules)) {
+        if (id === key || id.endsWith(`/${key}`) || id.endsWith(`@/lib/${key}`)) {
+          return mod;
+        }
+      }
+      return require(id);
+    };
+    vm.runInNewContext(fileOut, {
+      exports: modExports,
+      require: resolveForFile,
+      console,
+      crypto: { randomUUID: () => 'test-id' },
+      Date,
+      JSON,
+      Math,
+      Promise,
+      AbortController,
+      setTimeout,
+      clearTimeout,
+      URL,
+      URLSearchParams,
+      TextEncoder,
+      TextDecoder,
+    }, { filename: abs });
+    return modExports;
   };
 
-  vm.runInNewContext(compiled, {
-    exports,
-    require: resolveModule,
-    console,
-    crypto: { randomUUID: () => 'test-id' },
-    Date,
-    JSON,
-    Math,
-    Promise,
-    AbortController,
-    setTimeout,
-    clearTimeout,
-    URL,
-    URLSearchParams,
-    TextEncoder,
-    TextDecoder,
-  }, { filename: 'packages/common/src/store/useApiStore.ts' });
-
-  return exports.useApiStore;
+  return loadStoreFile('../packages/common/src/store/useApiStore.ts').useApiStore;
 }
 
 function configureRequest(store) {

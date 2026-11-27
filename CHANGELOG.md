@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.6.1] - 2026-11-28
+
+### Changed
+- **Modular Zustand Store Architecture (`packages/common/src/store/`)**:
+  - Split the monolithic `useApiStore.ts` (`525.8 KB` / `11,769` lines) into cohesive, type-safe modules—[storeTypes.ts](packages/common/src/store/storeTypes.ts), [storeHelpers.ts](packages/common/src/store/storeHelpers.ts), [sliceContext.ts](packages/common/src/store/sliceContext.ts), [environmentSlice.ts](packages/common/src/store/slices/environmentSlice.ts), [requestTabsSlice.ts](packages/common/src/store/slices/requestTabsSlice.ts), [examplesAndPerformanceSlice.ts](packages/common/src/store/slices/examplesAndPerformanceSlice.ts), [collectionCrudMoveSlice.ts](packages/common/src/store/slices/collectionCrudMoveSlice.ts), [duplicateSlice.ts](packages/common/src/store/slices/duplicateSlice.ts), and [cloudAuthWorkspaceSlice.ts](packages/common/src/store/slices/cloudAuthWorkspaceSlice.ts)—reducing `useApiStore.ts` to a ~45 KB orchestrator while preserving full public API exports, per-store instance isolation, and zero runtime behavioral changes.
+  - Updated VM test loaders and static contract assertions (`desktop-transport-lifecycle.test.mjs`, `tab-response-cache.test.mjs`, `extension-request-lifecycle.test.mjs`, `auth-header-state.test.mjs`, `collection-sync-retry.test.mjs`, `native-credential-storage.test.mjs`, `request-undo.test.mjs`, `move-folder.test.mjs`, `environment-draft-sync.test.mjs`, `collection-permission.test.mjs`, `report-share-import.test.mjs`) to resolve and verify the modular slice layout.
+- **Unified Version (`1.6.1`)**: Bumped unified version manifests (`package.json`, `package-lock.json`, `apps/extension`, `apps/hub`, `apps/native`, `@airrest/common`, `Cargo.toml`, Android `tauri.properties`, `README.md`, and `postman.ts`) to `1.6.1`.
+
 ## [1.6.0] - 2026-11-27
 
 ### Added
