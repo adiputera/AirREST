@@ -167,6 +167,21 @@ fn build_macos_menu<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>) -> taur
     )
 }
 
+#[cfg(desktop)]
+fn register_app_invoke_handler(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
+    builder.invoke_handler(tauri::generate_handler![
+        perf_runner::start_performance_run,
+        perf_runner::stop_performance_run,
+        perf_runner::update_performance_variables,
+        perf_runner::check_performance_capacity,
+    ])
+}
+
+#[cfg(not(desktop))]
+fn register_app_invoke_handler(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
+    builder.invoke_handler(tauri::generate_handler![])
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -243,24 +258,18 @@ pub fn run() {
             )
             .plugin(tauri_plugin_process::init())
             .plugin(updater_builder.build())
-            .invoke_handler(tauri::generate_handler![
-                perf_runner::start_performance_run,
-                perf_runner::stop_performance_run,
-                perf_runner::update_performance_variables,
-                perf_runner::check_performance_capacity,
-            ])
     };
 
-    let builder = builder
-        .setup(|app| {
-            use tauri::Manager as _;
-            // NAT-03: Remove any legacy unencrypted tauri-plugin-http cookie jar file from prior versions.
-            if let Ok(cache_dir) = app.path().app_cache_dir() {
-                let _ = std::fs::remove_file(cache_dir.join(".cookies"));
-            }
-            Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![]);
+    let builder = builder.setup(|app| {
+        use tauri::Manager as _;
+        // NAT-03: Remove any legacy unencrypted tauri-plugin-http cookie jar file from prior versions.
+        if let Ok(cache_dir) = app.path().app_cache_dir() {
+            let _ = std::fs::remove_file(cache_dir.join(".cookies"));
+        }
+        Ok(())
+    });
+
+    let builder = register_app_invoke_handler(builder);
 
     builder
         .run(tauri::generate_context!())

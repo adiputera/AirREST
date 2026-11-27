@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.6.2] - 2026-11-28
+
+### Fixed
+- **Desktop Native Performance Runner Command Registration (`apps/native/src-tauri/src/lib.rs`)**: Fixed `performance run failed: command start_performance_run not found` on Desktop by removing the trailing `.invoke_handler(tauri::generate_handler![])` call in `run()` that overwrote the `#[cfg(desktop)]` command handler (`start_performance_run`, `stop_performance_run`, `update_performance_variables`, `check_performance_capacity`), replacing it with a single mutually exclusive `register_app_invoke_handler(builder)` call prior to `.run(...)`, and adding a cross-layer contract regression test in `scripts/performance-testing.test.mjs`.
+- **Unified Version (`1.6.2`)**: Bumped unified version manifests (`package.json`, `package-lock.json`, `apps/extension`, `apps/hub`, `apps/native`, `@airrest/common`, `Cargo.toml`, Android `tauri.properties`, `README.md`, and `postman.ts`) to `1.6.2`.
+
 ## [1.6.1] - 2026-11-28
 
 ### Changed

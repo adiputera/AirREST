@@ -1522,3 +1522,61 @@ test('RUN-04: parseImportedPerformanceReport normalizes malformed errorGroups el
     requestIds: ['req-a'],
   });
 });
+
+test('desktop Tauri performance commands stay registered without invoke_handler overwrite', () => {
+  const libRs = fs.readFileSync(path.join(ROOT, 'apps/native/src-tauri/src/lib.rs'), 'utf8');
+  const buildRs = fs.readFileSync(path.join(ROOT, 'apps/native/src-tauri/build.rs'), 'utf8');
+  const tauriAdapter = fs.readFileSync(path.join(ROOT, 'apps/native/src/adapters/tauriAdapter.ts'), 'utf8');
+  const desktopCapabilities = JSON.parse(
+    fs.readFileSync(path.join(ROOT, 'apps/native/src-tauri/capabilities/desktop.json'), 'utf8'),
+  );
+
+  const commands = [
+    'start_performance_run',
+    'stop_performance_run',
+    'update_performance_variables',
+    'check_performance_capacity',
+  ];
+
+  const desktopHandlerMatch = libRs.match(
+    /#\[cfg\(desktop\)\]\s*fn register_app_invoke_handler[\s\S]*?tauri::generate_handler!\[([\s\S]*?)\]/,
+  );
+  assert.ok(desktopHandlerMatch, 'lib.rs must define #[cfg(desktop)] register_app_invoke_handler');
+
+  const notDesktopHandlerMatch = libRs.match(
+    /#\[cfg\(not\(desktop\)\)\]\s*fn register_app_invoke_handler[\s\S]*?tauri::generate_handler!\[\]/,
+  );
+  assert.ok(notDesktopHandlerMatch, 'lib.rs must define #[cfg(not(desktop))] register_app_invoke_handler');
+
+  const runBodyStart = libRs.indexOf('pub fn run()');
+  assert.notEqual(runBodyStart, -1, 'lib.rs must define pub fn run()');
+  const runBody = libRs.slice(runBodyStart);
+
+  assert.match(runBody, /register_app_invoke_handler\(builder\)/);
+  assert.doesNotMatch(
+    runBody,
+    /\.invoke_handler\(\s*tauri::generate_handler!\[\s*\]\s*\)/,
+    'run() must not overwrite the desktop invoke_handler with an empty generate_handler![]',
+  );
+
+  const registerCallIdx = runBody.indexOf('register_app_invoke_handler(builder)');
+  assert.doesNotMatch(
+    runBody.slice(registerCallIdx),
+    /\.invoke_handler\(/,
+    'no .invoke_handler() call may follow register_app_invoke_handler(builder)',
+  );
+
+  for (const cmd of commands) {
+    assert.ok(
+      desktopHandlerMatch[1].includes(`perf_runner::${cmd}`),
+      `desktop register_app_invoke_handler missing perf_runner::${cmd}`,
+    );
+    assert.ok(buildRs.includes(`"${cmd}"`), `build.rs AppManifest missing "${cmd}"`);
+    assert.ok(tauriAdapter.includes(`'${cmd}'`), `tauriAdapter.ts missing '${cmd}' invocation`);
+    const perm = `allow-${cmd.replaceAll('_', '-')}`;
+    assert.ok(
+      desktopCapabilities.permissions.includes(perm),
+      `capabilities/desktop.json missing permission "${perm}"`,
+    );
+  }
+});
