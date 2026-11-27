@@ -206,7 +206,12 @@ func (r *CollectionRepository) PatchItemExamples(
 			return &item, mutateErr
 		}
 
-		now := time.Now().UTC()
+		var now time.Time
+		if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+			tx.Rollback(ctx)
+			return nil, fmt.Errorf("failed to read database timestamp: %w", err)
+		}
+		now = now.UTC()
 		if _, err := tx.Exec(ctx, `
 			UPDATE collections
 			SET updated_at = $1, last_modified_by = $2, version = version + 1
@@ -400,6 +405,57 @@ func (r *CollectionRepository) ReplaceCollectionAtomic(
 		return nil, ErrVersionConflict
 	}
 
+	incomingIDStrings := make([]string, 0, len(flatItems))
+	usedIDs := make(map[uuid.UUID]struct{}, len(flatItems))
+	for _, it := range flatItems {
+		incomingIDStrings = append(incomingIDStrings, it.ID.String())
+		usedIDs[it.ID] = struct{}{}
+	}
+	if len(incomingIDStrings) > 0 {
+		collisionRows, err := tx.Query(ctx, `
+			SELECT id, collection_id
+			FROM collection_items
+			WHERE id = ANY($1::text[]::uuid[])
+		`, incomingIDStrings)
+		if err != nil {
+			return nil, fmt.Errorf("failed to inspect replace item IDs: %w", err)
+		}
+		remap := make(map[uuid.UUID]uuid.UUID)
+		for collisionRows.Next() {
+			var existingID, existingColID uuid.UUID
+			if err := collisionRows.Scan(&existingID, &existingColID); err != nil {
+				collisionRows.Close()
+				return nil, fmt.Errorf("failed to scan replace item collision: %w", err)
+			}
+			if existingColID != collectionID {
+				newID := uuid.New()
+				for _, used := usedIDs[newID]; used; _, used = usedIDs[newID] {
+					newID = uuid.New()
+				}
+				usedIDs[newID] = struct{}{}
+				remap[existingID] = newID
+			}
+		}
+		if err := collisionRows.Err(); err != nil {
+			collisionRows.Close()
+			return nil, err
+		}
+		collisionRows.Close()
+		if len(remap) > 0 {
+			for i := range flatItems {
+				if nextID, ok := remap[flatItems[i].ID]; ok {
+					flatItems[i].ID = nextID
+				}
+				if flatItems[i].ParentID != nil {
+					if nextParentID, ok := remap[*flatItems[i].ParentID]; ok {
+						pid := nextParentID
+						flatItems[i].ParentID = &pid
+					}
+				}
+			}
+		}
+	}
+
 	incomingSet := make(map[uuid.UUID]struct{}, len(flatItems))
 	for _, it := range flatItems {
 		incomingSet[it.ID] = struct{}{}
@@ -432,7 +488,11 @@ func (r *CollectionRepository) ReplaceCollectionAtomic(
 	}
 	existingRows.Close()
 
-	now := time.Now().UTC()
+	var now time.Time
+	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		return nil, err
+	}
+	now = now.UTC()
 	if len(toDelete) > 0 {
 		if _, err := tx.Exec(ctx, `
 			UPDATE collection_items

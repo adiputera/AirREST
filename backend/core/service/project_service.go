@@ -37,13 +37,13 @@ func (s *ProjectService) CreateProject(ctx context.Context, user *domain.User, t
 	}
 
 	name = strings.TrimSpace(name)
-	if name == "" {
-		return nil, errors.New("project name is required")
+	if err := ValidateName(name); err != nil {
+		return nil, err
 	}
 
 	var desc *string
-	if description != "" {
-		desc = &description
+	if trimmedDesc := strings.TrimSpace(description); trimmedDesc != "" {
+		desc = &trimmedDesc
 	}
 
 	project := &domain.Project{
@@ -54,22 +54,13 @@ func (s *ProjectService) CreateProject(ctx context.Context, user *domain.User, t
 		CreatedBy:   user.ID,
 	}
 
-	if err := s.projectRepo.Create(ctx, project); err != nil {
+	if err := s.projectRepo.CreateWithAdmin(ctx, project, user.ID); err != nil {
 		return nil, err
 	}
 
-	// Add creator as Project Admin
 	role := domain.ProjectRoleAdmin
 	project.UserRole = &role
 	project.Permissions = domain.GetPermissionsForRole(role)
-
-	_ = s.projectRepo.AddMember(ctx, &domain.ProjectMember{
-		ID:          uuid.New(),
-		ProjectID:   project.ID,
-		UserID:      user.ID,
-		Role:        domain.ProjectRoleAdmin,
-		Permissions: domain.GetPermissionsForRole(domain.ProjectRoleAdmin),
-	})
 
 	return project, nil
 }
@@ -113,12 +104,12 @@ func (s *ProjectService) UpdateProject(ctx context.Context, user *domain.User, p
 	}
 
 	if role != domain.ProjectRoleAdmin {
-		return nil, errors.New("admin access required to update project")
+		return nil, fmt.Errorf("%w: admin access required to update project", ErrForbidden)
 	}
 
 	name = strings.TrimSpace(name)
-	if name == "" {
-		return nil, errors.New("project name is required")
+	if err := ValidateName(name); err != nil {
+		return nil, err
 	}
 	project.Name = name
 
@@ -145,7 +136,7 @@ func (s *ProjectService) DeleteProject(ctx context.Context, user *domain.User, p
 	}
 
 	if role != domain.ProjectRoleAdmin {
-		return errors.New("admin access required to delete project")
+		return fmt.Errorf("%w: admin access required to delete project", ErrForbidden)
 	}
 
 	return s.projectRepo.Delete(ctx, projectID)
@@ -159,18 +150,29 @@ func (s *ProjectService) AddProjectMember(ctx context.Context, user *domain.User
 	}
 
 	if effectiveRole != domain.ProjectRoleAdmin {
-		return errors.New("admin access required to assign project members")
+		return fmt.Errorf("%w: admin access required to assign project members", ErrForbidden)
+	}
+
+	switch role {
+	case domain.ProjectRoleAdmin, domain.ProjectRoleMaintainer, domain.ProjectRoleContributor, domain.ProjectRoleReader:
+	default:
+		return newValidationError("role", "invalid project role, must be admin, maintainer, contributor, or reader")
 	}
 
 	// Ensure target user is already a member of the team
-	_, err = s.teamRepo.GetMember(ctx, project.TeamID, targetUserID)
-	if err != nil && !user.IsSuperadmin() {
-		return fmt.Errorf("user must be a member of the team before assignment to project: %w", err)
+	if _, err := s.teamRepo.GetMember(ctx, project.TeamID, targetUserID); err != nil && !user.IsSuperadmin() {
+		if errors.Is(err, postgres.ErrTeamMemberNotFound) {
+			return newValidationError("user_id", "user must be a member of the team before assignment to project")
+		}
+		return fmt.Errorf("failed to verify team membership: %w", err)
 	}
 
 	targetUser, err := s.teamService.GetUserByID(ctx, targetUserID)
-	if err == nil && targetUser.IsSuperadmin() {
-		return errors.New("cannot modify superadmin role in project")
+	if err != nil {
+		return err
+	}
+	if targetUser.IsSuperadmin() {
+		return fmt.Errorf("%w: cannot modify superadmin role in project", ErrForbidden)
 	}
 
 	return s.projectRepo.AddMember(ctx, &domain.ProjectMember{
@@ -188,12 +190,12 @@ func (s *ProjectService) RemoveProjectMember(ctx context.Context, user *domain.U
 	}
 
 	if effectiveRole != domain.ProjectRoleAdmin {
-		return errors.New("admin access required to remove project members")
+		return fmt.Errorf("%w: admin access required to remove project members", ErrForbidden)
 	}
 
 	targetUser, err := s.teamService.GetUserByID(ctx, targetUserID)
 	if err == nil && targetUser.IsSuperadmin() {
-		return errors.New("cannot remove superadmin from project")
+		return fmt.Errorf("%w: cannot remove superadmin from project", ErrForbidden)
 	}
 
 	return s.projectRepo.RemoveMember(ctx, projectID, targetUserID)

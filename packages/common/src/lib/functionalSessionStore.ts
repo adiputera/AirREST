@@ -15,6 +15,7 @@ interface RunCaptureBucket {
 interface RunEnvSnapshotEntry {
   tabId: string;
   env: Record<string, string>;
+  vars: Record<string, string>;
 }
 
 const sessionCaptures = new Map<string, RunCaptureBucket>();
@@ -122,15 +123,23 @@ export function getFunctionalSessionStats(runId: string): {
 export function saveFunctionalRunEnvSnapshot(
   runId: string,
   tabId: string,
-  env: Record<string, string>
+  env: Record<string, string>,
+  vars: Record<string, string> = {}
 ): void {
   if (!runId) return;
-  sessionEnvSnapshots.set(runId, { tabId, env: { ...env } });
+  sessionEnvSnapshots.set(runId, { tabId, env: { ...env }, vars: { ...vars } });
 }
 
 export function getFunctionalRunEnvSnapshot(runId: string): Record<string, string> | undefined {
   const entry = sessionEnvSnapshots.get(runId);
   return entry ? { ...entry.env } : undefined;
+}
+
+export function getFunctionalRunVariablesSnapshot(
+  runId: string
+): { env: Record<string, string>; vars: Record<string, string> } | undefined {
+  const entry = sessionEnvSnapshots.get(runId);
+  return entry ? { env: { ...entry.env }, vars: { ...entry.vars } } : undefined;
 }
 
 export function clearFunctionalSessionForTab(tabId: string): void {

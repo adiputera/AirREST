@@ -40,6 +40,8 @@ import {
   getDefaultPlatformAdapter,
   interpolateVariables,
   prepareRequest,
+  RESPONSE_SIZE_LIMIT_BYTES,
+  ResponseTooLargeError,
 } from './fetcher';
 import {
   clampPerformanceTimeoutMs,
@@ -123,6 +125,19 @@ async function readAndDiscardOrSample(
     return { sizeBytes: 0, textData: '' };
   }
 
+  const declaredSize = Number.parseInt(response.headers.get('content-length') || '', 10);
+  if (Number.isFinite(declaredSize) && declaredSize > RESPONSE_SIZE_LIMIT_BYTES) {
+    controller.abort();
+    if (response.body) {
+      try {
+        await response.body.cancel();
+      } catch {
+        // ignore cancel failure
+      }
+    }
+    throw new ResponseTooLargeError();
+  }
+
   if (!response.body) {
     return { sizeBytes: 0, textData: '' };
   }
@@ -142,6 +157,15 @@ async function readAndDiscardOrSample(
       const { done, value } = await reader.read();
       if (done) break;
       if (!value) continue;
+      if (totalBytes + value.byteLength > RESPONSE_SIZE_LIMIT_BYTES) {
+        controller.abort();
+        try {
+          await reader.cancel();
+        } catch {
+          // ignore secondary cancel failure
+        }
+        throw new ResponseTooLargeError();
+      }
       totalBytes += value.byteLength;
       if (maxRetainBytes > 0 && retainedTotal < maxRetainBytes) {
         const remaining = maxRetainBytes - retainedTotal;
@@ -341,6 +365,21 @@ export async function executePerfHttpStep(
     const preparedExtra = capturePrepared
       ? { requestHeaders: capturedHeaders, requestBody: capturedBody }
       : {};
+    if (err instanceof ResponseTooLargeError) {
+      return {
+        status: 0,
+        statusText: 'Response Too Large',
+        timeMs,
+        sizeBytes: 0,
+        headers: {},
+        data: '',
+        isError: true,
+        errorCategory: 'response_size_limit',
+        errorMessage: err.message,
+        finalUrl,
+        ...preparedExtra,
+      };
+    }
     if (controller.signal.aborted) {
       return {
         status: 0,
@@ -418,7 +457,7 @@ export async function executePreRunSetup(
     network: PerformanceNetworkOptions;
   }
 ): Promise<ExecutePreRunSetupResult> {
-  const envVars: Record<string, string> = { ...initialVariables };
+  let envVars: Record<string, string> = { ...initialVariables };
   let localVars: Record<string, string> = {};
   const setupResults: PerformanceSetupStepResult[] = [];
 
@@ -443,8 +482,8 @@ export async function executePreRunSetup(
         scriptExecutor: options.scriptExecutor,
         request: toScriptRequest(reqToRun),
       });
-      Object.assign(envVars, preRes.environment);
-      localVars = { ...localVars, ...preRes.variables };
+      envVars = { ...preRes.environment };
+      localVars = { ...preRes.variables };
       if (!preRes.success) {
         setupResults.push({
           requestId: item.id,
@@ -512,8 +551,8 @@ export async function executePreRunSetup(
         scriptExecutor: options.scriptExecutor,
         request: toScriptRequest(reqToRun),
       });
-      Object.assign(envVars, postRes.environment);
-      localVars = { ...localVars, ...postRes.variables };
+      envVars = { ...postRes.environment };
+      localVars = { ...postRes.variables };
       if (!postRes.success) {
         setupResults.push({
           requestId: item.id,
@@ -1067,7 +1106,7 @@ export async function startPerformanceTest(params: StartPerformanceRunParams): P
       let autoAbortMeta: { ruleId: string; reason: string } | undefined;
       let unauthorizedSeen = 0;
       let isRefreshingSetup = false;
-      let lastRefreshAttemptAt = 0;
+      let last401RefreshAttemptAt = 0;
       const refreshStats: PerformanceSetupRefreshStats = {
         attempts: 0,
         successes: 0,
@@ -1095,9 +1134,11 @@ export async function startPerformanceTest(params: StartPerformanceRunParams): P
           return;
         }
         const now = Date.now();
-        if (trigger === 'http_401' && now - lastRefreshAttemptAt < refreshCooldownMs) return;
+        if (trigger === 'http_401' && now - last401RefreshAttemptAt < refreshCooldownMs) return;
         isRefreshingSetup = true;
-        lastRefreshAttemptAt = now;
+        if (trigger === 'http_401') {
+          last401RefreshAttemptAt = now;
+        }
         refreshStats.attempts += 1;
 
         try {
@@ -1109,6 +1150,7 @@ export async function startPerformanceTest(params: StartPerformanceRunParams): P
           });
           if (outcome.success) {
             consecutiveRefreshFailures = 0;
+            last401RefreshAttemptAt = Date.now();
             runVariables = outcome.variables;
             sharedBaseVarsRef.current = { ...outcome.variables };
             sharedBaseVarsRef.version += 1;
@@ -1498,14 +1540,14 @@ async function runJsPerformanceEngine(params: {
     const vuIndex = nextVuIndex++;
     const promise = (async () => {
       // Isolated per-VU variable state cloned from run snapshot
-      const vuEnv: Record<string, string> = { ...sharedBaseVarsRef.current };
+      let vuEnv: Record<string, string> = { ...sharedBaseVarsRef.current };
       let vuVars: Record<string, string> = {};
       let seenBaseVersion = sharedBaseVarsRef.version;
       let vuIteration = 0;
 
       while (!vuCtrl.signal.aborted && !signal.aborted && performance.now() < runDeadlinePerf) {
         if (sharedBaseVarsRef.version !== seenBaseVersion) {
-          Object.assign(vuEnv, sharedBaseVarsRef.current);
+          vuEnv = { ...sharedBaseVarsRef.current };
           seenBaseVersion = sharedBaseVarsRef.version;
         }
 
@@ -1537,8 +1579,8 @@ async function runJsPerformanceEngine(params: {
               request: toScriptRequest(reqToRun),
               iterationData: iterationRow,
             });
-            Object.assign(vuEnv, preRes.environment);
-            vuVars = { ...vuVars, ...preRes.variables };
+            vuEnv = { ...preRes.environment };
+            vuVars = { ...preRes.variables };
             if (!preRes.success) {
               recordOutcome(item, 0, 0, true, {
                 status: 0,
@@ -1603,8 +1645,8 @@ async function runJsPerformanceEngine(params: {
                 iterationData: iterationRow,
               }
             );
-            Object.assign(vuEnv, postRes.environment);
-            vuVars = { ...vuVars, ...postRes.variables };
+            vuEnv = { ...postRes.environment };
+            vuVars = { ...postRes.variables };
             if (!postRes.success && !finalIsError) {
               finalIsError = true;
               errMeta = {

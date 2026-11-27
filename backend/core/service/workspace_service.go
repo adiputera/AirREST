@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 )
 
+var ErrCannotDeleteDefaultWorkspace = errors.New("cannot delete default private workspace")
+
 type WorkspaceService struct {
 	workspaceRepo *postgres.WorkspaceRepository
 }
@@ -20,13 +22,13 @@ func NewWorkspaceService(workspaceRepo *postgres.WorkspaceRepository) *Workspace
 
 func (s *WorkspaceService) Create(ctx context.Context, user *domain.User, name, description string) (*domain.Workspace, error) {
 	name = strings.TrimSpace(name)
-	if name == "" {
-		return nil, errors.New("workspace name is required")
+	if err := ValidateName(name); err != nil {
+		return nil, err
 	}
 
 	var desc *string
-	if description != "" {
-		desc = &description
+	if trimmedDesc := strings.TrimSpace(description); trimmedDesc != "" {
+		desc = &trimmedDesc
 	}
 
 	ws := &domain.Workspace{

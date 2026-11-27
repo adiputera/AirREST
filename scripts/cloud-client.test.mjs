@@ -870,3 +870,49 @@ test('A01: duplicateScopeCollection, importDuplicateCollection, and duplicateSco
   assert.equal(JSON.parse(calls[2].body).target_parent_id, 'folder-9');
   client.dispose();
 });
+
+test('STU-02: fetchWithAuth maps superseded access/refresh tokens to the rotated session tokens', async () => {
+  const { createCloudClient } = loadCloudApi();
+  const seenAuths = [];
+  let refreshCount = 0;
+  const client = createCloudClient({
+    transport: {
+      supportsCredentials: false,
+      async fetch(url, init) {
+        if (url.endsWith('/api/v1/auth/refresh')) {
+          refreshCount += 1;
+          return new Response(
+            JSON.stringify({
+              success: true,
+              data: { token: 'rotated-access', refresh_token: 'rotated-refresh', expires_at: '2030-01-01T00:00:00Z' },
+            }),
+            { status: 200 },
+          );
+        }
+        seenAuths.push(init.headers?.authorization || init.headers?.Authorization);
+        const auth = init.headers?.authorization || init.headers?.Authorization;
+        return new Response(JSON.stringify({ success: true, data: [] }), {
+          status: auth === 'Bearer rotated-access' ? 200 : 401,
+        });
+      },
+    },
+  });
+
+  const firstRes = await client.fetchWithAuth('/api/v1/collections', {
+    apiUrl: 'https://api.example.com',
+    token: 'stale-access',
+    refreshToken: 'stale-refresh',
+  });
+  assert.equal(firstRes.status, 200);
+
+  // Subsequent callback passing the old captured tokens must use the rotated token immediately without re-refreshing.
+  const secondRes = await client.fetchWithAuth('/api/v1/environments', {
+    apiUrl: 'https://api.example.com',
+    token: 'stale-access',
+    refreshToken: 'stale-refresh',
+  });
+  assert.equal(secondRes.status, 200);
+  assert.equal(refreshCount, 1);
+  assert.deepEqual(seenAuths, ['Bearer stale-access', 'Bearer rotated-access', 'Bearer rotated-access']);
+  client.dispose();
+});

@@ -34,10 +34,13 @@ export const App: React.FC = () => {
     setIsSidebarOpen(false);
   }, [activeTab]);
 
+  const isAuthenticated = Boolean(token);
+
   useEffect(() => {
-    if (!token) return;
+    if (!isAuthenticated) return;
     let cancelled = false;
-    apiGetMe(apiUrl, token, refreshToken || undefined)
+    const live = useHubStore.getState();
+    apiGetMe(apiUrl, live.token || token || '', live.refreshToken || refreshToken || undefined)
       .then((freshUser) => {
         if (!cancelled && freshUser) {
           updateUser(freshUser);
@@ -49,7 +52,7 @@ export const App: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [token, apiUrl]);
+  }, [isAuthenticated, apiUrl]);
 
   if (!token) {
     return <LoginView />;

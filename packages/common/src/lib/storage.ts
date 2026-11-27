@@ -78,7 +78,7 @@ export interface StorageCommitNotice {
 }
 
 export function onStorageCommit(listener: (notice: StorageCommitNotice) => void): () => void {
-  if (!storageChannel) return () => {};
+  if (!storageChannel) return () => { };
   const handler = (event: MessageEvent<StorageCommitNotice>) => {
     if (event.data?.writerId !== writerId && event.data?.key) listener(event.data);
   };
@@ -267,8 +267,26 @@ export async function setItemInAllPersistenceCopies(name: string, value: string)
     const envelope = createEnvelope(latestEnvelope([existingIdb, existingLocal]), value);
     const serialized = JSON.stringify(envelope);
 
-    await idbSet(name, serialized);
-    setLocalItem(name, serialized);
+    try {
+      await idbSet(name, serialized);
+      setLocalItem(name, serialized);
+    } catch (err) {
+      // When IndexedDB already stored the redacted >5 MiB snapshot and localStorage hits QuotaExceededError,
+      // remove the stale localStorage copy so legacy plaintext credentials cannot survive.
+      const idbHasNewSnapshot = await idbGet(name).then((v) => v === serialized).catch(() => false);
+      if (idbHasNewSnapshot && typeof localStorage !== 'undefined' && typeof localStorage.removeItem === 'function') {
+        try {
+          localStorage.removeItem(name);
+        } catch {
+          // ignore secondary remove failure
+        }
+        if (getLocalItem(name) === null) {
+          notifyStorageCommit(name, envelope);
+          return;
+        }
+      }
+      throw err;
+    }
     notifyStorageCommit(name, envelope);
   });
 }
@@ -289,63 +307,70 @@ export const appStorage: StateStorage = {
 
   setItem: async (name: string, value: string): Promise<void> => {
     await withStorageLock(name, async () => {
-    let existingIdb: string | null = null;
-    try {
-      existingIdb = await idbGet(name);
-    } catch {
-      // A fallback-only commit can still advance the revision from localStorage.
-    }
-    const previous = latestEnvelope([existingIdb, getLocalItem(name)]);
-    const envelope = createEnvelope(previous, value);
-    const serialized = JSON.stringify(envelope);
-    let committed = false;
-    try {
-      await idbSet(name, serialized);
-      committed = true;
-    } catch (err) {
-      console.warn('[AirREST Storage] IndexedDB write failed:', err);
-    }
-    try {
-      setLocalItem(name, serialized);
-      committed = true;
-    } catch (err) {
-      console.warn('[AirREST Storage] localStorage write failed:', err);
-    }
-    if (!committed) {
-      throw new Error('No persistent storage backend accepted this update.');
-    }
-    notifyStorageCommit(name, envelope);
+      let existingIdb: string | null = null;
+      try {
+        existingIdb = await idbGet(name);
+      } catch {
+        // A fallback-only commit can still advance the revision from localStorage.
+      }
+      const previous = latestEnvelope([existingIdb, getLocalItem(name)]);
+      const envelope = createEnvelope(previous, value);
+      const serialized = JSON.stringify(envelope);
+      let committed = false;
+      try {
+        await idbSet(name, serialized);
+        committed = true;
+      } catch (err) {
+        console.warn('[AirREST Storage] IndexedDB write failed:', err);
+      }
+      try {
+        setLocalItem(name, serialized);
+        committed = true;
+      } catch (err) {
+        console.warn('[AirREST Storage] localStorage write failed:', err);
+        if (committed && typeof localStorage !== 'undefined' && typeof localStorage.removeItem === 'function') {
+          try {
+            localStorage.removeItem(name);
+          } catch {
+            // ignore secondary remove failure
+          }
+        }
+      }
+      if (!committed) {
+        throw new Error('No persistent storage backend accepted this update.');
+      }
+      notifyStorageCommit(name, envelope);
     });
   },
 
   removeItem: async (name: string): Promise<void> => {
     await withStorageLock(name, async () => {
-    const previous = latestEnvelope([await idbGet(name).catch(() => null), getLocalItem(name)]);
-    const envelope: StorageEnvelope = {
-      version: STORAGE_ENVELOPE_VERSION,
-      timestamp: Date.now(),
-      revision: (previous?.revision || 0) + 1,
-      writerId,
-      deleted: true,
-    };
-    const serialized = JSON.stringify(envelope);
-    let committed = false;
-    try {
-      await idbSet(name, serialized);
-      committed = true;
-    } catch (err) {
-      console.warn(`[AirREST Storage] IndexedDB tombstone failed for "${name}":`, err);
-    }
-    try {
-      setLocalItem(name, serialized);
-      committed = true;
-    } catch (err) {
-      console.warn(`[AirREST Storage] localStorage tombstone failed for "${name}":`, err);
-    }
-    if (!committed) {
-      throw new Error('No persistent storage backend accepted the deletion.');
-    }
-    notifyStorageCommit(name, envelope);
+      const previous = latestEnvelope([await idbGet(name).catch(() => null), getLocalItem(name)]);
+      const envelope: StorageEnvelope = {
+        version: STORAGE_ENVELOPE_VERSION,
+        timestamp: Date.now(),
+        revision: (previous?.revision || 0) + 1,
+        writerId,
+        deleted: true,
+      };
+      const serialized = JSON.stringify(envelope);
+      let committed = false;
+      try {
+        await idbSet(name, serialized);
+        committed = true;
+      } catch (err) {
+        console.warn(`[AirREST Storage] IndexedDB tombstone failed for "${name}":`, err);
+      }
+      try {
+        setLocalItem(name, serialized);
+        committed = true;
+      } catch (err) {
+        console.warn(`[AirREST Storage] localStorage tombstone failed for "${name}":`, err);
+      }
+      if (!committed) {
+        throw new Error('No persistent storage backend accepted the deletion.');
+      }
+      notifyStorageCommit(name, envelope);
     });
   },
 };

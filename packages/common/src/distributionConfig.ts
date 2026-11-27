@@ -72,6 +72,13 @@ function normalizeRepository(raw: string): string {
 }
 
 /**
+ * Normalizes and validates a runtime API server URL (HTTPS required outside loopback).
+ */
+export function normalizeDistributionApiUrl(raw: string, label = 'Server URL'): string {
+  return normalizeUrl(raw, label, true);
+}
+
+/**
  * Validates build/startup configuration without reading environment variables.
  * Application entry points own environment access and inject this canonical value.
  */

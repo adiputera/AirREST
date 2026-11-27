@@ -12,9 +12,11 @@ import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
+import java.security.GeneralSecurityException
 import java.security.KeyStore
 import java.security.MessageDigest
 import java.util.concurrent.Executors
+import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -103,8 +105,24 @@ class NativeCredentialPlugin(activity: Activity) : Plugin(activity) {
 
     @Command
     fun read(invoke: Invoke) = execute(invoke) {
-        val encrypted = preferences.getString(preferenceKey(scopeFrom(invoke)), null)
-        val value = encrypted?.let(::decrypt)
+        val prefKey = preferenceKey(scopeFrom(invoke))
+        val encrypted = preferences.getString(prefKey, null)
+        val value = if (encrypted == null) {
+            null
+        } else {
+            try {
+                decrypt(encrypted)
+            } catch (e: AEADBadTagException) {
+                preferences.edit().remove(prefKey).apply()
+                null
+            } catch (e: GeneralSecurityException) {
+                preferences.edit().remove(prefKey).apply()
+                null
+            } catch (e: IllegalArgumentException) {
+                preferences.edit().remove(prefKey).apply()
+                null
+            }
+        }
         invoke.resolve(JSObject().put("value", value ?: org.json.JSONObject.NULL))
     }
 

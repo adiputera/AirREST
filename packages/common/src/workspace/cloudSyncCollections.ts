@@ -12,7 +12,7 @@ export interface CloudCollectionMetadata {
 }
 
 export function isPendingCloudCollection(collection: Collection): boolean {
-  if (collection._needsMoveReconciliation) return false;
+  if (collection._needsMoveReconciliation || collection.isPartial) return false;
   return collection._syncStatus === 'pending' ||
     (collection._origin === 'cloud' && typeof collection.version !== 'number');
 }
@@ -65,6 +65,7 @@ export function retainPendingCloudCollections(
   const serverIds = new Set(serverCollectionIds);
   return localCollections.filter((collection) =>
     !serverIds.has(collection.id) &&
+    !collection.isPartial &&
     (collection._syncStatus === 'pending' || typeof collection.version !== 'number'),
   );
 }

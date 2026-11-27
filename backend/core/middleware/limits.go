@@ -12,9 +12,12 @@ import (
 )
 
 const (
-	MaxRequestBytes       int64 = 4 << 20
-	MaxConcurrentRequests       = 16
-	RequestTimeout              = 300 * time.Second
+	MaxRequestBytes           int64 = 4 << 20
+	AuthRequestBytes          int64 = 64 << 10
+	MaxConcurrentRequests           = 16
+	MaxAuthConcurrentRequests       = 32
+	RequestTimeout                  = 300 * time.Second
+	AuthRequestTimeout              = 15 * time.Second
 )
 
 // RequestLimits bounds memory, concurrent work, body reads, and database contexts.

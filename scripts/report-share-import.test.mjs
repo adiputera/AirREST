@@ -519,7 +519,7 @@ test('UI & store contracts for report share, import modal ordering, session bann
   );
   const tabBarSrc = fs.readFileSync(path.join(ROOT, 'packages/common/src/components/TabBar.tsx'), 'utf8');
 
-  assert.match(storeSrc, /closingTab\.isSessionOnlyImported/);
+  assert.match(storeSrc, /!remainingTabsAfterClose\.some\(\(p\) => p\.viewingReportId === closingTab\.viewingReportId\)/);
   assert.match(appSrc, /isStrictAirrestReportJson/);
   assert.match(importModalSrc, /ReportImportResolveModal/);
   assert.match(importModalSrc, /Always process collections and environments before reports/);
@@ -532,4 +532,102 @@ test('UI & store contracts for report share, import modal ordering, session bann
   assert.match(funcViewSrc, /Import Report \(\.airrest-report\.json\)/);
   assert.match(funcViewSrc, /SessionOnlyReportBanner/);
   assert.match(tabBarSrc, /perfTab\.isSessionOnlyImported/);
+});
+
+test('RUN-01/RUN-02/RUN-04: redacts authority/fragment/JSON secrets and sanitizes exported HTML with CSP', () => {
+  const { perfReportExporter, functionalReportExporter } = (() => {
+    const cache = new Map();
+    const globals = {
+      console,
+      URL,
+      URLSearchParams,
+      Date,
+      Math,
+      JSON,
+      Object,
+      Array,
+      Map,
+      Set,
+      RegExp,
+      Error,
+      Number,
+      String,
+      Boolean,
+      TextEncoder,
+      TextDecoder,
+      crypto: globalThis.crypto,
+    };
+    const load = (relPath) => {
+      const absPath = path.resolve(ROOT, relPath);
+      if (cache.has(absPath)) return cache.get(absPath);
+      const exports = {};
+      cache.set(absPath, exports);
+      const source = fs.readFileSync(absPath, 'utf8');
+      const compiled = ts.transpileModule(source, {
+        fileName: absPath,
+        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
+      }).outputText;
+      vm.runInNewContext(compiled, {
+        ...globals,
+        exports,
+        module: { exports },
+        require: (id) => (id.startsWith('.') ? load(path.relative(ROOT, path.resolve(path.dirname(absPath), `${id}.ts`))) : {}),
+      });
+      return exports;
+    };
+    return {
+      perfReportExporter: load('packages/common/src/lib/perfReportExporter.ts'),
+      functionalReportExporter: load('packages/common/src/lib/functionalReportExporter.ts'),
+    };
+  })();
+
+  assert.equal(
+    reportShare.sanitizeUrlSecrets('https://alice:p@ss@api.example.com/cb#access_token=fragTok&ok=1'),
+    'https://[REDACTED]@api.example.com/cb#access_token=[REDACTED]&ok=1'
+  );
+  assert.equal(
+    reportShare.sanitizeUrlSecrets('https://api.example.com/v1?client_token=secret123&templated={{api_token}}'),
+    'https://api.example.com/v1?client_token=[REDACTED]&templated={{api_token}}'
+  );
+
+  const leakyPerf = {
+    ...makePerfReport(),
+    errorSamples: [
+      {
+        id: 'err-1',
+        timestampMs: 1700000001000,
+        requestId: 'req-1',
+        requestName: 'Checkout <img src=x onerror=alert(1)>',
+        method: 'POST',
+        url: 'https://user:pass@api.example.com/pay?api_key=supersecret',
+        status: 500,
+        statusText: 'Err',
+        category: 'http_5xx',
+        message: 'Failed with Basic dXNlcjpwYXNz at https://api.example.com/cb?token=abc',
+        responseSnippet: '{"access_token":"secret_tok","error":"<script>evil()</script>"}',
+        timeMs: 15,
+      },
+    ],
+  };
+
+  const jsonExport = perfReportExporter.exportPerformanceReportJson(leakyPerf);
+  assert.doesNotMatch(jsonExport, /supersecret|dXNlcjpwYXNz|secret_tok|=abc/);
+
+  const htmlExport = perfReportExporter.exportPerformanceReportHtml(leakyPerf);
+  assert.match(htmlExport, /http-equiv="Content-Security-Policy"/);
+  assert.doesNotMatch(htmlExport, /supersecret|dXNlcjpwYXNz|secret_tok/);
+  assert.match(htmlExport, /function esc\(v\)/);
+
+  const funcHtml = functionalReportExporter.exportFunctionalReportHtml({
+    ...makeFuncReport(),
+    steps: [
+      {
+        ...makeFuncReport().steps[0],
+        url: 'https://api.example.com/auth#id_token=jwt123',
+        scriptError: 'Bearer secret_jwt_token',
+      },
+    ],
+  });
+  assert.match(funcHtml, /http-equiv="Content-Security-Policy"/);
+  assert.doesNotMatch(funcHtml, /jwt123|secret_jwt_token/);
 });

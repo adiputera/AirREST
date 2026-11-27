@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/adiputera/airrest-backend/core/domain"
@@ -58,8 +59,14 @@ func (h *AdminHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	systemRole := domain.RoleUser
-	if req.Role == string(domain.RoleSuperadmin) {
+	switch req.Role {
+	case "", string(domain.RoleUser):
+		systemRole = domain.RoleUser
+	case string(domain.RoleSuperadmin):
 		systemRole = domain.RoleSuperadmin
+	default:
+		response.Error(w, http.StatusBadRequest, "invalid system role", "VALIDATION_ERROR")
+		return
 	}
 
 	user, err := h.authService.CreateUserByAdmin(r.Context(), req.Email, req.Password, req.Name, systemRole)
@@ -68,10 +75,15 @@ func (h *AdminHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusConflict, err.Error(), "EMAIL_EXISTS")
 			return
 		}
-		if errors.Is(err, service.ErrPasswordTooShort) {
+		if errors.Is(err, service.ErrInvalidEmail) ||
+			errors.Is(err, service.ErrNameRequired) ||
+			errors.Is(err, service.ErrNameTooLong) ||
+			errors.Is(err, service.ErrPasswordTooShort) ||
+			errors.Is(err, service.ErrPasswordTooLong) {
 			response.Error(w, http.StatusBadRequest, err.Error(), "VALIDATION_ERROR")
 			return
 		}
+		slog.Error("failed to provision user", "error", err)
 		response.Error(w, http.StatusInternalServerError, "failed to provision user", "SERVER_ERROR")
 		return
 	}
@@ -95,7 +107,7 @@ func (h *AdminHandler) ResetUserPassword(w http.ResponseWriter, r *http.Request)
 	}
 
 	if err := h.authService.ResetPasswordByAdmin(r.Context(), targetUserID, req.Password); err != nil {
-		if errors.Is(err, service.ErrPasswordTooShort) {
+		if errors.Is(err, service.ErrPasswordTooShort) || errors.Is(err, service.ErrPasswordTooLong) {
 			response.Error(w, http.StatusBadRequest, err.Error(), "VALIDATION_ERROR")
 			return
 		}
@@ -103,6 +115,7 @@ func (h *AdminHandler) ResetUserPassword(w http.ResponseWriter, r *http.Request)
 			response.Error(w, http.StatusNotFound, "user not found", "NOT_FOUND")
 			return
 		}
+		slog.Error("failed to reset user password", "user_id", targetUserID, "error", err)
 		response.Error(w, http.StatusInternalServerError, "failed to reset user password", "SERVER_ERROR")
 		return
 	}
@@ -127,7 +140,7 @@ func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 
 	updatedUser, err := h.authService.UpdateProfile(r.Context(), targetUserID, req.Name, req.AvatarURL)
 	if err != nil {
-		if errors.Is(err, service.ErrNameRequired) {
+		if errors.Is(err, service.ErrNameRequired) || errors.Is(err, service.ErrNameTooLong) {
 			response.Error(w, http.StatusBadRequest, err.Error(), "VALIDATION_ERROR")
 			return
 		}
@@ -135,6 +148,7 @@ func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusNotFound, "user not found", "NOT_FOUND")
 			return
 		}
+		slog.Error("failed to update user", "user_id", targetUserID, "error", err)
 		response.Error(w, http.StatusInternalServerError, "failed to update user", "SERVER_ERROR")
 		return
 	}

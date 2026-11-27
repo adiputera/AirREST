@@ -5,44 +5,14 @@ import {
   ScriptExecutor,
   ApiResponse,
   FileOptions,
-  OpenedFileResult,
   runScriptInSandbox,
   resetSandboxIframe,
   hasHostPermission,
   requestHostPermission,
   categorizeNetworkError,
   getChromiumNetworkError,
+  readBrowserFiles,
 } from '@airrest/common/platform';
-
-const MAX_IMPORT_FILE_BYTES = 16 * 1024 * 1024; // 16 MiB
-
-function readBrowserFileAsResult(file: File): Promise<OpenedFileResult> {
-  if (file.size > MAX_IMPORT_FILE_BYTES) {
-    return Promise.resolve({
-      filename: file.name,
-      content: '',
-      error: 'Selected file exceeds maximum allowed limit of 16 MB.',
-    });
-  }
-
-  return new Promise<OpenedFileResult>((resolve) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      resolve({
-        filename: file.name,
-        content: typeof e.target?.result === 'string' ? e.target.result : '',
-      });
-    };
-    reader.onerror = () => {
-      resolve({
-        filename: file.name,
-        content: '',
-        error: 'Failed to read selected file.',
-      });
-    };
-    reader.readAsText(file);
-  });
-}
 
 function pickBrowserFiles(options?: FileOptions, multiple = false): Promise<File[]> {
   if (typeof document === 'undefined') return Promise.resolve([]);
@@ -123,7 +93,11 @@ export const chromeScriptExecutor: ScriptExecutor = {
       input.response as ApiResponse | undefined,
       input.environment,
       input.variables,
-      options
+      {
+        ...options,
+        request: input.request,
+        iterationData: input.iterationData,
+      }
     );
   },
   dispose: () => {
@@ -160,7 +134,8 @@ export const chromeAdapter: PlatformAdapter = {
   openFile: async (options) => {
     const [file] = await pickBrowserFiles(options, false);
     if (!file) return null;
-    const result = await readBrowserFileAsResult(file);
+    const [result] = await readBrowserFiles([file]);
+    if (!result) return null;
     if (result.error) {
       throw new Error(result.error);
     }
@@ -172,7 +147,13 @@ export const chromeAdapter: PlatformAdapter = {
   openFiles: async (options) => {
     const files = await pickBrowserFiles(options, true);
     if (files.length === 0) return [];
-    return Promise.all(files.map(readBrowserFileAsResult));
+    const requireJson = Boolean(
+      options?.filters?.length &&
+      options.filters.every((filter) =>
+        filter.extensions.every((ext) => ext.replace(/^\./, '').toLowerCase() === 'json')
+      )
+    );
+    return readBrowserFiles(files, requireJson ? { requireJsonExtension: true } : undefined);
   },
   hasHostPermission,
   requestHostPermission,

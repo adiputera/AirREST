@@ -363,6 +363,9 @@ func ValidateImportItem(item *ImportItemRequest) error {
 	if err := validateType(itemType); err != nil {
 		return err
 	}
+	if itemType != domain.ItemTypeFolder && len(item.Items) > 0 {
+		return newValidationError("items", "only folder items may contain child items")
+	}
 	if err := validateMethod(item.Method, itemType); err != nil {
 		return err
 	}

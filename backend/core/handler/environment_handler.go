@@ -2,12 +2,10 @@ package handler
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 
 	"github.com/adiputera/airrest-backend/core/domain"
 	"github.com/adiputera/airrest-backend/core/middleware"
-	"github.com/adiputera/airrest-backend/core/repository/postgres"
 	"github.com/adiputera/airrest-backend/core/service"
 	"github.com/adiputera/airrest-backend/pkg/response"
 	"github.com/go-chi/chi/v5"
@@ -43,21 +41,18 @@ func (h *EnvironmentHandler) List(w http.ResponseWriter, r *http.Request) {
 	wsIDStr := r.URL.Query().Get("workspace_id")
 	projIDStr := r.URL.Query().Get("project_id")
 
-	var wsID, projID *uuid.UUID
-	if wsIDStr != "" {
-		if id, err := uuid.Parse(wsIDStr); err == nil {
-			wsID = &id
-		}
+	wsID, ok := parseOptionalQueryUUID(w, wsIDStr, "invalid workspace_id")
+	if !ok {
+		return
 	}
-	if projIDStr != "" {
-		if id, err := uuid.Parse(projIDStr); err == nil {
-			projID = &id
-		}
+	projID, ok := parseOptionalQueryUUID(w, projIDStr, "invalid project_id")
+	if !ok {
+		return
 	}
 
 	envs, err := h.envService.List(r.Context(), user, wsID, projID)
 	if err != nil {
-		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
+		writeMappedError(w, "list environments", err, nil)
 		return
 	}
 
@@ -104,7 +99,7 @@ func (h *EnvironmentHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.envService.Create(r.Context(), user, env); err != nil {
-		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
+		writeMappedError(w, "create environment", err, nil)
 		return
 	}
 
@@ -122,7 +117,7 @@ func (h *EnvironmentHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	env, err := h.envService.Get(r.Context(), user, id)
 	if err != nil {
-		response.Error(w, http.StatusNotFound, "environment not found", "NOT_FOUND")
+		writeMappedError(w, "get environment", err, nil)
 		return
 	}
 
@@ -155,11 +150,7 @@ func (h *EnvironmentHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	updated, err := h.envService.Update(r.Context(), user, env, req.BaseVersion)
 	if err != nil {
-		if errors.Is(err, postgres.ErrVersionConflict) {
-			response.Conflict(w, "conflict: environment has been modified by another user", updated)
-			return
-		}
-		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
+		writeMappedError(w, "update environment", err, updated)
 		return
 	}
 
@@ -176,7 +167,7 @@ func (h *EnvironmentHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.envService.Delete(r.Context(), user, id); err != nil {
-		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
+		writeMappedError(w, "delete environment", err, nil)
 		return
 	}
 

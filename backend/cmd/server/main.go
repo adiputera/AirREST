@@ -37,7 +37,7 @@ func main() {
 		Addr:         fmt.Sprintf(":%s", application.Config.Port),
 		Handler:      application.Router,
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 35 * time.Second,
+		WriteTimeout: 310 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 

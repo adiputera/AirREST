@@ -44,7 +44,7 @@ func (h *WorkspaceHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	ws, err := h.workspaceService.Create(r.Context(), user, req.Name, req.Description)
 	if err != nil {
-		response.Error(w, http.StatusBadRequest, err.Error(), "VALIDATION_ERROR")
+		writeMappedError(w, "create workspace", err, nil)
 		return
 	}
 	response.JSON(w, http.StatusCreated, ws)
@@ -61,7 +61,7 @@ func (h *WorkspaceHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	ws, err := h.workspaceService.Get(r.Context(), user, id)
 	if err != nil {
-		response.Error(w, http.StatusNotFound, "workspace not found", "NOT_FOUND")
+		writeMappedError(w, "get workspace", err, nil)
 		return
 	}
 	response.JSON(w, http.StatusOK, ws)
@@ -84,7 +84,7 @@ func (h *WorkspaceHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	ws, err := h.workspaceService.Update(r.Context(), user, id, req.Name, req.Description)
 	if err != nil {
-		response.Error(w, http.StatusBadRequest, err.Error(), "VALIDATION_ERROR")
+		writeMappedError(w, "update workspace", err, nil)
 		return
 	}
 	response.JSON(w, http.StatusOK, ws)
@@ -100,7 +100,7 @@ func (h *WorkspaceHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.workspaceService.Delete(r.Context(), user, id); err != nil {
-		response.Error(w, http.StatusBadRequest, err.Error(), "OPERATION_FAILED")
+		writeMappedError(w, "delete workspace", err, nil)
 		return
 	}
 	response.JSON(w, http.StatusOK, map[string]string{"message": "workspace deleted successfully"})

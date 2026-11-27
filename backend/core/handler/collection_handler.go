@@ -49,23 +49,20 @@ func (h *CollectionHandler) List(w http.ResponseWriter, r *http.Request) {
 	wsIDStr := r.URL.Query().Get("workspace_id")
 	projIDStr := r.URL.Query().Get("project_id")
 
-	var wsID, projID *uuid.UUID
-	if wsIDStr != "" {
-		if id, err := uuid.Parse(wsIDStr); err == nil {
-			wsID = &id
-		}
+	wsID, ok := parseOptionalQueryUUID(w, wsIDStr, "invalid workspace_id")
+	if !ok {
+		return
 	}
-	if projIDStr != "" {
-		if id, err := uuid.Parse(projIDStr); err == nil {
-			projID = &id
-		}
+	projID, ok := parseOptionalQueryUUID(w, projIDStr, "invalid project_id")
+	if !ok {
+		return
 	}
 
 	includeItems := r.URL.Query().Get("include_items") == "true"
 
 	collections, err := h.collectionService.ListCollections(r.Context(), user, wsID, projID, includeItems)
 	if err != nil {
-		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
+		writeMappedError(w, "list collections", err, nil)
 		return
 	}
 
@@ -112,11 +109,7 @@ func (h *CollectionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.collectionService.CreateCollection(r.Context(), user, col); err != nil {
-		if errors.Is(err, service.ErrInvalidItemPayload) {
-			response.Error(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST")
-			return
-		}
-		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
+		writeMappedError(w, "create collection", err, nil)
 		return
 	}
 
@@ -134,7 +127,7 @@ func (h *CollectionHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	col, err := h.collectionService.GetCollection(r.Context(), user, id)
 	if err != nil {
-		response.Error(w, http.StatusNotFound, "collection not found", "NOT_FOUND")
+		writeMappedError(w, "get collection", err, nil)
 		return
 	}
 
@@ -167,19 +160,7 @@ func (h *CollectionHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	updated, err := h.collectionService.UpdateCollection(r.Context(), user, col, req.BaseVersion)
 	if err != nil {
-		if errors.Is(err, postgres.ErrVersionConflict) {
-			response.Conflict(w, "conflict: collection has been modified by another user", updated)
-			return
-		}
-		if errors.Is(err, service.ErrInvalidItemPayload) {
-			response.Error(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST")
-			return
-		}
-		if errors.Is(err, postgres.ErrCollectionNotFound) {
-			response.Error(w, http.StatusNotFound, "collection not found", "NOT_FOUND")
-			return
-		}
-		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
+		writeMappedError(w, "update collection", err, updated)
 		return
 	}
 
@@ -196,15 +177,7 @@ func (h *CollectionHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.collectionService.DeleteCollection(r.Context(), user, id); err != nil {
-		if errors.Is(err, service.ErrFeatureDisabled) {
-			response.Error(w, http.StatusForbidden, err.Error(), "FEATURE_DISABLED")
-			return
-		}
-		if errors.Is(err, service.ErrFeaturePolicyUnavailable) {
-			response.Error(w, http.StatusServiceUnavailable, "feature policy unavailable", "FEATURE_POLICY_UNAVAILABLE")
-			return
-		}
-		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
+		writeMappedError(w, "delete collection", err, nil)
 		return
 	}
 
@@ -423,7 +396,13 @@ func (h *CollectionHandler) ReplaceCollection(w http.ResponseWriter, r *http.Req
 
 	receipt, err := h.collectionService.ReplaceCollection(r.Context(), user, colID, req)
 	if err != nil {
-		writeCollectionItemError(w, err, nil)
+		var conflictData any
+		if errors.Is(err, postgres.ErrVersionConflict) {
+			if latest, fetchErr := h.collectionService.GetCollection(r.Context(), user, colID); fetchErr == nil {
+				conflictData = latest
+			}
+		}
+		writeCollectionItemError(w, err, conflictData)
 		return
 	}
 
@@ -431,20 +410,7 @@ func (h *CollectionHandler) ReplaceCollection(w http.ResponseWriter, r *http.Req
 }
 
 func writeCollectionItemError(w http.ResponseWriter, err error, conflictData any) {
-	switch {
-	case errors.Is(err, service.ErrInvalidItemPayload):
-		response.Error(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST")
-	case errors.Is(err, service.ErrExampleLimitExceeded), errors.Is(err, service.ErrBatchLimit):
-		response.Error(w, http.StatusRequestEntityTooLarge, err.Error(), "LIMIT_EXCEEDED")
-	case errors.Is(err, postgres.ErrVersionConflict), errors.Is(err, service.ErrExampleConflict):
-		response.Conflict(w, err.Error(), conflictData)
-	case errors.Is(err, postgres.ErrItemNotFound), errors.Is(err, postgres.ErrCollectionNotFound), errors.Is(err, service.ErrExampleNotFound):
-		response.Error(w, http.StatusNotFound, "resource not found", "NOT_FOUND")
-	case errors.Is(err, service.ErrForbidden), errors.Is(err, service.ErrReaderCannotModify):
-		response.Error(w, http.StatusForbidden, err.Error(), "FORBIDDEN")
-	default:
-		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
-	}
+	writeMappedError(w, "collection item operation", err, conflictData)
 }
 
 type ReorderItemsRequest struct {
@@ -469,7 +435,7 @@ func (h *CollectionHandler) ReorderItems(w http.ResponseWriter, r *http.Request)
 
 	updatedItems, err := h.collectionService.ReorderItems(r.Context(), user, colID, req.Items)
 	if err != nil {
-		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
+		writeMappedError(w, "reorder items", err, nil)
 		return
 	}
 

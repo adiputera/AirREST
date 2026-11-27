@@ -55,7 +55,7 @@ func (s *appInitializer) get(ctx context.Context) (*app.App, error) {
 	if timeout <= 0 {
 		timeout = config.StartupTimeout
 	}
-	initCtx, cancel := context.WithTimeout(ctx, timeout)
+	initCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
 	a, err := s.initialize(initCtx)
 	if err == nil && a == nil {

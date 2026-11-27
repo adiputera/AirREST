@@ -706,6 +706,7 @@ test('F01 & F02 ImportModal component harness: close/scope-switch cancellation, 
   const examplesMod = loadReal('packages/common/src/lib/examples.ts');
   const perfMetricsMod = loadReal('packages/common/src/lib/perfMetrics.ts');
   const perfComparisonMod = loadReal('packages/common/src/lib/perfComparison.ts', {
+    './examples': examplesMod,
     './perfMetrics': perfMetricsMod,
   });
   const reportShareMod = loadReal('packages/common/src/lib/reportShare.ts', {
@@ -832,6 +833,7 @@ test('F01 & F02 ImportModal component harness: close/scope-switch cancellation, 
         useReportImporter: () => ({
           resolvePrompt: null,
           handleResolveChoice: () => { },
+          cancelPendingPrompt: () => { },
           importReportContent: async () => ({ ok: true }),
           attachSessionReportToCollection: async () => ({ ok: true }),
           pickReportFileContent: async () => null,

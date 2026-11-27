@@ -51,6 +51,17 @@ export function preserveEnvironmentCurrentValues(
   });
 }
 
+export function retainPendingCloudEnvironments(
+  pulledEnvironments: Environment[],
+  currentEnvironments: Environment[],
+): Environment[] {
+  const syncedIds = new Set(pulledEnvironments.map((e) => e.id));
+  const pendingLocals = currentEnvironments.filter(
+    (env) => !syncedIds.has(env.id) && (env._syncStatus === 'pending' || env._pendingCreate === true),
+  );
+  return pendingLocals.length > 0 ? [...pulledEnvironments, ...pendingLocals] : pulledEnvironments;
+}
+
 /** Builds the cache and UI state from data already fetched by a cloud sync. */
 export function prepareCloudDeltaState(input: CloudDeltaStateInput): CloudDeltaState {
   const tabs = input.tabs.map((tab) => {
@@ -66,7 +77,10 @@ export function prepareCloudDeltaState(input: CloudDeltaStateInput): CloudDeltaS
     }
     return { ...tab, deletedFromCollection: previous.collection.name };
   });
-  const environments = preserveEnvironmentCurrentValues(input.pulledEnvironments, input.currentEnvironments);
+  const environments = retainPendingCloudEnvironments(
+    preserveEnvironmentCurrentValues(input.pulledEnvironments, input.currentEnvironments),
+    input.currentEnvironments,
+  );
   const activeEnvironmentId = environments.some((environment) => environment.id === input.activeEnvironmentId)
     ? input.activeEnvironmentId
     : (environments[0]?.id || null);

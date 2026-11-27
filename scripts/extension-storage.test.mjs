@@ -169,3 +169,91 @@ test('serializes concurrent appStorage.setItem writes in FIFO order even when na
   const finalValue = await exports.appStorage.getItem('air-rest-storage');
   assert.equal(finalValue, '{"collections":["first","second"]}');
 });
+
+test('STU-01: evicts stale localStorage copy if IndexedDB succeeds and localStorage throws QuotaExceededError', async () => {
+  const source = fs.readFileSync(new URL('../packages/common/src/lib/storage.ts', import.meta.url), 'utf8');
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+
+  const idbData = new Map();
+  const localData = new Map([['air-rest-storage', 'stale-old-data']]);
+
+  const db = {
+    objectStoreNames: { contains: () => true },
+    transaction: () => {
+      const tx = {};
+      tx.objectStore = () => ({
+        get: (key) => {
+          const request = {};
+          queueMicrotask(() => {
+            request.result = idbData.get(key);
+            request.onsuccess?.();
+          });
+          return request;
+        },
+        put: (val, key) => {
+          const request = {};
+          queueMicrotask(() => {
+            idbData.set(key, val);
+            request.onsuccess?.();
+            tx.oncomplete?.();
+          });
+          return request;
+        },
+        delete: (key) => {
+          const request = {};
+          queueMicrotask(() => {
+            idbData.delete(key);
+            request.onsuccess?.();
+            tx.oncomplete?.();
+          });
+          return request;
+        },
+      });
+      return tx;
+    },
+  };
+
+  const indexedDB = {
+    open: () => {
+      const request = { result: db };
+      queueMicrotask(() => request.onsuccess?.());
+      return request;
+    },
+  };
+
+  const localStorage = {
+    getItem: (key) => (localData.has(key) ? localData.get(key) : null),
+    setItem: () => {
+      const err = new Error('QuotaExceededError');
+      err.name = 'QuotaExceededError';
+      throw err;
+    },
+    removeItem: (key) => {
+      localData.delete(key);
+    },
+  };
+
+  const exports = {};
+  vm.runInNewContext(
+    compiled,
+    {
+      exports,
+      indexedDB,
+      localStorage,
+      navigator: {},
+      console,
+      Promise,
+      Error,
+      queueMicrotask,
+      setTimeout,
+    },
+    { filename: 'packages/common/src/lib/storage.ts' }
+  );
+
+  await exports.appStorage.setItem('air-rest-storage', '{"collections":["fresh-large-payload"]}');
+  assert.equal(localData.has('air-rest-storage'), false, 'stale localStorage copy must be evicted on QuotaExceededError');
+  const readBack = await exports.appStorage.getItem('air-rest-storage');
+  assert.equal(readBack, '{"collections":["fresh-large-payload"]}');
+});

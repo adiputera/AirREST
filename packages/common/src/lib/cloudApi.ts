@@ -1,6 +1,11 @@
 
 import { CloudTransport } from '../types/platform';
 
+interface TokenSupersedeTarget {
+  token: string;
+  refreshToken: string;
+}
+
 interface CloudClientState {
   enabled: boolean;
   transport: CloudTransport | null;
@@ -8,6 +13,7 @@ interface CloudClientState {
   tokenRefreshListeners: Set<TokenRefreshCallback>;
   authEvictedListeners: Set<AuthEvictedCallback>;
   refreshRequests: Map<string, Promise<SilentRefreshResult>>;
+  supersededTokens: Map<string, TokenSupersedeTarget>;
   authorizeRequest?: CloudRequestAuthorizer;
   passwordRefresh: boolean;
   providerSessionActive: boolean;
@@ -25,6 +31,7 @@ function createCloudClientState(
     tokenRefreshListeners: new Set(),
     authEvictedListeners: new Set(),
     refreshRequests: new Map(),
+    supersededTokens: new Map(),
     passwordRefresh: true,
     providerSessionActive: false,
     sessionGeneration: 0,
@@ -394,6 +401,50 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function resolveActiveSessionTokens(
+  base: string,
+  token: string | undefined,
+  refreshToken: string | undefined,
+  client: CloudClientState,
+): { token: string | undefined; refreshToken: string | undefined } {
+  let currentToken = token;
+  let currentRefresh = refreshToken;
+  const visited = new Set<string>();
+  while (true) {
+    const byAccess = currentToken ? client.supersededTokens.get(`${base}:::${currentToken}`) : undefined;
+    const byRefresh = currentRefresh ? client.supersededTokens.get(`${base}:::${currentRefresh}`) : undefined;
+    const next = byRefresh || byAccess;
+    if (!next) break;
+    const stepKey = `${next.token}:::${next.refreshToken}`;
+    if (visited.has(stepKey)) break;
+    visited.add(stepKey);
+    currentToken = next.token;
+    currentRefresh = next.refreshToken;
+  }
+  return { token: currentToken, refreshToken: currentRefresh };
+}
+
+function recordSupersededTokens(
+  base: string,
+  oldToken: string | undefined,
+  oldRefreshToken: string,
+  nextToken: string,
+  nextRefreshToken: string,
+  client: CloudClientState,
+) {
+  const target: TokenSupersedeTarget = { token: nextToken, refreshToken: nextRefreshToken };
+  if (client.supersededTokens.size > 100) {
+    const firstKey = client.supersededTokens.keys().next().value;
+    if (firstKey) client.supersededTokens.delete(firstKey);
+  }
+  if (oldToken) {
+    client.supersededTokens.set(`${base}:::${oldToken}`, target);
+  }
+  if (oldRefreshToken) {
+    client.supersededTokens.set(`${base}:::${oldRefreshToken}`, target);
+  }
+}
+
 /**
  * Robust fetch wrapper that automatically handles Bearer authorization and
  * silent token refresh upon encountering 401 Unauthorized / TOKEN_EXPIRED.
@@ -408,10 +459,11 @@ export async function fetchWithAuth(
   const ensureCurrentSession = () => {
     if (generation !== client.sessionGeneration) throw new Error('Session changed. Please try again.');
   };
-  const { apiUrl, token, refreshToken, ...fetchInit } = options;
+  const { apiUrl, token: rawToken, refreshToken: rawRefreshToken, ...fetchInit } = options;
   const requestBody = await prepareRequestBody(endpoint, fetchInit.body, fetchInit.signal as AbortSignal | undefined);
   ensureCurrentSession();
   const base = normalizeCloudApiUrl(apiUrl);
+  const { token, refreshToken } = resolveActiveSessionTokens(base, rawToken, rawRefreshToken, client);
   const url = `${base}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`;
 
   const headers = new Headers(fetchInit.headers || {});
@@ -447,7 +499,7 @@ export async function fetchWithAuth(
   // If 401 Unauthorized, attempt background refresh if refreshToken is available
   if (response.status === 401 && refreshToken && client.passwordRefresh) {
     try {
-      const result = await handleSilentRefresh(base, refreshToken, client);
+      const result = await handleSilentRefresh(base, refreshToken, client, token);
       ensureCurrentSession();
       if (result.token) {
         try {
@@ -519,6 +571,7 @@ async function handleSilentRefresh(
   apiUrl: string,
   refreshTokenStr: string,
   client = defaultCloudClientState,
+  expiredToken?: string,
 ): Promise<SilentRefreshResult> {
   const base = normalizeCloudApiUrl(apiUrl);
   const generation = client.sessionGeneration;
@@ -536,6 +589,7 @@ async function handleSilentRefresh(
       );
       if (generation !== client.sessionGeneration) return { token: null, evicted: false };
       if (result.token && result.refreshToken) {
+        recordSupersededTokens(base, expiredToken, refreshTokenStr, result.token, result.refreshToken, client);
         notifyTokenRefreshed({
           token: result.token,
           refreshToken: result.refreshToken,
@@ -1678,6 +1732,7 @@ export function createCloudClient(config: CloudClientConfig = {}) {
     invalidateSession: () => {
       state.sessionGeneration += 1;
       state.refreshRequests.clear();
+      state.supersededTokens.clear();
     },
     setProviderSessionActive: (active: boolean) => { state.providerSessionActive = active; },
     registerTokenRefreshCallback: (callback: TokenRefreshCallback | null) =>
@@ -1692,6 +1747,7 @@ export function createCloudClient(config: CloudClientConfig = {}) {
       state.tokenRefreshListeners.clear();
       state.authEvictedListeners.clear();
       state.refreshRequests.clear();
+      state.supersededTokens.clear();
     },
   });
 }

@@ -14,10 +14,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+const MaxItemsPerCollection = 5000
+
 var (
-	ErrCollectionNotFound = errors.New("collection not found")
-	ErrItemNotFound       = errors.New("collection item not found")
-	ErrVersionConflict    = errors.New("optimistic lock conflict: item has been modified by another user")
+	ErrCollectionNotFound  = errors.New("collection not found")
+	ErrItemNotFound        = errors.New("collection item not found")
+	ErrVersionConflict     = errors.New("optimistic lock conflict: item has been modified by another user")
+	ErrInvalidReorder      = errors.New("invalid reorder hierarchy: cycle detected, missing parent folder, or max depth exceeded")
+	ErrCollectionItemLimit = errors.New("collection item limit exceeded")
 )
 
 type CollectionRepository struct {
@@ -35,20 +39,20 @@ func (r *CollectionRepository) CreateCollection(ctx context.Context, c *domain.C
 	}
 	query := `
 		INSERT INTO collections (id, workspace_id, project_id, name, description, min_role, version, created_by, last_modified_by, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $7, $8, $9)
+		VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $7, clock_timestamp(), clock_timestamp())
+		RETURNING created_at, updated_at
 	`
 	if c.ID == uuid.Nil {
 		c.ID = uuid.New()
 	}
-	now := time.Now().UTC()
 	c.Version = 1
-	c.CreatedAt = now
-	c.UpdatedAt = now
 
-	_, err := r.pool.Exec(ctx, query, c.ID, c.WorkspaceID, c.ProjectID, c.Name, c.Description, c.MinRole, c.CreatedBy, c.CreatedAt, c.UpdatedAt)
+	err := r.pool.QueryRow(ctx, query, c.ID, c.WorkspaceID, c.ProjectID, c.Name, c.Description, c.MinRole, c.CreatedBy).Scan(&c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to insert collection: %w", err)
 	}
+	c.CreatedAt = c.CreatedAt.UTC()
+	c.UpdatedAt = c.UpdatedAt.UTC()
 	return nil
 }
 
@@ -115,6 +119,9 @@ func (r *CollectionRepository) ListCollections(ctx context.Context, workspaceID,
 		}
 		collections = append(collections, &c)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate collections: %w", err)
+	}
 	return collections, nil
 }
 
@@ -122,22 +129,22 @@ func (r *CollectionRepository) ListCollections(ctx context.Context, workspaceID,
 func (r *CollectionRepository) UpdateCollection(ctx context.Context, c *domain.Collection, baseVersion int64) error {
 	query := `
 		UPDATE collections
-		SET name = $1, description = $2, min_role = $3, version = version + 1, last_modified_by = $4, updated_at = $5
-		WHERE id = $6 AND version = $7 AND deleted_at IS NULL
+		SET name = $1, description = $2, min_role = $3, version = version + 1, last_modified_by = $4, updated_at = clock_timestamp()
+		WHERE id = $5 AND version = $6 AND deleted_at IS NULL
+		RETURNING updated_at
 	`
-	now := time.Now().UTC()
 	if c.MinRole == "" {
 		c.MinRole = domain.ProjectRoleReader
 	}
-	result, err := r.pool.Exec(ctx, query, c.Name, c.Description, c.MinRole, c.LastModifiedBy, now, c.ID, baseVersion)
+	err := r.pool.QueryRow(ctx, query, c.Name, c.Description, c.MinRole, c.LastModifiedBy, c.ID, baseVersion).Scan(&c.UpdatedAt)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrVersionConflict
+		}
 		return fmt.Errorf("failed to update collection: %w", err)
 	}
-	if result.RowsAffected() == 0 {
-		return ErrVersionConflict
-	}
 	c.Version = baseVersion + 1
-	c.UpdatedAt = now
+	c.UpdatedAt = c.UpdatedAt.UTC()
 	return nil
 }
 
@@ -171,7 +178,11 @@ func (r *CollectionRepository) MoveCollection(ctx context.Context, id uuid.UUID,
 		}
 	}
 
-	now := time.Now().UTC()
+	var now time.Time
+	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		return fmt.Errorf("failed to read database timestamp: %w", err)
+	}
+	now = now.UTC()
 	query := `
 		UPDATE collections
 		SET workspace_id = $1, project_id = $2, version = version + 1, last_modified_by = $3, updated_at = $4
@@ -205,7 +216,11 @@ func (r *CollectionRepository) SoftDeleteCollection(ctx context.Context, id uuid
 	}
 	defer tx.Rollback(ctx)
 
-	now := time.Now().UTC()
+	var now time.Time
+	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		return fmt.Errorf("failed to read database timestamp: %w", err)
+	}
+	now = now.UTC()
 	query := `
 		UPDATE collections
 		SET deleted_at = $1, updated_at = $1, last_modified_by = $2, version = version + 1
@@ -240,7 +255,11 @@ func (r *CollectionRepository) CreateItem(ctx context.Context, item *domain.Coll
 	}
 	defer tx.Rollback(ctx)
 
-	now := time.Now().UTC()
+	var now time.Time
+	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		return fmt.Errorf("failed to read database timestamp: %w", err)
+	}
+	now = now.UTC()
 
 	// 1. Lock and touch parent collection
 	colQuery := `
@@ -254,6 +273,14 @@ func (r *CollectionRepository) CreateItem(ctx context.Context, item *domain.Coll
 	}
 	if res.RowsAffected() == 0 {
 		return ErrCollectionNotFound
+	}
+
+	var activeCount int
+	if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM collection_items WHERE collection_id = $1 AND deleted_at IS NULL`, item.CollectionID).Scan(&activeCount); err != nil {
+		return fmt.Errorf("failed to count collection items: %w", err)
+	}
+	if activeCount >= MaxItemsPerCollection {
+		return ErrCollectionItemLimit
 	}
 
 	if item.ID == uuid.Nil {
@@ -336,7 +363,11 @@ func (r *CollectionRepository) UpdateItem(ctx context.Context, item *domain.Coll
 	}
 	defer tx.Rollback(ctx)
 
-	now := time.Now().UTC()
+	var now time.Time
+	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		return fmt.Errorf("failed to read database timestamp: %w", err)
+	}
+	now = now.UTC()
 
 	// 1. Lock and touch parent collection
 	colQuery := `
@@ -418,7 +449,12 @@ func (r *CollectionRepository) SoftDeleteItem(ctx context.Context, id uuid.UUID,
 			return fmt.Errorf("failed to query item for deletion: %w", err)
 		}
 
-		now := time.Now().UTC()
+		var now time.Time
+		if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+			tx.Rollback(ctx)
+			return fmt.Errorf("failed to read database timestamp: %w", err)
+		}
+		now = now.UTC()
 
 		// 1. Lock and touch parent collection version first
 		colQuery := `
@@ -457,7 +493,7 @@ func (r *CollectionRepository) SoftDeleteItem(ctx context.Context, id uuid.UUID,
 			recursiveQuery := `
 				WITH RECURSIVE subtree AS (
 					SELECT id FROM collection_items WHERE id = $1 AND deleted_at IS NULL
-					UNION ALL
+					UNION
 					SELECT ci.id FROM collection_items ci
 					INNER JOIN subtree s ON ci.parent_id = s.id
 					WHERE ci.deleted_at IS NULL AND ci.collection_id = $2
@@ -537,6 +573,9 @@ func (r *CollectionRepository) ListActiveItemsByCollection(ctx context.Context, 
 		item.Type = domain.ItemType(typeStr)
 		items = append(items, &item)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate collection items: %w", err)
+	}
 	return items, nil
 }
 
@@ -577,6 +616,82 @@ func (r *CollectionRepository) BatchReorderItems(ctx context.Context, collection
 	return nil
 }
 
+type reorderTreeNode struct {
+	ID       uuid.UUID
+	ParentID *uuid.UUID
+	Type     domain.ItemType
+}
+
+// ValidateBatchReorderHierarchy verifies that applying the proposed parent_id updates
+// leaves every item pointing to a valid folder without cycles and within maxItemMoveDepth.
+func ValidateBatchReorderHierarchy(nodes map[uuid.UUID]reorderTreeNode, items []domain.ReorderItemPosition) error {
+	proposedParents := make(map[uuid.UUID]*uuid.UUID, len(nodes))
+	for id, node := range nodes {
+		proposedParents[id] = node.ParentID
+	}
+
+	for _, pos := range items {
+		if _, exists := nodes[pos.ID]; !exists {
+			return ErrItemNotFound
+		}
+		if pos.ParentID != nil {
+			if *pos.ParentID == pos.ID {
+				return ErrInvalidReorder
+			}
+			parentNode, exists := nodes[*pos.ParentID]
+			if !exists || parentNode.Type != domain.ItemTypeFolder {
+				return ErrInvalidReorder
+			}
+		}
+		proposedParents[pos.ID] = pos.ParentID
+	}
+
+	const (
+		unvisited = 0
+		visiting  = 1
+		visited   = 2
+	)
+	state := make(map[uuid.UUID]int, len(nodes))
+	depthCache := make(map[uuid.UUID]int, len(nodes))
+
+	var computeDepth func(id uuid.UUID) (int, error)
+	computeDepth = func(id uuid.UUID) (int, error) {
+		if st := state[id]; st == visiting {
+			return 0, ErrInvalidReorder
+		} else if st == visited {
+			return depthCache[id], nil
+		}
+
+		state[id] = visiting
+		parentID := proposedParents[id]
+		depth := 1
+		if parentID != nil {
+			parentNode, exists := nodes[*parentID]
+			if !exists || parentNode.Type != domain.ItemTypeFolder {
+				return 0, ErrInvalidReorder
+			}
+			parentDepth, err := computeDepth(*parentID)
+			if err != nil {
+				return 0, err
+			}
+			depth = parentDepth + 1
+		}
+		if depth > maxItemMoveDepth {
+			return 0, ErrInvalidReorder
+		}
+		state[id] = visited
+		depthCache[id] = depth
+		return depth, nil
+	}
+
+	for id := range nodes {
+		if _, err := computeDepth(id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *CollectionRepository) execBatchReorder(ctx context.Context, collectionID uuid.UUID, items []domain.ReorderItemPosition, modifiedBy uuid.UUID) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -584,21 +699,74 @@ func (r *CollectionRepository) execBatchReorder(ctx context.Context, collectionI
 	}
 	defer tx.Rollback(ctx)
 
-	now := time.Now().UTC()
+	// 1. Lock parent collection FIRST (collections -> collection_items lock order)
+	// and verify it exists and is active.
+	var colVersion int64
+	err = tx.QueryRow(ctx, `
+		SELECT version
+		FROM collections
+		WHERE id = $1 AND deleted_at IS NULL
+		FOR UPDATE
+	`, collectionID).Scan(&colVersion)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrCollectionNotFound
+		}
+		return fmt.Errorf("failed to lock collection for reorder: %w", err)
+	}
 
-	// 1. Touch parent collection version and updated_at FIRST.
-	// This acquires an exclusive row lock on collections(id) upfront, establishing a consistent
-	// lock order (collections -> collection_items) that prevents deadlocks with concurrent syncs or reorders.
+	// 2. Lock active items in deterministic UUID order and validate full hierarchy against cycles & max depth.
+	treeRows, err := tx.Query(ctx, `
+		SELECT id, parent_id, type
+		FROM collection_items
+		WHERE collection_id = $1 AND deleted_at IS NULL
+		ORDER BY id ASC
+		FOR UPDATE
+	`, collectionID)
+	if err != nil {
+		return fmt.Errorf("failed to lock collection items for reorder: %w", err)
+	}
+	nodes := make(map[uuid.UUID]reorderTreeNode)
+	for treeRows.Next() {
+		var id uuid.UUID
+		var parentID *uuid.UUID
+		var typeStr string
+		if err := treeRows.Scan(&id, &parentID, &typeStr); err != nil {
+			treeRows.Close()
+			return fmt.Errorf("failed to scan collection item for reorder: %w", err)
+		}
+		nodes[id] = reorderTreeNode{ID: id, ParentID: parentID, Type: domain.ItemType(typeStr)}
+	}
+	if err := treeRows.Err(); err != nil {
+		treeRows.Close()
+		return fmt.Errorf("failed to iterate collection items for reorder: %w", err)
+	}
+	treeRows.Close()
+
+	if err := ValidateBatchReorderHierarchy(nodes, items); err != nil {
+		return err
+	}
+
+	var now time.Time
+	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		return fmt.Errorf("failed to read database timestamp: %w", err)
+	}
+	now = now.UTC()
+
 	colQuery := `
 		UPDATE collections
 		SET updated_at = $1, last_modified_by = $2, version = version + 1
 		WHERE id = $3 AND deleted_at IS NULL
 	`
-	if _, err := tx.Exec(ctx, colQuery, now, modifiedBy, collectionID); err != nil {
+	res, err := tx.Exec(ctx, colQuery, now, modifiedBy, collectionID)
+	if err != nil {
 		return fmt.Errorf("failed to touch collection version: %w", err)
 	}
+	if res.RowsAffected() == 0 {
+		return ErrCollectionNotFound
+	}
 
-	// 2. Update items in deterministic sorted order
+	// 3. Update items in deterministic sorted order
 	query := `
 		UPDATE collection_items
 		SET parent_id = $1, sort_order = $2, updated_at = $3, last_modified_by = $4, version = version + 1

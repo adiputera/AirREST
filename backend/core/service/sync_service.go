@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/adiputera/airrest-backend/core/domain"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -53,7 +56,6 @@ func (s *SyncService) PullDelta(
 		Collections:  []*domain.Collection{},
 		Items:        []*domain.CollectionItem{},
 		Environments: []*domain.Environment{},
-		ServerTime:   time.Now().UTC(),
 	}
 
 	var userRole domain.ProjectRole
@@ -64,6 +66,44 @@ func (s *SyncService) PullDelta(
 			return nil, err
 		}
 	}
+
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin repeatable read delta transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var serverTime time.Time
+	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&serverTime); err != nil {
+		return nil, fmt.Errorf("failed to read database clock for delta sync: %w", err)
+	}
+	serverTime = serverTime.UTC()
+
+	// If any concurrent client write transaction is already active when our REPEATABLE READ snapshot
+	// is established, clamp server_time slightly before its xact_start (bounded to 10s) so its
+	// eventual commit will still satisfy updated_at > since on the client's next delta pull.
+	var minActiveStart *time.Time
+	if err := tx.QueryRow(ctx, `
+		SELECT MIN(xact_start)
+		FROM pg_stat_activity
+		WHERE datname = current_database()
+		  AND state = 'active'
+		  AND backend_type = 'client backend'
+		  AND pid <> pg_backend_pid()
+	`).Scan(&minActiveStart); err == nil && minActiveStart != nil {
+		candidate := minActiveStart.UTC().Add(-time.Millisecond)
+		floor := serverTime.Add(-10 * time.Second)
+		if candidate.Before(floor) {
+			candidate = floor
+		}
+		if candidate.Before(serverTime) {
+			serverTime = candidate
+		}
+	}
+	result.ServerTime = serverTime
 
 	// 1. Fetch Collections
 	var colQuery string
@@ -86,7 +126,7 @@ func (s *SyncService) PullDelta(
 		return nil, errors.New("must specify workspace_id or project_id")
 	}
 
-	colRows, err := s.pool.Query(ctx, colQuery, colParam, since)
+	colRows, err := tx.Query(ctx, colQuery, colParam, since)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query collections delta: %w", err)
 	}
@@ -141,7 +181,7 @@ func (s *SyncService) PullDelta(
 		`
 	}
 
-	itemRows, err := s.pool.Query(ctx, itemQuery, colParam, since)
+	itemRows, err := tx.Query(ctx, itemQuery, colParam, since)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query item deltas: %w", err)
 	}
@@ -193,7 +233,7 @@ func (s *SyncService) PullDelta(
 		`
 	}
 
-	envRows, err := s.pool.Query(ctx, envQuery, colParam, since)
+	envRows, err := tx.Query(ctx, envQuery, colParam, since)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query environments delta: %w", err)
 	}
@@ -222,6 +262,10 @@ func (s *SyncService) PullDelta(
 		return nil, fmt.Errorf("failed to read delta: %w", err)
 	}
 	envRows.Close()
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("failed to commit delta transaction: %w", err)
+	}
 
 	return result, nil
 }
@@ -478,6 +522,18 @@ type ImportBatchResult struct {
 	ItemVersions     map[string]int64 `json:"item_versions"`
 }
 
+type lockedImportCollection struct {
+	workspaceID *uuid.UUID
+	projectID   *uuid.UUID
+	minRole     domain.ProjectRole
+	deletedAt   *time.Time
+}
+
+func isRetryableSyncTxError(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && (pgErr.Code == "40P01" || pgErr.Code == "40001")
+}
+
 // ImportBatchWithSummary claims and migrates offline collections and returns summary metadata.
 func (s *SyncService) ImportBatchWithSummary(ctx context.Context, user *domain.User, workspaceID *uuid.UUID, projectID *uuid.UUID, collections []ImportCollectionRequest) (*ImportBatchResult, error) {
 	if (workspaceID == nil) == (projectID == nil) {
@@ -486,6 +542,40 @@ func (s *SyncService) ImportBatchWithSummary(ctx context.Context, user *domain.U
 	if err := validateImport(collections); err != nil {
 		return nil, err
 	}
+	for _, colReq := range collections {
+		if err := ValidateName(colReq.Name); err != nil {
+			return nil, err
+		}
+	}
+
+	candidateIDMap := make(map[string]struct{}, len(collections))
+	candidateIDs := make([]string, 0, len(collections))
+	for _, colReq := range collections {
+		if parsed, err := uuid.Parse(colReq.ID); err == nil && parsed != uuid.Nil {
+			idStr := parsed.String()
+			if _, ok := candidateIDMap[idStr]; !ok {
+				candidateIDMap[idStr] = struct{}{}
+				candidateIDs = append(candidateIDs, idStr)
+			}
+		}
+	}
+	sort.Strings(candidateIDs)
+
+	const maxAttempts = 3
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		result, err := s.importBatchTxAttempt(ctx, user, workspaceID, projectID, collections, candidateIDs)
+		if err == nil {
+			return result, nil
+		}
+		if isRetryableSyncTxError(err) && attempt < maxAttempts-1 && ctx.Err() == nil {
+			continue
+		}
+		return nil, err
+	}
+	return nil, ErrImportConflict
+}
+
+func (s *SyncService) importBatchTxAttempt(ctx context.Context, user *domain.User, workspaceID *uuid.UUID, projectID *uuid.UUID, collections []ImportCollectionRequest, candidateIDs []string) (*ImportBatchResult, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start import transaction: %w", err)
@@ -495,43 +585,69 @@ func (s *SyncService) ImportBatchWithSummary(ctx context.Context, user *domain.U
 	if err != nil {
 		return nil, err
 	}
+
+	lockedCols := make(map[uuid.UUID]lockedImportCollection, len(candidateIDs))
+	if len(candidateIDs) > 0 {
+		rows, err := tx.Query(ctx, "SELECT id, workspace_id, project_id, min_role, deleted_at FROM collections WHERE id = ANY($1::text[]::uuid[]) ORDER BY id ASC FOR UPDATE", candidateIDs)
+		if err != nil {
+			return nil, fmt.Errorf("failed to inspect import collections: %w", err)
+		}
+		for rows.Next() {
+			var id uuid.UUID
+			var row lockedImportCollection
+			if err := rows.Scan(&id, &row.workspaceID, &row.projectID, &row.minRole, &row.deletedAt); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("failed to scan import collection: %w", err)
+			}
+			lockedCols[id] = row
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("failed to iterate import collections: %w", err)
+		}
+		rows.Close()
+	}
+
 	result := &ImportBatchResult{
 		Message:          "collections successfully imported into cloud scope",
 		ImportedExamples: 0,
 		ItemVersions:     make(map[string]int64),
 	}
-	now := time.Now().UTC()
+	var now time.Time
+	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		return nil, fmt.Errorf("failed to read database timestamp: %w", err)
+	}
+	now = now.UTC()
+
+	seenColIDs := make(map[uuid.UUID]struct{}, len(collections))
 	for _, colReq := range collections {
+		colName := strings.TrimSpace(colReq.Name)
 		colID, err := uuid.Parse(colReq.ID)
 		exists := false
-		if err != nil {
+		if err != nil || colID == uuid.Nil {
 			colID = uuid.New()
-		} else {
-			var existingWsID, existingProjID *uuid.UUID
-			var minRole domain.ProjectRole
-			var deletedAt *time.Time
-			err := tx.QueryRow(ctx, "SELECT workspace_id, project_id, min_role, deleted_at FROM collections WHERE id = $1 FOR UPDATE", colID).Scan(&existingWsID, &existingProjID, &minRole, &deletedAt)
-			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-				return nil, fmt.Errorf("failed to inspect import collection: %w", err)
-			}
-			if err == nil {
-				sameScope := (workspaceID != nil && existingWsID != nil && *workspaceID == *existingWsID) || (projectID != nil && existingProjID != nil && *projectID == *existingProjID)
-				if !sameScope {
-					colID = uuid.New()
-				} else {
-					if deletedAt != nil || !CanAccessCollection(role, minRole) {
-						return nil, ErrForbidden
-					}
-					exists = true
+		} else if _, dup := seenColIDs[colID]; dup {
+			colID = uuid.New()
+		} else if existing, ok := lockedCols[colID]; ok {
+			sameScope := (workspaceID != nil && existing.workspaceID != nil && *workspaceID == *existing.workspaceID) ||
+				(projectID != nil && existing.projectID != nil && *projectID == *existing.projectID)
+			if !sameScope {
+				colID = uuid.New()
+			} else {
+				if existing.deletedAt != nil || !CanAccessCollection(role, existing.minRole) {
+					return nil, ErrForbidden
 				}
+				exists = true
 			}
 		}
+		seenColIDs[colID] = struct{}{}
+
 		if exists {
-			_, err = tx.Exec(ctx, `UPDATE collections SET name=$2, description=$3, version=version+1, last_modified_by=$4, updated_at=$5 WHERE id=$1`, colID, colReq.Name, colReq.Description, user.ID, now)
+			_, err = tx.Exec(ctx, `UPDATE collections SET name=$2, description=$3, version=version+1, last_modified_by=$4, updated_at=$5 WHERE id=$1`, colID, colName, colReq.Description, user.ID, now)
 		} else {
 			var affected int64
 			res, insertErr := tx.Exec(ctx, `INSERT INTO collections (id, workspace_id, project_id, name, description, min_role, version, created_by, last_modified_by, created_at, updated_at)
-    VALUES ($1,$2,$3,$4,$5,'reader',1,$6,$6,$7,$7) ON CONFLICT (id) DO NOTHING`, colID, workspaceID, projectID, colReq.Name, colReq.Description, user.ID, now)
+    VALUES ($1,$2,$3,$4,$5,'reader',1,$6,$6,$7,$7) ON CONFLICT (id) DO NOTHING`, colID, workspaceID, projectID, colName, colReq.Description, user.ID, now)
 			err = insertErr
 			if err == nil {
 				affected = res.RowsAffected()
@@ -543,7 +659,8 @@ func (s *SyncService) ImportBatchWithSummary(ctx context.Context, user *domain.U
 		if err != nil {
 			return nil, fmt.Errorf("failed to write imported collection: %w", err)
 		}
-		if err := s.insertImportItems(ctx, tx, colID, nil, colReq.Items, user.ID, now, result); err != nil {
+		seenItemIDs := make(map[uuid.UUID]struct{})
+		if err := s.insertImportItems(ctx, tx, colID, nil, colReq.Items, user.ID, now, result, seenItemIDs); err != nil {
 			return nil, err
 		}
 	}
@@ -568,15 +685,18 @@ func (s *SyncService) insertImportItems(
 	userID uuid.UUID,
 	now time.Time,
 	summary *ImportBatchResult,
+	seenItemIDs map[uuid.UUID]struct{},
 ) error {
 	for _, itemReq := range items {
 		itemID, err := uuid.Parse(itemReq.ID)
-		if err != nil {
+		if err != nil || itemID == uuid.Nil {
+			itemID = uuid.New()
+		} else if _, dup := seenItemIDs[itemID]; dup {
 			itemID = uuid.New()
 		} else {
-			// Check if item exists in a different collection
+			// Check foreign collision without FOR UPDATE to avoid cross-collection lock contention.
 			var existingColID uuid.UUID
-			if err := tx.QueryRow(ctx, "SELECT collection_id FROM collection_items WHERE id = $1 FOR UPDATE", itemID).Scan(&existingColID); err == nil {
+			if err := tx.QueryRow(ctx, "SELECT collection_id FROM collection_items WHERE id = $1", itemID).Scan(&existingColID); err == nil {
 				if existingColID != colID {
 					itemID = uuid.New()
 				}
@@ -584,6 +704,10 @@ func (s *SyncService) insertImportItems(
 				return fmt.Errorf("failed to inspect import item: %w", err)
 			}
 		}
+		for _, dup := seenItemIDs[itemID]; dup; _, dup = seenItemIDs[itemID] {
+			itemID = uuid.New()
+		}
+		seenItemIDs[itemID] = struct{}{}
 
 		itemType := itemReq.Type
 		if itemType == "" {
@@ -620,8 +744,10 @@ func (s *SyncService) insertImportItems(
 			ON CONFLICT (id) DO UPDATE SET
 				collection_id = EXCLUDED.collection_id,
 				parent_id = EXCLUDED.parent_id,
+				type = EXCLUDED.type,
 				deleted_at = NULL,
 				name = EXCLUDED.name,
+				sort_order = EXCLUDED.sort_order,
 				method = EXCLUDED.method,
 				url = EXCLUDED.url,
 				params = EXCLUDED.params,
@@ -646,7 +772,7 @@ func (s *SyncService) insertImportItems(
 
 		var savedVersion int64
 		err = tx.QueryRow(ctx, insertItemQuery,
-			itemID, colID, parentID, itemType, itemReq.Name, itemReq.SortOrder,
+			itemID, colID, parentID, itemType, strings.TrimSpace(itemReq.Name), itemReq.SortOrder,
 			itemReq.Method, itemReq.URL, itemReq.Params, itemReq.PathVariables, itemReq.Headers, itemReq.Auth,
 			itemReq.BodyType, itemReq.RawType, itemReq.BodyContent, itemReq.GraphQLQuery,
 			itemReq.GraphQLVariables, itemReq.BodyFormData, itemReq.PreRequestScript,
@@ -664,7 +790,7 @@ func (s *SyncService) insertImportItems(
 			summary.ItemVersions[itemID.String()] = savedVersion
 		}
 		if len(itemReq.Items) > 0 {
-			if err := s.insertImportItems(ctx, tx, colID, &itemID, itemReq.Items, userID, now, summary); err != nil {
+			if err := s.insertImportItems(ctx, tx, colID, &itemID, itemReq.Items, userID, now, summary, seenItemIDs); err != nil {
 				return err
 			}
 		}

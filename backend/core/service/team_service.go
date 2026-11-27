@@ -36,13 +36,13 @@ func (s *TeamService) CreateTeam(ctx context.Context, user *domain.User, name, d
 	}
 
 	name = strings.TrimSpace(name)
-	if name == "" {
-		return nil, errors.New("team name is required")
+	if err := ValidateName(name); err != nil {
+		return nil, err
 	}
 
 	var desc *string
-	if description != "" {
-		desc = &description
+	if trimmedDesc := strings.TrimSpace(description); trimmedDesc != "" {
+		desc = &trimmedDesc
 	}
 
 	team := &domain.Team{
@@ -52,17 +52,9 @@ func (s *TeamService) CreateTeam(ctx context.Context, user *domain.User, name, d
 		CreatedBy:   user.ID,
 	}
 
-	if err := s.teamRepo.Create(ctx, team); err != nil {
+	if err := s.teamRepo.CreateWithAdmin(ctx, team, user.ID); err != nil {
 		return nil, err
 	}
-
-	// Add creator as Team Admin
-	_ = s.teamRepo.AddMember(ctx, &domain.TeamMember{
-		ID:     uuid.New(),
-		TeamID: team.ID,
-		UserID: user.ID,
-		Role:   domain.TeamRoleAdmin,
-	})
 
 	return team, nil
 }
@@ -79,8 +71,8 @@ func (s *TeamService) UpdateTeam(ctx context.Context, user *domain.User, id uuid
 	}
 
 	name = strings.TrimSpace(name)
-	if name == "" {
-		return nil, errors.New("team name is required")
+	if err := ValidateName(name); err != nil {
+		return nil, err
 	}
 	team.Name = name
 
@@ -147,15 +139,18 @@ func (s *TeamService) AddMember(ctx context.Context, user *domain.User, teamID, 
 	if err != nil || !isAdmin {
 		return ErrTeamAdminRequired
 	}
+	if role != domain.TeamRoleAdmin && role != domain.TeamRoleMember {
+		return newValidationError("role", "invalid team role, must be admin or member")
+	}
 
 	// Verify target user exists
 	targetUser, err := s.userRepo.GetByID(ctx, targetUserID)
 	if err != nil {
-		return fmt.Errorf("target user not found: %w", err)
+		return fmt.Errorf("target user lookup failed: %w", err)
 	}
 
 	if targetUser.IsSuperadmin() {
-		return errors.New("cannot modify superadmin role in team")
+		return fmt.Errorf("%w: cannot modify superadmin role in team", ErrForbidden)
 	}
 
 	return s.teamRepo.AddMember(ctx, &domain.TeamMember{
@@ -174,7 +169,7 @@ func (s *TeamService) RemoveMember(ctx context.Context, user *domain.User, teamI
 
 	targetUser, err := s.userRepo.GetByID(ctx, targetUserID)
 	if err == nil && targetUser.IsSuperadmin() {
-		return errors.New("cannot remove superadmin from team")
+		return fmt.Errorf("%w: cannot remove superadmin from team", ErrForbidden)
 	}
 
 	return s.teamRepo.RemoveMember(ctx, teamID, targetUserID)

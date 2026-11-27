@@ -804,7 +804,7 @@ test('T-S2 (S2): runScriptInSandbox ignores MessageEvent from foreign sources an
   assert.equal(result.success, true);
   assert.equal(result.environment.k, 'v');
   assert.equal(result.environment.forged, undefined);
-  assert.equal(removed, false);
+  assert.equal(removed, true);
 });
 
 test('T-S2 (C3): runScriptInSandbox tears down hanging iframe from DOM on timeout', async () => {

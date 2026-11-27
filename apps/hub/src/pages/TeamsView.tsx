@@ -70,49 +70,59 @@ export const TeamsView: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // Ignore responses after navigation, session changes, or unmount.
+  const isAuthenticated = Boolean(token);
+  const teamsSeqRef = useRef(0);
+  const membersSeqRef = useRef(0);
+
   useEffect(() => {
-    if (!token) return;
+    if (!isAuthenticated) return;
+    const seq = ++teamsSeqRef.current;
     let cancelled = false;
     const loadTeams = async () => {
+      const live = useHubStore.getState();
+      if (!live.token) return;
       setIsLoadingTeams(true);
       setErrorMsg(null);
       try {
-        const data = await apiListTeams(apiUrl, token, refreshToken || undefined);
-        if (cancelled) return;
+        const data = await apiListTeams(apiUrl, live.token, live.refreshToken || undefined);
+        if (cancelled || seq !== teamsSeqRef.current) return;
         setTeams(data);
         if (!data.some((team) => team.id === useHubStore.getState().selectedTeamId)) {
           setSelectedTeamId(data[0]?.id || null);
         }
       } catch (err) {
-        if (!cancelled) setErrorMsg(err instanceof Error ? err.message : 'Failed to load teams');
+        if (!cancelled && seq === teamsSeqRef.current) setErrorMsg(err instanceof Error ? err.message : 'Failed to load teams');
       } finally {
-        if (!cancelled) setIsLoadingTeams(false);
+        if (!cancelled && seq === teamsSeqRef.current) setIsLoadingTeams(false);
       }
     };
     loadTeams();
     return () => { cancelled = true; };
-  }, [apiUrl, token]);
+  }, [apiUrl, isAuthenticated, user?.id]);
 
   useEffect(() => {
+    const seq = ++membersSeqRef.current;
     setMembers([]);
     setIsLoadingMembers(false);
-    if (!selectedTeamId || !token) return;
+    if (!selectedTeamId || !isAuthenticated) return;
     let cancelled = false;
     const loadMembers = async () => {
+      const live = useHubStore.getState();
+      if (!live.token) return;
       setIsLoadingMembers(true);
       try {
-        const data = await apiListTeamMembers(apiUrl, token, selectedTeamId, refreshToken || undefined);
-        if (cancelled || useHubStore.getState().selectedTeamId !== selectedTeamId) return;
+        const data = await apiListTeamMembers(apiUrl, live.token, selectedTeamId, live.refreshToken || undefined);
+        if (cancelled || seq !== membersSeqRef.current || useHubStore.getState().selectedTeamId !== selectedTeamId) return;
         setMembers(data);
       } catch (err) {
-        if (!cancelled) setErrorMsg(err instanceof Error ? err.message : 'Failed to load members');
+        if (!cancelled && seq === membersSeqRef.current) setErrorMsg(err instanceof Error ? err.message : 'Failed to load members');
       } finally {
-        if (!cancelled) setIsLoadingMembers(false);
+        if (!cancelled && seq === membersSeqRef.current) setIsLoadingMembers(false);
       }
     };
     loadMembers();
     return () => { cancelled = true; };
-  }, [selectedTeamId, apiUrl, token]);
+  }, [selectedTeamId, apiUrl, isAuthenticated, user?.id]);
 
   const activeTeam = teams.find((t) => t.id === selectedTeamId);
   const isTeamAdmin = user?.role === 'superadmin' || activeTeam?.user_role === 'admin';
@@ -209,9 +219,10 @@ export const TeamsView: React.FC = () => {
     }
     setIsSearchingUsers(true);
     try {
-      const results = await apiSearchUsers(apiUrl, token, query.trim(), refreshToken || undefined);
+      const live = useHubStore.getState();
+      const results = await apiSearchUsers(apiUrl, live.token || token, query.trim(), (live.refreshToken || refreshToken) || undefined);
       if (seq === searchSeqRef.current) {
-        setSearchResults(results);
+        setSearchResults(results.filter((u) => u.role !== 'superadmin'));
       }
     } catch {
       if (seq === searchSeqRef.current) {
@@ -375,32 +386,48 @@ export const TeamsView: React.FC = () => {
     }
   };
 
+  const [selfDemoteConfirmed, setSelfDemoteConfirmed] = useState(false);
+
   // Handle Update Member Role
   const handleOpenEditMember = (member: TeamMember) => {
     setEditingMember(member);
     setEditRole(member.role);
+    setSelfDemoteConfirmed(false);
     setErrorMsg(null);
   };
 
   const handleCloseEditMember = () => {
     setEditingMember(null);
     setEditRole('member');
+    setSelfDemoteConfirmed(false);
     setErrorMsg(null);
   };
 
   const handleUpdateRole = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!token || !selectedTeamId || !editingMember) return;
+    const live = useHubStore.getState();
+    if (!live.token || !selectedTeamId || !editingMember) return;
+    if (editingMember.user_id === user?.id && editRole !== editingMember.role && !selfDemoteConfirmed) {
+      return;
+    }
     setIsUpdatingRole(true);
     setErrorMsg(null);
     try {
-      await apiAddTeamMember(apiUrl, token, selectedTeamId, editingMember.user_id, editRole, refreshToken || undefined);
-      if (useHubStore.getState().selectedTeamId !== selectedTeamId) return;
-      const updatedMembers = await apiListTeamMembers(apiUrl, token, selectedTeamId, refreshToken || undefined);
-      if (useHubStore.getState().selectedTeamId !== selectedTeamId) return;
+      const targetTeamId = selectedTeamId;
+      await apiAddTeamMember(apiUrl, live.token, targetTeamId, editingMember.user_id, editRole, live.refreshToken || undefined);
+      if (useHubStore.getState().selectedTeamId !== targetTeamId) return;
+      const afterRoleAuth = useHubStore.getState();
+      const updatedMembers = await apiListTeamMembers(
+        apiUrl,
+        afterRoleAuth.token || live.token,
+        targetTeamId,
+        afterRoleAuth.refreshToken || undefined
+      );
+      if (useHubStore.getState().selectedTeamId !== targetTeamId) return;
       setMembers(updatedMembers);
       if (editingMember.user_id === user?.id) {
-        const updatedTeams = await apiListTeams(apiUrl, token, refreshToken || undefined);
+        const latestAuth = useHubStore.getState();
+        const updatedTeams = await apiListTeams(apiUrl, latestAuth.token || live.token, latestAuth.refreshToken || undefined);
         setTeams(updatedTeams);
       }
       handleCloseEditMember();
@@ -1054,6 +1081,26 @@ export const TeamsView: React.FC = () => {
                 </select>
               </div>
 
+              {editingMember.user_id === user?.id && editRole !== editingMember.role && (
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200 space-y-2">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="h-4 w-4 shrink-0 text-amber-400 mt-0.5" />
+                    <span>
+                      Changing your own team role from <strong>{editingMember.role}</strong> to <strong>{editRole}</strong> may immediately remove your team admin access.
+                    </span>
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer select-none text-[11px] font-medium">
+                    <input
+                      type="checkbox"
+                      checked={selfDemoteConfirmed}
+                      onChange={(e) => setSelfDemoteConfirmed(e.target.checked)}
+                      className="h-3.5 w-3.5 rounded border-amber-500/50 bg-zinc-900 text-amber-500 focus:ring-amber-500"
+                    />
+                    <span>I understand and want to change my own role</span>
+                  </label>
+                </div>
+              )}
+
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
@@ -1064,7 +1111,10 @@ export const TeamsView: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  disabled={isUpdatingRole}
+                  disabled={
+                    isUpdatingRole ||
+                    (editingMember.user_id === user?.id && editRole !== editingMember.role && !selfDemoteConfirmed)
+                  }
                   className="flex items-center gap-1.5 rounded-lg bg-sky-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-sky-500 transition shadow-md disabled:opacity-50"
                 >
                   {isUpdatingRole ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Save Changes'}

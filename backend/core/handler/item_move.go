@@ -39,6 +39,8 @@ func (h *CollectionHandler) MoveItem(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusNotFound, "item or collection not found", "NOT_FOUND")
 		case errors.Is(err, postgres.ErrVersionConflict):
 			response.Error(w, http.StatusConflict, "item location or collection access changed; refresh before retrying", "CONFLICT")
+		case errors.Is(err, postgres.ErrCollectionItemLimit):
+			response.Error(w, http.StatusRequestEntityTooLarge, err.Error(), "LIMIT_EXCEEDED")
 		case errors.Is(err, postgres.ErrInvalidItemMove):
 			response.Error(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST")
 		default:

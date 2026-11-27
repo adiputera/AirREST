@@ -1,4 +1,5 @@
 import type { FunctionalRunReport, FunctionalStepResult } from '../types/api';
+import { sanitizeFunctionalReportForShare } from './reportShare';
 
 function escapeHtml(raw: unknown): string {
   return String(raw ?? '')
@@ -9,8 +10,38 @@ function escapeHtml(raw: unknown): string {
     .replace(/'/g, '&#39;');
 }
 
+function stripInvalidXmlChars(raw: string): string {
+  let out = '';
+  for (let i = 0; i < raw.length; i++) {
+    const code = raw.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      if (i + 1 < raw.length) {
+        const low = raw.charCodeAt(i + 1);
+        if (low >= 0xdc00 && low <= 0xdfff) {
+          out += raw[i] + raw[i + 1];
+          i += 1;
+        }
+      }
+      continue;
+    }
+    if (code >= 0xdc00 && code <= 0xdfff) {
+      continue;
+    }
+    if (
+      code === 0x9 ||
+      code === 0xa ||
+      code === 0xd ||
+      (code >= 0x20 && code <= 0xd7ff) ||
+      (code >= 0xe000 && code <= 0xfffd)
+    ) {
+      out += raw[i];
+    }
+  }
+  return out;
+}
+
 function escapeXml(raw: unknown): string {
-  return String(raw ?? '')
+  return stripInvalidXmlChars(String(raw ?? ''))
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -18,8 +49,18 @@ function escapeXml(raw: unknown): string {
     .replace(/'/g, '&apos;');
 }
 
+function safeIsoTimestamp(ms: number): string {
+  const clamped = typeof ms === 'number' && Number.isFinite(ms) && ms >= 0 ? ms : 0;
+  try {
+    return new Date(clamped).toISOString();
+  } catch {
+    return new Date(0).toISOString();
+  }
+}
+
 export function exportFunctionalReportJson(report: FunctionalRunReport): string {
-  return JSON.stringify(report, null, 2);
+  const safeReport = sanitizeFunctionalReportForShare(report);
+  return JSON.stringify(safeReport, null, 2);
 }
 
 function formatStepStatusLabel(status: FunctionalStepResult['status']): string {
@@ -31,9 +72,10 @@ function formatStepStatusLabel(status: FunctionalStepResult['status']): string {
 }
 
 export function exportFunctionalReportHtml(report: FunctionalRunReport): string {
-  const startedLabel = new Date(report.startedAt).toISOString();
+  const safeReport = sanitizeFunctionalReportForShare(report);
+  const startedLabel = safeIsoTimestamp(safeReport.startedAt);
   const iterationsMap = new Map<number, FunctionalStepResult[]>();
-  for (const step of report.steps) {
+  for (const step of safeReport.steps || []) {
     const arr = iterationsMap.get(step.iteration) || [];
     arr.push(step);
     iterationsMap.set(step.iteration, arr);
@@ -108,13 +150,15 @@ export function exportFunctionalReportHtml(report: FunctionalRunReport): string 
     })
     .join('\n');
 
-  const overallPassed = report.requestsErrored === 0 && report.testsFailed === 0 && report.requestsFailed === 0;
+  const overallPassed =
+    safeReport.requestsErrored === 0 && safeReport.testsFailed === 0 && safeReport.requestsFailed === 0;
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>${escapeHtml(report.title)} — Functional Report</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';" />
+  <title>${escapeHtml(safeReport.title)} — Functional Report</title>
   <style>
     body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 24px; line-height: 1.5; }
     .container { max-width: 1120px; margin: 0 auto; }
@@ -149,17 +193,17 @@ export function exportFunctionalReportHtml(report: FunctionalRunReport): string 
   <div class="container">
     <header>
       <div>
-        <h1>${escapeHtml(report.title)}</h1>
-        <div class="meta">Started: ${escapeHtml(startedLabel)} • Duration: ${(report.durationMs / 1000).toFixed(2)}s • Status: ${escapeHtml(report.status)}</div>
+        <h1>${escapeHtml(safeReport.title)}</h1>
+        <div class="meta">Started: ${escapeHtml(startedLabel)} • Duration: ${(Number(safeReport.durationMs || 0) / 1000).toFixed(2)}s • Status: ${escapeHtml(safeReport.status)}</div>
       </div>
       <span class="badge ${overallPassed ? 'badge-pass' : 'badge-fail'}">${overallPassed ? 'ALL PASSED' : 'FAILURES DETECTED'}</span>
     </header>
     <div class="kpis">
-      <div class="kpi"><div class="kpi-label">Iterations</div><div class="kpi-val">${report.completedIterations} / ${report.plannedIterations}</div></div>
-      <div class="kpi"><div class="kpi-label">Requests Executed</div><div class="kpi-val">${report.totalRequestsExecuted}</div></div>
-      <div class="kpi"><div class="kpi-label">Tests Passed</div><div class="kpi-val">${report.testsPassed}</div></div>
-      <div class="kpi"><div class="kpi-label">Tests Failed</div><div class="kpi-val">${report.testsFailed}</div></div>
-      <div class="kpi"><div class="kpi-label">Avg Latency</div><div class="kpi-val">${report.avgResponseTimeMs} ms</div></div>
+      <div class="kpi"><div class="kpi-label">Iterations</div><div class="kpi-val">${Number(safeReport.completedIterations || 0)} / ${Number(safeReport.plannedIterations || 0)}</div></div>
+      <div class="kpi"><div class="kpi-label">Requests Executed</div><div class="kpi-val">${Number(safeReport.totalRequestsExecuted || 0)}</div></div>
+      <div class="kpi"><div class="kpi-label">Tests Passed</div><div class="kpi-val">${Number(safeReport.testsPassed || 0)}</div></div>
+      <div class="kpi"><div class="kpi-label">Tests Failed</div><div class="kpi-val">${Number(safeReport.testsFailed || 0)}</div></div>
+      <div class="kpi"><div class="kpi-label">Avg Latency</div><div class="kpi-val">${Number(safeReport.avgResponseTimeMs || 0)} ms</div></div>
     </div>
     ${iterationBlocks || '<p>No request steps executed.</p>'}
   </div>
@@ -168,8 +212,9 @@ export function exportFunctionalReportHtml(report: FunctionalRunReport): string 
 }
 
 export function exportFunctionalReportJunitXml(report: FunctionalRunReport): string {
+  const safeReport = sanitizeFunctionalReportForShare(report);
   const iterationsMap = new Map<number, FunctionalStepResult[]>();
-  for (const step of report.steps) {
+  for (const step of safeReport.steps || []) {
     const arr = iterationsMap.get(step.iteration) || [];
     arr.push(step);
     iterationsMap.set(step.iteration, arr);
@@ -264,9 +309,9 @@ export function exportFunctionalReportJunitXml(report: FunctionalRunReport): str
     totalSkipped += suiteSkipped;
 
     suiteXmlBlocks.push(
-      `  <testsuite name="${escapeXml(`${report.title} - Iteration ${iterNum}`)}" tests="${suiteTests}" failures="${suiteFailures}" errors="${suiteErrors}" skipped="${suiteSkipped}" time="${suiteTimeSec.toFixed(3)}" timestamp="${escapeXml(new Date(report.startedAt).toISOString())}">\n${cases.join('\n')}\n  </testsuite>`
+      `  <testsuite name="${escapeXml(`${safeReport.title} - Iteration ${iterNum}`)}" tests="${suiteTests}" failures="${suiteFailures}" errors="${suiteErrors}" skipped="${suiteSkipped}" time="${suiteTimeSec.toFixed(3)}" timestamp="${escapeXml(safeIsoTimestamp(safeReport.startedAt))}">\n${cases.join('\n')}\n  </testsuite>`
     );
   }
 
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<testsuites name="${escapeXml(report.title)}" tests="${totalTests}" failures="${totalFailures}" errors="${totalErrors}" skipped="${totalSkipped}" time="${((report.durationMs || 0) / 1000).toFixed(3)}">\n${suiteXmlBlocks.join('\n')}\n</testsuites>\n`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<testsuites name="${escapeXml(safeReport.title)}" tests="${totalTests}" failures="${totalFailures}" errors="${totalErrors}" skipped="${totalSkipped}" time="${((Number(safeReport.durationMs) || 0) / 1000).toFixed(3)}">\n${suiteXmlBlocks.join('\n')}\n</testsuites>\n`;
 }

@@ -1359,3 +1359,138 @@ test('perfStorage isolates identical report IDs across distinct scopes and syncR
   assert.equal(missingBlobRes.ok, false);
   assert.match(missingBlobRes.error, /doc\.pdf/i);
 });
+
+test('RUN-03: perfComparison & parseImportedPerformanceReport guard sparse seconds, __proto__, and non-finite inputs', () => {
+  const { perfComparison } = loadCommonModules();
+
+  const payload = JSON.stringify({
+    id: 'rep-poison',
+    title: 'Perf',
+    sourceType: 'collection',
+    sourceId: 'c1',
+    startedAt: Date.now() + 999_999_999_999,
+    finishedAt: Number.NaN,
+    durationMs: -50,
+    status: 'completed',
+    engineMode: 'js_fallback',
+    platformId: 'web',
+    executionMode: 'sequential',
+    configSnapshot: {
+      loadProfile: { profile: 'fixed', virtualUsers: 999_999, baseLoad: 1, durationValue: 999_999, durationUnit: 's', handles: {}, thinkTimeMs: 0 },
+      network: { requestTimeoutMs: 5000, followRedirects: true, ignoreSslErrors: false },
+      requestCount: 1,
+      setupRequestCount: 0,
+      runInLoopScripts: false,
+    },
+    summary: { totalRequests: 1, errorCount: 0, errorRatePct: 0, requestsPerSec: 1, maxRequestsPerSec: 1, avgMs: 10, minMs: 10, maxMs: 10, p90Ms: 10, p95Ms: 10, p99Ms: 10, bytesReceived: 10 },
+    timeSeries: [
+      { second: 1_000_000_000, timestampMs: 1000, virtualUsers: 1, totalRequests: 1, errorCount: 0, errorRatePct: 0, requestsPerSec: 1, avgMs: 10, minMs: 10, maxMs: 10, p90Ms: 10, p95Ms: 10, p99Ms: 10 },
+    ],
+    endpoints: [
+      { requestId: '__proto__', name: 'Evil', method: 'GET', path: '/evil', totalRequests: 1, errorCount: 0, errorRatePct: 0, requestsPerSec: 1, maxRequestsPerSec: 1, avgMs: 10, minMs: 10, maxMs: 10, p90Ms: 10, p95Ms: 10, p99Ms: 10, bytesReceived: 10 },
+    ],
+  });
+
+  const parsed = perfComparison.parseImportedPerformanceReport(payload);
+  assert.ok(parsed.report);
+  assert.ok(parsed.report.startedAt <= Date.now() + 86_400_001);
+  assert.equal(parsed.report.durationMs, 0);
+  assert.equal(parsed.report.configSnapshot.loadProfile.virtualUsers, 10_000);
+  assert.equal(parsed.report.timeSeries[0].second, 7200);
+  const cmp = perfComparison.computePerformanceComparison(parsed.report, parsed.report);
+  assert.equal(cmp.alignedSeconds.length, 1);
+  assert.equal(({}).polluted, undefined);
+});
+
+test('NAT-02 (JS): perfRunner enforces 10 MiB response size limit and avoids loading huge payloads', async () => {
+  const { perfRunner } = loadCommonModules();
+  const server = http.createServer((_req, res) => {
+    const bigHeaderBytes = 10 * 1024 * 1024 + 4096;
+    res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': String(bigHeaderBytes) });
+    res.end('x');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const addr = server.address();
+  try {
+    const res = await perfRunner.executePerfHttpStep(
+      {
+        id: 'req-big',
+        name: 'Big',
+        method: 'GET',
+        url: `http://127.0.0.1:${addr.port}/big`,
+        headers: [],
+        params: [],
+        auth: { type: 'none' },
+        bodyType: 'none',
+        bodyContent: '',
+        bodyFormData: [],
+        bodyUrlEncoded: [],
+      },
+      {},
+      new AbortController().signal,
+      undefined,
+      { requestTimeoutMs: 5000, followRedirects: true, ignoreSslErrors: false },
+      false,
+    );
+    assert.equal(res.isError, true);
+    assert.match(res.errorMessage || '', /10 MiB|exceeded/i);
+  } finally {
+    server.close();
+  }
+});
+
+test('RUN-07/RUN-09/RUN-11/RUN-12/RUN-15: CSV parser handles inline quotes & empty quoted rows & duplicate headers, scope keys include cloudApiUrl, and setup IDs stay pinned on folder/request resync', () => {
+  const { perfDataFile, perfStorage, perfLaunch } = loadCommonModules();
+
+  // RUN-09: duplicate headers rejected; inline quote inside unquoted field splits on comma; quoted empty cell kept
+  assert.throws(() => perfDataFile.parseCsvDataFile('token,token\na,b', 100), /duplicate/i);
+  const inlineQuote = perfDataFile.parseCsvDataFile('a,b\nfoo"bar,baz', 100);
+  assert.deepEqual(JSON.parse(JSON.stringify(inlineQuote.rows)), [{ a: 'foo"bar', b: 'baz' }]);
+  const emptyQuoted = perfDataFile.parseCsvDataFile('col\n""', 100);
+  assert.equal(emptyQuoted.rows.length, 1);
+
+  // RUN-07: scope key isolates distinct cloud servers
+  assert.notEqual(
+    perfStorage.buildPerfScopeKey({
+      workspaceMode: 'cloud',
+      cloudApiUrl: 'https://api-one.example.com',
+      cloudUserId: 'u1',
+      activeScopeType: 'personal',
+      activeScopeId: 'ws1',
+    }),
+    perfStorage.buildPerfScopeKey({
+      workspaceMode: 'cloud',
+      cloudApiUrl: 'https://api-two.example.com',
+      cloudUserId: 'u1',
+      activeScopeType: 'personal',
+      activeScopeId: 'ws1',
+    }),
+  );
+
+  // RUN-15: folder runner sync keeps setupItemIds selected from parent collection
+  const synced = perfLaunch.syncRunnerTabItemsFromSource(
+    {
+      sourceType: 'folder',
+      sourceId: 'folder-1',
+      items: [{ id: 'req-1', name: 'Loop', selected: true }],
+      setupItemIds: ['setup-req'],
+    },
+    [
+      {
+        id: 'col-1',
+        name: 'Col',
+        items: [
+          { id: 'setup-req', type: 'request', name: 'Auth Setup', request: { id: 'setup-req', name: 'Auth Setup', method: 'POST', url: 'https://example.com/auth', params: [], headers: [], bodyType: 'none', bodyContent: '' } },
+          {
+            id: 'folder-1',
+            type: 'folder',
+            name: 'Endpoints',
+            items: [{ id: 'req-1', type: 'request', name: 'Loop', request: { id: 'req-1', name: 'Loop', method: 'GET', url: 'https://example.com/items', params: [], headers: [], bodyType: 'none', bodyContent: '' } }],
+          },
+        ],
+      },
+    ],
+  );
+  assert.ok(synced);
+  assert.deepEqual(Array.from(synced.setupItemIds), ['setup-req']);
+});

@@ -41,7 +41,7 @@ func (h *ProjectHandler) ListByTeam(w http.ResponseWriter, r *http.Request) {
 
 	projects, err := h.projectService.ListProjects(r.Context(), user, teamID)
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, "failed to list projects", "SERVER_ERROR")
+		writeMappedError(w, "list team projects", err, nil)
 		return
 	}
 	response.JSON(w, http.StatusOK, projects)
@@ -64,7 +64,7 @@ func (h *ProjectHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	project, err := h.projectService.CreateProject(r.Context(), user, teamID, req.Name, req.Description)
 	if err != nil {
-		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
+		writeMappedError(w, "create project", err, nil)
 		return
 	}
 	response.JSON(w, http.StatusCreated, project)
@@ -81,7 +81,7 @@ func (h *ProjectHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	project, err := h.projectService.GetProject(r.Context(), user, id)
 	if err != nil {
-		response.Error(w, http.StatusNotFound, "project not found or access forbidden", "NOT_FOUND")
+		writeMappedError(w, "get project", err, nil)
 		return
 	}
 	response.JSON(w, http.StatusOK, project)
@@ -104,7 +104,7 @@ func (h *ProjectHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	project, err := h.projectService.UpdateProject(r.Context(), user, id, req.Name, req.Description)
 	if err != nil {
-		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
+		writeMappedError(w, "update project", err, nil)
 		return
 	}
 	response.JSON(w, http.StatusOK, project)
@@ -120,7 +120,7 @@ func (h *ProjectHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.projectService.DeleteProject(r.Context(), user, id); err != nil {
-		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
+		writeMappedError(w, "delete project", err, nil)
 		return
 	}
 	response.JSON(w, http.StatusOK, map[string]string{"message": "project deleted successfully"})
@@ -137,7 +137,7 @@ func (h *ProjectHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
 
 	members, err := h.projectService.ListProjectMembers(r.Context(), user, id)
 	if err != nil {
-		response.Error(w, http.StatusForbidden, "access forbidden", "FORBIDDEN")
+		writeMappedError(w, "list project members", err, nil)
 		return
 	}
 	response.JSON(w, http.StatusOK, members)
@@ -166,16 +166,23 @@ func (h *ProjectHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 
 	role := domain.ProjectRoleReader
 	switch req.Role {
+	case "":
+		role = domain.ProjectRoleReader
 	case string(domain.ProjectRoleAdmin):
 		role = domain.ProjectRoleAdmin
 	case string(domain.ProjectRoleMaintainer):
 		role = domain.ProjectRoleMaintainer
 	case string(domain.ProjectRoleContributor):
 		role = domain.ProjectRoleContributor
+	case string(domain.ProjectRoleReader):
+		role = domain.ProjectRoleReader
+	default:
+		response.Error(w, http.StatusBadRequest, "invalid project role", "BAD_REQUEST")
+		return
 	}
 
 	if err := h.projectService.AddProjectMember(r.Context(), user, projectID, targetUserID, role); err != nil {
-		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
+		writeMappedError(w, "add project member", err, nil)
 		return
 	}
 	response.JSON(w, http.StatusOK, map[string]string{"message": "project member assigned successfully"})
@@ -198,7 +205,7 @@ func (h *ProjectHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.projectService.RemoveProjectMember(r.Context(), user, projectID, targetUserID); err != nil {
-		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
+		writeMappedError(w, "remove project member", err, nil)
 		return
 	}
 	response.JSON(w, http.StatusOK, map[string]string{"message": "project member unassigned successfully"})

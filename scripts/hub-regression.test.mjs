@@ -31,7 +31,7 @@ function load(file, overrides = {}, globals = {}) {
         : id === '@airrest/common/configuration' ? load('packages/common/src/distributionConfig.ts', {
           './productPolicy': load('packages/common/src/productPolicy.ts', {}, globals),
         }, globals)
-        : require(id),
+          : require(id),
     ...globals,
   }, { filename: file });
   return exports;
@@ -41,7 +41,7 @@ function session(fetch, env = {}, persisted = null) {
   const api = load('apps/hub/src/lib/api.ts', {}, { fetch, VITE_ENV: env });
   const { useHubStore: store } = load('apps/hub/src/store/useHubStore.ts', { '../lib/api': api }, {
     VITE_ENV: env,
-    localStorage: { getItem: () => persisted, setItem() {}, removeItem() {} },
+    localStorage: { getItem: () => persisted, setItem() { }, removeItem() { } },
   });
   return { api, store };
 }
@@ -146,12 +146,12 @@ test('auth eviction callback rejects mismatched tokens and accepts matching toke
   let evictionHandler;
   const fakeApi = {
     DEFAULT_API_URL: 'http://localhost:8080',
-    registerHubTokenRefresh() {},
+    registerHubTokenRefresh() { },
     registerHubAuthEvicted(cb) { evictionHandler = cb; },
-    invalidateHubSession() {},
+    invalidateHubSession() { },
   };
   const { useHubStore: store } = load('apps/hub/src/store/useHubStore.ts', { '../lib/api': fakeApi }, {
-    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    localStorage: { getItem: () => null, setItem() { }, removeItem() { } },
   });
   login(store, 'active');
   assert.equal(store.getState().token, 'active-access');
@@ -230,7 +230,8 @@ function component(file, exportName, initialState = {}, api = {}) {
   let index = 0;
   const state = { ...initialState };
   const effects = [];
-  const store = { apiUrl: 'https://example.com', token: 'access', refreshToken: 'refresh', user, selectedTeamId: 't', selectedProjectId: 'p', activeTab: 'teams',
+  const store = {
+    apiUrl: 'https://example.com', token: 'access', refreshToken: 'refresh', user, selectedTeamId: 't', selectedProjectId: 'p', activeTab: 'teams',
     featurePolicy: { flags: { 'collection.move': true, 'collection.delete': true, 'collection.export': true }, revision: 1, updated_at: 'now' },
     featurePolicyFetchedAt: Date.now(),
     setFeaturePolicy(policy, fetchedAt = Date.now()) { store.featurePolicy = policy; store.featurePolicyFetchedAt = policy ? fetchedAt : null; },
@@ -241,7 +242,8 @@ function component(file, exportName, initialState = {}, api = {}) {
   };
   const useHubStore = Object.assign((selector) => selector(store), { getState: () => store });
   const stub = (name) => ({ [name]: () => React.createElement('span', null, name) });
-  const reactOverride = { ...React,
+  const reactOverride = {
+    ...React,
     useState(initial) {
       const name = names[index++];
       if (!(name in state)) state[name] = initial;
@@ -251,10 +253,14 @@ function component(file, exportName, initialState = {}, api = {}) {
     useRef(initial) { return { current: initial }; },
   };
   reactOverride.default = reactOverride;
+  const apiWithDefaults = {
+    validateHubApiUrl: (raw) => String(raw || '').trim(),
+    ...api,
+  };
   const overrides = {
     react: reactOverride,
     '../store/useHubStore': { useHubStore }, './store/useHubStore': { useHubStore },
-    '../lib/api': api, './lib/api': api,
+    '../lib/api': apiWithDefaults, './lib/api': apiWithDefaults,
     '../lib/environmentVariables': load('apps/hub/src/lib/environmentVariables.ts'),
     '../components/ConfirmModal': { ConfirmModal: () => null },
   };
@@ -392,7 +398,7 @@ test('member assignment finishing after navigation cannot replace the new projec
   }
   const form = findForm(h.render());
   assert.ok(form, 'assignment modal must contain a form');
-  const submission = form.props.onSubmit({ preventDefault() {} });
+  const submission = form.props.onSubmit({ preventDefault() { } });
   await tick();
   assert.equal(addMemberCalled, 1, 'apiAddProjectMember must be called for valid assignment');
   h.store.selectedProjectId = 'new-project';
@@ -443,7 +449,7 @@ test('SuperadminView resets provision form state on close, reopen, and submit', 
 
   const form = findElements(h.render(), (n) => n.type === 'form')[0];
   assert.ok(form, 'provision modal must contain a form');
-  await form.props.onSubmit({ preventDefault() {} });
+  await form.props.onSubmit({ preventDefault() { } });
 
   assert.equal(provisionCalls, 1);
   assert.equal(h.state.isProvisionOpen, false);
@@ -488,7 +494,7 @@ test('SuperadminView handles edit user modal and updates user name', async () =>
 
   const forms = findElements(h.render(), (n) => n.type === 'form');
   assert.ok(forms.length > 0, 'must have edit form');
-  await forms[0].props.onSubmit({ preventDefault() {} });
+  await forms[0].props.onSubmit({ preventDefault() { } });
 
   assert.equal(updateCalls, 1);
   assert.deepEqual(updatedPayload, { id: 'u-1', name: 'Updated Name' });
@@ -510,7 +516,7 @@ test('TeamsView resets add member form and role on open, cancel, and success', a
   });
 
   const form = findElements(h.render(), (n) => n.type === 'form')[0];
-  await form.props.onSubmit({ preventDefault() {} });
+  await form.props.onSubmit({ preventDefault() { } });
 
   assert.equal(addCalls, 1);
   assert.equal(h.state.isAddMemberOpen, false);
@@ -542,7 +548,7 @@ test('ProjectsView resets assign member form and role on open, cancel, and succe
   });
 
   const form = findElements(h.render(), (n) => n.type === 'form')[0];
-  await form.props.onSubmit({ preventDefault() {} });
+  await form.props.onSubmit({ preventDefault() { } });
 
   assert.equal(assignCalls, 1);
   assert.equal(h.state.isAssignMemberOpen, false);
@@ -577,7 +583,7 @@ test('LoginView clears password and resets showPassword on mount and submit', as
   h.state.password = 'mysecret';
   h.state.showPassword = true;
   const form = findElements(h.render(), (n) => n.type === 'form')[0];
-  await form.props.onSubmit({ preventDefault() {} });
+  await form.props.onSubmit({ preventDefault() { } });
   assert.equal(loginCalls, 1);
   assert.equal(h.state.password, '');
   assert.equal(h.state.showPassword, false);
@@ -715,7 +721,7 @@ test('handleSavePermission recovers from 409 Conflict by updating version and pa
 
   const form = findElements(h.render(), (n) => n.type === 'form' && renderToStaticMarkup(n).includes('Save Permission'))[0];
   assert.ok(form, 'Permission form must exist');
-  await form.props.onSubmit({ preventDefault() {} });
+  await form.props.onSubmit({ preventDefault() { } });
 
   assert.equal(passedName, 'Secure Collection', 'apiUpdateCollectionPermission must receive collection name');
   assert.equal(h.state.permModalItem.version, 5, 'permModalItem version must update to remote conflicting version');
@@ -729,4 +735,76 @@ test('SuperadminView renders Access Denied when user is not superadmin', () => {
   const html = renderToStaticMarkup(h.render());
   assert.match(html, /Access Denied: Superadmin privileges required/);
   assert.doesNotMatch(html, /Global Feature Controls/);
+});
+
+test('HUB-01: Hub validates Server URLs, rejects redirects, and enforces CSP security headers', async () => {
+  const api = load('apps/hub/src/lib/api.ts', {
+    '@airrest/common/configuration': load('packages/common/src/public/configuration.ts', {
+      '../distributionConfig': load('packages/common/src/distributionConfig.ts', {
+        './productPolicy': load('packages/common/src/productPolicy.ts'),
+      }),
+    }),
+  });
+
+  assert.equal(api.validateHubApiUrl('https://hub.example.com/v1/'), 'https://hub.example.com/v1');
+  assert.throws(() => api.validateHubApiUrl('javascript:alert(1)'));
+  assert.throws(() => api.validateHubApiUrl('https://user:pass@hub.example.com'));
+  assert.throws(() => api.validateHubApiUrl('http://hub.example.com'));
+  assert.throws(() => api.validateHubApiUrl('https://hub.example.com?token=leak'));
+
+  const vercel = JSON.parse(read('apps/hub/vercel.json'));
+  const headerMap = Object.fromEntries((vercel.headers?.[0]?.headers || []).map((h) => [h.key, h.value]));
+  assert.match(headerMap['Content-Security-Policy'] || '', /default-src 'self'/);
+  assert.equal(headerMap['X-Frame-Options'], 'DENY');
+  assert.equal(headerMap['X-Content-Type-Options'], 'nosniff');
+  assert.equal(headerMap['Referrer-Policy'], 'no-referrer');
+
+  const { api: redirectApi, store: redirectStore } = session(async () => ({
+    status: 302,
+    type: 'basic',
+    body: null,
+  }));
+  login(redirectStore);
+  await assert.rejects(request(redirectApi, redirectStore), /redirect/i);
+});
+
+test('HUB-02 & HUB-03: live token provider prevents stale-token 401 loops, and ProjectsView enforces role rank and filters deleted items', async () => {
+  const activeAccess = 'access-2';
+  const activeRefresh = 'refresh-1';
+  const authHeadersSeen = [];
+  const apiMod = load(
+    'apps/hub/src/lib/api.ts',
+    {
+      '@airrest/common/configuration': load('packages/common/src/public/configuration.ts', {
+        '../distributionConfig': load('packages/common/src/distributionConfig.ts', {
+          './productPolicy': load('packages/common/src/productPolicy.ts'),
+        }),
+      }),
+    },
+    {
+      fetch: async (url, init = {}) => {
+        const auth = new Headers(init.headers).get('Authorization');
+        authHeadersSeen.push(auth);
+        if (String(url).endsWith('/api/v1/teams') && auth === 'Bearer access-2') {
+          return json({ data: [] }, 200);
+        }
+        return json({ success: false, error: 'expired' }, 401);
+      },
+    },
+  );
+  apiMod.registerHubTokenProvider(() => ({
+    apiUrl: 'https://hub.example.com',
+    token: activeAccess,
+    refreshToken: activeRefresh,
+  }));
+
+  // Passing an older token while store rotated to access-2 must transparently use live token
+  await apiMod.apiListTeams('https://hub.example.com', 'access-1');
+  assert.deepEqual(authHeadersSeen, ['Bearer access-2']);
+
+  const projectsSrc = read('apps/hub/src/pages/ProjectsView.tsx');
+  assert.match(projectsSrc, /deleted_at/);
+  assert.match(projectsSrc, /sort_order/);
+  assert.match(projectsSrc, /ROLE_RANK/);
+  assert.doesNotMatch(projectsSrc, /err\?\.status === 403 && err\?\.code === 'FEATURE_DISABLED' && err\?\.message !== ''/);
 });

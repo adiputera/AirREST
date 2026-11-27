@@ -15,7 +15,7 @@ export function computePeakRpsMetrics(
 ): PeakRpsMetrics {
   let overallMaxRps = report.summary?.maxRequestsPerSec ?? 0;
   let overallPeakTimestampMs: number | null = null;
-  const byRequestMaxRps: Record<string, number> = {};
+  const byRequestMaxRps: Record<string, number> = Object.create(null);
 
   for (const ep of report.endpoints || []) {
     if (typeof ep.maxRequestsPerSec === 'number' && ep.maxRequestsPerSec > 0) {
@@ -38,7 +38,9 @@ export function computePeakRpsMetrics(
 
     if (bucket.byRequest) {
       for (const [reqId, reqMetrics] of Object.entries(bucket.byRequest)) {
-        const prev = byRequestMaxRps[reqId] ?? 0;
+        const prev = Object.prototype.hasOwnProperty.call(byRequestMaxRps, reqId)
+          ? byRequestMaxRps[reqId]
+          : 0;
         if (reqMetrics.requestsPerSec > prev) {
           byRequestMaxRps[reqId] = reqMetrics.requestsPerSec;
         }

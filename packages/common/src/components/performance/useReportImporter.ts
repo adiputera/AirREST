@@ -12,6 +12,12 @@ import { useStoreContext } from '../../store/storeContext';
 import { useApiStore } from '../../store/useApiStore';
 import { makePerformanceTabId } from '../../lib/examples';
 import {
+  captureImportTarget,
+  type ImportTargetBinding,
+  isImportTargetMatching,
+  MAX_IMPORT_FILE_BYTES,
+} from '../../lib/importBatch';
+import {
   computeDefaultPerformanceTimeoutMs,
   createDefaultLoadProfileConfig,
   getDurationSeconds,
@@ -136,8 +142,36 @@ export function useReportImporter() {
   const adapter = usePlatformAdapter();
   const platformId = adapter?.platformId || 'web';
 
+  const workspaceMode = activeStore((s) => s.workspaceMode);
+  const activeOfflineWorkspaceId = activeStore((s) => s.activeOfflineWorkspaceId);
+  const cloudScopeType = activeStore((s) => s.cloudConfig?.activeScope?.type);
+  const cloudScopeId = activeStore((s) => s.cloudConfig?.activeScope?.id);
+  const cloudUserId = activeStore((s) => s.cloudConfig?.user?.id);
+  const cloudApiUrl = activeStore((s) => s.cloudConfig?.apiUrl);
+
   const [resolvePrompt, setResolvePrompt] = useState<ReportResolvePrompt | null>(null);
   const promptResolverRef = useRef<((choice: ReportResolveChoice) => void) | null>(null);
+
+  const cancelPendingPrompt = useCallback(() => {
+    setResolvePrompt(null);
+    if (promptResolverRef.current) {
+      const resolver = promptResolverRef.current;
+      promptResolverRef.current = null;
+      resolver('cancel');
+    }
+  }, []);
+
+  useEffect(() => {
+    cancelPendingPrompt();
+  }, [
+    workspaceMode,
+    activeOfflineWorkspaceId,
+    cloudScopeType,
+    cloudScopeId,
+    cloudUserId,
+    cloudApiUrl,
+    cancelPendingPrompt,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -173,6 +207,7 @@ export function useReportImporter() {
     return buildPerfScopeKey({
       workspaceMode: s.workspaceMode,
       activeOfflineWorkspaceId: s.activeOfflineWorkspaceId,
+      cloudApiUrl: s.cloudConfig?.apiUrl,
       cloudUserId: s.cloudConfig?.user?.id,
       activeScopeType: s.cloudConfig?.activeScope?.type,
       activeScopeId: s.cloudConfig?.activeScope?.id,
@@ -185,11 +220,17 @@ export function useReportImporter() {
       perfReport?: PerformanceRunReport;
       funcReport?: FunctionalRunReport;
       target: AttachedTargetInfo;
+      targetBinding?: ImportTargetBinding;
       filename?: string;
       closeSessionTabId?: string;
       onAttachedSaved?: () => void;
     }): Promise<ImportReportOutcome> => {
       const { kind, perfReport, funcReport, target, filename, closeSessionTabId, onAttachedSaved } = params;
+      const binding = params.targetBinding ?? captureImportTarget(activeStore.getState());
+      if (!isImportTargetMatching(activeStore.getState(), binding)) {
+        return { ok: false, cancelled: true };
+      }
+
       const incomingReportId = kind === 'performance' ? perfReport!.id : funcReport!.id;
       const incomingTitle = kind === 'performance' ? perfReport!.title : funcReport!.title;
       const incomingStartedAt = kind === 'performance' ? perfReport!.startedAt : funcReport!.startedAt;
@@ -199,6 +240,9 @@ export function useReportImporter() {
         kind === 'performance'
           ? await hasPerfReportInScope(scopeKey, incomingReportId)
           : await hasFunctionalReportInScope(scopeKey, incomingReportId);
+      if (!isImportTargetMatching(activeStore.getState(), binding)) {
+        return { ok: false, cancelled: true };
+      }
 
       let forceNewId = false;
       if (duplicateExists) {
@@ -206,6 +250,9 @@ export function useReportImporter() {
           kind === 'performance'
             ? await getPerfReportById(incomingReportId, scopeKey)
             : await getFunctionalReportById(incomingReportId, scopeKey);
+        if (!isImportTargetMatching(activeStore.getState(), binding)) {
+          return { ok: false, cancelled: true };
+        }
 
         const dupChoice = await requestResolveChoice({
           type: 'duplicate_id',
@@ -216,6 +263,9 @@ export function useReportImporter() {
           incomingStartedAt,
           filename,
         });
+        if (!isImportTargetMatching(activeStore.getState(), binding)) {
+          return { ok: false, cancelled: true };
+        }
 
         if (dupChoice === 'cancel') {
           return { ok: false, cancelled: true };
@@ -259,8 +309,11 @@ export function useReportImporter() {
         }
       }
 
+      if (!isImportTargetMatching(activeStore.getState(), binding)) {
+        return { ok: false, cancelled: true };
+      }
+
       const targetName = target.targetItem?.name || target.targetCollection.name;
-      const state = activeStore.getState();
       const runnerMode: RunnerMode = kind === 'functional' ? 'functional' : 'performance';
       let savedId = incomingReportId;
 
@@ -278,7 +331,10 @@ export function useReportImporter() {
         );
         savedId = bound.id;
         await savePerfReport(scopeKey, bound);
-        state.setPerformanceReport(bound);
+        if (!isImportTargetMatching(activeStore.getState(), binding)) {
+          return { ok: false, cancelled: true };
+        }
+        activeStore.getState().setPerformanceReport(bound);
       } else if (kind === 'functional' && funcReport) {
         const bound = bindImportedFunctionalReport(
           funcReport,
@@ -293,9 +349,17 @@ export function useReportImporter() {
         );
         savedId = bound.id;
         await saveFunctionalReport(scopeKey, bound);
-        state.setFunctionalReport(bound);
+        if (!isImportTargetMatching(activeStore.getState(), binding)) {
+          return { ok: false, cancelled: true };
+        }
+        activeStore.getState().setFunctionalReport(bound);
       }
 
+      if (!isImportTargetMatching(activeStore.getState(), binding)) {
+        return { ok: false, cancelled: true };
+      }
+
+      const state = activeStore.getState();
       const launchBase = buildLaunchConfigForTarget(target, runnerMode, platformId);
       const tabId = makePerformanceTabId(launchBase.sourceType, launchBase.sourceId);
       state.openPerformanceTestTab({
@@ -334,6 +398,7 @@ export function useReportImporter() {
         onAttachedSaved?: () => void;
       }
     ): Promise<ImportReportOutcome> => {
+      const targetBinding = captureImportTarget(activeStore.getState());
       const parsed = parseShareableReportJson(content);
       if (parsed.error || !parsed.kind || !parsed.sourceMeta) {
         return {
@@ -354,6 +419,9 @@ export function useReportImporter() {
         } catch {
           // Best-effort hydration; fall back cleanly to lower match tiers if unavailable
         }
+        if (!isImportTargetMatching(activeStore.getState(), targetBinding)) {
+          return { ok: false, cancelled: true };
+        }
         liveState = activeStore.getState();
       }
 
@@ -371,6 +439,9 @@ export function useReportImporter() {
           displayLabel: resolution.displayLabel,
           filename: options?.filename,
         });
+        if (!isImportTargetMatching(activeStore.getState(), targetBinding)) {
+          return { ok: false, cancelled: true };
+        }
         if (choice === 'cancel') {
           return { ok: false, cancelled: true };
         }
@@ -394,9 +465,14 @@ export function useReportImporter() {
             targetItem: resolution.targetItem,
             displayLabel: resolution.displayLabel,
           },
+          targetBinding,
           filename: options?.filename,
           onAttachedSaved: options?.onAttachedSaved,
         });
+      }
+
+      if (!isImportTargetMatching(activeStore.getState(), targetBinding)) {
+        return { ok: false, cancelled: true };
       }
 
       // Tier 3: Unmatched -> in-memory Session-Only Read-Only (never saved to IndexedDB)
@@ -405,9 +481,11 @@ export function useReportImporter() {
         parsed.kind === 'performance' && parsed.perfReport
           ? bindImportedPerformanceReport(parsed.perfReport, { mode: 'session_only' }, {
               filename: options?.filename,
+              forceNewId: true,
             })
           : bindImportedFunctionalReport(parsed.funcReport!, { mode: 'session_only' }, {
               filename: options?.filename,
+              forceNewId: true,
             });
 
       if (parsed.kind === 'performance') {
@@ -445,33 +523,62 @@ export function useReportImporter() {
       currentTabId: string;
       onAttachedSaved?: () => void;
     }): Promise<ImportReportOutcome> => {
+      const targetBinding = captureImportTarget(activeStore.getState());
+      let targetCollection = params.collection;
+      const liveBefore = activeStore.getState();
+      if (
+        targetCollection.isPartial &&
+        liveBefore.workspaceMode === 'cloud' &&
+        typeof liveBefore.loadCollectionDetails === 'function'
+      ) {
+        try {
+          await liveBefore.loadCollectionDetails(targetCollection.id);
+        } catch {
+          // Proceed with live collection state if best-effort detail hydration fails.
+        }
+        if (!isImportTargetMatching(activeStore.getState(), targetBinding)) {
+          return { ok: false, cancelled: true };
+        }
+        targetCollection =
+          (activeStore.getState().collections || []).find((c) => c.id === params.collection.id) ||
+          targetCollection;
+      }
       return persistAndOpenAttached({
         kind: params.kind,
         perfReport: params.perfReport,
         funcReport: params.funcReport,
         target: {
           targetType: 'collection',
-          targetId: params.collection.id,
-          targetCollection: params.collection,
-          displayLabel: params.collection.name,
+          targetId: targetCollection.id,
+          targetCollection,
+          displayLabel: targetCollection.name,
         },
+        targetBinding,
         filename: params.perfReport?.importedFilename || params.funcReport?.importedFilename,
         closeSessionTabId: params.currentTabId,
         onAttachedSaved: params.onAttachedSaved,
       });
     },
-    [persistAndOpenAttached]
+    [activeStore, persistAndOpenAttached]
   );
 
   const pickReportFileContent = useCallback(async (): Promise<{
     filename: string;
     content: string;
+    error?: string;
   } | null> => {
     if (adapter?.capabilities?.supportsNativeFileSystem && adapter.openFile) {
       const picked = await adapter.openFile({
         filters: [{ name: 'AirREST Report JSON', extensions: ['json'] }],
       });
       if (!picked) return null;
+      if (new TextEncoder().encode(picked.content).byteLength > MAX_IMPORT_FILE_BYTES) {
+        return {
+          filename: picked.filename,
+          content: '',
+          error: 'Selected report file exceeds maximum allowed limit of 16 MB.',
+        };
+      }
       return { filename: picked.filename, content: picked.content };
     }
 
@@ -482,15 +589,24 @@ export function useReportImporter() {
       input.type = 'file';
       input.accept = '.json,.airrest-report.json,application/json';
       let settled = false;
-      const finish = (val: { filename: string; content: string } | null) => {
+      const finish = (val: { filename: string; content: string; error?: string } | null) => {
         if (settled) return;
         settled = true;
+        input.remove?.();
         resolve(val);
       };
       input.onchange = async () => {
         const file = input.files?.[0];
         if (!file) {
           finish(null);
+          return;
+        }
+        if (file.size > MAX_IMPORT_FILE_BYTES) {
+          finish({
+            filename: file.name || 'report.airrest-report.json',
+            content: '',
+            error: 'Selected report file exceeds maximum allowed limit of 16 MB.',
+          });
           return;
         }
         try {
@@ -508,6 +624,7 @@ export function useReportImporter() {
   return {
     resolvePrompt,
     handleResolveChoice,
+    cancelPendingPrompt,
     importReportContent,
     attachSessionReportToCollection,
     pickReportFileContent,

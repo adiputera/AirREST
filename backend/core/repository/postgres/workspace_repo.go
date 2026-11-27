@@ -64,6 +64,9 @@ func (r *WorkspaceRepository) ListByOwner(ctx context.Context, ownerID uuid.UUID
 		}
 		workspaces = append(workspaces, &ws)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate workspaces: %w", err)
+	}
 	return workspaces, nil
 }
 

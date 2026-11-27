@@ -1,5 +1,5 @@
 import type { FunctionalRunReport, PerformanceRunReport } from '../types/api';
-import { registerCloudPerfCleanup } from './examples';
+import { registerCloudPerfCleanup, registerOfflinePerfCleanup } from './examples';
 
 const PERF_DB_NAME = 'airrest-perf-runs';
 const LEGACY_PERF_STORE_NAME = 'reports';
@@ -12,6 +12,7 @@ export const MAX_PERF_REPORTS_PER_SCOPE = 25;
 export interface PerfScopeKeyInput {
   workspaceMode: 'offline' | 'cloud';
   activeOfflineWorkspaceId?: string | null;
+  cloudApiUrl?: string | null;
   cloudUserId?: string | null;
   activeScopeType?: string | null;
   activeScopeId?: string | null;
@@ -19,6 +20,10 @@ export interface PerfScopeKeyInput {
 
 export function buildPerfScopeKey(input: PerfScopeKeyInput): string {
   if (input.workspaceMode === 'cloud' && input.cloudUserId && input.activeScopeId) {
+    const normalizedOrigin = (input.cloudApiUrl || '').trim().replace(/\/+$/, '').toLowerCase();
+    if (normalizedOrigin) {
+      return `cloud:${normalizedOrigin}:${input.cloudUserId}:${input.activeScopeType || 'workspace'}:${input.activeScopeId}`;
+    }
     return `cloud:${input.cloudUserId}:${input.activeScopeType || 'workspace'}:${input.activeScopeId}`;
   }
   return `offline:${input.activeOfflineWorkspaceId || 'default'}`;
@@ -141,11 +146,18 @@ function txPromise<T>(req: IDBRequest<T>): Promise<T> {
   });
 }
 
+const MAX_REPORT_CLOCK_SKEW_MS = 86_400_000;
+
+function clampReportStartedAt(startedAt: unknown): number {
+  if (typeof startedAt !== 'number' || !Number.isFinite(startedAt)) return 0;
+  return Math.min(Math.max(0, startedAt), Date.now() + MAX_REPORT_CLOCK_SKEW_MS);
+}
+
 export function prunePerfRecordsForScope<T extends { id: string; startedAt: number }>(
   records: StoredReportRecord<T>[],
   maxPerScope = MAX_PERF_REPORTS_PER_SCOPE
 ): { keep: StoredReportRecord<T>[]; pruneIds: string[]; pruneStorageKeys: string[] } {
-  const sorted = [...records].sort((a, b) => b.startedAt - a.startedAt);
+  const sorted = [...records].sort((a, b) => clampReportStartedAt(b.startedAt) - clampReportStartedAt(a.startedAt));
   const keep = sorted.slice(0, maxPerScope);
   const pruned = sorted.slice(maxPerScope);
   const pruneIds = pruned.map((r) => r.id);
@@ -161,11 +173,12 @@ async function saveScopedReport<T extends { id: string; startedAt: number }>(
 ): Promise<void> {
   const dbPromise = openPerfDb();
   const storageKey = makeScopedStorageKey(scopeKey, report.id);
+  const safeStartedAt = clampReportStartedAt(report.startedAt);
   const record: StoredReportRecord<T> = {
     storageKey,
     id: report.id,
     scopeKey,
-    startedAt: report.startedAt,
+    startedAt: safeStartedAt,
     report,
   };
 
@@ -291,15 +304,15 @@ async function deleteScopedReport<T extends { id: string; startedAt: number }>(
   }
 }
 
-async function clearCloudRecordsInStore<T extends { id: string; startedAt: number }>(
+async function clearMatchingRecordsInStore<T extends { id: string; startedAt: number }>(
   storeName: string,
   fallbackMap: Map<string, StoredReportRecord<T>>,
-  prefix: string
+  predicate: (scopeKey: string) => boolean
 ): Promise<void> {
   const dbPromise = openPerfDb();
   if (!dbPromise) {
     for (const [key, rec] of fallbackMap.entries()) {
-      if (rec.scopeKey.startsWith(prefix)) {
+      if (predicate(rec.scopeKey)) {
         fallbackMap.delete(key);
       }
     }
@@ -314,7 +327,7 @@ async function clearCloudRecordsInStore<T extends { id: string; startedAt: numbe
     if (typeof store.getAll !== 'function') return;
     const all = (await txPromise(store.getAll())) as StoredReportRecord<T>[];
     for (const rec of all) {
-      if (rec.scopeKey.startsWith(prefix)) {
+      if (predicate(rec.scopeKey)) {
         await txPromise(store.delete(rec.storageKey));
       }
     }
@@ -397,12 +410,34 @@ export async function deleteFunctionalReport(reportId: string, scopeKey?: string
   return deleteScopedReport(FUNCTIONAL_STORE_NAME, functionalMemoryFallback, reportId, scopeKey);
 }
 
-export async function clearCloudPerfReports(userId?: string | null): Promise<void> {
-  const prefix = userId ? `cloud:${userId}:` : 'cloud:';
+export async function clearCloudPerfReports(userId?: string | null, cloudApiUrl?: string | null): Promise<void> {
+  const normalizedOrigin = (cloudApiUrl || '').trim().replace(/\/+$/, '').toLowerCase();
+  const matchesScope = (scopeKey: string): boolean => {
+    if (!userId) return scopeKey.startsWith('cloud:');
+    if (normalizedOrigin) {
+      return (
+        scopeKey.startsWith(`cloud:${normalizedOrigin}:${userId}:`) ||
+        scopeKey.startsWith(`cloud:${userId}:`)
+      );
+    }
+    return (
+      scopeKey.startsWith(`cloud:${userId}:`) ||
+      (scopeKey.startsWith('cloud:') && scopeKey.includes(`:${userId}:`))
+    );
+  };
   await Promise.all([
-    clearCloudRecordsInStore(PERF_STORE_NAME, memoryFallback, prefix),
-    clearCloudRecordsInStore(FUNCTIONAL_STORE_NAME, functionalMemoryFallback, prefix),
+    clearMatchingRecordsInStore(PERF_STORE_NAME, memoryFallback, matchesScope),
+    clearMatchingRecordsInStore(FUNCTIONAL_STORE_NAME, functionalMemoryFallback, matchesScope),
+  ]);
+}
+
+export async function clearOfflineWorkspacePerfReports(offlineWorkspaceId: string): Promise<void> {
+  const targetPrefix = `offline:${offlineWorkspaceId || 'default'}`;
+  await Promise.all([
+    clearMatchingRecordsInStore(PERF_STORE_NAME, memoryFallback, (key) => key === targetPrefix),
+    clearMatchingRecordsInStore(FUNCTIONAL_STORE_NAME, functionalMemoryFallback, (key) => key === targetPrefix),
   ]);
 }
 
 registerCloudPerfCleanup(clearCloudPerfReports);
+registerOfflinePerfCleanup(clearOfflineWorkspacePerfReports);

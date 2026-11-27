@@ -1,8 +1,27 @@
 import type { PerformanceRunReport } from '../types/api';
 import { computePerformanceComparison, formatDeltaCompact } from './perfComparison';
 import { formatThresholdRuleExpression } from './perfThresholds';
+import { sanitizePerformanceReportForShare } from './reportShare';
 
-function escapeHtml(raw: string): string {
+function safeDateString(ms: unknown): string {
+  const safeMs = typeof ms === 'number' && Number.isFinite(ms) && ms >= 0 ? ms : 0;
+  try {
+    return new Date(safeMs).toLocaleString();
+  } catch {
+    return new Date(0).toLocaleString();
+  }
+}
+
+function safeIsoString(ms: unknown): string {
+  const safeMs = typeof ms === 'number' && Number.isFinite(ms) && ms >= 0 ? ms : 0;
+  try {
+    return new Date(safeMs).toISOString();
+  } catch {
+    return new Date(0).toISOString();
+  }
+}
+
+function escapeHtml(raw: unknown): string {
   return String(raw ?? '')
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
@@ -27,6 +46,7 @@ function csvEscape(value: string | number | boolean | null | undefined): string 
  * Exports per-endpoint performance summary breakdown as an RFC 4180 CSV string.
  */
 export function exportPerformanceEndpointsCsv(report: PerformanceRunReport): string {
+  const safeReport = sanitizePerformanceReportForShare(report);
   const headers = [
     'Request',
     'Method',
@@ -47,7 +67,7 @@ export function exportPerformanceEndpointsCsv(report: PerformanceRunReport): str
 
   const rows: string[] = [headers.map(csvEscape).join(',')];
   const byReqPeak = new Map<string, number>();
-  for (const b of report.timeSeries || []) {
+  for (const b of safeReport.timeSeries || []) {
     if (!b.byRequest) continue;
     for (const [reqId, rb] of Object.entries(b.byRequest)) {
       const cur = byReqPeak.get(reqId) ?? 0;
@@ -55,7 +75,7 @@ export function exportPerformanceEndpointsCsv(report: PerformanceRunReport): str
     }
   }
 
-  for (const ep of report.endpoints || []) {
+  for (const ep of safeReport.endpoints || []) {
     const maxRps = byReqPeak.get(ep.requestId) ?? ep.maxRequestsPerSec ?? 0;
     rows.push(
       [
@@ -87,6 +107,7 @@ export function exportPerformanceEndpointsCsv(report: PerformanceRunReport): str
  * Exports 1-second time-series performance buckets as an RFC 4180 CSV string.
  */
 export function exportPerformanceTimeSeriesCsv(report: PerformanceRunReport): string {
+  const safeReport = sanitizePerformanceReportForShare(report);
   const headers = [
     'Elapsed (s)',
     'Timestamp (ISO)',
@@ -104,16 +125,16 @@ export function exportPerformanceTimeSeriesCsv(report: PerformanceRunReport): st
   ];
 
   const rows: string[] = [headers.map(csvEscape).join(',')];
-  for (const b of report.timeSeries || []) {
+  for (const b of safeReport.timeSeries || []) {
     rows.push(
       [
         b.second,
-        new Date(b.timestampMs).toISOString(),
+        safeIsoString(b.timestampMs),
         b.virtualUsers,
         b.totalRequests,
         b.requestsPerSec,
         b.errorCount,
-        b.errorRatePct.toFixed(2),
+        Number(b.errorRatePct || 0).toFixed(2),
         b.avgMs,
         b.minMs,
         b.maxMs,
@@ -133,11 +154,12 @@ export function exportPerformanceTimeSeriesCsv(report: PerformanceRunReport): st
  * Serializes a PerformanceRunReport into a clean JSON export (excluding any raw secret environment dumps).
  */
 export function exportPerformanceReportJson(report: PerformanceRunReport): string {
+  const safeReport = sanitizePerformanceReportForShare(report);
   return JSON.stringify(
     {
       exportedAt: new Date().toISOString(),
       generator: 'AirREST Performance Runner',
-      report,
+      report: safeReport,
     },
     null,
     2
@@ -153,35 +175,37 @@ export function exportPerformanceReportHtml(
   report: PerformanceRunReport,
   baselineReport?: PerformanceRunReport | null
 ): string {
-  const title = escapeHtml(report.title || 'AirREST Performance Report');
-  const startedStr = new Date(report.startedAt).toLocaleString();
-  const durationSec = (report.durationMs / 1000).toFixed(1);
-  const embeddedReportJson = safeJsonEmbed(report);
-  const embeddedBaselineJson = baselineReport ? safeJsonEmbed(baselineReport) : 'null';
+  const safeReport = sanitizePerformanceReportForShare(report);
+  const safeBaseline = baselineReport ? sanitizePerformanceReportForShare(baselineReport) : null;
+  const title = escapeHtml(safeReport.title || 'AirREST Performance Report');
+  const startedStr = safeDateString(safeReport.startedAt);
+  const durationSec = ((Number(safeReport.durationMs) || 0) / 1000).toFixed(1);
+  const embeddedReportJson = safeJsonEmbed(safeReport);
+  const embeddedBaselineJson = safeBaseline ? safeJsonEmbed(safeBaseline) : 'null';
 
-  const slaBadgeHtml = report.slaResult
-    ? report.slaResult.status === 'passed'
+  const slaBadgeHtml = safeReport.slaResult
+    ? safeReport.slaResult.status === 'passed'
       ? '<span class="badge badge-pass">SLA PASSED (' +
-        report.slaResult.passedCount +
+        escapeHtml(safeReport.slaResult.passedCount) +
         '/' +
-        report.slaResult.totalCount +
+        escapeHtml(safeReport.slaResult.totalCount) +
         ')</span>'
       : '<span class="badge badge-fail">SLA FAILED (' +
-        report.slaResult.failedCount +
+        escapeHtml(safeReport.slaResult.failedCount) +
         '/' +
-        report.slaResult.totalCount +
+        escapeHtml(safeReport.slaResult.totalCount) +
         ')</span>'
     : '';
 
-  const statusLabel = report.autoAborted ? 'STOPPED (AUTO-ABORTED)' : report.status.toUpperCase();
+  const statusLabel = safeReport.autoAborted ? 'STOPPED (AUTO-ABORTED)' : String(safeReport.status || '').toUpperCase();
 
-  const slaSectionHtml = report.slaResult
+  const slaSectionHtml = safeReport.slaResult
     ? `<div class="card">
         <div class="toolbar" style="margin-bottom:8px;">
-          <strong>SLA Threshold Rules (${report.slaResult.passedCount}/${report.slaResult.totalCount} Passed)</strong>
+          <strong>SLA Threshold Rules (${escapeHtml(safeReport.slaResult.passedCount)}/${escapeHtml(safeReport.slaResult.totalCount)} Passed)</strong>
           ${
-            report.slaResult.autoAborted && report.slaResult.autoAbortedReason
-              ? `<span style="color:var(--rose);font-size:12px;">${escapeHtml(report.slaResult.autoAbortedReason)}</span>`
+            safeReport.slaResult.autoAborted && safeReport.slaResult.autoAbortedReason
+              ? `<span style="color:var(--rose);font-size:12px;">${escapeHtml(safeReport.slaResult.autoAbortedReason)}</span>`
               : ''
           }
         </div>
@@ -195,12 +219,12 @@ export function exportPerformanceReportHtml(
             </tr>
           </thead>
           <tbody>
-            ${report.slaResult.results
+            ${safeReport.slaResult.results
               .map(
                 (r) => `<tr>
                   <td class="name-col">${escapeHtml(r.targetLabel)}</td>
                   <td>${escapeHtml(formatThresholdRuleExpression(r))}</td>
-                  <td class="num">${r.notEvaluated ? '-' : r.actual}</td>
+                  <td class="num">${r.notEvaluated ? '-' : escapeHtml(r.actual)}</td>
                   <td class="num" style="font-weight:700;color:${
                     r.notEvaluated ? 'var(--amber)' : r.passed ? 'var(--emerald)' : 'var(--rose)'
                   }">${
@@ -216,8 +240,8 @@ export function exportPerformanceReportHtml(
 
   let comparisonPayload: Record<string, string> | null = null;
   let comparisonBannerHtml = '';
-  if (baselineReport) {
-    const comp = computePerformanceComparison(report, baselineReport);
+  if (safeBaseline) {
+    const comp = computePerformanceComparison(safeReport, safeBaseline);
     comparisonPayload = {
       totalRequests: formatDeltaCompact(comp.kpis.totalRequests, 0),
       requestsPerSec: formatDeltaCompact(comp.kpis.requestsPerSec, 2),
@@ -237,9 +261,9 @@ export function exportPerformanceReportHtml(
       errDir: comp.kpis.errorRatePct.direction,
     };
     comparisonBannerHtml = `<div class="compare-banner">
-      Comparing against baseline: <strong>${escapeHtml(baselineReport.title)}</strong>
-      &bull; ${escapeHtml(new Date(baselineReport.startedAt).toLocaleString())}
-      &bull; ${baselineReport.configSnapshot.loadProfile.virtualUsers} VUs
+      Comparing against baseline: <strong>${escapeHtml(safeBaseline.title)}</strong>
+      &bull; ${escapeHtml(safeDateString(safeBaseline.startedAt))}
+      &bull; ${escapeHtml(safeBaseline.configSnapshot.loadProfile.virtualUsers)} VUs
     </div>`;
   }
   const embeddedCompareJson = comparisonPayload ? safeJsonEmbed(comparisonPayload) : 'null';
@@ -248,6 +272,7 @@ export function exportPerformanceReportHtml(
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${title} — AirREST Performance Report</title>
   <style>
@@ -389,8 +414,8 @@ export function exportPerformanceReportHtml(
         <h1 class="title">${title}</h1>
         <div class="meta">
           Started ${escapeHtml(startedStr)} &bull; Duration ${escapeHtml(durationSec)}s &bull;
-          Profile: ${escapeHtml(report.configSnapshot.loadProfile.profile)} (${report.configSnapshot.loadProfile.virtualUsers} VUs) &bull;
-          Engine: ${escapeHtml(report.engineMode)}
+          Profile: ${escapeHtml(safeReport.configSnapshot.loadProfile.profile)} (${escapeHtml(safeReport.configSnapshot.loadProfile.virtualUsers)} VUs) &bull;
+          Engine: ${escapeHtml(safeReport.engineMode)}
         </div>
       </div>
       <div>
@@ -467,27 +492,45 @@ export function exportPerformanceReportHtml(
       const report = ${embeddedReportJson};
       const baseline = ${embeddedBaselineJson};
       const cmp = ${embeddedCompareJson};
+      function esc(v) {
+        return String(v === null || v === undefined ? '' : v)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+      function num(v, fallback) {
+        const d = typeof fallback === 'number' ? fallback : 0;
+        return typeof v === 'number' && Number.isFinite(v) ? v : d;
+      }
       const kpiGrid = document.getElementById('kpiGrid');
-      const s = report.summary;
-      let overallMaxRps = s.maxRequestsPerSec || 0;
+      const s = report.summary || {};
+      let overallMaxRps = num(s.maxRequestsPerSec);
       let overallPeakTs = null;
-      const epMaxMap = {};
+      const epMaxMap = Object.create(null);
       (report.endpoints || []).forEach(ep => {
-        if (typeof ep.maxRequestsPerSec === 'number' && ep.maxRequestsPerSec > 0) {
+        if (typeof ep.maxRequestsPerSec === 'number' && Number.isFinite(ep.maxRequestsPerSec) && ep.maxRequestsPerSec > 0) {
           epMaxMap[ep.requestId] = ep.maxRequestsPerSec;
         }
       });
       (report.timeSeries || []).forEach(b => {
-        if (b.requestsPerSec > overallMaxRps) {
-          overallMaxRps = b.requestsPerSec;
-          overallPeakTs = b.timestampMs;
-        } else if (b.requestsPerSec > 0 && b.requestsPerSec === overallMaxRps && overallPeakTs === null) {
-          overallPeakTs = b.timestampMs;
+        const rps = num(b.requestsPerSec);
+        if (rps > overallMaxRps) {
+          overallMaxRps = rps;
+          overallPeakTs = typeof b.timestampMs === 'number' && Number.isFinite(b.timestampMs) ? b.timestampMs : null;
+        } else if (
+          rps > 0 &&
+          rps === overallMaxRps &&
+          overallPeakTs === null
+        ) {
+          overallPeakTs = typeof b.timestampMs === 'number' && Number.isFinite(b.timestampMs) ? b.timestampMs : null;
         }
         if (b.byRequest) {
           Object.keys(b.byRequest).forEach(reqId => {
-            const val = b.byRequest[reqId].requestsPerSec || 0;
-            if (val > (epMaxMap[reqId] || 0)) epMaxMap[reqId] = val;
+            const val = num(b.byRequest[reqId] && b.byRequest[reqId].requestsPerSec);
+            const cur = Object.prototype.hasOwnProperty.call(epMaxMap, reqId) ? epMaxMap[reqId] : 0;
+            if (val > cur) epMaxMap[reqId] = val;
           });
         }
       });
@@ -500,18 +543,18 @@ export function exportPerformanceReportHtml(
         return '';
       }
       const kpis = [
-        ['Total requests sent', s.totalRequests.toLocaleString(), cmp ? cmp.totalRequests : '', cmp ? cmp.totalDir : 'neutral'],
-        ['Requests/second', s.requestsPerSec.toFixed(2), cmp ? cmp.requestsPerSec : '', cmp ? cmp.rpsDir : 'neutral'],
+        ['Total requests sent', num(s.totalRequests).toLocaleString(), cmp ? cmp.totalRequests : '', cmp ? cmp.totalDir : 'neutral'],
+        ['Requests/second', num(s.requestsPerSec).toFixed(2), cmp ? cmp.requestsPerSec : '', cmp ? cmp.rpsDir : 'neutral'],
         ['Max Req/s', overallMaxRps.toLocaleString(), cmp ? cmp.maxRequestsPerSec : (peakTimeStr ? 'at ' + peakTimeStr : ''), cmp ? cmp.maxRpsDir : 'neutral'],
-        ['Avg. response time', s.avgMs + ' ms', cmp ? cmp.avgMs : '', cmp ? cmp.avgDir : 'neutral'],
-        ['P90', s.p90Ms + ' ms', cmp ? cmp.p90Ms : '', cmp ? cmp.p90Dir : 'neutral'],
-        ['P95', s.p95Ms + ' ms', cmp ? cmp.p95Ms : '', cmp ? cmp.p95Dir : 'neutral'],
-        ['P99', s.p99Ms + ' ms', cmp ? cmp.p99Ms : '', cmp ? cmp.p99Dir : 'neutral'],
-        ['Error rate', s.errorRatePct.toFixed(2) + '%', cmp ? cmp.errorRatePct : '', cmp ? cmp.errDir : 'neutral']
+        ['Avg. response time', num(s.avgMs) + ' ms', cmp ? cmp.avgMs : '', cmp ? cmp.avgDir : 'neutral'],
+        ['P90', num(s.p90Ms) + ' ms', cmp ? cmp.p90Ms : '', cmp ? cmp.p90Dir : 'neutral'],
+        ['P95', num(s.p95Ms) + ' ms', cmp ? cmp.p95Ms : '', cmp ? cmp.p95Dir : 'neutral'],
+        ['P99', num(s.p99Ms) + ' ms', cmp ? cmp.p99Ms : '', cmp ? cmp.p99Dir : 'neutral'],
+        ['Error rate', num(s.errorRatePct).toFixed(2) + '%', cmp ? cmp.errorRatePct : '', cmp ? cmp.errDir : 'neutral']
       ];
       kpiGrid.innerHTML = kpis.map(([l, v, sub, dir]) =>
-        '<div class="kpi"><div class="kpi-label">' + l + '</div><div class="kpi-value">' + v + '</div>' +
-        (sub ? '<div class="kpi-sub ' + deltaCls(dir) + '">' + sub + '</div>' : '') + '</div>'
+        '<div class="kpi"><div class="kpi-label">' + esc(l) + '</div><div class="kpi-value">' + esc(v) + '</div>' +
+        (sub ? '<div class="kpi-sub ' + deltaCls(dir) + '">' + esc(sub) + '</div>' : '') + '</div>'
       ).join('');
 
       const reqFilter = document.getElementById('reqFilter');
@@ -520,13 +563,14 @@ export function exportPerformanceReportHtml(
       const latLegend = document.getElementById('latLegend');
 
       reqFilter.innerHTML = '<option value="all">All requests</option>' +
-        (report.endpoints || []).map(ep => '<option value="' + ep.requestId.replace(/"/g, '&quot;') + '">' + ep.method + ' ' + ep.name.replace(/</g, '&lt;') + '</option>').join('');
+        (report.endpoints || []).map(ep => '<option value="' + esc(ep.requestId) + '">' + esc(ep.method) + ' ' + esc(ep.name) + '</option>').join('');
 
       function drawChart() {
         const series = report.timeSeries || [];
         const baseSeries = baseline && baseline.timeSeries ? baseline.timeSeries : [];
         const filterId = reqFilter.value;
-        const metricKey = metricSelect.value;
+        const allowedMetrics = { avgMs: 1, p90Ms: 1, p95Ms: 1, p99Ms: 1, maxMs: 1, minMs: 1 };
+        const metricKey = Object.prototype.hasOwnProperty.call(allowedMetrics, metricSelect.value) ? metricSelect.value : 'avgMs';
         latLegend.textContent = metricSelect.options[metricSelect.selectedIndex].text;
 
         const W = 1000, H = 280;
@@ -539,43 +583,45 @@ export function exportPerformanceReportHtml(
           return;
         }
 
-        const curMap = {};
-        const baseMap = {};
-        let maxSec = 0;
+        const curMap = new Map();
+        const baseMap = new Map();
+        const secSet = new Set();
         series.forEach((b, i) => {
-          const sec = typeof b.second === 'number' ? b.second : i;
-          curMap[sec] = b;
-          if (sec > maxSec) maxSec = sec;
+          const sec = typeof b.second === 'number' && Number.isFinite(b.second) ? Math.min(7200, Math.max(0, Math.trunc(b.second))) : i;
+          curMap.set(sec, b);
+          secSet.add(sec);
         });
         baseSeries.forEach((b, i) => {
-          const sec = typeof b.second === 'number' ? b.second : i;
-          baseMap[sec] = b;
-          if (sec > maxSec) maxSec = sec;
+          const sec = typeof b.second === 'number' && Number.isFinite(b.second) ? Math.min(7200, Math.max(0, Math.trunc(b.second))) : i;
+          baseMap.set(sec, b);
+          secSet.add(sec);
         });
 
-        const points = [];
-        for (let sIdx = 0; sIdx <= maxSec; sIdx++) {
-          const b = curMap[sIdx];
-          const bb = baseMap[sIdx];
-          const src = b ? (filterId !== 'all' && b.byRequest && b.byRequest[filterId] ? b.byRequest[filterId] : (filterId === 'all' ? b : null)) : null;
-          const bsrc = bb ? (filterId !== 'all' && bb.byRequest && bb.byRequest[filterId] ? bb.byRequest[filterId] : (filterId === 'all' ? bb : null)) : null;
-          points.push({
+        const sortedSecs = Array.from(secSet).sort((a, b) => a - b);
+        const points = sortedSecs.map((sIdx) => {
+          const b = curMap.get(sIdx);
+          const bb = baseMap.get(sIdx);
+          const byReqCur = b && b.byRequest && Object.prototype.hasOwnProperty.call(b.byRequest, filterId) ? b.byRequest[filterId] : null;
+          const byReqBase = bb && bb.byRequest && Object.prototype.hasOwnProperty.call(bb.byRequest, filterId) ? bb.byRequest[filterId] : null;
+          const src = b ? (filterId !== 'all' ? byReqCur : b) : null;
+          const bsrc = bb ? (filterId !== 'all' ? byReqBase : bb) : null;
+          return {
             sec: sIdx,
             hasCur: Boolean(b),
             hasBase: Boolean(bb),
-            rps: src ? src.requestsPerSec : 0,
-            lat: src ? src[metricKey] : 0,
-            err: src ? src.errorRatePct : 0,
-            vu: b ? (b.virtualUsers || 0) : 0,
-            brps: bsrc ? bsrc.requestsPerSec : 0,
-            blat: bsrc ? bsrc[metricKey] : 0,
-            berr: bsrc ? bsrc.errorRatePct : 0
-          });
-        }
+            rps: src ? num(src.requestsPerSec) : 0,
+            lat: src ? num(src[metricKey]) : 0,
+            err: src ? num(src.errorRatePct) : 0,
+            vu: b ? num(b.virtualUsers) : 0,
+            brps: bsrc ? num(bsrc.requestsPerSec) : 0,
+            blat: bsrc ? num(bsrc[metricKey]) : 0,
+            berr: bsrc ? num(bsrc.errorRatePct) : 0
+          };
+        });
 
-        const maxRps = Math.max(1, ...points.map(p => Math.max(p.rps, p.brps)));
-        const maxLat = Math.max(10, ...points.map(p => Math.max(p.lat, p.blat)));
-        const maxVu = Math.max(1, ...points.map(p => p.vu));
+        const maxRps = points.reduce((acc, p) => Math.max(acc, p.rps, p.brps), 1);
+        const maxLat = points.reduce((acc, p) => Math.max(acc, p.lat, p.blat), 10);
+        const maxVu = points.reduce((acc, p) => Math.max(acc, p.vu), 1);
 
         const xOf = (i) => PAD.left + (points.length === 1 ? plotW / 2 : (i / (points.length - 1)) * plotW);
         const yErr = (v) => PAD.top + plotH - (Math.min(100, Math.max(0, v)) / 100) * plotH;
@@ -616,30 +662,32 @@ export function exportPerformanceReportHtml(
 
       const tbody = document.getElementById('endpointsBody');
       tbody.innerHTML = (report.endpoints || []).map((ep, i) => {
-        const errAlpha = ep.errorRatePct > 0 ? Math.min(0.6, 0.15 + ep.errorRatePct / 100) : 0;
+        const errRate = num(ep.errorRatePct);
+        const errAlpha = errRate > 0 ? Math.min(0.6, 0.15 + errRate / 100) : 0;
         const errStyle = errAlpha > 0 ? 'background:rgba(244,63,94,' + errAlpha.toFixed(2) + ');color:#fecdd3;font-weight:700;' : '';
+        const epMax = Object.prototype.hasOwnProperty.call(epMaxMap, ep.requestId) ? epMaxMap[ep.requestId] : 0;
         return '<tr>' +
           '<td>' + (i + 1) + '</td>' +
-          '<td class="name-col"><span class="method">' + ep.method + '</span>' + ep.name.replace(/</g, '&lt;') + '</td>' +
-          '<td class="num">' + ep.totalRequests.toLocaleString() + '</td>' +
-          '<td class="num">' + ep.requestsPerSec.toFixed(2) + '</td>' +
-          '<td class="num">' + (epMaxMap[ep.requestId] || 0).toLocaleString() + '</td>' +
-          '<td class="num" style="' + errStyle + '">' + ep.errorRatePct.toFixed(2) + '%</td>' +
-          '<td class="num">' + ep.avgMs + '</td>' +
-          '<td class="num">' + ep.minMs + '</td>' +
-          '<td class="num">' + ep.maxMs + '</td>' +
-          '<td class="num">' + ep.p90Ms + '</td>' +
-          '<td class="num">' + ep.p95Ms + '</td>' +
-          '<td class="num">' + ep.p99Ms + '</td>' +
+          '<td class="name-col"><span class="method">' + esc(ep.method) + '</span>' + esc(ep.name) + '</td>' +
+          '<td class="num">' + num(ep.totalRequests).toLocaleString() + '</td>' +
+          '<td class="num">' + num(ep.requestsPerSec).toFixed(2) + '</td>' +
+          '<td class="num">' + num(epMax).toLocaleString() + '</td>' +
+          '<td class="num" style="' + errStyle + '">' + errRate.toFixed(2) + '%</td>' +
+          '<td class="num">' + esc(num(ep.avgMs)) + '</td>' +
+          '<td class="num">' + esc(num(ep.minMs)) + '</td>' +
+          '<td class="num">' + esc(num(ep.maxMs)) + '</td>' +
+          '<td class="num">' + esc(num(ep.p90Ms)) + '</td>' +
+          '<td class="num">' + esc(num(ep.p95Ms)) + '</td>' +
+          '<td class="num">' + esc(num(ep.p99Ms)) + '</td>' +
         '</tr>';
       }).join('');
 
       if ((report.errorSamples || []).length > 0) {
         document.getElementById('errorsSection').style.display = 'block';
         document.getElementById('errorsList').innerHTML = report.errorSamples.map(err =>
-          '<div class="err-card"><div><strong>' + err.method + ' ' + err.requestName.replace(/</g, '&lt;') + '</strong> &mdash; ' +
-          (err.status > 0 ? 'HTTP ' + err.status + ' ' : '') + err.message.replace(/</g, '&lt;') + ' (' + err.timeMs + ' ms)</div>' +
-          (err.responseSnippet ? '<pre>' + err.responseSnippet.replace(/</g, '&lt;') + '</pre>' : '') +
+          '<div class="err-card"><div><strong>' + esc(err.method) + ' ' + esc(err.requestName) + '</strong> &mdash; ' +
+          (num(err.status) > 0 ? 'HTTP ' + esc(num(err.status)) + ' ' : '') + esc(err.message) + ' (' + esc(num(err.timeMs)) + ' ms)</div>' +
+          (err.responseSnippet ? '<pre>' + esc(err.responseSnippet) + '</pre>' : '') +
           '</div>'
         ).join('');
       }

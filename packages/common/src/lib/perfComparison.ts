@@ -1,9 +1,46 @@
 import type {
   PerformanceEndpointBreakdown,
+  PerformanceErrorSample,
+  PerformanceMetricSnapshot,
   PerformanceRunReport,
   PerformanceTimeBucket,
 } from '../types/api';
+import { sanitizeJsonValue } from './examples';
 import { computePeakRpsMetrics } from './perfMetrics';
+
+const MAX_TIME_SERIES_SECONDS = 7200;
+const MAX_IMPORTED_ENDPOINTS = 1000;
+const MAX_IMPORTED_ERROR_SAMPLES = 50;
+const MAX_CLOCK_SKEW_MS = 86_400_000;
+
+function toFiniteNonNegative(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+function normalizeHttpMethod(value: unknown): PerformanceEndpointBreakdown['method'] {
+  if (typeof value === 'string') {
+    const upper = value.toUpperCase();
+    if (
+      upper === 'GET' ||
+      upper === 'POST' ||
+      upper === 'PUT' ||
+      upper === 'PATCH' ||
+      upper === 'DELETE' ||
+      upper === 'HEAD' ||
+      upper === 'OPTIONS'
+    ) {
+      return upper;
+    }
+  }
+  return 'GET';
+}
+
+function clampBucketSecond(value: unknown, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return Math.min(MAX_TIME_SERIES_SECONDS, Math.max(0, Math.trunc(fallback)));
+  }
+  return Math.min(MAX_TIME_SERIES_SECONDS, Math.max(0, Math.trunc(value)));
+}
 
 export type DeltaDirection = 'improved' | 'regressed' | 'neutral';
 
@@ -118,30 +155,25 @@ export function computePerformanceComparison(
   // Align time-series by relative elapsed second (`bucket.second`, or normalized index fallback)
   const curBySec = new Map<number, PerformanceTimeBucket>();
   const baseBySec = new Map<number, PerformanceTimeBucket>();
-  let maxSec = 0;
 
   (current.timeSeries || []).forEach((b, idx) => {
-    const sec = typeof b.second === 'number' && b.second >= 0 ? b.second : idx;
+    const sec = clampBucketSecond(b?.second, idx);
     curBySec.set(sec, b);
-    if (sec > maxSec) maxSec = sec;
   });
 
   (baseline.timeSeries || []).forEach((b, idx) => {
-    const sec = typeof b.second === 'number' && b.second >= 0 ? b.second : idx;
+    const sec = clampBucketSecond(b?.second, idx);
     baseBySec.set(sec, b);
-    if (sec > maxSec) maxSec = sec;
   });
 
-  const alignedSeconds: AlignedTimeSeriesComparisonPoint[] = [];
-  if (curBySec.size > 0 || baseBySec.size > 0) {
-    for (let s = 0; s <= maxSec; s++) {
-      const cb = curBySec.get(s);
-      const bb = baseBySec.get(s);
-      if (cb || bb) {
-        alignedSeconds.push({ second: s, currentBucket: cb, baselineBucket: bb });
-      }
-    }
-  }
+  const sortedSeconds = Array.from(new Set<number>([...curBySec.keys(), ...baseBySec.keys()])).sort(
+    (a, b) => a - b
+  );
+  const alignedSeconds: AlignedTimeSeriesComparisonPoint[] = sortedSeconds.map((s) => ({
+    second: s,
+    currentBucket: curBySec.get(s),
+    baselineBucket: baseBySec.get(s),
+  }));
 
   // Match endpoints by exact `requestId`, then fallback to `METHOD:normalized_name`
   const usedBaselineIds = new Set<string>();
@@ -169,11 +201,21 @@ export function computePerformanceComparison(
       }
     }
 
-    const curMaxRps = curPeak.byRequestMaxRps[curEp.requestId] ?? curEp.maxRequestsPerSec ?? 0;
+    const curMaxRps =
+      (Object.prototype.hasOwnProperty.call(curPeak.byRequestMaxRps, curEp.requestId)
+        ? curPeak.byRequestMaxRps[curEp.requestId]
+        : undefined) ??
+      curEp.maxRequestsPerSec ??
+      0;
 
     if (baseEp) {
       usedBaselineIds.add(baseEp.requestId);
-      const baseMaxRps = basePeak.byRequestMaxRps[baseEp.requestId] ?? baseEp.maxRequestsPerSec ?? 0;
+      const baseMaxRps =
+        (Object.prototype.hasOwnProperty.call(basePeak.byRequestMaxRps, baseEp.requestId)
+          ? basePeak.byRequestMaxRps[baseEp.requestId]
+          : undefined) ??
+        baseEp.maxRequestsPerSec ??
+        0;
       endpoints.push({
         key: curEp.requestId,
         matchStatus: 'matched',
@@ -205,7 +247,12 @@ export function computePerformanceComparison(
 
   for (const baseEp of baseline.endpoints || []) {
     if (usedBaselineIds.has(baseEp.requestId)) continue;
-    const baseMaxRps = basePeak.byRequestMaxRps[baseEp.requestId] ?? baseEp.maxRequestsPerSec ?? 0;
+    const baseMaxRps =
+      (Object.prototype.hasOwnProperty.call(basePeak.byRequestMaxRps, baseEp.requestId)
+        ? basePeak.byRequestMaxRps[baseEp.requestId]
+        : undefined) ??
+      baseEp.maxRequestsPerSec ??
+      0;
     endpoints.push({
       key: `removed:${baseEp.requestId}`,
       matchStatus: 'removed',
@@ -222,6 +269,100 @@ export function computePerformanceComparison(
   };
 }
 
+function normalizeImportedEndpoint(raw: unknown, index: number): PerformanceEndpointBreakdown {
+  const ep = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const name =
+    typeof ep.name === 'string' && ep.name
+      ? ep.name
+      : typeof ep.requestName === 'string' && ep.requestName
+        ? ep.requestName
+        : `Request ${index + 1}`;
+  return {
+    requestId: typeof ep.requestId === 'string' && ep.requestId ? ep.requestId : `ep_${index}`,
+    name,
+    method: normalizeHttpMethod(ep.method),
+    path: typeof ep.path === 'string' ? ep.path : '',
+    totalRequests: toFiniteNonNegative(ep.totalRequests),
+    errorCount: toFiniteNonNegative(ep.errorCount),
+    ...(typeof ep.warningCount === 'number' && Number.isFinite(ep.warningCount) && ep.warningCount >= 0
+      ? { warningCount: ep.warningCount }
+      : {}),
+    errorRatePct: toFiniteNonNegative(ep.errorRatePct),
+    requestsPerSec: toFiniteNonNegative(ep.requestsPerSec),
+    maxRequestsPerSec: toFiniteNonNegative(ep.maxRequestsPerSec),
+    avgMs: toFiniteNonNegative(ep.avgMs),
+    minMs: toFiniteNonNegative(ep.minMs),
+    maxMs: toFiniteNonNegative(ep.maxMs),
+    p90Ms: toFiniteNonNegative(ep.p90Ms),
+    p95Ms: toFiniteNonNegative(ep.p95Ms),
+    p99Ms: toFiniteNonNegative(ep.p99Ms),
+    bytesReceived: toFiniteNonNegative(ep.bytesReceived),
+  };
+}
+
+function normalizeImportedBucket(raw: unknown, index: number): PerformanceTimeBucket {
+  const b = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const byRequestRaw = b.byRequest && typeof b.byRequest === 'object' && !Array.isArray(b.byRequest)
+    ? (b.byRequest as Record<string, unknown>)
+    : undefined;
+  let byRequest: PerformanceTimeBucket['byRequest'];
+  if (byRequestRaw) {
+    const cleanByRequest: NonNullable<PerformanceTimeBucket['byRequest']> = Object.create(null);
+    for (const [k, v] of Object.entries(byRequestRaw)) {
+      if (!v || typeof v !== 'object') continue;
+      const m = v as Record<string, unknown>;
+      cleanByRequest[k] = {
+        totalRequests: toFiniteNonNegative(m.totalRequests),
+        errorCount: toFiniteNonNegative(m.errorCount),
+        errorRatePct: toFiniteNonNegative(m.errorRatePct),
+        requestsPerSec: toFiniteNonNegative(m.requestsPerSec),
+        avgMs: toFiniteNonNegative(m.avgMs),
+        minMs: toFiniteNonNegative(m.minMs),
+        maxMs: toFiniteNonNegative(m.maxMs),
+        p90Ms: toFiniteNonNegative(m.p90Ms),
+        p95Ms: toFiniteNonNegative(m.p95Ms),
+        p99Ms: toFiniteNonNegative(m.p99Ms),
+      };
+    }
+    byRequest = cleanByRequest;
+  }
+
+  return {
+    second: clampBucketSecond(b.second, index),
+    timestampMs: toFiniteNonNegative(b.timestampMs),
+    virtualUsers: toFiniteNonNegative(b.virtualUsers),
+    totalRequests: toFiniteNonNegative(b.totalRequests),
+    errorCount: toFiniteNonNegative(b.errorCount),
+    errorRatePct: toFiniteNonNegative(b.errorRatePct),
+    requestsPerSec: toFiniteNonNegative(b.requestsPerSec),
+    avgMs: toFiniteNonNegative(b.avgMs),
+    minMs: toFiniteNonNegative(b.minMs),
+    maxMs: toFiniteNonNegative(b.maxMs),
+    p90Ms: toFiniteNonNegative(b.p90Ms),
+    p95Ms: toFiniteNonNegative(b.p95Ms),
+    p99Ms: toFiniteNonNegative(b.p99Ms),
+    byRequest,
+  };
+}
+
+function normalizeImportedErrorSample(raw: unknown, index: number): PerformanceErrorSample {
+  const e = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return {
+    id: typeof e.id === 'string' && e.id ? e.id : `err_${index}`,
+    timestampMs: toFiniteNonNegative(e.timestampMs),
+    requestId: typeof e.requestId === 'string' ? e.requestId : '',
+    requestName: typeof e.requestName === 'string' ? e.requestName : '',
+    method: normalizeHttpMethod(e.method),
+    url: typeof e.url === 'string' ? e.url : '',
+    status: typeof e.status === 'number' && Number.isFinite(e.status) && e.status >= 0 ? e.status : 0,
+    statusText: typeof e.statusText === 'string' ? e.statusText : '',
+    category: typeof e.category === 'string' ? e.category : 'error',
+    message: typeof e.message === 'string' ? e.message : 'Unknown error',
+    ...(typeof e.responseSnippet === 'string' ? { responseSnippet: e.responseSnippet } : {}),
+    timeMs: toFiniteNonNegative(e.timeMs),
+  };
+}
+
 /**
  * Parses and validates an exported JSON baseline report (supports both `{ report: ... }` envelope and bare report objects).
  */
@@ -231,7 +372,7 @@ export function parseImportedPerformanceReport(content: string): {
 } {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(content);
+    parsed = sanitizeJsonValue(JSON.parse(content));
   } catch (err) {
     return { error: `Invalid JSON report file: ${err instanceof Error ? err.message : String(err)}` };
   }
@@ -247,8 +388,10 @@ export function parseImportedPerformanceReport(content: string): {
 
   if (
     typeof candidate.id !== 'string' ||
+    !candidate.id.trim() ||
     typeof candidate.title !== 'string' ||
     typeof candidate.startedAt !== 'number' ||
+    !Number.isFinite(candidate.startedAt) ||
     !candidate.summary ||
     typeof candidate.summary !== 'object' ||
     !Array.isArray(candidate.timeSeries) ||
@@ -259,10 +402,65 @@ export function parseImportedPerformanceReport(content: string): {
     };
   }
 
-  const normalized = candidate as unknown as PerformanceRunReport;
-  if (!normalized.configSnapshot || !normalized.configSnapshot.loadProfile) {
+  const rawReport = candidate as unknown as PerformanceRunReport;
+  if (!rawReport.configSnapshot || !rawReport.configSnapshot.loadProfile) {
     return { error: 'Selected JSON report is missing load profile configuration metadata.' };
   }
+
+  const maxStartedAt = Date.now() + MAX_CLOCK_SKEW_MS;
+  const startedAt = Math.min(Math.max(0, candidate.startedAt), maxStartedAt);
+  const rawFinishedAt = typeof candidate.finishedAt === 'number' && Number.isFinite(candidate.finishedAt)
+    ? Math.min(Math.max(startedAt, candidate.finishedAt), maxStartedAt)
+    : startedAt + toFiniteNonNegative(candidate.durationMs);
+
+  const rawSummary = (candidate.summary || {}) as Record<string, unknown>;
+  const summary: PerformanceMetricSnapshot = {
+    totalRequests: toFiniteNonNegative(rawSummary.totalRequests),
+    errorCount: toFiniteNonNegative(rawSummary.errorCount),
+    ...(typeof rawSummary.warningCount === 'number' && Number.isFinite(rawSummary.warningCount) && rawSummary.warningCount >= 0
+      ? { warningCount: rawSummary.warningCount }
+      : {}),
+    errorRatePct: toFiniteNonNegative(rawSummary.errorRatePct),
+    requestsPerSec: toFiniteNonNegative(rawSummary.requestsPerSec),
+    maxRequestsPerSec: toFiniteNonNegative(rawSummary.maxRequestsPerSec),
+    avgMs: toFiniteNonNegative(rawSummary.avgMs),
+    minMs: toFiniteNonNegative(rawSummary.minMs),
+    maxMs: toFiniteNonNegative(rawSummary.maxMs),
+    p90Ms: toFiniteNonNegative(rawSummary.p90Ms),
+    p95Ms: toFiniteNonNegative(rawSummary.p95Ms),
+    p99Ms: toFiniteNonNegative(rawSummary.p99Ms),
+    bytesReceived: toFiniteNonNegative(rawSummary.bytesReceived),
+  };
+  const rawLoadProfile = rawReport.configSnapshot.loadProfile;
+
+  const normalized: PerformanceRunReport = {
+    ...rawReport,
+    startedAt,
+    finishedAt: rawFinishedAt,
+    durationMs: toFiniteNonNegative(candidate.durationMs),
+    summary,
+    timeSeries: (candidate.timeSeries as unknown[])
+      .slice(0, MAX_TIME_SERIES_SECONDS)
+      .map((b, idx) => normalizeImportedBucket(b, idx)),
+    endpoints: (candidate.endpoints as unknown[])
+      .slice(0, MAX_IMPORTED_ENDPOINTS)
+      .map((ep, idx) => normalizeImportedEndpoint(ep, idx)),
+    errorGroups: Array.isArray(candidate.errorGroups) ? rawReport.errorGroups.slice(0, MAX_IMPORTED_ENDPOINTS) : [],
+    errorSamples: Array.isArray(candidate.errorSamples)
+      ? candidate.errorSamples.slice(0, MAX_IMPORTED_ERROR_SAMPLES).map((e, idx) => normalizeImportedErrorSample(e, idx))
+      : [],
+    warnings: Array.isArray(candidate.warnings)
+      ? candidate.warnings.filter((w): w is string => typeof w === 'string').slice(0, 200)
+      : [],
+    configSnapshot: {
+      ...rawReport.configSnapshot,
+      loadProfile: {
+        ...rawLoadProfile,
+        virtualUsers: Math.min(10_000, Math.max(1, toFiniteNonNegative(rawLoadProfile.virtualUsers, 1))),
+        durationValue: Math.min(86_400, Math.max(0, toFiniteNonNegative(rawLoadProfile.durationValue))),
+      },
+    },
+  };
 
   return { report: normalized };
 }

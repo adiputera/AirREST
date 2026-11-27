@@ -212,6 +212,7 @@ pub fn run() {
 
     #[cfg(desktop)]
     let builder = {
+        use tauri::Manager as _;
         let mut updater_builder = tauri_plugin_updater::Builder::new();
         if let Some(pubkey) = option_env!("TAURI_UPDATER_PUBLIC_KEY")
             && !pubkey.trim().is_empty()
@@ -220,6 +221,17 @@ pub fn run() {
         }
         builder
             .manage(perf_runner::PerfRunnerManager::default())
+            .on_window_event(|window, event| {
+                if matches!(
+                    event,
+                    tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
+                ) {
+                    window.state::<perf_runner::PerfRunnerManager>().stop_all();
+                }
+            })
+            .on_page_load(|webview, _payload| {
+                webview.state::<perf_runner::PerfRunnerManager>().stop_all();
+            })
             .plugin(
                 tauri::plugin::Builder::<tauri::Wry>::new("native-credential")
                     .invoke_handler(tauri::generate_handler![
@@ -239,8 +251,16 @@ pub fn run() {
             ])
     };
 
-    #[cfg(not(desktop))]
-    let builder = builder.invoke_handler(tauri::generate_handler![]);
+    let builder = builder
+        .setup(|app| {
+            use tauri::Manager as _;
+            // NAT-03: Remove any legacy unencrypted tauri-plugin-http cookie jar file from prior versions.
+            if let Ok(cache_dir) = app.path().app_cache_dir() {
+                let _ = std::fs::remove_file(cache_dir.join(".cookies"));
+            }
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![]);
 
     builder
         .run(tauri::generate_context!())

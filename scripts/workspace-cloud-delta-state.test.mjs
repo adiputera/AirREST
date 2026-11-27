@@ -126,3 +126,27 @@ test('cloud delta state chooses a valid environment and reports partial collecti
   assert.equal(state.syncStatus, 'error');
   assert.match(state.syncError, /2 collection details/);
 });
+
+test('STU-04: cloud delta state retains locally pending/created environments across pull', () => {
+  const { prepareCloudDeltaState } = loadCloudDeltaState();
+  const state = prepareCloudDeltaState({
+    scope: { type: 'workspace', id: 'workspace-1', name: 'Workspace 1' },
+    scopeCache: {},
+    collections: [],
+    currentCollections: [],
+    pulledEnvironments: [{ id: 'env-server', name: 'Server', variables: [] }],
+    currentEnvironments: [
+      { id: 'env-local-tmp', name: 'Local Pending', variables: [], _syncStatus: 'pending', _pendingCreate: true },
+    ],
+    activeEnvironmentId: 'env-local-tmp',
+    tabs: [{ id: 'tab-1' }],
+    activeTabId: 'tab-1',
+    history: [],
+    partialCollectionCount: 0,
+    syncedAt: 5_000,
+  });
+
+  assert.equal(state.environments.length, 2);
+  assert.ok(state.environments.some((e) => e.id === 'env-local-tmp'));
+  assert.equal(state.activeEnvironmentId, 'env-local-tmp');
+});

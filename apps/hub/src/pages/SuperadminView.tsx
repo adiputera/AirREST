@@ -58,41 +58,57 @@ export const SuperadminView: React.FC = () => {
     };
   }, []);
 
+  const isAuthenticated = Boolean(token);
+  const usersLoadSeqRef = useRef(0);
+  const policyLoadSeqRef = useRef(0);
+
   const loadUsers = async () => {
-    if (!token || currentUser?.role !== 'superadmin') return;
+    const seq = ++usersLoadSeqRef.current;
+    const live = useHubStore.getState();
+    if (!live.token || currentUser?.role !== 'superadmin') return;
     setIsLoading(true);
     setLoadError(null);
     try {
-      const data = await apiListAllUsers(apiUrl, token, refreshToken || undefined);
+      const data = await apiListAllUsers(apiUrl, live.token, live.refreshToken || undefined);
+      if (seq !== usersLoadSeqRef.current) return;
       setUsers(data);
     } catch (err: any) {
+      if (seq !== usersLoadSeqRef.current) return;
       setLoadError(err.message || 'Failed to list users');
     } finally {
-      setIsLoading(false);
+      if (seq === usersLoadSeqRef.current) {
+        setIsLoading(false);
+      }
     }
   };
 
   const loadFeaturePolicy = async (clearError = true) => {
-    if (!token || currentUser?.role !== 'superadmin') return;
+    const seq = ++policyLoadSeqRef.current;
+    const live = useHubStore.getState();
+    if (!live.token || currentUser?.role !== 'superadmin') return;
     setIsLoadingFeaturePolicy(true);
     if (clearError) setFeaturePolicyError(null);
     try {
-      const policy = await apiGetFeaturePolicy(apiUrl, token, refreshToken || undefined);
+      const policy = await apiGetFeaturePolicy(apiUrl, live.token, live.refreshToken || undefined);
+      if (seq !== policyLoadSeqRef.current) return;
       setFeaturePolicy(policy);
       setFeatureFlags(policy.flags);
     } catch (err: unknown) {
+      if (seq !== policyLoadSeqRef.current) return;
       setFeaturePolicyError(err instanceof Error ? err.message : 'Failed to load feature controls');
     } finally {
-      setIsLoadingFeaturePolicy(false);
+      if (seq === policyLoadSeqRef.current) {
+        setIsLoadingFeaturePolicy(false);
+      }
     }
   };
 
   useEffect(() => {
-    if (currentUser?.role === 'superadmin') {
+    if (isAuthenticated && currentUser?.role === 'superadmin') {
       loadUsers();
       loadFeaturePolicy();
     }
-  }, [apiUrl, token, currentUser?.role]);
+  }, [apiUrl, isAuthenticated, currentUser?.id, currentUser?.role]);
 
   const saveFeaturePolicy = async () => {
     if (!token || !featurePolicy || !featureFlags || currentUser?.role !== 'superadmin') return;

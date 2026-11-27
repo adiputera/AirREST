@@ -682,7 +682,11 @@ func (r *DuplicateRepository) DuplicateCollection(
 			return err
 		}
 
-		now := time.Now().UTC()
+		var now time.Time
+		if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+			return err
+		}
+		now = now.UTC()
 		newColID := uuid.New()
 		_, err = tx.Exec(ctx, `
 			INSERT INTO collections (id, workspace_id, project_id, name, description, min_role, version, created_by, last_modified_by, created_at, updated_at)
@@ -776,7 +780,11 @@ func (r *DuplicateRepository) ImportDuplicateCollection(
 			return err
 		}
 
-		now := time.Now().UTC()
+		var now time.Time
+		if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+			return err
+		}
+		now = now.UTC()
 		newColID := uuid.New()
 		minRole := domain.ProjectRoleReader
 		_, err = tx.Exec(ctx, `
@@ -993,8 +1001,15 @@ func (r *DuplicateRepository) DuplicateItem(
 		if err != nil {
 			return err
 		}
+		if len(targetItems)+len(clonedRows) > MaxDuplicateItems {
+			return &DuplicateLimitError{Message: fmt.Sprintf("duplicate exceeds maximum collection limit of %d items", MaxDuplicateItems)}
+		}
 
-		now := time.Now().UTC()
+		var now time.Time
+		if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+			return err
+		}
+		now = now.UTC()
 		if err := insertClonedItemsInTx(ctx, tx, tgtCol.ID, clonedRows, user.ID, now); err != nil {
 			return err
 		}

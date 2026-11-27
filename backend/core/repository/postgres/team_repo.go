@@ -44,6 +44,39 @@ func (r *TeamRepository) Create(ctx context.Context, t *domain.Team) error {
 	return nil
 }
 
+// CreateWithAdmin atomically creates a team and adds its initial admin member in one transaction.
+func (r *TeamRepository) CreateWithAdmin(ctx context.Context, t *domain.Team, adminUserID uuid.UUID) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin team creation transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if t.ID == uuid.Nil {
+		t.ID = uuid.New()
+	}
+	now := time.Now().UTC()
+	t.CreatedAt = now
+	t.UpdatedAt = now
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO teams (id, name, description, created_by, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, t.ID, t.Name, t.Description, t.CreatedBy, t.CreatedAt, t.UpdatedAt); err != nil {
+		return fmt.Errorf("failed to create team: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO team_members (id, team_id, user_id, role, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (team_id, user_id) DO UPDATE SET role = EXCLUDED.role, updated_at = EXCLUDED.updated_at
+	`, uuid.New(), t.ID, adminUserID, string(domain.TeamRoleAdmin), now, now); err != nil {
+		return fmt.Errorf("failed to add initial team admin: %w", err)
+	}
+
+	return tx.Commit(ctx)
+}
+
 func (r *TeamRepository) ListForUser(ctx context.Context, userID uuid.UUID, isSuperadmin bool) ([]*domain.Team, error) {
 	var query string
 	var rows pgx.Rows
@@ -82,6 +115,9 @@ func (r *TeamRepository) ListForUser(ctx context.Context, userID uuid.UUID, isSu
 		role := domain.TeamRole(roleStr)
 		t.UserRole = &role
 		teams = append(teams, &t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate teams: %w", err)
 	}
 	return teams, nil
 }
@@ -157,23 +193,31 @@ func (r *TeamRepository) UpdateMemberRole(ctx context.Context, teamID, userID uu
 }
 
 func (r *TeamRepository) RemoveMember(ctx context.Context, teamID, userID uuid.UUID) error {
-	// Clean up any project assignments under this team for the user
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin team member removal transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Clean up any project assignments under this team for the user atomically
 	cleanupProjectsQuery := `
 		DELETE FROM project_members
 		WHERE project_id IN (SELECT id FROM projects WHERE team_id = $1)
 		  AND user_id = $2
 	`
-	_, _ = r.pool.Exec(ctx, cleanupProjectsQuery, teamID, userID)
+	if _, err := tx.Exec(ctx, cleanupProjectsQuery, teamID, userID); err != nil {
+		return fmt.Errorf("failed to clean up team project memberships: %w", err)
+	}
 
 	query := `DELETE FROM team_members WHERE team_id = $1 AND user_id = $2`
-	result, err := r.pool.Exec(ctx, query, teamID, userID)
+	result, err := tx.Exec(ctx, query, teamID, userID)
 	if err != nil {
 		return fmt.Errorf("failed to remove team member: %w", err)
 	}
 	if result.RowsAffected() == 0 {
 		return ErrTeamMemberNotFound
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (r *TeamRepository) GetMember(ctx context.Context, teamID, userID uuid.UUID) (*domain.TeamMember, error) {
@@ -226,6 +270,9 @@ func (r *TeamRepository) ListMembers(ctx context.Context, teamID uuid.UUID) ([]*
 		u.Role = domain.SystemRole(userRoleStr)
 		m.User = &u
 		members = append(members, &m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate team members: %w", err)
 	}
 	return members, nil
 }

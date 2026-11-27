@@ -29,13 +29,14 @@ import {
   syncRunnerTabItemsFromSource,
   validateRunnerPreflight,
 } from '../../lib/perfLaunch';
-import { getFunctionalRunEnvSnapshot } from '../../lib/functionalSessionStore';
+import { getFunctionalRunVariablesSnapshot } from '../../lib/functionalSessionStore';
 import {
   clearPerformanceTabDataRows,
   getPerformanceTabDataRows,
   setPerformanceTabDataRows,
 } from '../../lib/perfDataFile';
 import { parseImportedPerformanceReport } from '../../lib/perfComparison';
+import { captureImportTarget, isImportTargetMatching, MAX_IMPORT_FILE_BYTES } from '../../lib/importBatch';
 import {
   AIRREST_REPORT_FILE_EXTENSION,
   buildSourceMetaFromContext,
@@ -84,6 +85,8 @@ export const PerformanceTabView: React.FC = () => {
   const updatePerformanceTab = activeStore((s) => s.updatePerformanceTab);
   const setPerformanceReport = activeStore((s) => s.setPerformanceReport);
   const setFunctionalReport = activeStore((s) => s.setFunctionalReport);
+  const removePerformanceReport = activeStore((s) => s.removePerformanceReport);
+  const removeFunctionalReport = activeStore((s) => s.removeFunctionalReport);
   const applyEnvironmentVariableUpdates = activeStore((s) => s.applyEnvironmentVariableUpdates);
 
   const tab: OpenPerformanceTab | undefined = useMemo(
@@ -99,6 +102,7 @@ export const PerformanceTabView: React.FC = () => {
       buildPerfScopeKey({
         workspaceMode,
         activeOfflineWorkspaceId,
+        cloudApiUrl: cloudConfig?.apiUrl,
         cloudUserId: cloudConfig?.user?.id,
         activeScopeType: cloudConfig?.activeScope?.type,
         activeScopeId: cloudConfig?.activeScope?.id,
@@ -135,6 +139,16 @@ export const PerformanceTabView: React.FC = () => {
     void listPerfReports(scopeKey).then(setRecentReports);
     void listFunctionalReports(scopeKey).then(setRecentFunctionalReports);
   };
+
+  const tabRecentReports = useMemo(() => {
+    if (!tab || tab.isSessionOnlyImported || tab.sourceType === 'imported') return [];
+    return recentReports.filter((r) => r.sourceId === tab.sourceId);
+  }, [recentReports, tab]);
+
+  const tabRecentFunctionalReports = useMemo(() => {
+    if (!tab || tab.isSessionOnlyImported || tab.sourceType === 'imported') return [];
+    return recentFunctionalReports.filter((r) => r.sourceId === tab.sourceId);
+  }, [recentFunctionalReports, tab]);
 
   if (!tab) return null;
 
@@ -215,8 +229,15 @@ export const PerformanceTabView: React.FC = () => {
     }
 
     const initialVariables = resolveActiveEnvVariables();
+    const targetBinding = captureImportTarget(activeStore.getState());
+    const capturedScopeKey = scopeKey;
+    const capturedTabId = tab.id;
+    const isRunStillBound = () => isImportTargetMatching(activeStore.getState(), targetBinding);
+    const hasOpenRunnerTab = () =>
+      (activeStore.getState().openPerformanceTabs || []).some((p) => p.id === capturedTabId);
+
     const res = await startPerformanceTest({
-      tabId: tab.id,
+      tabId: capturedTabId,
       title: tab.title,
       sourceType: tab.sourceType,
       sourceId: tab.sourceId,
@@ -233,17 +254,26 @@ export const PerformanceTabView: React.FC = () => {
       initialVariables,
       adapter: adapter || undefined,
       onUpdate: (liveReport) => {
+        if (!isRunStillBound()) return;
         setPerformanceReport(liveReport);
       },
       onFinish: (finalReport) => {
-        setPerformanceReport(finalReport);
-        updatePerformanceTab(tab.id, {
-          viewMode: 'report',
-          activeRunId: null,
-          viewingReportId: finalReport.id,
-        });
-        void savePerfReport(scopeKey, finalReport).then(() => {
-          void listPerfReports(scopeKey).then(setRecentReports);
+        if (!isRunStillBound()) return;
+        if (hasOpenRunnerTab()) {
+          setPerformanceReport(finalReport);
+          updatePerformanceTab(capturedTabId, {
+            viewMode: 'report',
+            activeRunId: null,
+            viewingReportId: finalReport.id,
+          });
+        }
+        void savePerfReport(capturedScopeKey, finalReport).then(() => {
+          if (!isRunStillBound()) return;
+          void listPerfReports(capturedScopeKey).then((list) => {
+            if (isRunStillBound()) {
+              setRecentReports(list);
+            }
+          });
         });
       },
     });
@@ -253,11 +283,13 @@ export const PerformanceTabView: React.FC = () => {
       return;
     }
 
-    updatePerformanceTab(tab.id, {
-      viewMode: 'running',
-      activeRunId: res.runId,
-      viewingReportId: res.runId,
-    });
+    if (isRunStillBound() && hasOpenRunnerTab()) {
+      updatePerformanceTab(capturedTabId, {
+        viewMode: 'running',
+        activeRunId: res.runId,
+        viewingReportId: res.runId,
+      });
+    }
   };
 
   const handleStartFunctional = async (
@@ -291,14 +323,21 @@ export const PerformanceTabView: React.FC = () => {
     const baseEnvVariables = resolveActiveEnvVariables();
     const chainedSnapshot =
       onlyItemIds && options?.sourceReportId
-        ? getFunctionalRunEnvSnapshot(options.sourceReportId)
+        ? getFunctionalRunVariablesSnapshot(options.sourceReportId)
         : undefined;
     const initialVariables = chainedSnapshot
-      ? { ...baseEnvVariables, ...chainedSnapshot }
+      ? { ...baseEnvVariables, ...chainedSnapshot.env }
       : baseEnvVariables;
+    const targetBinding = captureImportTarget(activeStore.getState());
+    const capturedScopeKey = scopeKey;
+    const capturedEnvId = activeEnvironmentId;
+    const capturedTabId = tab.id;
+    const isRunStillBound = () => isImportTargetMatching(activeStore.getState(), targetBinding);
+    const hasOpenRunnerTab = () =>
+      (activeStore.getState().openPerformanceTabs || []).some((p) => p.id === capturedTabId);
 
     const res = await startFunctionalRun({
-      tabId: tab.id,
+      tabId: capturedTabId,
       title: tab.title,
       sourceType: tab.sourceType,
       sourceId: tab.sourceId,
@@ -309,20 +348,33 @@ export const PerformanceTabView: React.FC = () => {
       dataFileMeta: tab.dataFile,
       dataRows: dataRowsInMemory,
       initialVariables,
+      initialLocalVariables: chainedSnapshot?.vars,
       adapter: adapter || undefined,
-      onCommitEnvironmentUpdates: applyEnvironmentVariableUpdates,
+      onCommitEnvironmentUpdates: (updates, unsetKeys) => {
+        if (!capturedEnvId || !isRunStillBound()) return [];
+        return applyEnvironmentVariableUpdates(updates, unsetKeys, capturedEnvId);
+      },
       onUpdate: (liveReport) => {
+        if (!isRunStillBound()) return;
         setFunctionalReport(liveReport);
       },
       onFinish: (finalReport) => {
-        setFunctionalReport(finalReport);
-        updatePerformanceTab(tab.id, {
-          viewMode: 'report',
-          activeFunctionalRunId: null,
-          viewingFunctionalReportId: finalReport.id,
-        });
-        void saveFunctionalReport(scopeKey, finalReport).then(() => {
-          void listFunctionalReports(scopeKey).then(setRecentFunctionalReports);
+        if (!isRunStillBound()) return;
+        if (hasOpenRunnerTab()) {
+          setFunctionalReport(finalReport);
+          updatePerformanceTab(capturedTabId, {
+            viewMode: 'report',
+            activeFunctionalRunId: null,
+            viewingFunctionalReportId: finalReport.id,
+          });
+        }
+        void saveFunctionalReport(capturedScopeKey, finalReport).then(() => {
+          if (!isRunStillBound()) return;
+          void listFunctionalReports(capturedScopeKey).then((list) => {
+            if (isRunStillBound()) {
+              setRecentFunctionalReports(list);
+            }
+          });
         });
       },
     });
@@ -332,12 +384,23 @@ export const PerformanceTabView: React.FC = () => {
       return;
     }
 
-    updatePerformanceTab(tab.id, {
-      runnerMode: 'functional',
-      viewMode: 'running',
-      activeFunctionalRunId: res.runId,
-      viewingFunctionalReportId: res.runId,
-    });
+    if (isRunStillBound() && hasOpenRunnerTab()) {
+      updatePerformanceTab(capturedTabId, {
+        runnerMode: 'functional',
+        viewMode: 'running',
+        activeFunctionalRunId: res.runId,
+        viewingFunctionalReportId: res.runId,
+      });
+    }
+  };
+
+  const safeReportDateTag = (startedAt: number): string => {
+    const safeMs = typeof startedAt === 'number' && Number.isFinite(startedAt) && startedAt >= 0 ? startedAt : 0;
+    try {
+      return new Date(safeMs).toISOString().slice(0, 10);
+    } catch {
+      return new Date(0).toISOString().slice(0, 10);
+    }
   };
 
   const downloadExportArtifact = async (
@@ -349,7 +412,7 @@ export const PerformanceTabView: React.FC = () => {
     mimeType: string
   ) => {
     const slug = (report.title || 'performance-report').toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    const dateTag = new Date(report.startedAt).toISOString().slice(0, 10);
+    const dateTag = safeReportDateTag(report.startedAt);
     const filename = `${slug}-${suffix ? `${suffix}-` : ''}${dateTag}.${ext}`;
     if (adapter?.saveFile) {
       await adapter.saveFile(filename, content, {
@@ -372,7 +435,7 @@ export const PerformanceTabView: React.FC = () => {
     kind: 'performance' | 'functional'
   ) => {
     const slug = (report.title || `${kind}-report`).toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    const dateTag = new Date(report.startedAt).toISOString().slice(0, 10);
+    const dateTag = safeReportDateTag(report.startedAt);
     const filename = `${slug}-${dateTag}${AIRREST_REPORT_FILE_EXTENSION}`;
     const sourceMeta = buildSourceMetaFromContext(report, collections);
     const content =
@@ -400,6 +463,10 @@ export const PerformanceTabView: React.FC = () => {
     setStartError(null);
     const picked = await reportImporter.pickReportFileContent();
     if (!picked) return;
+    if (picked.error) {
+      setStartError(picked.error);
+      return;
+    }
     const res = await reportImporter.importReportContent(picked.content, {
       filename: picked.filename,
       onAttachedSaved: refreshSavedReports,
@@ -441,6 +508,10 @@ export const PerformanceTabView: React.FC = () => {
       resolver(null);
       return;
     }
+    if (file.size > MAX_IMPORT_FILE_BYTES) {
+      resolver({ error: 'Selected baseline report file exceeds maximum allowed limit of 16 MB.' });
+      return;
+    }
     try {
       const content = await file.text();
       resolver(parseImportedPerformanceReport(content));
@@ -454,7 +525,7 @@ export const PerformanceTabView: React.FC = () => {
       <>
         <FunctionalReportView
           report={viewingFunctionalReport}
-          recentReports={recentFunctionalReports}
+          recentReports={tabRecentFunctionalReports}
           isAnotherRunActive={isAnotherRunActive}
           isSessionOnlyImported={Boolean(tab.isSessionOnlyImported)}
           sessionOnlyReason={tab.sessionOnlyReason}
@@ -477,9 +548,12 @@ export const PerformanceTabView: React.FC = () => {
             updatePerformanceTab(tab.id, {
               viewMode: 'report',
               viewingFunctionalReportId: selected.id,
+              isSessionOnlyImported: false,
+              sessionOnlyReason: '',
             });
           }}
           onDeleteHistoryReport={(reportId) => {
+            removeFunctionalReport?.(reportId);
             void deleteFunctionalReport(reportId, scopeKey).then(() => {
               void listFunctionalReports(scopeKey).then(setRecentFunctionalReports);
             });
@@ -546,7 +620,7 @@ export const PerformanceTabView: React.FC = () => {
         />
         <PerformanceReportView
           report={viewingReport}
-          recentReports={recentReports}
+          recentReports={tabRecentReports}
           isAnotherRunActive={isAnotherRunActive}
           isSessionOnlyImported={Boolean(tab.isSessionOnlyImported)}
           sessionOnlyReason={tab.sessionOnlyReason}
@@ -563,9 +637,12 @@ export const PerformanceTabView: React.FC = () => {
             updatePerformanceTab(tab.id, {
               viewMode: 'report',
               viewingReportId: selected.id,
+              isSessionOnlyImported: false,
+              sessionOnlyReason: '',
             });
           }}
           onDeleteHistoryReport={(reportId) => {
+            removePerformanceReport?.(reportId);
             void deletePerfReport(reportId, scopeKey).then(() => {
               void listPerfReports(scopeKey).then(setRecentReports);
             });
@@ -708,11 +785,11 @@ export const PerformanceTabView: React.FC = () => {
 
         <div className="flex items-center gap-2">
           {isFunctionalMode ? (
-            recentFunctionalReports.length > 0 && (
+            tabRecentFunctionalReports.length > 0 && (
               <button
                 type="button"
                 onClick={() => {
-                  const latest = recentFunctionalReports[0];
+                  const latest = tabRecentFunctionalReports[0];
                   if (!latest) return;
                   setFunctionalReport(latest);
                   updatePerformanceTab(tab.id, {
@@ -723,15 +800,15 @@ export const PerformanceTabView: React.FC = () => {
                 className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-card px-3 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition"
               >
                 <History className="h-3.5 w-3.5 text-emerald-500" />
-                <span>Last Report ({recentFunctionalReports.length})</span>
+                <span>Last Report ({tabRecentFunctionalReports.length})</span>
               </button>
             )
           ) : (
-            recentReports.length > 0 && (
+            tabRecentReports.length > 0 && (
               <button
                 type="button"
                 onClick={() => {
-                  const latest = recentReports[0];
+                  const latest = tabRecentReports[0];
                   if (!latest) return;
                   setPerformanceReport(latest);
                   updatePerformanceTab(tab.id, {
@@ -742,7 +819,7 @@ export const PerformanceTabView: React.FC = () => {
                 className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-card px-3 text-xs font-medium text-tx-secondary hover:bg-hover hover:text-tx-primary transition"
               >
                 <History className="h-3.5 w-3.5 text-sky-500" />
-                <span>Last Report ({recentReports.length})</span>
+                <span>Last Report ({tabRecentReports.length})</span>
               </button>
             )
           )}

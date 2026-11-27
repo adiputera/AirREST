@@ -152,10 +152,14 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
     }
   }, []);
 
+  const cancelReportPromptRef = useRef(reportImporter.cancelPendingPrompt);
+  cancelReportPromptRef.current = reportImporter.cancelPendingPrompt;
+
   const invalidateActiveRun = useCallback(() => {
     importRunIdRef.current += 1;
     activeTargetRef.current = null;
     clearCloseTimer();
+    cancelReportPromptRef.current?.();
   }, [clearCloseTimer]);
 
   const isRunCurrent = useCallback(

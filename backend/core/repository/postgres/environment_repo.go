@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/adiputera/airrest-backend/core/domain"
 	"github.com/google/uuid"
@@ -27,7 +26,8 @@ func NewEnvironmentRepository(pool *pgxpool.Pool) *EnvironmentRepository {
 func (r *EnvironmentRepository) Create(ctx context.Context, env *domain.Environment) error {
 	query := `
 		INSERT INTO environments (id, workspace_id, project_id, name, variables, min_role, version, last_modified_by, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $8, $9)
+		VALUES ($1, $2, $3, $4, $5, $6, 1, $7, clock_timestamp(), clock_timestamp())
+		RETURNING created_at, updated_at
 	`
 	if env.ID == uuid.Nil {
 		env.ID = uuid.New()
@@ -35,15 +35,14 @@ func (r *EnvironmentRepository) Create(ctx context.Context, env *domain.Environm
 	if env.MinRole == "" {
 		env.MinRole = domain.ProjectRoleReader
 	}
-	now := time.Now().UTC()
 	env.Version = 1
-	env.CreatedAt = now
-	env.UpdatedAt = now
 
-	_, err := r.pool.Exec(ctx, query, env.ID, env.WorkspaceID, env.ProjectID, env.Name, env.Variables, env.MinRole, env.LastModifiedBy, env.CreatedAt, env.UpdatedAt)
+	err := r.pool.QueryRow(ctx, query, env.ID, env.WorkspaceID, env.ProjectID, env.Name, env.Variables, env.MinRole, env.LastModifiedBy).Scan(&env.CreatedAt, &env.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to create environment: %w", err)
 	}
+	env.CreatedAt = env.CreatedAt.UTC()
+	env.UpdatedAt = env.UpdatedAt.UTC()
 	return nil
 }
 
@@ -108,39 +107,41 @@ func (r *EnvironmentRepository) List(ctx context.Context, workspaceID, projectID
 		}
 		envs = append(envs, &env)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate environments: %w", err)
+	}
 	return envs, nil
 }
 
 func (r *EnvironmentRepository) Update(ctx context.Context, env *domain.Environment, baseVersion int64) error {
 	query := `
 		UPDATE environments
-		SET name = $1, variables = $2, min_role = $3, version = version + 1, last_modified_by = $4, updated_at = $5
-		WHERE id = $6 AND version = $7 AND deleted_at IS NULL
+		SET name = $1, variables = $2, min_role = $3, version = version + 1, last_modified_by = $4, updated_at = clock_timestamp()
+		WHERE id = $5 AND version = $6 AND deleted_at IS NULL
+		RETURNING updated_at
 	`
-	now := time.Now().UTC()
 	if env.MinRole == "" {
 		env.MinRole = domain.ProjectRoleReader
 	}
-	result, err := r.pool.Exec(ctx, query, env.Name, env.Variables, env.MinRole, env.LastModifiedBy, now, env.ID, baseVersion)
+	err := r.pool.QueryRow(ctx, query, env.Name, env.Variables, env.MinRole, env.LastModifiedBy, env.ID, baseVersion).Scan(&env.UpdatedAt)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrVersionConflict
+		}
 		return fmt.Errorf("failed to update environment: %w", err)
 	}
-	if result.RowsAffected() == 0 {
-		return ErrVersionConflict
-	}
 	env.Version = baseVersion + 1
-	env.UpdatedAt = now
+	env.UpdatedAt = env.UpdatedAt.UTC()
 	return nil
 }
 
 func (r *EnvironmentRepository) SoftDelete(ctx context.Context, id uuid.UUID, modifiedBy uuid.UUID) error {
 	query := `
 		UPDATE environments
-		SET deleted_at = $1, updated_at = $1, last_modified_by = $2, version = version + 1
-		WHERE id = $3 AND deleted_at IS NULL
+		SET deleted_at = clock_timestamp(), updated_at = clock_timestamp(), last_modified_by = $1, version = version + 1
+		WHERE id = $2 AND deleted_at IS NULL
 	`
-	now := time.Now().UTC()
-	result, err := r.pool.Exec(ctx, query, now, modifiedBy, id)
+	result, err := r.pool.Exec(ctx, query, modifiedBy, id)
 	if err != nil {
 		return fmt.Errorf("failed to soft delete environment: %w", err)
 	}

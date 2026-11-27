@@ -9,6 +9,7 @@ import (
 	"github.com/adiputera/airrest-backend/core/domain"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -41,10 +42,65 @@ func (r *UserRepository) Create(ctx context.Context, u *domain.User) error {
 
 	_, err := r.pool.Exec(ctx, query, u.ID, u.Email, u.PasswordHash, u.Name, u.AvatarURL, string(u.Role), u.CreatedAt, u.UpdatedAt)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ErrUserAlreadyExists
+		}
 		return fmt.Errorf("failed to insert user: %w", err)
 	}
 
 	return nil
+}
+
+// CreateWithDefaultWorkspace atomically creates a user and their initial private workspace in one transaction.
+func (r *UserRepository) CreateWithDefaultWorkspace(ctx context.Context, u *domain.User, workspaceName string) (*domain.Workspace, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin user creation transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if u.ID == uuid.Nil {
+		u.ID = uuid.New()
+	}
+	now := time.Now().UTC()
+	u.CreatedAt = now
+	u.UpdatedAt = now
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, email, password_hash, name, avatar_url, role, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, u.ID, u.Email, u.PasswordHash, u.Name, u.AvatarURL, string(u.Role), u.CreatedAt, u.UpdatedAt)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return nil, ErrUserAlreadyExists
+		}
+		return nil, fmt.Errorf("failed to insert user: %w", err)
+	}
+
+	ws := &domain.Workspace{
+		ID:        uuid.New(),
+		OwnerID:   u.ID,
+		Name:      workspaceName,
+		IsDefault: true,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO workspaces (id, owner_id, name, is_default, created_at, updated_at)
+		VALUES ($1, $2, $3, TRUE, $4, $5)
+		RETURNING id, owner_id, name, description, is_default, created_at, updated_at
+	`, ws.ID, ws.OwnerID, ws.Name, now, now).Scan(
+		&ws.ID, &ws.OwnerID, &ws.Name, &ws.Description, &ws.IsDefault, &ws.CreatedAt, &ws.UpdatedAt,
+	); err != nil {
+		return nil, fmt.Errorf("failed to create default workspace: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("failed to commit user creation: %w", err)
+	}
+	return ws, nil
 }
 
 // GetByEmail retrieves a user by email
@@ -151,6 +207,9 @@ func (r *UserRepository) ListAll(ctx context.Context) ([]*domain.User, error) {
 		}
 		u.Role = domain.SystemRole(roleStr)
 		users = append(users, &u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate users: %w", err)
 	}
 
 	return users, nil
@@ -273,6 +332,9 @@ func (r *UserRepository) SearchUsers(ctx context.Context, queryStr string, limit
 		u.Role = domain.SystemRole(roleStr)
 		users = append(users, &u)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate searched users: %w", err)
+	}
 	return users, nil
 }
 
@@ -295,7 +357,7 @@ func (r *UserRepository) Delete(ctx context.Context, targetUserID, reassignToUse
 		return fmt.Errorf("failed to reassign collections creator: %w", err)
 	}
 
-	// Clear last_modified_by references
+	// Clear last_modified_by and feature policy updated_by references
 	if _, err := tx.Exec(ctx, `UPDATE collections SET last_modified_by = NULL WHERE last_modified_by = $1`, targetUserID); err != nil {
 		return fmt.Errorf("failed to clear collections last_modified_by: %w", err)
 	}
@@ -304,6 +366,12 @@ func (r *UserRepository) Delete(ctx context.Context, targetUserID, reassignToUse
 	}
 	if _, err := tx.Exec(ctx, `UPDATE environments SET last_modified_by = NULL WHERE last_modified_by = $1`, targetUserID); err != nil {
 		return fmt.Errorf("failed to clear environments last_modified_by: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE feature_policies SET updated_by = NULL WHERE updated_by = $1`, targetUserID); err != nil {
+		return fmt.Errorf("failed to clear feature_policies updated_by: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE feature_policy_audit SET updated_by = $1 WHERE updated_by = $2`, reassignToUserID, targetUserID); err != nil {
+		return fmt.Errorf("failed to reassign feature_policy_audit updated_by: %w", err)
 	}
 
 	// Delete user (cascades to workspaces, team_members, project_members)

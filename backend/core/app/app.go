@@ -124,9 +124,8 @@ func NewWithOptions(ctx context.Context, options Options) (*App, error) {
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
-	r.Use(middleware.RequestLimits(middleware.MaxRequestBytes, middleware.MaxConcurrentRequests, middleware.RequestTimeout))
 
-	// Root Status and Health aliases (useful for direct ping / monitoring)
+	// Root Status and Health aliases (exempt from heavy RequestLimits slots so probes stay responsive)
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		response.JSON(w, http.StatusOK, map[string]any{
 			"service":    "AirREST Cloud API",
@@ -157,8 +156,9 @@ func NewWithOptions(ctx context.Context, options Options) (*App, error) {
 			})
 		})
 
-		// Public Auth
+		// Public Auth (isolated short-deadline/small-body limit pool)
 		r.Route("/auth", func(r chi.Router) {
+			r.Use(middleware.RequestLimits(middleware.AuthRequestBytes, middleware.MaxAuthConcurrentRequests, middleware.AuthRequestTimeout))
 			r.Post("/register", authHandler.Register)
 			r.Post("/login", authHandler.Login)
 			r.Post("/refresh", authHandler.Refresh)
@@ -166,6 +166,7 @@ func NewWithOptions(ctx context.Context, options Options) (*App, error) {
 
 		// Authenticated Routes
 		r.Group(func(r chi.Router) {
+			r.Use(middleware.RequestLimits(middleware.MaxRequestBytes, middleware.MaxConcurrentRequests, middleware.RequestTimeout))
 			r.Use(middleware.AuthenticateWith(authenticator))
 
 			// Auth profile & password management

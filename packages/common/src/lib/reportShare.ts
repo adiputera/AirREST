@@ -2,9 +2,10 @@ import type {
   Collection,
   CollectionItem,
   FunctionalRunReport,
+  FunctionalStepResult,
   PerformanceRunReport,
 } from '../types/api';
-import { makePerformanceTabId } from './examples';
+import { makePerformanceTabId, sanitizeJsonValue } from './examples';
 import { parseImportedPerformanceReport } from './perfComparison';
 
 export const AIRREST_REPORT_BUNDLE_FORMAT = 'airrest-report-v1' as const;
@@ -22,25 +23,25 @@ export interface AirRESTReportSourceMeta {
 
 export type AirRESTReportBundle =
   | {
-      format: typeof AIRREST_REPORT_BUNDLE_FORMAT;
-      version: 1;
-      reportKind: 'performance';
-      exportedAt: string;
-      generator: 'AirREST';
-      sanitized: true;
-      sourceMeta: AirRESTReportSourceMeta;
-      report: PerformanceRunReport;
-    }
+    format: typeof AIRREST_REPORT_BUNDLE_FORMAT;
+    version: 1;
+    reportKind: 'performance';
+    exportedAt: string;
+    generator: 'AirREST';
+    sanitized: true;
+    sourceMeta: AirRESTReportSourceMeta;
+    report: PerformanceRunReport;
+  }
   | {
-      format: typeof AIRREST_REPORT_BUNDLE_FORMAT;
-      version: 1;
-      reportKind: 'functional';
-      exportedAt: string;
-      generator: 'AirREST';
-      sanitized: true;
-      sourceMeta: AirRESTReportSourceMeta;
-      report: FunctionalRunReport;
-    };
+    format: typeof AIRREST_REPORT_BUNDLE_FORMAT;
+    version: 1;
+    reportKind: 'functional';
+    exportedAt: string;
+    generator: 'AirREST';
+    sanitized: true;
+    sourceMeta: AirRESTReportSourceMeta;
+    report: FunctionalRunReport;
+  };
 
 const SENSITIVE_QUERY_KEYS = new Set([
   'token',
@@ -82,56 +83,97 @@ function normalizeName(raw: string | undefined | null): string {
   return String(raw || '').trim().toLowerCase();
 }
 
+function isSensitiveParamKey(normalizedKey: string): boolean {
+  if (SENSITIVE_QUERY_KEYS.has(normalizedKey)) return true;
+  return /(?:^|[_-])(token|secret|password|passwd|pwd|api[_-]?key|auth|signature|sig|session|jwt|bearer|credential|private[_-]?key)(?:$|[_-])/i.test(
+    normalizedKey
+  );
+}
+
+function redactQueryStringParams(queryPartRaw: string): string {
+  if (!queryPartRaw) return queryPartRaw;
+  return queryPartRaw
+    .split('&')
+    .map((pair) => {
+      const eqIdx = pair.indexOf('=');
+      if (eqIdx < 0) return pair;
+      const rawKey = pair.slice(0, eqIdx);
+      const rawVal = pair.slice(eqIdx + 1);
+      let decodedKey = rawKey;
+      try {
+        decodedKey = decodeURIComponent(rawKey);
+      } catch {
+        // keep rawKey
+      }
+      const normalizedKey = decodedKey.trim().toLowerCase();
+      // Keep Postman/AirREST variable templates unredacted even for sensitive parameter names
+      if (/^(?:\{\{[^}]+\}\}|%7B%7B[^%]+%7D%7D)$/i.test(rawVal.trim())) {
+        return pair;
+      }
+      if (isSensitiveParamKey(normalizedKey)) {
+        return `${rawKey}=[REDACTED]`;
+      }
+      return pair;
+    })
+    .join('&');
+}
+
 /**
- * Redacts embedded authority credentials (user:pass@host) and sensitive query parameter values
+ * Redacts embedded authority credentials (user:pass@host) and sensitive query/fragment parameter values
  * while keeping non-sensitive params and {{template}} placeholders intact.
  */
 export function sanitizeUrlSecrets(rawUrl: string): string {
   if (!rawUrl || typeof rawUrl !== 'string') return rawUrl;
+  const trimmed = rawUrl.trim();
 
-  const hashIdx = rawUrl.indexOf('#');
-  const hashPart = hashIdx >= 0 ? rawUrl.slice(hashIdx) : '';
-  const withoutHash = hashIdx >= 0 ? rawUrl.slice(0, hashIdx) : rawUrl;
+  const hashIdx = trimmed.indexOf('#');
+  const hashRaw = hashIdx >= 0 ? trimmed.slice(hashIdx) : '';
+  const withoutHash = hashIdx >= 0 ? trimmed.slice(0, hashIdx) : trimmed;
 
   const qIdx = withoutHash.indexOf('?');
   const basePartRaw = qIdx >= 0 ? withoutHash.slice(0, qIdx) : withoutHash;
   const queryPartRaw = qIdx >= 0 ? withoutHash.slice(qIdx + 1) : '';
 
-  // Redact user:pass@ in URL authority if present
-  const basePart = basePartRaw.replace(/^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^/@\s]+@)/, '$1[REDACTED]@');
+  // Redact user:pass@ up to the last '@' inside the URL authority (before path/query/fragment)
+  const basePart = basePartRaw.replace(
+    /^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^/?#]+)(?=[/?#]|$)/,
+    (_full, scheme: string, authority: string) => {
+      const atIdx = authority.lastIndexOf('@');
+      if (atIdx < 0) return `${scheme}${authority}`;
+      return `${scheme}[REDACTED]@${authority.slice(atIdx + 1)}`;
+    }
+  );
 
-  if (!queryPartRaw) {
-    return basePart + hashPart;
+  let sanitizedHash = hashRaw;
+  if (hashRaw.length > 1 && hashRaw.includes('=')) {
+    const hashBody = hashRaw.slice(1);
+    const hashQIdx = hashBody.indexOf('?');
+    if (hashQIdx >= 0) {
+      sanitizedHash = `#${hashBody.slice(0, hashQIdx + 1)}${redactQueryStringParams(hashBody.slice(hashQIdx + 1))}`;
+    } else {
+      sanitizedHash = `#${redactQueryStringParams(hashBody)}`;
+    }
   }
 
-  const redactedPairs = queryPartRaw.split('&').map((pair) => {
-    const eqIdx = pair.indexOf('=');
-    if (eqIdx < 0) return pair;
-    const rawKey = pair.slice(0, eqIdx);
-    const rawVal = pair.slice(eqIdx + 1);
-    let decodedKey = rawKey;
-    try {
-      decodedKey = decodeURIComponent(rawKey);
-    } catch {
-      // keep rawKey
-    }
-    const normalizedKey = decodedKey.trim().toLowerCase();
-    // Keep Postman/AirREST variable templates unredacted even for sensitive parameter names
-    if (/^(?:\{\{[^}]+\}\}|%7B%7B[^%]+%7D%7D)$/i.test(rawVal.trim())) {
-      return pair;
-    }
-    if (SENSITIVE_QUERY_KEYS.has(normalizedKey)) {
-      return `${rawKey}=[REDACTED]`;
-    }
-    return pair;
-  });
+  if (!queryPartRaw) {
+    return basePart + sanitizedHash;
+  }
 
-  return `${basePart}?${redactedPairs.join('&')}${hashPart}`;
+  return `${basePart}?${redactQueryStringParams(queryPartRaw)}${sanitizedHash}`;
 }
 
-function redactInlineBearerSecrets(text: string | undefined): string | undefined {
-  if (!text) return text;
-  return text.replace(/(\bBearer\s+)[A-Za-z0-9\-._~+/]+=*/gi, '$1[REDACTED]');
+export function redactInlineSecrets(text: string | undefined): string | undefined {
+  if (!text || typeof text !== 'string') return text;
+  return text
+    .replace(/(\b(?:Bearer|Basic)\s+)[A-Za-z0-9\-._~+/]+=*/gi, '$1[REDACTED]')
+    .replace(
+      /("(?:access_token|refresh_token|id_token|client_secret|api_key|apikey|password|secret|authorization|x-api-key)"\s*:\s*")([^"]*)(")/gi,
+      '$1[REDACTED]$3'
+    )
+    .replace(
+      /(https?:\/\/[^\s"'`<>]+)/gi,
+      (matchedUrl) => sanitizeUrlSecrets(matchedUrl)
+    );
 }
 
 export function buildSourceMetaFromContext(
@@ -143,7 +185,8 @@ export function buildSourceMetaFromContext(
 ): AirRESTReportSourceMeta {
   let sourceCollectionId = report.sourceCollectionId;
   let sourceCollectionName = report.sourceCollectionName;
-  let sourceName = report.sourceName || report.title.replace(/\s+—\s+(Performance|Runner)$/i, '').trim() || report.title;
+  let sourceName =
+    report.sourceName || report.title.replace(/\s+—\s+(Performance|Runner)$/i, '').trim() || report.title;
 
   for (const col of collections || []) {
     if (report.sourceType === 'collection' && col.id === report.sourceId) {
@@ -170,46 +213,79 @@ export function buildSourceMetaFromContext(
   };
 }
 
+export function fallbackReportSourceMeta(
+  report: Pick<
+    PerformanceRunReport | FunctionalRunReport,
+    'sourceType' | 'sourceId' | 'title' | 'sourceCollectionId' | 'sourceCollectionName' | 'sourceName'
+  >
+): AirRESTReportSourceMeta {
+  const sourceType =
+    report.sourceType === 'folder' || report.sourceType === 'request' ? report.sourceType : 'collection';
+  const fallbackName = report.title.replace(/\s+—\s+(Performance|Runner)$/i, '').trim() || report.title;
+  return {
+    sourceType,
+    sourceId: report.sourceId || '',
+    ...(report.sourceCollectionId ? { sourceCollectionId: report.sourceCollectionId } : {}),
+    ...(report.sourceCollectionName ? { sourceCollectionName: report.sourceCollectionName } : {}),
+    sourceName: report.sourceName || fallbackName,
+  };
+}
+
 export function sanitizePerformanceReportForShare(
   report: PerformanceRunReport,
-  sourceMeta: AirRESTReportSourceMeta
+  sourceMeta: AirRESTReportSourceMeta = fallbackReportSourceMeta(report)
 ): PerformanceRunReport {
   return {
     ...report,
+    title: redactInlineSecrets(report.title) || report.title,
     sourceType: sourceMeta.sourceType,
     sourceId: sourceMeta.sourceId,
     ...(sourceMeta.sourceCollectionId ? { sourceCollectionId: sourceMeta.sourceCollectionId } : {}),
     ...(sourceMeta.sourceCollectionName ? { sourceCollectionName: sourceMeta.sourceCollectionName } : {}),
-    sourceName: sourceMeta.sourceName,
+    sourceName: redactInlineSecrets(sourceMeta.sourceName) || sourceMeta.sourceName,
+    ...(report.failureReason ? { failureReason: redactInlineSecrets(report.failureReason) } : {}),
+    endpoints: (report.endpoints || []).map((ep) => ({
+      ...ep,
+      path: sanitizeUrlSecrets(ep.path),
+    })),
     setupResults: (report.setupResults || []).map((s) => ({
       ...s,
       url: sanitizeUrlSecrets(s.url),
+      ...(s.error ? { error: redactInlineSecrets(s.error) } : {}),
     })),
     errorSamples: (report.errorSamples || []).map((sample) => ({
       ...sample,
       url: sanitizeUrlSecrets(sample.url),
-      ...(sample.responseSnippet ? { responseSnippet: redactInlineBearerSecrets(sample.responseSnippet) } : {}),
+      message: redactInlineSecrets(sample.message) || sample.message,
+      ...(sample.responseSnippet ? { responseSnippet: redactInlineSecrets(sample.responseSnippet) } : {}),
     })),
-    warnings: (report.warnings || []).map((w) => redactInlineBearerSecrets(w) || w),
+    warnings: (report.warnings || []).map((w) => redactInlineSecrets(w) || w),
   };
 }
 
 export function sanitizeFunctionalReportForShare(
   report: FunctionalRunReport,
-  sourceMeta: AirRESTReportSourceMeta
+  sourceMeta: AirRESTReportSourceMeta = fallbackReportSourceMeta(report)
 ): FunctionalRunReport {
   return {
     ...report,
+    title: redactInlineSecrets(report.title) || report.title,
     sourceType: sourceMeta.sourceType,
     sourceId: sourceMeta.sourceId,
     ...(sourceMeta.sourceCollectionId ? { sourceCollectionId: sourceMeta.sourceCollectionId } : {}),
     ...(sourceMeta.sourceCollectionName ? { sourceCollectionName: sourceMeta.sourceCollectionName } : {}),
-    sourceName: sourceMeta.sourceName,
+    sourceName: redactInlineSecrets(sourceMeta.sourceName) || sourceMeta.sourceName,
     steps: (report.steps || []).map((step) => ({
       ...step,
       url: sanitizeUrlSecrets(step.url),
       hasCapturedExchange: false,
-      ...(step.errorMessage ? { errorMessage: redactInlineBearerSecrets(step.errorMessage) } : {}),
+      ...(step.errorMessage ? { errorMessage: redactInlineSecrets(step.errorMessage) } : {}),
+      ...(step.warningMessage ? { warningMessage: redactInlineSecrets(step.warningMessage) } : {}),
+      ...(step.scriptError ? { scriptError: redactInlineSecrets(step.scriptError) } : {}),
+      testResults: (step.testResults || []).map((t) => ({
+        ...t,
+        ...(t.error ? { error: redactInlineSecrets(t.error) } : {}),
+      })),
     })),
   };
 }
@@ -278,12 +354,98 @@ function isLikelyPostmanDocument(parsed: Record<string, unknown>): boolean {
   return false;
 }
 
+const MAX_FUNCTIONAL_IMPORT_STEPS = 5000;
+const MAX_FUNCTIONAL_IMPORT_TESTS = 200;
+const MAX_REPORT_CLOCK_SKEW_MS = 86_400_000;
+
+function toFiniteNonNeg(val: unknown, fallback = 0): number {
+  return typeof val === 'number' && Number.isFinite(val) && val >= 0 ? val : fallback;
+}
+
+function normalizeImportedFunctionalReport(raw: Record<string, unknown>): FunctionalRunReport {
+  const maxTs = Date.now() + MAX_REPORT_CLOCK_SKEW_MS;
+  const startedAt = Math.min(Math.max(0, toFiniteNonNeg(raw.startedAt)), maxTs);
+  const finishedAt =
+    typeof raw.finishedAt === 'number' && Number.isFinite(raw.finishedAt)
+      ? Math.min(Math.max(startedAt, raw.finishedAt), maxTs)
+      : undefined;
+  const rawSteps = Array.isArray(raw.steps) ? raw.steps.slice(0, MAX_FUNCTIONAL_IMPORT_STEPS) : [];
+  const steps: FunctionalStepResult[] = rawSteps.map((s, idx) => {
+    const step = (s && typeof s === 'object' && !Array.isArray(s) ? s : {}) as Record<string, unknown>;
+    const rawTests = Array.isArray(step.testResults) ? step.testResults.slice(0, MAX_FUNCTIONAL_IMPORT_TESTS) : [];
+    const status =
+      step.status === 'passed' ||
+        step.status === 'warning' ||
+        step.status === 'failed' ||
+        step.status === 'error' ||
+        step.status === 'skipped'
+        ? step.status
+        : 'failed';
+    const method = typeof step.method === 'string' && step.method ? step.method.toUpperCase() : 'GET';
+    return {
+      id: typeof step.id === 'string' && step.id ? step.id : `step_${idx}`,
+      iteration: Math.max(1, Math.trunc(toFiniteNonNeg(step.iteration, 1))),
+      stepIndex: Math.trunc(toFiniteNonNeg(step.stepIndex, idx)),
+      itemId: typeof step.itemId === 'string' ? step.itemId : '',
+      name: typeof step.name === 'string' ? step.name : `Step ${idx + 1}`,
+      method: method as FunctionalStepResult['method'],
+      url: typeof step.url === 'string' ? sanitizeUrlSecrets(step.url) : '',
+      status,
+      httpStatus: Math.trunc(toFiniteNonNeg(step.httpStatus)),
+      statusText: typeof step.statusText === 'string' ? step.statusText : '',
+      timeMs: toFiniteNonNeg(step.timeMs),
+      sizeBytes: toFiniteNonNeg(step.sizeBytes),
+      testResults: rawTests.map((t, tIdx) => {
+        const test = (t && typeof t === 'object' && !Array.isArray(t) ? t : {}) as Record<string, unknown>;
+        return {
+          name: typeof test.name === 'string' ? test.name : `Test ${tIdx + 1}`,
+          passed: Boolean(test.passed),
+          ...(typeof test.error === 'string' ? { error: redactInlineSecrets(test.error) } : {}),
+          ...(typeof test.durationMs === 'number' && Number.isFinite(test.durationMs)
+            ? { durationMs: Math.max(0, test.durationMs) }
+            : {}),
+        };
+      }),
+      testsPassed: Math.trunc(toFiniteNonNeg(step.testsPassed)),
+      testsFailed: Math.trunc(toFiniteNonNeg(step.testsFailed)),
+      ...(typeof step.errorMessage === 'string' ? { errorMessage: redactInlineSecrets(step.errorMessage) } : {}),
+      ...(typeof step.warningMessage === 'string' ? { warningMessage: redactInlineSecrets(step.warningMessage) } : {}),
+      ...(typeof step.scriptError === 'string' ? { scriptError: redactInlineSecrets(step.scriptError) } : {}),
+      hasCapturedExchange: false,
+      timestamp: Math.min(Math.max(0, toFiniteNonNeg(step.timestamp, startedAt)), maxTs),
+    };
+  });
+
+  const base = raw as unknown as FunctionalRunReport;
+  return {
+    ...base,
+    startedAt,
+    ...(finishedAt !== undefined ? { finishedAt } : {}),
+    durationMs: toFiniteNonNeg(raw.durationMs),
+    plannedIterations: Math.max(1, Math.trunc(toFiniteNonNeg(raw.plannedIterations, 1))),
+    completedIterations: Math.trunc(toFiniteNonNeg(raw.completedIterations)),
+    totalRequestsExecuted: Math.trunc(toFiniteNonNeg(raw.totalRequestsExecuted)),
+    requestsPassed: Math.trunc(toFiniteNonNeg(raw.requestsPassed)),
+    requestsFailed: Math.trunc(toFiniteNonNeg(raw.requestsFailed)),
+    requestsErrored: Math.trunc(toFiniteNonNeg(raw.requestsErrored)),
+    requestsSkipped: Math.trunc(toFiniteNonNeg(raw.requestsSkipped)),
+    totalTests: Math.trunc(toFiniteNonNeg(raw.totalTests)),
+    testsPassed: Math.trunc(toFiniteNonNeg(raw.testsPassed)),
+    testsFailed: Math.trunc(toFiniteNonNeg(raw.testsFailed)),
+    avgResponseTimeMs: toFiniteNonNeg(raw.avgResponseTimeMs),
+    steps,
+  };
+}
+
 function isValidFunctionalReportShape(candidate: Record<string, unknown>): boolean {
   return (
     typeof candidate.id === 'string' &&
+    Boolean(candidate.id.trim()) &&
     typeof candidate.title === 'string' &&
     typeof candidate.startedAt === 'number' &&
+    Number.isFinite(candidate.startedAt) &&
     typeof candidate.plannedIterations === 'number' &&
+    Number.isFinite(candidate.plannedIterations) &&
     Array.isArray(candidate.steps) &&
     Boolean(candidate.config && typeof candidate.config === 'object')
   );
@@ -338,10 +500,38 @@ export interface ParsedShareableReportResult {
   error?: string;
 }
 
+const MAX_SHAREABLE_REPORT_BYTES = 16 * 1024 * 1024; // 16 MiB
+
+function measureUtf8Bytes(text: string): number {
+  if (typeof TextEncoder === 'function') {
+    return new TextEncoder().encode(text).byteLength;
+  }
+  let bytes = 0;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code <= 0x7f) bytes += 1;
+    else if (code <= 0x7ff) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff && i + 1 < text.length) {
+      bytes += 4;
+      i++;
+    } else bytes += 3;
+  }
+  return bytes;
+}
+
 export function parseShareableReportJson(content: string): ParsedShareableReportResult {
+  if (typeof content !== 'string') {
+    return { error: 'Report content must be text.' };
+  }
+  const utf8Bytes = measureUtf8Bytes(content);
+  if (utf8Bytes > MAX_SHAREABLE_REPORT_BYTES) {
+    return {
+      error: 'Report file exceeds maximum allowed limit of 16 MB.',
+    };
+  }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(content);
+    parsed = sanitizeJsonValue(JSON.parse(content));
   } catch (err) {
     return {
       error: `Invalid JSON report file: ${err instanceof Error ? err.message : String(err)}`,
@@ -371,7 +561,7 @@ export function parseShareableReportJson(content: string): ParsedShareableReport
       if (!isValidFunctionalReportShape(innerObj)) {
         return { error: 'Functional report bundle is missing required fields.' };
       }
-      const funcReport = innerObj as unknown as FunctionalRunReport;
+      const funcReport = normalizeImportedFunctionalReport(innerObj);
       const sourceMeta = normalizeSourceMetaFromParsed(funcReport, root.sourceMeta);
       return { kind: 'functional', funcReport, sourceMeta };
     }
@@ -392,7 +582,7 @@ export function parseShareableReportJson(content: string): ParsedShareableReport
   ) as Record<string, unknown>;
 
   if (isValidFunctionalReportShape(candidate)) {
-    const funcReport = candidate as unknown as FunctionalRunReport;
+    const funcReport = normalizeImportedFunctionalReport(candidate);
     const sourceMeta = normalizeSourceMetaFromParsed(funcReport);
     return { kind: 'functional', funcReport, sourceMeta };
   }
@@ -490,25 +680,25 @@ export function findPartialCollectionCandidate(
 
 export type ReportSourceResolution =
   | {
-      tier: 'exact_id';
-      targetType: 'collection' | 'folder' | 'request';
-      targetId: string;
-      targetCollection: Collection;
-      targetItem?: CollectionItem;
-      displayLabel: string;
-    }
+    tier: 'exact_id';
+    targetType: 'collection' | 'folder' | 'request';
+    targetId: string;
+    targetCollection: Collection;
+    targetItem?: CollectionItem;
+    displayLabel: string;
+  }
   | {
-      tier: 'name_match';
-      targetType: 'collection' | 'folder' | 'request';
-      targetId: string;
-      targetCollection: Collection;
-      targetItem?: CollectionItem;
-      displayLabel: string;
-    }
+    tier: 'name_match';
+    targetType: 'collection' | 'folder' | 'request';
+    targetId: string;
+    targetCollection: Collection;
+    targetItem?: CollectionItem;
+    displayLabel: string;
+  }
   | {
-      tier: 'unmatched';
-      reason: string;
-    };
+    tier: 'unmatched';
+    reason: string;
+  };
 
 export function resolveReportSourceTarget(
   sourceMeta: AirRESTReportSourceMeta,
@@ -596,12 +786,12 @@ export function bindImportedPerformanceReport(
   report: PerformanceRunReport,
   target:
     | {
-        mode: 'attached';
-        targetType: 'collection' | 'folder' | 'request';
-        targetId: string;
-        targetCollection: Collection;
-        targetName: string;
-      }
+      mode: 'attached';
+      targetType: 'collection' | 'folder' | 'request';
+      targetId: string;
+      targetCollection: Collection;
+      targetName: string;
+    }
     | { mode: 'session_only' },
   options?: { filename?: string; forceNewId?: boolean }
 ): PerformanceRunReport {
@@ -635,12 +825,12 @@ export function bindImportedFunctionalReport(
   report: FunctionalRunReport,
   target:
     | {
-        mode: 'attached';
-        targetType: 'collection' | 'folder' | 'request';
-        targetId: string;
-        targetCollection: Collection;
-        targetName: string;
-      }
+      mode: 'attached';
+      targetType: 'collection' | 'folder' | 'request';
+      targetId: string;
+      targetCollection: Collection;
+      targetName: string;
+    }
     | { mode: 'session_only' },
   options?: { filename?: string; forceNewId?: boolean }
 ): FunctionalRunReport {

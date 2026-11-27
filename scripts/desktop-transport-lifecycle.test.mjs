@@ -2155,7 +2155,7 @@ test('T-IMPORT-3: chromeAdapter.openFile in DOM environment creates file input a
           style: {},
           files: [],
           click: () => {
-            simulatedInput.files = [{ name: 'postman.json', testContent: '{"values":[]}' }];
+            simulatedInput.files = [{ name: 'postman.json', size: 13, testContent: '{"values":[]}' }];
             simulatedInput.onchange();
           },
           remove: () => {
@@ -2173,13 +2173,26 @@ test('T-IMPORT-3: chromeAdapter.openFile in DOM environment creates file input a
     },
   };
 
+  const importBatchSrc = fs.readFileSync(new URL('../packages/common/src/lib/importBatch.ts', import.meta.url), 'utf8');
+  const importBatchExports = {};
+  vm.runInNewContext(
+    ts.transpileModule(importBatchSrc, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText,
+    {
+      exports: importBatchExports,
+      require: () => ({}),
+      FileReader: MockFileReader,
+      TextEncoder,
+    },
+    { filename: 'importBatch.ts' }
+  );
+
   const adapterSrc = fs.readFileSync(new URL('../apps/extension/src/adapters/chromeAdapter.ts', import.meta.url), 'utf8');
   const adapterExports = {};
   vm.runInNewContext(
     ts.transpileModule(adapterSrc, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText,
     {
       exports: adapterExports,
-      require: () => ({}),
+      require: (id) => (id === '@airrest/common/platform' ? importBatchExports : {}),
       fetch: () => {},
       Blob: class {},
       URL: { createObjectURL: () => '', revokeObjectURL: () => {} },

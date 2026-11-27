@@ -9,12 +9,66 @@
     <script>
       function isValidOrigin(origin) {
         if (!origin || typeof origin !== 'string' || origin === 'null') return false;
-        if (origin.startsWith('chrome-extension://')) return true;
+        if (typeof location !== 'undefined' && location.ancestorOrigins && location.ancestorOrigins.length > 0) {
+          if (origin !== location.ancestorOrigins[0]) return false;
+        }
+        if (origin.startsWith('chrome-extension://')) {
+          if (typeof location !== 'undefined' && location.protocol === 'chrome-extension:' && location.origin && location.origin !== 'null') {
+            return origin === location.origin;
+          }
+          return true;
+        }
         // Allow localhost only during development / test runners
         if (location.protocol === 'http:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
           if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
         }
         return false;
+      }
+
+      const MAX_RETURN_PAYLOAD_BYTES = 2 * 1024 * 1024; // 2 MiB
+
+      function isForbiddenKey(k) {
+        const key = String(k);
+        return key === '__proto__' || key === 'constructor' || key === 'prototype';
+      }
+
+      function createNullPrototypeMap(source) {
+        const map = Object.create(null);
+        if (!source || typeof source !== 'object' || Array.isArray(source)) return map;
+        for (const k of Object.keys(source)) {
+          if (!isForbiddenKey(k)) {
+            map[k] = source[k];
+          }
+        }
+        return map;
+      }
+
+      function toSafePlainObject(source) {
+        const out = {};
+        if (!source || typeof source !== 'object') return out;
+        for (const k of Object.keys(source)) {
+          if (!isForbiddenKey(k)) {
+            Object.defineProperty(out, k, {
+              value: source[k],
+              enumerable: true,
+              writable: true,
+              configurable: true,
+            });
+          }
+        }
+        return out;
+      }
+
+      function measurePayloadUtf8Bytes(payload) {
+        try {
+          const json = JSON.stringify(payload);
+          if (typeof TextEncoder !== 'undefined') {
+            return new TextEncoder().encode(json).length;
+          }
+          return json.length * 3;
+        } catch {
+          return Number.POSITIVE_INFINITY;
+        }
       }
 
       const internalSandboxParameters = [
@@ -70,18 +124,12 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
         const { id, script, request, response, environment = {}, variables = {}, iterationData = {} } = event.data;
         if (!id || !script) return;
 
-        const currentEnv = Object.create(null);
-        Object.assign(currentEnv, environment || {});
-        const currentVars = Object.create(null);
-        Object.assign(currentVars, variables || {});
-        const currentIterationData = Object.create(null);
-        if (iterationData && typeof iterationData === 'object' && !Array.isArray(iterationData)) {
-          Object.assign(currentIterationData, iterationData);
-        }
-
-        function isForbiddenKey(k) {
-          return k === '__proto__' || k === 'constructor' || k === 'prototype';
-        }
+        const currentEnv = createNullPrototypeMap(environment);
+        const currentVars = createNullPrototypeMap(variables);
+        const currentIterationData = createNullPrototypeMap(iterationData);
+        const safeInitialEnv = toSafePlainObject(currentEnv);
+        const safeInitialVars = toSafePlainObject(currentVars);
+        const replyPort = event.ports && event.ports.length > 0 ? event.ports[0] : null;
 
         function createPmRequest(rawReq) {
           if (!rawReq || typeof rawReq !== 'object') return undefined;
@@ -879,8 +927,28 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
         const responseCode = response ? { code: response.status, name: response.statusText } : { code: 0, name: '' };
         const responseTime = response ? (response.timeMs || 0) : 0;
         const responseHeaders = response ? (response.headers || {}) : {};
-        const tests = {};
+        const tests = Object.create(null);
         const targetOrigin = event.origin;
+
+        function postSandboxResult(payload) {
+          let safePayload = payload;
+          if (measurePayloadUtf8Bytes(safePayload) > MAX_RETURN_PAYLOAD_BYTES) {
+            safePayload = {
+              id: id,
+              success: false,
+              error: 'Script output payload exceeded the 2 MiB size limit.',
+              environment: safeInitialEnv,
+              variables: safeInitialVars
+            };
+          }
+          if (replyPort && typeof replyPort.postMessage === 'function') {
+            replyPort.postMessage(safePayload);
+            return;
+          }
+          if (event.source && typeof event.source.postMessage === 'function') {
+            event.source.postMessage(safePayload, targetOrigin);
+          }
+        }
 
         function appendLegacyTests() {
           for (const key of Object.keys(tests)) {
@@ -918,8 +986,8 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
           const outPayload = {
             id: id,
             success: true,
-            environment: Object.assign({}, currentEnv),
-            variables: Object.assign({}, currentVars),
+            environment: toSafePlainObject(currentEnv),
+            variables: toSafePlainObject(currentVars),
             mutatedRequest: mutatedRequest
           };
           if (collectedTestResults.length > 0) {
@@ -929,9 +997,7 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
             outPayload.nextRequest = nextRequestTarget;
           }
 
-          if (event.source && typeof event.source.postMessage === 'function') {
-            event.source.postMessage(outPayload, targetOrigin);
-          }
+          postSandboxResult(outPayload);
         } catch (err) {
           appendLegacyTests();
           let errorMessage = 'Script execution failed.';
@@ -949,8 +1015,8 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
             id: id,
             success: false,
             error: errorMessage,
-            environment: Object.assign({}, currentEnv),
-            variables: Object.assign({}, currentVars)
+            environment: toSafePlainObject(currentEnv),
+            variables: toSafePlainObject(currentVars)
           };
           if (collectedTestResults.length > 0) {
             errPayload.testResults = collectedTestResults;
@@ -958,9 +1024,7 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
           if (nextRequestSet) {
             errPayload.nextRequest = nextRequestTarget;
           }
-          if (event.source && typeof event.source.postMessage === 'function') {
-            event.source.postMessage(errPayload, targetOrigin);
-          }
+          postSandboxResult(errPayload);
         }
       });
     </script>

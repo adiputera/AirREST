@@ -192,6 +192,7 @@ export function createAirrestRuntime(config: AirrestRuntimeConfig): AirrestRunti
     const pendingTokenRotations = new Set<{
       generation: number;
       token: string;
+      previousToken?: string;
       scope: { apiUrl: string; userId: string } | null;
     }>();
 
@@ -205,7 +206,12 @@ export function createAirrestRuntime(config: AirrestRuntimeConfig): AirrestRunti
       if (state.cloudConfig.refreshToken !== newTokens.previousRefreshToken) return;
       const generation = state.getCloudSessionGeneration();
       const scope = getNativeCredentialScope(state.cloudConfig);
-      const pending = { generation, token: newTokens.token, scope };
+      const pending = {
+        generation,
+        token: newTokens.token,
+        previousToken: state.cloudConfig.token,
+        scope,
+      };
       pendingTokenRotations.add(pending);
       const update = {
         token: newTokens.token,
@@ -238,6 +244,14 @@ export function createAirrestRuntime(config: AirrestRuntimeConfig): AirrestRunti
       const matchedPending = failedToken
         ? [...pendingTokenRotations].find((entry) => entry.generation === generation && entry.token === failedToken)
         : undefined;
+      const supersededByPending = failedToken
+        ? [...pendingTokenRotations].find(
+            (entry) => entry.generation === generation && entry.previousToken === failedToken && entry.token !== failedToken
+          )
+        : undefined;
+      if (supersededByPending) {
+        return;
+      }
       const providerFailure = !failedToken && state.cloudConfig.sessionKind === 'provider' && isCloudSessionActive(state.cloudConfig);
       const matchesActiveToken = Boolean(state.cloudConfig.token && (!failedToken || state.cloudConfig.token === failedToken));
       if (providerFailure || matchesActiveToken || Boolean(matchedPending)) {

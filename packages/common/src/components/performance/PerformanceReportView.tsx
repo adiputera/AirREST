@@ -230,9 +230,12 @@ export const PerformanceReportView: React.FC<PerformanceReportViewProps> = ({
     });
   }, [report.timeSeries, comparison, requestFilterId, latencyMetric]);
 
-  const maxRps = Math.max(10, ...chartPoints.map((p) => Math.max(p.rps, p.hasBase ? p.baseRps : 0)));
-  const maxLat = Math.max(10, ...chartPoints.map((p) => Math.max(p.latencyMs, p.hasBase ? p.baseLatencyMs : 0)));
-  const maxVu = Math.max(1, report.configSnapshot.loadProfile.virtualUsers || 1, ...chartPoints.map((p) => p.virtualUsers));
+  const maxRps = chartPoints.reduce((acc, p) => Math.max(acc, p.rps, p.hasBase ? p.baseRps : 0), 10);
+  const maxLat = chartPoints.reduce((acc, p) => Math.max(acc, p.latencyMs, p.hasBase ? p.baseLatencyMs : 0), 10);
+  const maxVu = chartPoints.reduce(
+    (acc, p) => Math.max(acc, p.virtualUsers),
+    Math.max(1, report.configSnapshot.loadProfile.virtualUsers || 1),
+  );
 
   const xOf = (idx: number) => {
     if (chartPoints.length <= 1) return CHART_PAD.left + PLOT_W / 2;

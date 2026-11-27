@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Cloud, Server, LogOut, User as UserIcon, Menu } from 'lucide-react';
 import { useHubStore } from '../store/useHubStore';
-import { DEFAULT_API_URL } from '../lib/api';
+import { DEFAULT_API_URL, validateHubApiUrl } from '../lib/api';
 
 export interface NavbarProps {
   onOpenSidebar?: () => void;
@@ -15,11 +15,18 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenSidebar }) => {
 
   const [isServerModalOpen, setIsServerModalOpen] = useState(false);
   const [tempUrl, setTempUrl] = useState(apiUrl);
+  const [urlError, setUrlError] = useState<string | null>(null);
 
   const handleSaveUrl = (e: React.FormEvent) => {
     e.preventDefault();
-    setApiUrl(tempUrl.trim().replace(/\/+$/, '') || DEFAULT_API_URL);
-    setIsServerModalOpen(false);
+    try {
+      const validated = validateHubApiUrl(tempUrl);
+      setUrlError(null);
+      setApiUrl(validated);
+      setIsServerModalOpen(false);
+    } catch (err) {
+      setUrlError(err instanceof Error ? err.message : 'Invalid Server URL.');
+    }
   };
 
   return (
@@ -59,6 +66,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenSidebar }) => {
           <button
             onClick={() => {
               setTempUrl(apiUrl);
+              setUrlError(null);
               setIsServerModalOpen(true);
             }}
             className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/90 px-2 sm:px-2.5 py-1.5 text-xs text-zinc-300 hover:border-zinc-700 hover:text-white transition"
@@ -122,10 +130,16 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenSidebar }) => {
                   type="url"
                   required
                   value={tempUrl}
-                  onChange={(e) => setTempUrl(e.target.value)}
+                  onChange={(e) => {
+                    setTempUrl(e.target.value);
+                    if (urlError) setUrlError(null);
+                  }}
                   placeholder={DEFAULT_API_URL}
                   className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs text-zinc-100 font-mono focus:border-sky-500 focus:outline-none"
                 />
+                {urlError && (
+                  <p className="mt-1.5 text-[11px] text-rose-400">{urlError}</p>
+                )}
               </div>
 
               <div className="flex justify-end gap-2 pt-2">

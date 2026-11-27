@@ -25,7 +25,7 @@ function createSandboxHarness(location) {
     },
   };
 
-  vm.runInNewContext(inlineScript, { window, location, console });
+  vm.runInNewContext(inlineScript, { window, location, console, TextEncoder });
   if (!messageListener) throw new Error('sandbox did not register a message listener');
 
   return {
@@ -33,18 +33,22 @@ function createSandboxHarness(location) {
       origin,
       source = parent,
       script = "pm.environment.set('verified', 'yes');",
+      environment = {},
+      variables = {},
       request,
       iterationData,
+      ports,
       response = { status: 200, statusText: 'OK', data: '{}' },
     }) {
       messageListener({
         origin,
         source,
+        ports,
         data: {
           id: 'test-script',
           script,
-          environment: {},
-          variables: {},
+          environment,
+          variables,
           iterationData,
           request,
           response,
@@ -220,4 +224,38 @@ test('extension sandbox supports structured pm.test, Chai subset, legacy tests[]
   assert.equal(msg.testResults[1].passed, true, msg.testResults[1].error);
   assert.equal(msg.testResults[2].name, 'Legacy fail check');
   assert.equal(msg.testResults[2].passed, false);
+});
+
+test('EXT-01: chromeScriptExecutor forwards request and iterationData to runScriptInSandbox', () => {
+  const chromeAdapterSrc = fs.readFileSync(new URL('../apps/extension/src/adapters/chromeAdapter.ts', import.meta.url), 'utf8');
+  assert.match(chromeAdapterSrc, /request:\s*input\.request/);
+  assert.match(chromeAdapterSrc, /iterationData:\s*input\.iterationData/);
+});
+
+test('EXT-02: sandbox uses null-prototype maps, supports MessagePort reply, and rejects oversized return payloads', () => {
+  const harness = createSandboxHarness({ protocol: 'chrome-extension:', hostname: 'example-extension' });
+  const portReplies = [];
+  const mockPort = {
+    postMessage: (data) => portReplies.push(data),
+    close: () => {},
+  };
+  harness.dispatch(
+    {
+      origin: 'chrome-extension://abcdefghijklmnopabcdefghijklmnop',
+      ports: [mockPort],
+      environment: { existingKey: 'initial' },
+      variables: { __proto__: 'ignored' },
+      script: `
+        pm.environment.set("hasProtoKey", String("toString" in pm.environment.toObject()));
+        pm.environment.unset("existingKey");
+        pm.variables.set("big", "x".repeat(2 * 1024 * 1024 + 128));
+      `,
+    },
+  );
+
+  // When a reply port is passed, reply arrives on MessagePort rather than window.parent
+  assert.equal(harness.messages.length, 0);
+  assert.equal(portReplies.length, 1);
+  assert.equal(portReplies[0].success, false);
+  assert.match(portReplies[0].error, /2 MiB|maximum/i);
 });

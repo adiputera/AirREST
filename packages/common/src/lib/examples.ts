@@ -137,7 +137,8 @@ export interface ActivePerfRunController {
 
 let activePerfRunController: ActivePerfRunController | null = null;
 let activeFunctionalRunState: { runId: string; tabId: string } | null = null;
-let cloudPerfCleanupHandler: ((userId?: string | null) => Promise<void>) | null = null;
+let cloudPerfCleanupHandler: ((userId?: string | null, cloudApiUrl?: string | null) => Promise<void>) | null = null;
+let offlinePerfCleanupHandler: ((offlineWorkspaceId: string) => Promise<void>) | null = null;
 let perfDataRowsCleanupHandler: ((tabId?: string) => void) | null = null;
 let functionalSessionCleanupHandler: ((tabId?: string) => void) | null = null;
 let functionalRunStopHandler: ((tabId?: string) => Promise<void> | void) | null = null;
@@ -165,13 +166,25 @@ export async function stopActivePerformanceRun(): Promise<void> {
   await activePerfRunController.stop();
 }
 
-export function registerCloudPerfCleanup(handler: (userId?: string | null) => Promise<void>): void {
+export function registerCloudPerfCleanup(
+  handler: (userId?: string | null, cloudApiUrl?: string | null) => Promise<void>
+): void {
   cloudPerfCleanupHandler = handler;
 }
 
-export function triggerCloudPerfCleanup(userId?: string | null): void {
+export function triggerCloudPerfCleanup(userId?: string | null, cloudApiUrl?: string | null): void {
   if (cloudPerfCleanupHandler) {
-    void cloudPerfCleanupHandler(userId);
+    void cloudPerfCleanupHandler(userId, cloudApiUrl);
+  }
+}
+
+export function registerOfflinePerfCleanup(handler: (offlineWorkspaceId: string) => Promise<void>): void {
+  offlinePerfCleanupHandler = handler;
+}
+
+export function triggerOfflinePerfCleanup(offlineWorkspaceId: string): void {
+  if (offlinePerfCleanupHandler) {
+    void offlinePerfCleanupHandler(offlineWorkspaceId);
   }
 }
 
@@ -1639,9 +1652,15 @@ export function applyServerItemToLocalItem(
         : Array.isArray(exampleSummaries)
           ? exampleSummaries.length
           : getItemExampleCount(existing);
+  const nextVersion =
+    typeof serverItem?.version === 'number'
+      ? serverItem.version
+      : typeof serverItem?.item_version === 'number'
+        ? serverItem.item_version
+        : undefined;
   return {
     ...existing,
-    ...(typeof serverItem?.version === 'number' ? { version: serverItem.version } : {}),
+    ...(typeof nextVersion === 'number' ? { version: nextVersion } : {}),
     ...(examples ? { examples } : {}),
     ...(exampleSummaries ? { exampleSummaries } : {}),
     exampleCount,
@@ -1656,11 +1675,11 @@ export function overlayPendingExampleIntentsOnCollections(
   ownerKey: string | null,
   activeScope?: ActiveScope,
 ): Collection[] {
-  if (!intents) return collections;
+  if (!intents || !ownerKey) return collections;
   const relevant = Object.values(intents)
     .filter((intent) => {
       if (!intent) return false;
-      if (intent.ownerKey !== null && ownerKey !== null && intent.ownerKey !== ownerKey) return false;
+      if (intent.ownerKey !== ownerKey) return false;
       if (activeScope && intent.targetScope) {
         if (intent.targetScope.id !== activeScope.id || intent.targetScope.type !== activeScope.type) {
           return false;

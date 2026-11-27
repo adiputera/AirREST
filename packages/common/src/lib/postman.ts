@@ -28,25 +28,27 @@ import {
 } from './examples';
 import { parseQueryParamsFromUrl, parsePathVariablesFromUrl } from './urlParams';
 
+export type PostmanDescription = string | { content?: string; type?: string };
+
 export interface PostmanHeader {
   key?: string;
   value?: string;
   disabled?: boolean;
-  description?: string;
+  description?: PostmanDescription;
 }
 
 export interface PostmanQueryParam {
   key?: string;
   value?: string;
   disabled?: boolean;
-  description?: string;
+  description?: PostmanDescription;
 }
 
 export interface PostmanVariable {
   key?: string;
   value?: string;
   disabled?: boolean;
-  description?: string;
+  description?: PostmanDescription;
 }
 
 export interface PostmanUrlObject {
@@ -75,15 +77,15 @@ interface PostmanRequestBody {
     value?: string;
     type?: string;
     disabled?: boolean;
-    description?: string;
+    description?: PostmanDescription;
   }>;
   formdata?: Array<{
     key?: string;
     value?: string;
     type?: 'text' | 'file';
-    src?: string;
+    src?: string | string[];
     disabled?: boolean;
-    description?: string;
+    description?: PostmanDescription;
   }>;
   options?: {
     raw?: {
@@ -150,11 +152,20 @@ interface PostmanCollectionSchema {
   info?: {
     _postman_id?: string;
     name?: string;
-    description?: string;
+    description?: PostmanDescription;
     schema?: string;
   };
   item?: PostmanRawItem[];
   auth?: PostmanAuth;
+}
+
+function normalizePostmanDescription(raw: unknown): string | undefined {
+  if (typeof raw === 'string') return raw;
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const content = (raw as { content?: unknown }).content;
+    if (typeof content === 'string') return content;
+  }
+  return undefined;
 }
 
 export function generateUUID(): string {
@@ -174,26 +185,32 @@ function generateId(): string {
 
 function parseHeaders(headers?: PostmanHeader[]): KeyValuePair[] {
   if (!Array.isArray(headers)) return [];
-  return headers.map((h) => ({
-    id: generateId(),
-    key: String(h?.key ?? ''),
-    value: String(h?.value ?? ''),
-    enabled: !h?.disabled,
-    description: h?.description,
-  }));
+  return headers.map((h) => {
+    const desc = normalizePostmanDescription(h?.description);
+    return {
+      id: generateId(),
+      key: String(h?.key ?? ''),
+      value: String(h?.value ?? ''),
+      enabled: !h?.disabled,
+      ...(desc !== undefined ? { description: desc } : {}),
+    };
+  });
 }
 
 function parseQueryParams(url?: string | PostmanUrlObject, rawUrl?: string): KeyValuePair[] {
   if (url && typeof url === 'object' && Array.isArray(url.query)) {
     const fromQuery: KeyValuePair[] = url.query
       .filter((q) => String(q?.key ?? '').trim() !== '' || String(q?.value ?? '').trim() !== '')
-      .map((q) => ({
-        id: generateId(),
-        key: String(q?.key ?? ''),
-        value: String(q?.value ?? ''),
-        enabled: !q?.disabled,
-        description: q?.description,
-      }));
+      .map((q) => {
+        const desc = normalizePostmanDescription(q?.description);
+        return {
+          id: generateId(),
+          key: String(q?.key ?? ''),
+          value: String(q?.value ?? ''),
+          enabled: !q?.disabled,
+          ...(desc !== undefined ? { description: desc } : {}),
+        };
+      });
     if (fromQuery.length > 0) {
       if (!fromQuery.some((p) => p.key === '' && p.value === '')) {
         fromQuery.push({ id: generateId(), key: '', value: '', enabled: true });
@@ -222,7 +239,7 @@ function parsePathVariables(url?: string | PostmanUrlObject, rawUrl?: string): K
         key: String(v?.key ?? '').trim(),
         value: String(v?.value ?? ''),
         enabled: !v?.disabled,
-        description: v?.description,
+        description: normalizePostmanDescription(v?.description),
       }));
 
     if (fromVariables.length > 0) {
@@ -633,10 +650,26 @@ export function convertPostmanItem(
   inheritedAuth?: AuthConfig,
   depth: number = 0,
   exampleImportSummary?: PostmanExampleImportSummary,
+  seenIds: Set<string> = new Set(),
 ): CollectionItem {
+  const allocateItemId = (candidate?: string): string => {
+    const trimmed = typeof candidate === 'string' ? candidate.trim() : '';
+    if (trimmed && !seenIds.has(trimmed)) {
+      seenIds.add(trimmed);
+      return trimmed;
+    }
+    let nextId = generateId();
+    while (seenIds.has(nextId)) {
+      nextId = generateId();
+    }
+    seenIds.add(nextId);
+    return nextId;
+  };
+  const resolvedId = allocateItemId(item.id);
+
   if (depth >= 32) {
     return {
-      id: item.id || generateId(),
+      id: resolvedId,
       name: item.name || 'Unnamed Folder (depth exceeded)',
       type: 'folder',
       items: [],
@@ -655,15 +688,18 @@ export function convertPostmanItem(
       recordSkippedExample(exampleImportSummary, 'Folders cannot contain saved examples.');
     }
     return {
-      id: item.id || generateId(),
+      id: resolvedId,
       name: item.name || 'Unnamed Folder',
       type: 'folder',
-      items: (item.item || []).map((child) => convertPostmanItem(child, folderAuth, depth + 1, exampleImportSummary)),
+      items: (item.item || []).map((child) => convertPostmanItem(child, folderAuth, depth + 1, exampleImportSummary, seenIds)),
     };
   }
 
   // It's a request
-  const rawReq = typeof item.request === 'object' && item.request !== null ? item.request : {};
+  const rawReq: PostmanRequestObject =
+    typeof item.request === 'string'
+      ? { method: 'GET', url: item.request }
+      : (typeof item.request === 'object' && item.request !== null ? item.request : {});
   const method = (rawReq.method || 'GET').toUpperCase() as HttpMethod;
   const validMethods: HttpMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
   const safeMethod: HttpMethod = validMethods.includes(method) ? method : 'GET';
@@ -711,13 +747,16 @@ export function convertPostmanItem(
       bodyType = 'x-www-form-urlencoded';
       const urlencodedList = Array.isArray(rawReq.body.urlencoded) ? rawReq.body.urlencoded : [];
       if (urlencodedList.length > 0) {
-        bodyUrlEncoded = urlencodedList.map((item) => ({
-          id: generateId(),
-          key: String(item?.key ?? ''),
-          value: String(item?.value ?? ''),
-          enabled: item?.disabled !== true,
-          description: item?.description,
-        }));
+        bodyUrlEncoded = urlencodedList.map((item) => {
+          const desc = normalizePostmanDescription(item?.description);
+          return {
+            id: generateId(),
+            key: String(item?.key ?? ''),
+            value: String(item?.value ?? ''),
+            enabled: item?.disabled !== true,
+            ...(desc !== undefined ? { description: desc } : {}),
+          };
+        });
         const urlParams = new URLSearchParams();
         for (const item of bodyUrlEncoded) {
           if (item.enabled && String(item.key ?? '').trim()) {
@@ -748,13 +787,20 @@ export function convertPostmanItem(
       bodyType = 'form-data';
       const formdataList = Array.isArray(rawReq.body.formdata) ? rawReq.body.formdata : [];
       if (formdataList.length > 0) {
-        bodyFormData = formdataList.map((item) => ({
-          id: generateId(),
-          key: String(item?.key ?? ''),
-          type: item?.type === 'file' ? 'file' : 'text',
-          value: String(item?.value ?? item?.src ?? ''),
-          enabled: item?.disabled !== true,
-        }));
+        bodyFormData = formdataList.map((item) => {
+          const isFile = item?.type === 'file';
+          const rawSrc = Array.isArray(item?.src) ? (item.src[0] ?? '') : (item?.src ?? '');
+          const nonEmptyValue = item?.value !== undefined && String(item.value).trim() !== '' ? String(item.value) : '';
+          const resolvedValue = isFile ? String(rawSrc || nonEmptyValue) : String(item?.value ?? item?.src ?? '');
+          return {
+            id: generateId(),
+            key: String(item?.key ?? ''),
+            type: isFile ? 'file' : 'text',
+            value: resolvedValue,
+            ...(isFile && resolvedValue ? { fileName: resolvedValue } : {}),
+            enabled: item?.disabled !== true,
+          };
+        });
       }
       if (bodyFormData.length === 0) {
         bodyFormData = [{ id: generateId(), key: '', type: 'text', value: '', enabled: true }];
@@ -860,7 +906,7 @@ export function convertPostmanItem(
   }
 
   const apiRequest: ApiRequest = {
-    id: generateId(),
+    id: resolvedId,
     name: item.name || 'Untitled Request',
     method: safeMethod,
     url: rawUrl,
@@ -885,7 +931,7 @@ export function convertPostmanItem(
   const examples = parsePostmanItemExamples(item.response, exampleImportSummary);
 
   return {
-    id: item.id || generateId(),
+    id: resolvedId,
     name: item.name || 'Untitled Request',
     type: 'request',
     request: apiRequest,
@@ -910,7 +956,7 @@ export function importPostmanCollectionWithSummary(jsonString: string): {
   }
 
   const name = parsed.info?.name || 'Imported Postman Collection';
-  const description = parsed.info?.description || '';
+  const description = normalizePostmanDescription(parsed.info?.description) || '';
   const rawItems = Array.isArray(parsed.item) ? parsed.item : [];
 
   // Parse collection-level authorization
@@ -921,8 +967,9 @@ export function importPostmanCollectionWithSummary(jsonString: string): {
     skippedReasons: [],
   };
 
+  const seenIds = new Set<string>();
   const items: CollectionItem[] = rawItems.map((item) =>
-    convertPostmanItem(item, collectionAuth, 0, exampleImportSummary),
+    convertPostmanItem(item, collectionAuth, 0, exampleImportSummary, seenIds),
   );
 
   return {
@@ -1033,14 +1080,23 @@ function itemToPostmanJson(item: CollectionItem): PostmanRawItem {
     body = {
       mode: 'formdata',
       formdata: (req.bodyFormData || [])
-        .filter((item) => item && (String(item.key ?? '').trim() !== '' || (item.value && String(item.value).trim() !== '') || item.file))
-        .map((item) => ({
-          key: String(item?.key ?? ''),
-          value: String(item?.value ?? ''),
-          type: item.type,
-          src: item.file?.name || (item.type === 'file' ? String(item?.value ?? '') : undefined),
-          ...(item.enabled === false ? { disabled: true } : {}),
-        })),
+        .filter((item) =>
+          item &&
+          (String(item.key ?? '').trim() !== '' ||
+            (item.value && String(item.value).trim() !== '') ||
+            Boolean(item.file) ||
+            (item.fileName && String(item.fileName).trim() !== ''))
+        )
+        .map((item) => {
+          const resolvedFileName = item.file?.name || item.fileName || (item.type === 'file' ? String(item?.value ?? '') : undefined);
+          return {
+            key: String(item?.key ?? ''),
+            value: String(item?.value ?? ''),
+            type: item.type,
+            src: resolvedFileName,
+            ...(item.enabled === false ? { disabled: true } : {}),
+          };
+        }),
     };
   } else if (req.bodyType === 'raw') {
     body = {

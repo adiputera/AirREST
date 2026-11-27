@@ -130,18 +130,111 @@ function nativeRequestHeaders(input: TransportInit['headers']): Headers {
   return headers;
 }
 
+function isCrossOriginOrSchemeDowngrade(prevUrlStr: string, nextUrlStr: string): boolean {
+  try {
+    const prev = new URL(prevUrlStr);
+    const next = new URL(nextUrlStr);
+    if (prev.protocol === 'https:' && next.protocol === 'http:') return true;
+    return prev.origin !== next.origin;
+  } catch {
+    return true;
+  }
+}
+
+function stripSensitiveRedirectHeaders(headers: Headers): void {
+  const staticSensitive = new Set([
+    'authorization',
+    'proxy-authorization',
+    'cookie',
+    'cookie2',
+    'x-api-key',
+    'x-auth-token',
+    'x-access-token',
+    'x-api-token',
+    'api-key',
+  ]);
+  for (const key of Array.from(headers.keys())) {
+    const lower = key.toLowerCase();
+    if (
+      staticSensitive.has(lower) ||
+      lower.includes('api-key') ||
+      lower.includes('apikey') ||
+      lower.includes('auth-token') ||
+      lower.includes('access-token')
+    ) {
+      headers.delete(key);
+    }
+  }
+}
+
 export const tauriTestTransport: TestTransport = {
   fetch: async (url: string, init: TransportInit, options?: TestRequestOptions) => {
-    return tauriFetch(url, {
-      method: init.method,
-      headers: nativeRequestHeaders(init.headers),
-      body: init.body,
-      signal: init.signal,
-      maxRedirections: options?.followRedirects === false ? 0 : undefined,
-      danger: options?.ignoreSslErrors
-        ? { acceptInvalidCerts: true, acceptInvalidHostnames: true }
-        : undefined,
-    });
+    const headers = nativeRequestHeaders(init.headers);
+    if (options?.followRedirects === false) {
+      return tauriFetch(url, {
+        method: init.method,
+        headers,
+        body: init.body,
+        signal: init.signal,
+        maxRedirections: 0,
+        danger: options?.ignoreSslErrors
+          ? { acceptInvalidCerts: true, acceptInvalidHostnames: true }
+          : undefined,
+      });
+    }
+
+    let currentUrl = url;
+    let currentMethod = (init.method || 'GET').toUpperCase();
+    let currentHeaders = headers;
+    let currentBody: BodyInit | null | undefined = init.body;
+    const maxRedirects = 10;
+
+    for (let hop = 0; hop <= maxRedirects; hop += 1) {
+      const response = await tauriFetch(currentUrl, {
+        method: currentMethod,
+        headers: currentHeaders,
+        body: currentBody,
+        signal: init.signal,
+        maxRedirections: 0,
+        danger: options?.ignoreSslErrors
+          ? { acceptInvalidCerts: true, acceptInvalidHostnames: true }
+          : undefined,
+      });
+
+      if (![301, 302, 303, 307, 308].includes(response.status) || hop === maxRedirects) {
+        return response;
+      }
+
+      const location = response.headers.get('location');
+      if (!location) {
+        return response;
+      }
+
+      const nextUrlObj = new URL(location, currentUrl);
+      if (nextUrlObj.protocol !== 'http:' && nextUrlObj.protocol !== 'https:') {
+        throw new Error(`Blocked unsafe redirect protocol "${nextUrlObj.protocol}".`);
+      }
+
+      const nextHeaders = new Headers(currentHeaders);
+      if (isCrossOriginOrSchemeDowngrade(currentUrl, nextUrlObj.toString())) {
+        stripSensitiveRedirectHeaders(nextHeaders);
+      }
+
+      if (
+        response.status === 303 ||
+        ((response.status === 301 || response.status === 302) && currentMethod === 'POST')
+      ) {
+        currentMethod = 'GET';
+        currentBody = undefined;
+        nextHeaders.delete('content-type');
+        nextHeaders.delete('content-length');
+      }
+
+      currentUrl = nextUrlObj.toString();
+      currentHeaders = nextHeaders;
+    }
+
+    throw new Error('Too many redirects.');
   },
   classifyError: async (error: unknown) => {
     return classifyTauriNetworkError(error);

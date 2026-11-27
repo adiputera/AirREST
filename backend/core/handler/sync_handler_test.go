@@ -57,4 +57,22 @@ func TestSyncHandler_Validation(t *testing.T) {
 			t.Fatalf("expected status 400, got %d", w.Code)
 		}
 	})
+
+	t.Run("Pull rejects malformed since timestamp and malformed scope UUIDs", func(t *testing.T) {
+		for _, url := range []string{
+			"/sync/pull?workspace_id=" + uuid.New().String() + "&since=not-a-timestamp",
+			"/sync/pull?workspace_id=not-a-uuid",
+			"/sync/pull?project_id=not-a-uuid",
+		} {
+			req := httptest.NewRequest(http.MethodGet, url, nil)
+			req = req.WithContext(context.WithValue(req.Context(), middleware.UserContextKey, user))
+
+			w := httptest.NewRecorder()
+			syncHandler.Pull(w, req)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected status 400 for %s, got %d", url, w.Code)
+			}
+		}
+	})
 }

@@ -20,12 +20,36 @@ var (
 	ErrInvalidCredentials       = errors.New("invalid email or password")
 	ErrEmailAlreadyExists       = errors.New("a user with this email already exists")
 	ErrPasswordTooShort         = errors.New("password must be at least 8 characters long")
+	ErrPasswordTooLong          = errors.New("password must not exceed 72 bytes")
 	ErrInvalidEmail             = errors.New("invalid email address")
 	ErrIncorrectCurrentPassword = errors.New("current password is incorrect")
 	ErrNameRequired             = errors.New("name is required")
+	ErrNameTooLong              = errors.New("name must not exceed 100 characters")
 	ErrCannotDeleteSelf         = errors.New("cannot delete your own account")
 	ErrCannotDeleteLastAdmin    = errors.New("cannot delete the last superadmin account")
 )
+
+func validateEmailAddress(raw string) (string, error) {
+	email := strings.TrimSpace(strings.ToLower(raw))
+	if email == "" || len(email) > 254 {
+		return "", ErrInvalidEmail
+	}
+	address, err := mail.ParseAddress(email)
+	if err != nil || address.Address != email {
+		return "", ErrInvalidEmail
+	}
+	return email, nil
+}
+
+func validatePasswordStrength(password string) error {
+	if len(password) < 8 {
+		return ErrPasswordTooShort
+	}
+	if len(password) > 72 {
+		return ErrPasswordTooLong
+	}
+	return nil
+}
 
 type AuthService struct {
 	userRepo     *postgres.UserRepository
@@ -65,17 +89,21 @@ func (s *AuthService) issueTokenPair(user *domain.User, tokenVersion int64) (*To
 
 // Register registers a new regular user, generates their default private workspace and JWT pair
 func (s *AuthService) Register(ctx context.Context, email, password, name string) (*domain.User, *TokenPair, error) {
-	email = strings.TrimSpace(strings.ToLower(email))
+	validEmail, err := validateEmailAddress(email)
+	if err != nil {
+		return nil, nil, err
+	}
+	email = validEmail
 	name = strings.TrimSpace(name)
 
-	if !strings.Contains(email, "@") || len(email) < 5 {
-		return nil, nil, ErrInvalidEmail
-	}
-	if len(password) < 8 {
-		return nil, nil, ErrPasswordTooShort
+	if err := validatePasswordStrength(password); err != nil {
+		return nil, nil, err
 	}
 	if name == "" {
 		name = strings.Split(email, "@")[0]
+	}
+	if len([]rune(name)) > 100 {
+		return nil, nil, ErrNameTooLong
 	}
 
 	// Check if user already exists
@@ -98,13 +126,11 @@ func (s *AuthService) Register(ctx context.Context, email, password, name string
 		Role:         domain.RoleUser,
 	}
 
-	if err := s.userRepo.Create(ctx, newUser); err != nil {
+	if _, err := s.userRepo.CreateWithDefaultWorkspace(ctx, newUser, "Default Workspace"); err != nil {
+		if errors.Is(err, postgres.ErrUserAlreadyExists) {
+			return nil, nil, ErrEmailAlreadyExists
+		}
 		return nil, nil, fmt.Errorf("failed to create user: %w", err)
-	}
-
-	// Create default private workspace
-	if _, err := s.userRepo.CreateDefaultWorkspace(ctx, newUser.ID, "Default Workspace"); err != nil {
-		slog.Error("failed to create default workspace for user", "user_id", newUser.ID, "error", err)
 	}
 
 	tokens, err := s.issueTokenPair(newUser, newUser.TokenVersion)
@@ -121,7 +147,10 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*domai
 
 	user, err := s.userRepo.GetByEmail(ctx, email)
 	if err != nil {
-		return nil, nil, ErrInvalidCredentials
+		if errors.Is(err, postgres.ErrUserNotFound) {
+			return nil, nil, ErrInvalidCredentials
+		}
+		return nil, nil, fmt.Errorf("failed to look up user: %w", err)
 	}
 
 	if !hasher.CheckPassword(password, user.PasswordHash) {
@@ -140,12 +169,18 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*domai
 func (s *AuthService) RefreshToken(ctx context.Context, refreshTokenStr string) (*domain.User, *TokenPair, error) {
 	claims, err := s.tokenManager.ValidateRefreshToken(refreshTokenStr)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("%w: %v", token.ErrInvalidRefreshToken, err)
 	}
 
 	user, err := s.userRepo.GetByID(ctx, claims.UserID)
-	if err != nil || user == nil {
-		return nil, nil, errors.New("user not found or deactivated")
+	if err != nil {
+		if errors.Is(err, postgres.ErrUserNotFound) {
+			return nil, nil, fmt.Errorf("%w: user not found or deactivated", token.ErrInvalidRefreshToken)
+		}
+		return nil, nil, fmt.Errorf("failed to load user for refresh: %w", err)
+	}
+	if user == nil {
+		return nil, nil, fmt.Errorf("%w: user not found or deactivated", token.ErrInvalidRefreshToken)
 	}
 
 	if claims.TokenVersion == nil || *claims.TokenVersion != user.TokenVersion {
@@ -192,7 +227,7 @@ func (s *AuthService) BootstrapSuperadmin(ctx context.Context, email, password, 
 		Role:         domain.RoleSuperadmin,
 	}
 
-	if err := s.userRepo.Create(ctx, superUser); err != nil {
+	if _, err := s.userRepo.CreateWithDefaultWorkspace(ctx, superUser, "Default Workspace"); err != nil {
 		// Concurrent cold starts may race between the count check and the insert.
 		// If another instance already created a superadmin, treat bootstrap as complete.
 		if recount, countErr := s.userRepo.CountSuperadmins(ctx); countErr == nil && recount > 0 {
@@ -202,27 +237,34 @@ func (s *AuthService) BootstrapSuperadmin(ctx context.Context, email, password, 
 		return fmt.Errorf("failed to create superadmin user: %w", err)
 	}
 
-	// Create default workspace for superadmin
-	if _, err := s.userRepo.CreateDefaultWorkspace(ctx, superUser.ID, "Default Workspace"); err != nil {
-		slog.Error("failed to create superadmin default workspace", "error", err)
-	}
-
 	slog.Info("superadmin account successfully bootstrapped")
 	return nil
 }
 
 // CreateUserByAdmin creates a user directly by superadmin with specified role
 func (s *AuthService) CreateUserByAdmin(ctx context.Context, email, password, name string, role domain.SystemRole) (*domain.User, error) {
-	email = strings.TrimSpace(strings.ToLower(email))
+	validEmail, err := validateEmailAddress(email)
+	if err != nil {
+		return nil, err
+	}
+	email = validEmail
 	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, ErrNameRequired
+	}
+	if len([]rune(name)) > 100 {
+		return nil, ErrNameTooLong
+	}
 
 	existing, err := s.userRepo.GetByEmail(ctx, email)
 	if err == nil && existing != nil {
 		return nil, ErrEmailAlreadyExists
+	} else if err != nil && !errors.Is(err, postgres.ErrUserNotFound) {
+		return nil, fmt.Errorf("failed to check existing user: %w", err)
 	}
 
-	if len(password) < 8 {
-		return nil, ErrPasswordTooShort
+	if err := validatePasswordStrength(password); err != nil {
+		return nil, err
 	}
 
 	pwdHash, err := hasher.HashPassword(password)
@@ -238,12 +280,11 @@ func (s *AuthService) CreateUserByAdmin(ctx context.Context, email, password, na
 		Role:         role,
 	}
 
-	if err := s.userRepo.Create(ctx, newUser); err != nil {
+	if _, err := s.userRepo.CreateWithDefaultWorkspace(ctx, newUser, "Default Workspace"); err != nil {
+		if errors.Is(err, postgres.ErrUserAlreadyExists) {
+			return nil, ErrEmailAlreadyExists
+		}
 		return nil, fmt.Errorf("failed to create user: %w", err)
-	}
-
-	if _, err := s.userRepo.CreateDefaultWorkspace(ctx, newUser.ID, "Default Workspace"); err != nil {
-		slog.Error("failed to create default workspace for user", "user_id", newUser.ID, "error", err)
 	}
 
 	return newUser, nil
@@ -265,13 +306,16 @@ func (s *AuthService) UpdateProfile(ctx context.Context, userID uuid.UUID, name 
 	if name == "" {
 		return nil, ErrNameRequired
 	}
+	if len([]rune(name)) > 100 {
+		return nil, ErrNameTooLong
+	}
 	return s.userRepo.UpdateProfile(ctx, userID, name, avatarURL)
 }
 
 // ChangePassword verifies the current password, revokes other sessions, and returns a replacement token pair.
 func (s *AuthService) ChangePassword(ctx context.Context, userID uuid.UUID, currentPassword, newPassword string) (*domain.User, *TokenPair, error) {
-	if len(newPassword) < 8 {
-		return nil, nil, ErrPasswordTooShort
+	if err := validatePasswordStrength(newPassword); err != nil {
+		return nil, nil, err
 	}
 
 	user, err := s.userRepo.GetByID(ctx, userID)
@@ -305,8 +349,8 @@ func (s *AuthService) ChangePassword(ctx context.Context, userID uuid.UUID, curr
 
 // ResetPasswordByAdmin allows superadmin to reset any user's password without requiring current password
 func (s *AuthService) ResetPasswordByAdmin(ctx context.Context, userID uuid.UUID, newPassword string) error {
-	if len(newPassword) < 8 {
-		return ErrPasswordTooShort
+	if err := validatePasswordStrength(newPassword); err != nil {
+		return err
 	}
 
 	if _, err := s.userRepo.GetByID(ctx, userID); err != nil {

@@ -1,6 +1,6 @@
 import { User, Team, TeamMember, Project, ProjectMember, Collection, Environment, ProjectRole, FeaturePolicy, FeatureFlags } from '../types';
 import { requestPasswordRefresh } from '@airrest/common/cloud';
-import { createApplicationDistributionConfig } from '@airrest/common/configuration';
+import { createApplicationDistributionConfig, normalizeDistributionApiUrl } from '@airrest/common/configuration';
 
 export interface TokenRefreshCallback {
   (tokens: { token: string; refreshToken: string; expiresAt: string; previousRefreshToken: string }): void;
@@ -10,8 +10,13 @@ export interface AuthEvictedCallback {
   (evictedSession?: { token?: string | null; refreshToken?: string | null }): void;
 }
 
+export interface TokenProviderCallback {
+  (): { apiUrl: string; token?: string | null; refreshToken?: string | null } | null;
+}
+
 let onTokenRefreshed: TokenRefreshCallback | null = null;
 let onAuthEvicted: AuthEvictedCallback | null = null;
+let tokenProvider: TokenProviderCallback | null = null;
 let sessionGeneration = 0;
 
 // A login, logout, or server change invalidates all work from the previous session.
@@ -26,6 +31,10 @@ export function registerHubTokenRefresh(cb: TokenRefreshCallback | null) {
 
 export function registerHubAuthEvicted(cb: AuthEvictedCallback | null) {
   onAuthEvicted = cb;
+}
+
+export function registerHubTokenProvider(cb: TokenProviderCallback | null) {
+  tokenProvider = cb;
 }
 
 export interface ApiFetchOptions extends RequestInit {
@@ -77,6 +86,23 @@ const hubDistributionConfig = createApplicationDistributionConfig({
 
 export const DEFAULT_API_URL = hubDistributionConfig.backend.apiUrl ?? 'http://localhost:8080';
 
+export function validateHubApiUrl(rawUrl: string): string {
+  const cleaned = String(rawUrl ?? '').trim().replace(/\/+$/, '');
+  if (!cleaned) return DEFAULT_API_URL;
+  return normalizeDistributionApiUrl(cleaned, 'Server URL');
+}
+
+async function hubFetch(url: string, init?: RequestInit): Promise<Response> {
+  const response = await fetch(url, {
+    ...init,
+    redirect: 'manual',
+  });
+  if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+    throw new Error('Server redirected unexpectedly. Please verify the API base URL.');
+  }
+  return response;
+}
+
 export async function fetchWithAuth(endpoint: string, options: ApiFetchOptions): Promise<Response> {
   const generation = sessionGeneration;
   const { apiUrl, token, refreshToken, ...fetchInit } = options;
@@ -86,36 +112,61 @@ export async function fetchWithAuth(endpoint: string, options: ApiFetchOptions):
   const baseUrl = apiUrl ? apiUrl.replace(/\/+$/, '') : DEFAULT_API_URL;
   const url = `${baseUrl}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`;
 
+  const resolveLatestAuth = () => {
+    const live = tokenProvider?.();
+    if (live && (live.apiUrl ? live.apiUrl.replace(/\/+$/, '') : DEFAULT_API_URL) === baseUrl && live.token) {
+      return {
+        activeToken: live.token,
+        activeRefreshToken: live.refreshToken || refreshToken,
+      };
+    }
+    return { activeToken: token, activeRefreshToken: refreshToken };
+  };
+
+  let { activeToken, activeRefreshToken } = resolveLatestAuth();
+
   const headers = new Headers(fetchInit.headers || {});
   headers.set('Content-Type', 'application/json');
-  if (token) {
-    headers.set('Authorization', `Bearer ${token}`);
+  if (activeToken) {
+    headers.set('Authorization', `Bearer ${activeToken}`);
   }
 
-  let response = await fetch(url, { ...fetchInit, headers });
+  let response = await hubFetch(url, { ...fetchInit, headers });
   if (generation !== sessionGeneration) throw new Error('Session changed. Please try again.');
 
-  if (response.status === 401 && refreshToken) {
+  if (response.status === 401) {
+    const afterAttemptAuth = resolveLatestAuth();
+    // If another concurrent call already rotated tokens while this request was in-flight, retry once with the fresh token.
+    if (afterAttemptAuth.activeToken && afterAttemptAuth.activeToken !== activeToken) {
+      activeToken = afterAttemptAuth.activeToken;
+      activeRefreshToken = afterAttemptAuth.activeRefreshToken;
+      headers.set('Authorization', `Bearer ${activeToken}`);
+      response = await hubFetch(url, { ...fetchInit, headers });
+      if (generation !== sessionGeneration) throw new Error('Session changed. Please try again.');
+    }
+  }
+
+  if (response.status === 401 && activeRefreshToken) {
     try {
-      const result = await handleSilentRefresh(baseUrl, refreshToken);
+      const result = await handleSilentRefresh(baseUrl, activeRefreshToken);
       if (generation !== sessionGeneration) throw new Error('Session changed. Please try again.');
       if (result.token) {
         headers.set('Authorization', `Bearer ${result.token}`);
-        response = await fetch(url, { ...fetchInit, headers });
+        response = await hubFetch(url, { ...fetchInit, headers });
         if (response.status === 401 && generation === sessionGeneration) {
-          onAuthEvicted?.({ token: result.token, refreshToken: result.refreshToken || refreshToken });
+          onAuthEvicted?.({ token: result.token, refreshToken: result.refreshToken || activeRefreshToken });
         }
       } else if (result.evicted) {
         if (generation === sessionGeneration && onAuthEvicted) {
-          onAuthEvicted({ token, refreshToken });
+          onAuthEvicted({ token: activeToken, refreshToken: activeRefreshToken });
         }
       }
     } catch {
       // Network or transient error during refresh attempt - do not evict session
     }
-  } else if (response.status === 401 && !refreshToken) {
+  } else if (response.status === 401 && !activeRefreshToken) {
     if (generation === sessionGeneration && onAuthEvicted) {
-      onAuthEvicted({ token, refreshToken });
+      onAuthEvicted({ token: activeToken, refreshToken: activeRefreshToken });
     }
   }
 
@@ -140,7 +191,7 @@ async function handleSilentRefresh(apiUrl: string, refreshTokenStr: string): Pro
   const refreshPromise = (async (): Promise<SilentRefreshResult> => {
     try {
       const result = await requestPasswordRefresh(
-        apiUrl, refreshTokenStr, (url, init) => fetch(url, init), (response) => response.json().catch(() => ({})),
+        apiUrl, refreshTokenStr, (url, init) => hubFetch(url, init), (response) => response.json().catch(() => ({})),
       );
       if (result.token && result.refreshToken) {
         if (onTokenRefreshed && generation === sessionGeneration) {
@@ -168,7 +219,8 @@ async function handleSilentRefresh(apiUrl: string, refreshTokenStr: string): Pro
 // ----------------- Auth -----------------
 
 export async function apiLogin(apiUrl: string, email: string, password: string) {
-  const res = await fetch(`${apiUrl.replace(/\/+$/, '')}/api/v1/auth/login`, {
+  const safeUrl = validateHubApiUrl(apiUrl);
+  const res = await hubFetch(`${safeUrl}/api/v1/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
@@ -179,7 +231,8 @@ export async function apiLogin(apiUrl: string, email: string, password: string) 
 }
 
 export async function apiRegister(apiUrl: string, email: string, password: string, name: string) {
-  const res = await fetch(`${apiUrl.replace(/\/+$/, '')}/api/v1/auth/register`, {
+  const safeUrl = validateHubApiUrl(apiUrl);
+  const res = await hubFetch(`${safeUrl}/api/v1/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password, name }),

@@ -1645,3 +1645,126 @@ test('Regression: duplicate operations flush via persistStoreState (appStorage.s
   assert.ok(setItemCalls > 0, 'duplicateCollectionItem must flush via persistStoreState / customStorage.setItem');
   s.dispose();
 });
+
+test('STU-03: setCloudConfig clears active cloud runner/example/conflict state on user session switch', async () => {
+  const h = createStoreHarness();
+  const s = await h.createStore();
+
+  s.setState({
+    workspaceMode: 'cloud',
+    cloudConfig: {
+      apiUrl: 'https://api.example.com',
+      token: 'tok-user-a',
+      user: { id: 'user-a', email: 'a@example.com', name: 'User A', role: 'owner' },
+      activeScope: { type: 'workspace', id: 'ws-a', name: 'WS A', role: 'owner' },
+    },
+    cloudCacheOwner: 'https://api.example.com:::user-a',
+    openExampleTabs: [{ id: 'ex-tab-1', collectionId: 'col-1', itemId: 'item-1', exampleId: 'ex-1', name: 'Ex' }],
+    selectedExample: { collectionId: 'col-1', itemId: 'item-1', exampleId: 'ex-1' },
+    openPerformanceTabs: [{ id: 'perf:collection:col-1', title: 'Perf', sourceType: 'collection', sourceId: 'col-1' }],
+    selectedPerformanceTabId: 'perf:collection:col-1',
+    performanceReports: { 'rep-1': { id: 'rep-1' } },
+    functionalReports: { 'func-1': { id: 'func-1' } },
+    tabOrder: ['perf:collection:col-1'],
+    environmentOccConflict: { local: { id: 'env-1' }, remote: { id: 'env-1' } },
+  });
+
+  s.getState().setCloudConfig({
+    token: 'tok-user-b',
+    user: { id: 'user-b', email: 'b@example.com', name: 'User B', role: 'owner' },
+  });
+
+  const next = s.getState();
+  assert.deepEqual(toPlain(next.openExampleTabs), []);
+  assert.equal(next.selectedExample, null);
+  assert.deepEqual(toPlain(next.openPerformanceTabs), []);
+  assert.equal(next.selectedPerformanceTabId, null);
+  assert.deepEqual(toPlain(next.performanceReports), {});
+  assert.deepEqual(toPlain(next.functionalReports), {});
+  assert.deepEqual(toPlain(next.tabOrder), []);
+  assert.equal(next.environmentOccConflict, null);
+  s.dispose();
+});
+
+test('STU-04: createEnvironment -> deleteEnvironment awaits in-flight creation and deletes canonical server ID', async () => {
+  const deletedIds = [];
+  let resolveCreate;
+  const h = createStoreHarness({
+    cloudClientOverrides: {
+      createScopeEnvironment: async () => new Promise((resolve) => { resolveCreate = resolve; }),
+      deleteScopeEnvironment: async (_api, _tok, id) => { deletedIds.push(id); },
+    },
+  });
+  const s = await h.createStore();
+  s.setState({
+    workspaceMode: 'cloud',
+    cloudConfig: {
+      apiUrl: 'https://api.example.com',
+      token: 'tok-env',
+      user: { id: 'alice', email: 'alice@example.com', name: 'Alice', role: 'owner' },
+      activeScope: { type: 'workspace', id: 'ws-a', name: 'WS A', role: 'owner' },
+    },
+  });
+
+  const localId = s.getState().createEnvironment('Ephemeral');
+  assert.equal(s.getState().environments.find((e) => e.id === localId)?._pendingCreate, true);
+
+  s.getState().deleteEnvironment(localId);
+  assert.equal(deletedIds.length, 0);
+
+  resolveCreate({ id: 'server-env-99', version: 1 });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(deletedIds, ['server-env-99']);
+  s.dispose();
+});
+
+test('STU-06: duplicateCollectionItem clears pendingDuplicateIntents even if active scope changes right after POST commits', async () => {
+  let resolveDup;
+  const h = createStoreHarness({
+    cloudClientOverrides: {
+      duplicateScopeItem: async () => new Promise((resolve) => { resolveDup = resolve; }),
+      fetchCollectionById: async (_api, _tok, colId) => ({
+        id: colId,
+        workspace_id: 'ws-a',
+        name: 'Target Col',
+        min_role: 'reader',
+        version: 2,
+        items: [{ id: 'dup-req-id', type: 'request', name: 'Ping', method: 'GET', url: 'https://httpbin.org/get' }],
+      }),
+      fetchScopeCollections: async () => [],
+      fetchScopeEnvironments: async () => [],
+    },
+  });
+  const s = await h.createStore();
+  s.setState({
+    workspaceMode: 'cloud',
+    cloudConfig: {
+      apiUrl: 'https://api.example.com',
+      token: 'tok-dup',
+      user: { id: 'alice', email: 'alice@example.com', name: 'Alice', role: 'owner' },
+      activeScope: { type: 'workspace', id: 'ws-a', name: 'WS A', role: 'owner' },
+    },
+    collections: [
+      { id: 'col-src', name: 'Source Col', minRole: 'reader', version: 1, items: [{ id: 'req-1', name: 'Ping', type: 'request', request: makeSampleRequest('req-1', 'Ping') }], createdAt: 1, updatedAt: 1, _origin: 'cloud' },
+      { id: 'col-new', name: 'Target Col', minRole: 'reader', version: 1, items: [], createdAt: 1, updatedAt: 1, _origin: 'cloud', _syncStatus: 'synced' },
+    ],
+  });
+
+  const dupPromise = s.getState().duplicateCollectionItem('col-src', 'req-1', 'col-new', null);
+  await new Promise((r) => setTimeout(r, 20));
+  // User switches active scope via setActiveScope while duplicateScopeItem POST is in flight; session owner stays identical
+  await s.getState().setActiveScope({ type: 'workspace', id: 'ws-b', name: 'WS B', role: 'owner' });
+  resolveDup({
+    operation_id: Object.keys(s.getState().pendingDuplicateIntents)[0],
+    status: 'committed',
+    root_item_id: 'dup-req-id',
+    target_collection_id: 'col-new',
+    target_collection_version: 2,
+    name: 'Ping',
+  });
+  const res = await dupPromise;
+  assert.equal(res.success, false);
+  assert.match(res.error, /Session or scope changed/);
+  assert.deepEqual(toPlain(s.getState().pendingDuplicateIntents), {});
+  s.dispose();
+});

@@ -224,6 +224,15 @@ export function syncRunnerTabItemsFromSource(
   }
 
   let liveItems: PerformanceRequestDescriptor[] | null = null;
+  let setupSupplementItems: PerformanceRequestDescriptor[] = [];
+
+  const collectSetupSupplements = (colItems: Collection['items']) => {
+    if (existingSetupIds.length === 0) return [];
+    const wanted = new Set(existingSetupIds);
+    return buildPerformanceItemsFromCollection(colItems).filter(
+      (item) => wanted.has(item.id) || wanted.has(item.itemId)
+    );
+  };
 
   if (tab.sourceType === 'collection') {
     const col = collections.find((c) => c.id === (tab.collectionId || tab.sourceId));
@@ -235,6 +244,7 @@ export function syncRunnerTabItemsFromSource(
       ? collections.find((c) => c.id === tab.collectionId)
       : collections.find((c) => !c.isPartial && Boolean(findFolderInTree(c.items || [], tab.sourceId)));
     if (col && !col.isPartial) {
+      setupSupplementItems = collectSetupSupplements(col.items || []);
       const folder = findFolderInTree(col.items || [], tab.sourceId);
       if (folder) {
         liveItems = buildPerformanceItemsFromCollection(folder.items || []);
@@ -257,6 +267,12 @@ export function syncRunnerTabItemsFromSource(
           selected: true,
         },
       ];
+      if (tab.collectionId) {
+        const parentCol = collections.find((c) => c.id === tab.collectionId);
+        if (parentCol && !parentCol.isPartial) {
+          setupSupplementItems = collectSetupSupplements(parentCol.items || []);
+        }
+      }
     } else {
       const col = tab.collectionId
         ? collections.find((c) => c.id === tab.collectionId)
@@ -266,6 +282,7 @@ export function syncRunnerTabItemsFromSource(
         if (c.isPartial) continue;
         const found = findRequestItemInTree(c.items || [], tab.sourceId);
         if (found?.item.request) {
+          setupSupplementItems = collectSetupSupplements(c.items || []);
           liveItems = [
             {
               id: found.item.id,
@@ -297,6 +314,11 @@ export function syncRunnerTabItemsFromSource(
   const liveById = new Map<string, PerformanceRequestDescriptor>();
   for (const li of liveItems) {
     liveById.set(li.id, li);
+  }
+  for (const sup of setupSupplementItems) {
+    if (!liveById.has(sup.id)) {
+      liveById.set(sup.id, sup);
+    }
   }
 
   const syncedItems: PerformanceRequestDescriptor[] = [];
@@ -330,6 +352,10 @@ export function syncRunnerTabItemsFromSource(
   }
 
   const validIdSet = new Set(syncedItems.map((it) => it.id));
+  for (const sup of setupSupplementItems) {
+    validIdSet.add(sup.id);
+    validIdSet.add(sup.itemId);
+  }
   const nextSetupIds = existingSetupIds.filter((id) => validIdSet.has(id));
   const setupChanged = nextSetupIds.length !== existingSetupIds.length;
   const changed = removedNames.length > 0 || addedCount > 0 || setupChanged || syncedCount > 0;

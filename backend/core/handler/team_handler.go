@@ -50,11 +50,7 @@ func (h *TeamHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	team, err := h.teamService.CreateTeam(r.Context(), user, req.Name, req.Description)
 	if err != nil {
-		if err == service.ErrSuperadminRequired {
-			response.Error(w, http.StatusForbidden, err.Error(), "FORBIDDEN")
-			return
-		}
-		response.Error(w, http.StatusBadRequest, err.Error(), "VALIDATION_ERROR")
+		writeMappedError(w, "create team", err, nil)
 		return
 	}
 	response.JSON(w, http.StatusCreated, team)
@@ -71,7 +67,7 @@ func (h *TeamHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	team, err := h.teamService.GetTeam(r.Context(), user, id)
 	if err != nil {
-		response.Error(w, http.StatusNotFound, "team not found or access forbidden", "NOT_FOUND")
+		writeMappedError(w, "get team", err, nil)
 		return
 	}
 	response.JSON(w, http.StatusOK, team)
@@ -94,11 +90,7 @@ func (h *TeamHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	team, err := h.teamService.UpdateTeam(r.Context(), user, id, req.Name, req.Description)
 	if err != nil {
-		if err == service.ErrSuperadminRequired {
-			response.Error(w, http.StatusForbidden, err.Error(), "FORBIDDEN")
-			return
-		}
-		response.Error(w, http.StatusBadRequest, err.Error(), "VALIDATION_ERROR")
+		writeMappedError(w, "update team", err, nil)
 		return
 	}
 	response.JSON(w, http.StatusOK, team)
@@ -114,11 +106,7 @@ func (h *TeamHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.teamService.DeleteTeam(r.Context(), user, id); err != nil {
-		if err == service.ErrSuperadminRequired {
-			response.Error(w, http.StatusForbidden, err.Error(), "FORBIDDEN")
-			return
-		}
-		response.Error(w, http.StatusBadRequest, err.Error(), "OPERATION_FAILED")
+		writeMappedError(w, "delete team", err, nil)
 		return
 	}
 	response.JSON(w, http.StatusOK, map[string]string{"message": "team deleted successfully"})
@@ -135,7 +123,7 @@ func (h *TeamHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
 
 	members, err := h.teamService.ListMembers(r.Context(), user, id)
 	if err != nil {
-		response.Error(w, http.StatusForbidden, "access forbidden", "FORBIDDEN")
+		writeMappedError(w, "list team members", err, nil)
 		return
 	}
 	response.JSON(w, http.StatusOK, members)
@@ -163,12 +151,18 @@ func (h *TeamHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 	}
 
 	role := domain.TeamRoleMember
-	if req.Role == string(domain.TeamRoleAdmin) {
+	switch req.Role {
+	case "", string(domain.TeamRoleMember):
+		role = domain.TeamRoleMember
+	case string(domain.TeamRoleAdmin):
 		role = domain.TeamRoleAdmin
+	default:
+		response.Error(w, http.StatusBadRequest, "invalid team role", "BAD_REQUEST")
+		return
 	}
 
 	if err := h.teamService.AddMember(r.Context(), user, teamID, targetUserID, role); err != nil {
-		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
+		writeMappedError(w, "add team member", err, nil)
 		return
 	}
 	response.JSON(w, http.StatusOK, map[string]string{"message": "team member added/updated successfully"})
@@ -191,7 +185,7 @@ func (h *TeamHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.teamService.RemoveMember(r.Context(), user, teamID, targetUserID); err != nil {
-		response.Error(w, http.StatusForbidden, err.Error(), "OPERATION_FAILED")
+		writeMappedError(w, "remove team member", err, nil)
 		return
 	}
 	response.JSON(w, http.StatusOK, map[string]string{"message": "team member removed successfully"})

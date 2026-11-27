@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 
@@ -125,6 +126,9 @@ func (s *EnvironmentService) Get(ctx context.Context, user *domain.User, id uuid
 	if err != nil {
 		return nil, err
 	}
+	if env.DeletedAt != nil {
+		return nil, postgres.ErrEnvironmentNotFound
+	}
 
 	if err := s.collectionService.CheckPermission(ctx, user, env.WorkspaceID, env.ProjectID, false); err != nil {
 		return nil, err
@@ -148,6 +152,9 @@ func (s *EnvironmentService) Update(ctx context.Context, user *domain.User, env 
 	existing, err := s.envRepo.GetByID(ctx, env.ID)
 	if err != nil {
 		return nil, err
+	}
+	if existing.DeletedAt != nil {
+		return nil, postgres.ErrEnvironmentNotFound
 	}
 
 	if err := s.collectionService.CheckPermission(ctx, user, existing.WorkspaceID, existing.ProjectID, true); err != nil {
@@ -177,16 +184,34 @@ func (s *EnvironmentService) Update(ctx context.Context, user *domain.User, env 
 		}
 	}
 
-	if env.Name == "" {
+	if strings.TrimSpace(env.Name) == "" {
 		env.Name = existing.Name
+	} else {
+		env.Name = strings.TrimSpace(env.Name)
+		if err := ValidateName(env.Name); err != nil {
+			return nil, err
+		}
 	}
 	if env.Variables == nil {
 		env.Variables = existing.Variables
+	} else {
+		var varsList []json.RawMessage
+		if err := json.Unmarshal(*env.Variables, &varsList); err != nil {
+			return nil, newValidationError("variables", "variables must be a valid JSON array")
+		}
 	}
 	if env.MinRole == "" {
 		env.MinRole = existing.MinRole
 	}
+	switch env.MinRole {
+	case domain.ProjectRoleAdmin, domain.ProjectRoleMaintainer, domain.ProjectRoleContributor, domain.ProjectRoleReader:
+	default:
+		return nil, newValidationError("min_role", "invalid min_role, must be admin, maintainer, contributor, or reader")
+	}
 
+	env.WorkspaceID = existing.WorkspaceID
+	env.ProjectID = existing.ProjectID
+	env.CreatedAt = existing.CreatedAt
 	env.LastModifiedBy = &user.ID
 	if baseVersion <= 0 {
 		return existing, postgres.ErrVersionConflict
@@ -208,6 +233,9 @@ func (s *EnvironmentService) Delete(ctx context.Context, user *domain.User, id u
 	existing, err := s.envRepo.GetByID(ctx, id)
 	if err != nil {
 		return err
+	}
+	if existing.DeletedAt != nil {
+		return postgres.ErrEnvironmentNotFound
 	}
 
 	if err := s.collectionService.CheckOperationPermission(ctx, user, existing.WorkspaceID, existing.ProjectID, domain.PermissionEnvDelete); err != nil {

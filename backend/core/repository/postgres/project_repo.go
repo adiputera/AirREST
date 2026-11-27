@@ -44,6 +44,39 @@ func (r *ProjectRepository) Create(ctx context.Context, p *domain.Project) error
 	return nil
 }
 
+// CreateWithAdmin atomically creates a project and adds its creator as initial admin member.
+func (r *ProjectRepository) CreateWithAdmin(ctx context.Context, p *domain.Project, adminUserID uuid.UUID) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin project creation transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if p.ID == uuid.Nil {
+		p.ID = uuid.New()
+	}
+	now := time.Now().UTC()
+	p.CreatedAt = now
+	p.UpdatedAt = now
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO projects (id, team_id, name, description, created_by, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, p.ID, p.TeamID, p.Name, p.Description, p.CreatedBy, p.CreatedAt, p.UpdatedAt); err != nil {
+		return fmt.Errorf("failed to create project: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO project_members (id, project_id, user_id, role, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (project_id, user_id) DO UPDATE SET role = EXCLUDED.role, updated_at = EXCLUDED.updated_at
+	`, uuid.New(), p.ID, adminUserID, string(domain.ProjectRoleAdmin), now, now); err != nil {
+		return fmt.Errorf("failed to add initial project admin: %w", err)
+	}
+
+	return tx.Commit(ctx)
+}
+
 // ListForUser returns projects in a team with strict visibility isolation:
 // Superadmins and Team Admins see all projects.
 // Regular members see ONLY projects where they are in project_members.
@@ -88,6 +121,9 @@ func (r *ProjectRepository) ListForUser(ctx context.Context, teamID, userID uuid
 		p.UserRole = &role
 		p.Permissions = domain.GetPermissionsForRole(role)
 		projects = append(projects, &p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate projects: %w", err)
 	}
 	return projects, nil
 }
@@ -226,6 +262,9 @@ func (r *ProjectRepository) ListMembers(ctx context.Context, projectID uuid.UUID
 		u.Role = domain.SystemRole(userRoleStr)
 		m.User = &u
 		members = append(members, &m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate project members: %w", err)
 	}
 	return members, nil
 }

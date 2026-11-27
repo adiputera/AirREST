@@ -33,6 +33,7 @@ concurrency:
 
 jobs:
   publish-tauri:
+    if: ${{ !startsWith(github.ref, 'refs/tags/android-v') }}
     outputs:
       tag_name: ${{ steps.release_meta.outputs.tag_name }}
       version: ${{ steps.release_meta.outputs.version }}
@@ -150,15 +151,29 @@ jobs:
           includeUpdaterJson: false
           args: ${{ matrix.args }}
 
+      - name: Normalize Linux .deb ar headers
+        if: matrix.platform == 'ubuntu-22.04' && (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.release_meta.outputs.tag_name }}
+        run: |
+          shopt -s nullglob globstar
+          node scripts/fix-linux-deb.mjs
+          debs=(apps/native/src-tauri/target/**/release/bundle/deb/*.deb)
+          for deb in "${debs[@]}"; do
+            gh release upload "$RELEASE_TAG" "$deb" --clobber --repo "$GITHUB_REPOSITORY"
+          done
+
   publish-updater:
     needs: publish-tauri
-    if: needs.publish-tauri.outputs.updater_enabled == 'true'
+    if: ${{ needs.publish-tauri.result == 'success' && needs.publish-tauri.outputs.updater_enabled == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 22
       - name: Generate complete desktop updater manifest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -175,6 +190,7 @@ jobs:
         run: gh release upload "$RELEASE_TAG" latest.json --clobber --repo "$GITHUB_REPOSITORY"
 
   build-android:
+    if: ${{ !startsWith(github.ref, 'refs/tags/desktop-v') }}
     runs-on: ubuntu-latest
     outputs:
       tag_name: ${{ steps.release_meta.outputs.tag_name }}
@@ -185,7 +201,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 22
           cache: 'npm'
 
       - name: Setup Java 21
@@ -309,7 +325,7 @@ jobs:
     needs: [build-android, publish-tauri]
     if: >-
       ${{ !cancelled() && needs.build-android.result == 'success' &&
-      (needs.publish-tauri.result == 'success' || needs.publish-tauri.result == 'failure') }}
+      (needs.publish-tauri.result == 'success' || needs.publish-tauri.result == 'failure' || needs.publish-tauri.result == 'skipped') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -318,7 +334,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 22
 
       - name: Download Android Artifacts
         uses: actions/download-artifact@v4

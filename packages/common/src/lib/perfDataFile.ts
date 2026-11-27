@@ -91,6 +91,8 @@ export function parseCsvDataFile(
   let currentCell = '';
   let inQuotes = false;
 
+  let currentRowHasQuotedCell = false;
+
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
     if (inQuotes) {
@@ -107,8 +109,9 @@ export function parseCsvDataFile(
       continue;
     }
 
-    if (ch === '"') {
+    if (ch === '"' && currentCell.length === 0) {
       inQuotes = true;
+      currentRowHasQuotedCell = true;
     } else if (ch === ',') {
       currentRow.push(currentCell);
       currentCell = '';
@@ -116,17 +119,19 @@ export function parseCsvDataFile(
       if (text[i + 1] === '\n') i += 1;
       currentRow.push(currentCell);
       currentCell = '';
-      if (currentRow.some((cell) => cell.trim() !== '')) {
+      if (currentRowHasQuotedCell || currentRow.some((cell) => cell.trim() !== '')) {
         parsedRows.push(currentRow);
       }
       currentRow = [];
+      currentRowHasQuotedCell = false;
     } else if (ch === '\n') {
       currentRow.push(currentCell);
       currentCell = '';
-      if (currentRow.some((cell) => cell.trim() !== '')) {
+      if (currentRowHasQuotedCell || currentRow.some((cell) => cell.trim() !== '')) {
         parsedRows.push(currentRow);
       }
       currentRow = [];
+      currentRowHasQuotedCell = false;
     } else {
       currentCell += ch;
     }
@@ -141,7 +146,7 @@ export function parseCsvDataFile(
   }
 
   currentRow.push(currentCell);
-  if (currentRow.some((cell) => cell.trim() !== '')) {
+  if (currentRowHasQuotedCell || currentRow.some((cell) => cell.trim() !== '')) {
     parsedRows.push(currentRow);
   }
 
@@ -160,10 +165,11 @@ export function parseCsvDataFile(
     if (FORBIDDEN_KEYS.has(h)) {
       throw new Error(`CSV header "${h}" is not allowed as a variable name.`);
     }
-    if (!seenCols.has(h)) {
-      seenCols.add(h);
-      columns.push(h);
+    if (seenCols.has(h)) {
+      throw new Error(`CSV data file contains duplicate column header "${h}".`);
     }
+    seenCols.add(h);
+    columns.push(h);
   }
 
   const dataRows = parsedRows.slice(1);
@@ -239,7 +245,7 @@ export function parseJsonDataFile(
   const columns = Array.from(colSet);
   for (const row of rows) {
     for (const col of columns) {
-      if (!(col in row)) row[col] = '';
+      if (!Object.prototype.hasOwnProperty.call(row, col)) row[col] = '';
     }
   }
 

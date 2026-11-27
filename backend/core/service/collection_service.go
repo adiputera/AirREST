@@ -191,10 +191,11 @@ func (s *CollectionService) ListCollections(ctx context.Context, user *domain.Us
 	if includeItems {
 		for _, col := range collections {
 			items, err := s.collectionRepo.ListActiveItemsByCollection(ctx, col.ID)
-			if err == nil {
-				ApplySummaryModeToItems(items)
-				col.Items = items
+			if err != nil {
+				return nil, err
 			}
+			ApplySummaryModeToItems(items)
+			col.Items = items
 		}
 	}
 
@@ -217,10 +218,11 @@ func (s *CollectionService) GetCollection(ctx context.Context, user *domain.User
 	}
 
 	items, err := s.collectionRepo.ListActiveItemsByCollection(ctx, col.ID)
-	if err == nil {
-		ApplySummaryModeToItems(items)
-		col.Items = items
+	if err != nil {
+		return nil, err
 	}
+	ApplySummaryModeToItems(items)
+	col.Items = items
 
 	return col, nil
 }
@@ -274,7 +276,16 @@ func (s *CollectionService) UpdateCollection(ctx context.Context, user *domain.U
 	if c.MinRole == "" {
 		c.MinRole = domain.ProjectRoleReader
 	}
+	switch c.MinRole {
+	case domain.ProjectRoleAdmin, domain.ProjectRoleMaintainer, domain.ProjectRoleContributor, domain.ProjectRoleReader:
+	default:
+		return nil, newValidationError("min_role", "invalid min_role, must be admin, maintainer, contributor, or reader")
+	}
 
+	c.WorkspaceID = existing.WorkspaceID
+	c.ProjectID = existing.ProjectID
+	c.CreatedBy = existing.CreatedBy
+	c.CreatedAt = existing.CreatedAt
 	c.LastModifiedBy = &user.ID
 	err = s.collectionRepo.UpdateCollection(ctx, c, baseVersion)
 	if err != nil {
@@ -471,6 +482,9 @@ func (s *CollectionService) UpdateItem(ctx context.Context, user *domain.User, i
 	if existing.DeletedAt != nil {
 		return nil, postgres.ErrItemNotFound
 	}
+	if item.Type != existing.Type {
+		return nil, newValidationError("type", "item type cannot be changed")
+	}
 
 	col, err := s.collectionRepo.GetCollectionByID(ctx, existing.CollectionID)
 	if err != nil {
@@ -494,11 +508,19 @@ func (s *CollectionService) UpdateItem(ctx context.Context, user *domain.User, i
 		}
 
 		if existing.Type == domain.ItemTypeFolder {
+			visited := map[uuid.UUID]bool{
+				item.ID:   true,
+				parent.ID: true,
+			}
 			curr := parent
-			for curr.ParentID != nil {
+			for steps := 0; curr.ParentID != nil && steps < 64; steps++ {
 				if *curr.ParentID == item.ID {
 					return nil, newValidationError("parent_id", "cycle detected: folder cannot be child of its own descendant")
 				}
+				if visited[*curr.ParentID] {
+					return nil, newValidationError("parent_id", "cycle detected in parent folder chain")
+				}
+				visited[*curr.ParentID] = true
 				anc, err := s.collectionRepo.GetItemByID(ctx, *curr.ParentID)
 				if err != nil || anc.DeletedAt != nil {
 					break
@@ -509,6 +531,7 @@ func (s *CollectionService) UpdateItem(ctx context.Context, user *domain.User, i
 	}
 
 	item.CollectionID = existing.CollectionID
+	item.CreatedAt = existing.CreatedAt
 	item.LastModifiedBy = &user.ID
 	err = s.collectionRepo.UpdateItem(ctx, item, baseVersion)
 	if err != nil {

@@ -247,4 +247,11 @@ func TestValidateImportItem(t *testing.T) {
 	if err := ValidateImportItem(&invalidFormMetaImport); !errors.Is(err, ErrInvalidItemPayload) {
 		t.Fatalf("expected ErrInvalidItemPayload for invalid form-data metadata in import, got: %v", err)
 	}
+
+	// Non-folder item with nested child items must be rejected (BKD-08)
+	nonFolderWithChildren := *validImport
+	nonFolderWithChildren.Items = []ImportItemRequest{{Name: "Child", Type: "request"}}
+	if err := ValidateImportItem(&nonFolderWithChildren); !errors.Is(err, ErrInvalidItemPayload) {
+		t.Fatalf("expected ErrInvalidItemPayload when request item contains nested items, got: %v", err)
+	}
 }

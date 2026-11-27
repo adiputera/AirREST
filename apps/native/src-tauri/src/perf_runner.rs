@@ -13,6 +13,7 @@ use tokio::sync::watch;
 const MAX_ERROR_SAMPLES: usize = 50;
 const MAX_ERROR_SNIPPET_BYTES: usize = 4096;
 const MAX_DATA_FILE_ROWS: usize = 50_000;
+const MAX_PERF_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
 
 static GLOBAL_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -24,6 +25,22 @@ struct ActiveRunControl {
 #[derive(Default)]
 pub struct PerfRunnerManager {
     active_runs: Mutex<HashMap<String, ActiveRunControl>>,
+}
+
+impl PerfRunnerManager {
+    /// Cancels and removes every currently active performance run.
+    pub fn stop_all(&self) {
+        if let Ok(mut guard) = self.active_runs.lock() {
+            for (_, ctrl) in guard.drain() {
+                let _ = ctrl.cancel_tx.send(true);
+            }
+        }
+    }
+}
+
+enum PerfBodyReadError {
+    Reqwest(reqwest::Error),
+    SizeLimit(u64),
 }
 
 #[allow(dead_code)]
@@ -1072,7 +1089,7 @@ fn prepare_reqwest(
     item: &NativeRequestItemInput,
     attachments: &DecodedAttachments,
     vars: &HashMap<String, String>,
-) -> Result<(reqwest::RequestBuilder, String), String> {
+) -> Result<(reqwest::RequestBuilder, String, Option<String>), String> {
     let req = &item.request;
     let mut raw_url = interpolate_variables(req.url.trim(), vars);
     raw_url = substitute_path_vars(&raw_url, &req.path_variables, vars);
@@ -1358,7 +1375,140 @@ fn prepare_reqwest(
         }
     }
 
-    Ok((builder.headers(headers), final_url))
+    let auth_header_lower = auth_key_lower.clone();
+    Ok((builder.headers(headers), final_url, auth_header_lower))
+}
+
+fn is_cross_origin_or_downgrade(prev_url: &url::Url, next_url: &url::Url) -> bool {
+    if prev_url.scheme().eq_ignore_ascii_case("https")
+        && next_url.scheme().eq_ignore_ascii_case("http")
+    {
+        return true;
+    }
+    prev_url.scheme().to_ascii_lowercase() != next_url.scheme().to_ascii_lowercase()
+        || prev_url.host_str().map(|h| h.to_ascii_lowercase())
+            != next_url.host_str().map(|h| h.to_ascii_lowercase())
+        || prev_url.port_or_known_default() != next_url.port_or_known_default()
+}
+
+fn strip_sensitive_headers_for_redirect(
+    headers: &mut HeaderMap,
+    custom_auth_header_lower: Option<&str>,
+) {
+    const SENSITIVE_NAMES: &[&str] = &[
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "cookie2",
+        "x-api-key",
+        "x-auth-token",
+        "x-access-token",
+        "x-api-token",
+        "api-key",
+    ];
+    let to_remove: Vec<HeaderName> = headers
+        .keys()
+        .filter(|name| {
+            let lower = name.as_str().to_ascii_lowercase();
+            SENSITIVE_NAMES.contains(&lower.as_str())
+                || custom_auth_header_lower == Some(lower.as_str())
+                || lower.contains("api-key")
+                || lower.contains("apikey")
+                || lower.contains("auth-token")
+                || lower.contains("access-token")
+        })
+        .cloned()
+        .collect();
+    for key in to_remove {
+        headers.remove(key);
+    }
+}
+
+async fn execute_reqwest_with_safe_redirects(
+    client: &Client,
+    req_builder: reqwest::RequestBuilder,
+    initial_url: &str,
+    follow_redirects: bool,
+    custom_auth_header_lower: Option<&str>,
+) -> Result<reqwest::Response, PerfBodyReadError> {
+    let initial_req = req_builder.build().map_err(PerfBodyReadError::Reqwest)?;
+    if !follow_redirects {
+        return client
+            .execute(initial_req)
+            .await
+            .map_err(PerfBodyReadError::Reqwest);
+    }
+
+    let mut current_url = url::Url::parse(initial_url)
+        .unwrap_or_else(|_| initial_req.url().clone());
+    let mut current_method = initial_req.method().clone();
+    let mut current_headers = initial_req.headers().clone();
+    let mut current_body_bytes: Option<Vec<u8>> = initial_req
+        .body()
+        .and_then(|b| b.as_bytes())
+        .map(|slice| slice.to_vec());
+
+    let mut first_request = Some(initial_req);
+    const MAX_REDIRECT_HOPS: usize = 10;
+
+    for hop in 0..=MAX_REDIRECT_HOPS {
+        let req_to_send = if let Some(req) = first_request.take() {
+            req
+        } else {
+            let mut b = client
+                .request(current_method.clone(), current_url.as_str())
+                .headers(current_headers.clone());
+            if let Some(ref body_bytes) = current_body_bytes {
+                b = b.body(body_bytes.clone());
+            }
+            b.build().map_err(PerfBodyReadError::Reqwest)?
+        };
+
+        let resp = client
+            .execute(req_to_send)
+            .await
+            .map_err(PerfBodyReadError::Reqwest)?;
+
+        let status = resp.status();
+        if !status.is_redirection() || hop == MAX_REDIRECT_HOPS {
+            return Ok(resp);
+        }
+
+        let Some(loc_header) = resp.headers().get(reqwest::header::LOCATION) else {
+            return Ok(resp);
+        };
+        let Ok(loc_str) = loc_header.to_str() else {
+            return Ok(resp);
+        };
+        let Ok(next_url) = current_url.join(loc_str) else {
+            return Ok(resp);
+        };
+        let scheme = next_url.scheme().to_ascii_lowercase();
+        if scheme != "http" && scheme != "https" {
+            return Ok(resp);
+        }
+
+        let mut next_headers = current_headers.clone();
+        if is_cross_origin_or_downgrade(&current_url, &next_url) {
+            strip_sensitive_headers_for_redirect(&mut next_headers, custom_auth_header_lower);
+        }
+
+        if status == reqwest::StatusCode::SEE_OTHER
+            || ((status == reqwest::StatusCode::MOVED_PERMANENTLY
+                || status == reqwest::StatusCode::FOUND)
+                && current_method == Method::POST)
+        {
+            current_method = Method::GET;
+            current_body_bytes = None;
+            next_headers.remove(reqwest::header::CONTENT_TYPE);
+            next_headers.remove(reqwest::header::CONTENT_LENGTH);
+        }
+
+        current_url = next_url;
+        current_headers = next_headers;
+    }
+
+    unreachable!("redirect loop exits at hop == MAX_REDIRECT_HOPS")
 }
 
 fn classify_http_status_outcome(status: reqwest::StatusCode, follow_redirects: bool) -> (bool, bool) {
@@ -1552,11 +1702,9 @@ pub async fn start_performance_run(
         .pool_idle_timeout(Duration::from_secs(30))
         .tcp_nodelay(true)
         .timeout(Duration::from_millis(timeout_ms))
-        .connect_timeout(Duration::from_millis(timeout_ms.min(15_000)));
-
-    if !input.network.follow_redirects {
-        client_builder = client_builder.redirect(redirect::Policy::none());
-    }
+        .connect_timeout(Duration::from_millis(timeout_ms.min(15_000)))
+        // Always manage redirects manually so cross-origin & https->http downgrades strip sensitive headers.
+        .redirect(redirect::Policy::none());
     if input.network.ignore_ssl_errors {
         client_builder = client_builder
             .danger_accept_invalid_certs(true)
@@ -1575,6 +1723,9 @@ pub async fn start_performance_run(
             .active_runs
             .lock()
             .map_err(|_| "Performance runner lock poisoned.".to_string())?;
+        for (_, prev) in guard.drain() {
+            let _ = prev.cancel_tx.send(true);
+        }
         guard.insert(
             input.run_id.clone(),
             ActiveRunControl {
@@ -1637,7 +1788,7 @@ pub async fn start_performance_run(
 
             let elapsed = run_start.elapsed();
             let elapsed_sec = elapsed.as_secs_f64();
-            let target_vus = get_target_vus_at_time(&profile, elapsed_sec).min(10_000);
+            let target_vus = get_target_vus_at_time(&profile, elapsed_sec).min(effective_max_vus);
 
             while (active_vu_txs.len() as u32) < target_vus {
                 let (vu_tx, mut vu_rx) = watch::channel(false);
@@ -1713,22 +1864,41 @@ pub async fn start_performance_run(
                                         );
                                     }
                                 }
-                                Ok((req_builder, final_url)) => {
+                                Ok((req_builder, final_url, custom_auth_key_lower)) => {
                                     let send_fut = async {
-                                        let mut resp = req_builder.send().await?;
+                                        let mut resp = execute_reqwest_with_safe_redirects(
+                                            &c,
+                                            req_builder,
+                                            &final_url,
+                                            follow_redirects,
+                                            custom_auth_key_lower.as_deref(),
+                                        )
+                                        .await?;
                                         let status = resp.status();
                                         let (is_err, _is_warn) = classify_http_status_outcome(status, follow_redirects);
+                                        if let Some(declared_len) = resp.content_length() {
+                                            if declared_len > MAX_PERF_RESPONSE_BYTES {
+                                                return Err(PerfBodyReadError::SizeLimit(declared_len));
+                                            }
+                                        }
                                         let mut bytes_received: u64 = 0;
                                         let mut snippet_buf: Vec<u8> = Vec::new();
-                                        while let Some(chunk) = resp.chunk().await? {
-                                            bytes_received += chunk.len() as u64;
+                                        while let Some(chunk) = resp
+                                            .chunk()
+                                            .await
+                                            .map_err(PerfBodyReadError::Reqwest)?
+                                        {
+                                            bytes_received = bytes_received.saturating_add(chunk.len() as u64);
+                                            if bytes_received > MAX_PERF_RESPONSE_BYTES {
+                                                return Err(PerfBodyReadError::SizeLimit(bytes_received));
+                                            }
                                             if is_err && snippet_buf.len() < MAX_ERROR_SNIPPET_BYTES {
                                                 let rem = MAX_ERROR_SNIPPET_BYTES - snippet_buf.len();
                                                 let take = chunk.len().min(rem);
                                                 snippet_buf.extend_from_slice(&chunk[..take]);
                                             }
                                         }
-                                        Ok::<(reqwest::StatusCode, u64, Option<String>), reqwest::Error>((
+                                        Ok::<(reqwest::StatusCode, u64, Option<String>), PerfBodyReadError>((
                                             status,
                                             bytes_received,
                                             if is_err && !snippet_buf.is_empty() {
@@ -1777,7 +1947,32 @@ pub async fn start_performance_run(
                                                         );
                                                     }
                                                 }
-                                                Err(err) => {
+                                                Err(PerfBodyReadError::SizeLimit(limit_bytes)) => {
+                                                    let msg = format!(
+                                                        "Response exceeded the {} MiB limit ({} bytes).",
+                                                        MAX_PERF_RESPONSE_BYTES / (1024 * 1024),
+                                                        limit_bytes
+                                                    );
+                                                    if let Ok(mut guard) = m.lock() {
+                                                        guard.record(
+                                                            sec,
+                                                            &item.id,
+                                                            &item.name,
+                                                            &item.request.method,
+                                                            &final_url,
+                                                            t_ms,
+                                                            limit_bytes,
+                                                            0,
+                                                            "Response Too Large",
+                                                            true,
+                                                            false,
+                                                            "response_too_large",
+                                                            &msg,
+                                                            None,
+                                                        );
+                                                    }
+                                                }
+                                                Err(PerfBodyReadError::Reqwest(err)) => {
                                                     let (cat, st_text) = classify_reqwest_error(&err);
                                                     if let Ok(mut guard) = m.lock() {
                                                         guard.record(
@@ -2083,5 +2278,59 @@ mod tests {
             classify_http_status_outcome(reqwest::StatusCode::OK, false),
             (false, false)
         );
+    }
+
+    #[test]
+    fn stop_all_signals_and_drains_active_runs() {
+        let mgr = PerfRunnerManager::default();
+        let (tx1, rx1) = watch::channel(false);
+        let (tx2, rx2) = watch::channel(false);
+        {
+            let mut guard = mgr.active_runs.lock().unwrap();
+            guard.insert(
+                "run-1".to_string(),
+                ActiveRunControl {
+                    cancel_tx: tx1,
+                    shared_vars: Arc::new(RwLock::new(Arc::new(HashMap::new()))),
+                },
+            );
+            guard.insert(
+                "run-2".to_string(),
+                ActiveRunControl {
+                    cancel_tx: tx2,
+                    shared_vars: Arc::new(RwLock::new(Arc::new(HashMap::new()))),
+                },
+            );
+        }
+        mgr.stop_all();
+        assert!(*rx1.borrow());
+        assert!(*rx2.borrow());
+        assert!(mgr.active_runs.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn redirect_strips_auth_and_api_keys_on_cross_origin_and_https_downgrade() {
+        let https_origin = url::Url::parse("https://api.example.com:8443/v1/login").unwrap();
+        let same_origin = url::Url::parse("https://api.example.com:8443/v2/profile").unwrap();
+        let downgrade_same_host_port = url::Url::parse("http://api.example.com:8443/v2/profile").unwrap();
+        let cross_origin = url::Url::parse("https://cdn.other.example/asset").unwrap();
+
+        assert!(!is_cross_origin_or_downgrade(&https_origin, &same_origin));
+        assert!(is_cross_origin_or_downgrade(&https_origin, &downgrade_same_host_port));
+        assert!(is_cross_origin_or_downgrade(&https_origin, &cross_origin));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(HeaderName::from_static("authorization"), HeaderValue::from_static("Bearer secret"));
+        headers.insert(HeaderName::from_static("cookie"), HeaderValue::from_static("sid=123"));
+        headers.insert(HeaderName::from_static("x-api-key"), HeaderValue::from_static("k1"));
+        headers.insert(HeaderName::from_static("x-custom-secret-hdr"), HeaderValue::from_static("k2"));
+        headers.insert(HeaderName::from_static("x-trace-id"), HeaderValue::from_static("keep-me"));
+
+        strip_sensitive_headers_for_redirect(&mut headers, Some("x-custom-secret-hdr"));
+        assert!(!headers.contains_key("authorization"));
+        assert!(!headers.contains_key("cookie"));
+        assert!(!headers.contains_key("x-api-key"));
+        assert!(!headers.contains_key("x-custom-secret-hdr"));
+        assert_eq!(headers.get("x-trace-id").unwrap(), "keep-me");
     }
 }

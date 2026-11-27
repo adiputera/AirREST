@@ -33,6 +33,8 @@ import {
   resolveSnapshotDisplayHeaders,
 } from '../lib/exampleSnapshot';
 import { canModifyCollection } from '../lib/jwt';
+import { cloudCacheOwnerKey } from '../workspace/cloudCacheArchive';
+import { normalizeCloudApiUrl } from '../lib/cloudApi';
 import { useBackHandler } from '../lib/backNavigation';
 import { CodeEditor, CodeEditorHandle } from './editor/CodeEditor';
 import { MethodBadge } from './MethodBadge';
@@ -118,19 +120,27 @@ export const SavedExampleViewer: React.FC = () => {
     [collection, selectedExample],
   );
 
+  const currentOwnerKey = useMemo(
+    () => (workspaceMode === 'cloud' ? cloudCacheOwnerKey(cloudConfig, normalizeCloudApiUrl) : null),
+    [cloudConfig, workspaceMode],
+  );
+
   const fullExample: SavedExample | undefined = useMemo(() => {
     if (!selectedExample || !item) return undefined;
     const fromItem = item.examples?.find((ex) => ex.id === selectedExample.exampleId);
     if (fromItem) return fromItem;
+    if (!currentOwnerKey) return undefined;
     const fromIntent = Object.values(pendingExampleIntents || {}).find(
       (intent) =>
         intent.op === 'add' &&
+        intent.ownerKey === currentOwnerKey &&
+        intent.collectionId === selectedExample.collectionId &&
         intent.itemId === selectedExample.itemId &&
         intent.exampleId === selectedExample.exampleId &&
         intent.example,
     );
     return fromIntent?.example;
-  }, [item, pendingExampleIntents, selectedExample]);
+  }, [currentOwnerKey, item, pendingExampleIntents, selectedExample]);
 
   const summary = useMemo(() => {
     if (!selectedExample || !item) return undefined;

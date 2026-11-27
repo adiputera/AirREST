@@ -170,7 +170,7 @@ export function interpolateVariables(input: string, variables: Record<string, st
     }
 
     // Custom environment or script variables
-    if (variables[trimmed] !== undefined) {
+    if (Object.prototype.hasOwnProperty.call(variables, trimmed) && variables[trimmed] !== undefined) {
       return variables[trimmed];
     }
 
@@ -394,6 +394,17 @@ export function prepareRequest(
     finalBody: bodyPayload,
   };
 }
+
+export const SAFE_IMAGE_BLOB_MIME_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'image/avif',
+  'image/bmp',
+  'image/x-icon',
+  'image/vnd.microsoft.icon',
+]);
 
 export function detectMediaType(
   buffer: Uint8Array,
@@ -702,7 +713,7 @@ export async function executeApiRequest(
     let blobUrl: string | undefined = undefined;
     let hasDecodingError = false;
 
-    if (isImage) {
+    if (isImage && SAFE_IMAGE_BLOB_MIME_TYPES.has(mimeType)) {
       const blob = new Blob([uint8 as unknown as BlobPart], { type: mimeType });
       blobUrl = createTrackedBlobUrl(blob);
     }

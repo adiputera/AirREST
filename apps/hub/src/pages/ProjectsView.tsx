@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   FolderGit2,
   Users,
@@ -18,6 +18,8 @@ import {
   ChevronRight,
   FolderInput,
   ArrowLeft,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { useHubStore } from '../store/useHubStore';
 import {
@@ -66,6 +68,13 @@ async function mapConcurrent<T, R>(items: T[], limit: number, fn: (item: T) => P
   return results;
 }
 
+const ROLE_RANK: Record<ProjectRole, number> = {
+  reader: 1,
+  contributor: 2,
+  maintainer: 3,
+  admin: 4,
+};
+
 export const ProjectsView: React.FC = () => {
   const apiUrl = useHubStore((state) => state.apiUrl);
   const token = useHubStore((state) => state.token);
@@ -108,6 +117,7 @@ export const ProjectsView: React.FC = () => {
 
   const [editingMember, setEditingMember] = useState<ProjectMember | null>(null);
   const [editRole, setEditRole] = useState<'admin' | 'maintainer' | 'contributor' | 'reader'>('contributor');
+  const [selfDemoteConfirmed, setSelfDemoteConfirmed] = useState(false);
   const [isUpdatingRole, setIsUpdatingRole] = useState(false);
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -116,6 +126,7 @@ export const ProjectsView: React.FC = () => {
   const [projectSubTab, setProjectSubTab] = useState<'members' | 'collections' | 'environments'>('members');
   const [collections, setCollections] = useState<Collection[]>([]);
   const [environments, setEnvironments] = useState<Environment[]>([]);
+  const [revealedEnvVars, setRevealedEnvVars] = useState<Record<string, boolean>>({});
   const [isLoadingCollections, setIsLoadingCollections] = useState(false);
   const [isLoadingEnvironments, setIsLoadingEnvironments] = useState(false);
   const [searchCollection, setSearchCollection] = useState('');
@@ -134,46 +145,60 @@ export const ProjectsView: React.FC = () => {
   const [isUpdatingPerm, setIsUpdatingPerm] = useState(false);
 
   // Move Collection Modal
-  const [moveColItem, setMoveColItem] = useState<{ id: string; name: string } | null>(null);
+  const [moveColItem, setMoveColItem] = useState<{ id: string; name: string; min_role?: ProjectRole } | null>(null);
   const [targetMoveProjectId, setTargetMoveProjectId] = useState<string>('');
   const [isMovingCol, setIsMovingCol] = useState(false);
 
+  const isAuthenticated = Boolean(token);
+  const teamsSeqRef = useRef(0);
+  const projectsSeqRef = useRef(0);
+  const membersSeqRef = useRef(0);
+  const resourcesSeqRef = useRef(0);
+
   // 1. Load teams list
   useEffect(() => {
-    if (!token) return;
+    if (!isAuthenticated) return;
+    const seq = ++teamsSeqRef.current;
     let cancelled = false;
     const loadTeams = async () => {
+      const live = useHubStore.getState();
+      if (!live.token) return;
       try {
-        const data = await apiListTeams(apiUrl, token, refreshToken || undefined);
-        if (cancelled) return;
+        const data = await apiListTeams(apiUrl, live.token, live.refreshToken || undefined);
+        if (cancelled || seq !== teamsSeqRef.current) return;
         setTeams(data);
         if (!data.some((team) => team.id === useHubStore.getState().selectedTeamId)) {
           setSelectedTeamId(data[0]?.id || null);
         }
       } catch (err) {
-        if (!cancelled) setErrorMsg(err instanceof Error ? err.message : 'Failed to load teams');
+        if (!cancelled && seq === teamsSeqRef.current) {
+          setErrorMsg(err instanceof Error ? err.message : 'Failed to load teams');
+        }
       }
     };
     loadTeams();
     return () => { cancelled = true; };
-  }, [apiUrl, token]);
+  }, [apiUrl, isAuthenticated, user?.id]);
 
   // 2. Load projects for selected team
   useEffect(() => {
+    const seq = ++projectsSeqRef.current;
     setProjects([]);
     setTeamMembers([]);
     setIsLoadingProjects(false);
-    if (!selectedTeamId || !token) return;
+    if (!selectedTeamId || !isAuthenticated) return;
     let cancelled = false;
     const loadProjects = async () => {
+      const live = useHubStore.getState();
+      if (!live.token) return;
       setIsLoadingProjects(true);
       setErrorMsg(null);
       try {
         const [projData, tmData] = await Promise.all([
-          apiListTeamProjects(apiUrl, token, selectedTeamId, refreshToken || undefined),
-          apiListTeamMembers(apiUrl, token, selectedTeamId, refreshToken || undefined),
+          apiListTeamProjects(apiUrl, live.token, selectedTeamId, live.refreshToken || undefined),
+          apiListTeamMembers(apiUrl, live.token, selectedTeamId, live.refreshToken || undefined),
         ]);
-        if (cancelled || useHubStore.getState().selectedTeamId !== selectedTeamId) return;
+        if (cancelled || seq !== projectsSeqRef.current || useHubStore.getState().selectedTeamId !== selectedTeamId) return;
         setProjects(projData);
         setTeamMembers(tmData);
 
@@ -185,72 +210,84 @@ export const ProjectsView: React.FC = () => {
           setSelectedProjectId(null);
         }
       } catch (err: any) {
-        if (!cancelled) setErrorMsg(err.message || 'Failed to load projects');
+        if (!cancelled && seq === projectsSeqRef.current) setErrorMsg(err.message || 'Failed to load projects');
       } finally {
-        if (!cancelled) setIsLoadingProjects(false);
+        if (!cancelled && seq === projectsSeqRef.current) setIsLoadingProjects(false);
       }
     };
     loadProjects();
     return () => { cancelled = true; };
-  }, [selectedTeamId, apiUrl, token]);
+  }, [selectedTeamId, apiUrl, isAuthenticated, user?.id]);
 
   // 3. Load project members for selected project
   useEffect(() => {
+    const seq = ++membersSeqRef.current;
     setProjectMembers([]);
     setIsLoadingMembers(false);
-    if (!selectedProjectId || !token) return;
+    if (!selectedProjectId || !isAuthenticated) return;
     let cancelled = false;
     const loadMembers = async () => {
+      const live = useHubStore.getState();
+      if (!live.token) return;
       setIsLoadingMembers(true);
       try {
-        const data = await apiListProjectMembers(apiUrl, token, selectedProjectId, refreshToken || undefined);
-        if (cancelled || useHubStore.getState().selectedProjectId !== selectedProjectId) return;
+        const data = await apiListProjectMembers(apiUrl, live.token, selectedProjectId, live.refreshToken || undefined);
+        if (cancelled || seq !== membersSeqRef.current || useHubStore.getState().selectedProjectId !== selectedProjectId) return;
         setProjectMembers(data);
       } catch (err) {
-        if (!cancelled) setErrorMsg(err instanceof Error ? err.message : 'Failed to load project members');
+        if (!cancelled && seq === membersSeqRef.current) {
+          setErrorMsg(err instanceof Error ? err.message : 'Failed to load project members');
+        }
       } finally {
-        if (!cancelled) setIsLoadingMembers(false);
+        if (!cancelled && seq === membersSeqRef.current) setIsLoadingMembers(false);
       }
     };
     loadMembers();
     return () => { cancelled = true; };
-  }, [selectedProjectId, apiUrl, token]);
+  }, [selectedProjectId, apiUrl, isAuthenticated, user?.id]);
 
   // 4. Load project collections and environments for selected project
   useEffect(() => {
+    const seq = ++resourcesSeqRef.current;
     setCollections([]);
     setEnvironments([]);
+    setRevealedEnvVars({});
     setIsLoadingCollections(false);
     setIsLoadingEnvironments(false);
-    if (!selectedProjectId || !token) return;
+    if (!selectedProjectId || !isAuthenticated) return;
     let cancelled = false;
     const loadResources = async () => {
+      const live = useHubStore.getState();
+      if (!live.token) return;
       setIsLoadingCollections(true);
       setIsLoadingEnvironments(true);
       try {
         const [colList, envData] = await Promise.all([
-          apiListProjectCollections(apiUrl, token, selectedProjectId, refreshToken || undefined),
-          apiListProjectEnvironments(apiUrl, token, selectedProjectId, refreshToken || undefined),
+          apiListProjectCollections(apiUrl, live.token, selectedProjectId, live.refreshToken || undefined),
+          apiListProjectEnvironments(apiUrl, live.token, selectedProjectId, live.refreshToken || undefined),
         ]);
-        if (cancelled) return;
+        if (cancelled || seq !== resourcesSeqRef.current) return;
         const colDetails = await mapConcurrent(colList, 4, async (c) => {
+          const latest = useHubStore.getState();
           try {
-            return await apiGetCollection(apiUrl, token, c.id, refreshToken || undefined);
+            return await apiGetCollection(apiUrl, latest.token || live.token!, c.id, latest.refreshToken || undefined);
           } catch {
             return { ...c, items: [], detailsLoadFailed: true } as Collection & { detailsLoadFailed?: boolean };
           }
         });
-        if (cancelled || useHubStore.getState().selectedProjectId !== selectedProjectId) return;
+        if (cancelled || seq !== resourcesSeqRef.current || useHubStore.getState().selectedProjectId !== selectedProjectId) return;
         setCollections(colDetails);
         setEnvironments(envData);
       } catch (err) {
-        if (!cancelled && useHubStore.getState().selectedProjectId === selectedProjectId) {
+        if (!cancelled && seq === resourcesSeqRef.current && useHubStore.getState().selectedProjectId === selectedProjectId) {
           setCollections([]);
           setEnvironments([]);
         }
-        if (!cancelled) setErrorMsg(err instanceof Error ? err.message : 'Failed to load project resources');
+        if (!cancelled && seq === resourcesSeqRef.current) {
+          setErrorMsg(err instanceof Error ? err.message : 'Failed to load project resources');
+        }
       } finally {
-        if (!cancelled) {
+        if (!cancelled && seq === resourcesSeqRef.current) {
           setIsLoadingCollections(false);
           setIsLoadingEnvironments(false);
         }
@@ -258,23 +295,26 @@ export const ProjectsView: React.FC = () => {
     };
     loadResources();
     return () => { cancelled = true; };
-  }, [selectedProjectId, apiUrl, token]);
+  }, [selectedProjectId, apiUrl, isAuthenticated, user?.id]);
 
   const refreshResources = async () => {
-    if (!selectedProjectId || !token) return;
+    const targetProjectId = selectedProjectId;
+    const live = useHubStore.getState();
+    if (!targetProjectId || !live.token) return;
     try {
       const [colList, envData] = await Promise.all([
-        apiListProjectCollections(apiUrl, token, selectedProjectId, refreshToken || undefined),
-        apiListProjectEnvironments(apiUrl, token, selectedProjectId, refreshToken || undefined),
+        apiListProjectCollections(apiUrl, live.token, targetProjectId, live.refreshToken || undefined),
+        apiListProjectEnvironments(apiUrl, live.token, targetProjectId, live.refreshToken || undefined),
       ]);
       const colDetails = await mapConcurrent(colList, 4, async (c) => {
+        const latest = useHubStore.getState();
         try {
-          return await apiGetCollection(apiUrl, token, c.id, refreshToken || undefined);
+          return await apiGetCollection(apiUrl, latest.token || live.token!, c.id, latest.refreshToken || undefined);
         } catch {
           return { ...c, items: [], detailsLoadFailed: true } as Collection & { detailsLoadFailed?: boolean };
         }
       });
-      if (useHubStore.getState().selectedProjectId !== selectedProjectId) return;
+      if (useHubStore.getState().selectedProjectId !== targetProjectId) return;
       setCollections(colDetails);
       setEnvironments(envData);
     } catch (err) {
@@ -283,9 +323,10 @@ export const ProjectsView: React.FC = () => {
   };
 
   const refreshFeaturePolicy = async () => {
-    if (!token) return;
+    const live = useHubStore.getState();
+    if (!live.token) return;
     try {
-      const policy = await apiGetClientFeaturePolicy(apiUrl, token, refreshToken || undefined);
+      const policy = await apiGetClientFeaturePolicy(apiUrl, live.token, live.refreshToken || undefined);
       setFeaturePolicy(policy, Date.now());
     } catch {
       // keep existing policy or fail closed
@@ -321,17 +362,24 @@ export const ProjectsView: React.FC = () => {
   const canMoveCollection = (canEditProject || activeProject?.user_role === 'maintainer') && isMoveAllowed;
   const canDeleteCollection = canManagePermissions && isDeleteAllowed;
 
-  const eligibleTargetProjects = projects.filter((p) => {
-    if (p.id === selectedProjectId) return false;
-    const isSuper = user?.role === 'superadmin';
-    const isTeamAdm = activeTeam?.user_role === 'admin';
-    const role = p.user_role;
-    return isSuper || isTeamAdm || role === 'admin' || role === 'maintainer';
-  });
+  const getEligibleTargetProjects = (minRole: ProjectRole = 'reader') =>
+    projects.filter((p) => {
+      if (p.id === selectedProjectId) return false;
+      const isSuper = user?.role === 'superadmin';
+      const isTeamAdm = activeTeam?.user_role === 'admin';
+      if (isSuper || isTeamAdm) return true;
+      const role = p.user_role as ProjectRole | undefined;
+      if (!role || !(role in ROLE_RANK)) return false;
+      const requiredRank = Math.max(ROLE_RANK.maintainer, ROLE_RANK[minRole] || ROLE_RANK.reader);
+      return ROLE_RANK[role] >= requiredRank;
+    });
 
-  const handleOpenMoveCollection = (col: { id: string; name: string }) => {
+  const eligibleTargetProjects = getEligibleTargetProjects(moveColItem?.min_role || 'reader');
+
+  const handleOpenMoveCollection = (col: { id: string; name: string; min_role?: ProjectRole }) => {
     setMoveColItem(col);
-    setTargetMoveProjectId(eligibleTargetProjects[0]?.id || '');
+    const targets = getEligibleTargetProjects(col.min_role || 'reader');
+    setTargetMoveProjectId(targets[0]?.id || '');
     setErrorMsg(null);
   };
 
@@ -343,18 +391,19 @@ export const ProjectsView: React.FC = () => {
 
   const handleConfirmMoveCollection = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!token || !moveColItem || !targetMoveProjectId) return;
+    const live = useHubStore.getState();
+    if (!live.token || !moveColItem || !targetMoveProjectId) return;
     setIsMovingCol(true);
     setErrorMsg(null);
     try {
-      await apiMoveCollection(apiUrl, token, moveColItem.id, targetMoveProjectId, undefined, refreshToken || undefined);
+      await apiMoveCollection(apiUrl, live.token, moveColItem.id, targetMoveProjectId, undefined, live.refreshToken || undefined);
       handleCloseMoveCollection();
       if (useHubStore.getState().selectedProjectId !== selectedProjectId) return;
       if (selectedProjectId) {
         await refreshResources();
       }
     } catch (err: any) {
-      if (err?.code === 'FEATURE_DISABLED' || err?.status === 403 || err?.message?.includes('FEATURE_DISABLED')) {
+      if (err?.code === 'FEATURE_DISABLED' || err?.message?.includes('FEATURE_DISABLED')) {
         await refreshFeaturePolicy();
         setErrorMsg('This feature has been disabled by an administrator.');
       } else {
@@ -499,7 +548,8 @@ export const ProjectsView: React.FC = () => {
   };
 
   const renderCollectionItems = (items: CollectionItem[] = []) => {
-    if (!items || items.length === 0) {
+    const activeItems = (items || []).filter((i) => !(i as any)?.deleted_at);
+    if (activeItems.length === 0) {
       return (
         <div className="py-6 text-center text-xs text-zinc-500">
           No requests in this collection yet.
@@ -507,8 +557,11 @@ export const ProjectsView: React.FC = () => {
       );
     }
 
-    const rootItems = items.filter((i) => !i.parent_id);
-    if (rootItems.length === 0 && items.length > 0) {
+    const sortByOrder = (list: CollectionItem[]) =>
+      [...list].sort((a, b) => Number((a as any).sort_order ?? 0) - Number((b as any).sort_order ?? 0));
+
+    const rootItems = sortByOrder(activeItems.filter((i) => !i.parent_id));
+    if (rootItems.length === 0 && activeItems.length > 0) {
       return (
         <div className="px-3 py-2 text-xs text-amber-400">
           Folder hierarchy cannot be displayed: cycle or excessive depth.
@@ -516,12 +569,15 @@ export const ProjectsView: React.FC = () => {
       );
     }
     const childMap = new Map<string, CollectionItem[]>();
-    for (const item of items) {
+    for (const item of activeItems) {
       if (item.parent_id) {
         const list = childMap.get(item.parent_id) || [];
         list.push(item);
         childMap.set(item.parent_id, list);
       }
+    }
+    for (const [parentId, list] of childMap.entries()) {
+      childMap.set(parentId, sortByOrder(list));
     }
 
     const renderItem = (item: CollectionItem, depth = 0, ancestors = new Set<string>()): React.ReactNode => {
@@ -834,14 +890,15 @@ export const ProjectsView: React.FC = () => {
 
   // Handle Delete Collection Confirmation
   const confirmDeleteCollection = async () => {
-    if (!token || !collectionToDelete) return;
+    const live = useHubStore.getState();
+    if (!live.token || !collectionToDelete) return;
     setIsDeletingCollection(true);
     try {
-      await apiDeleteCollection(apiUrl, token, collectionToDelete.id, refreshToken || undefined);
+      await apiDeleteCollection(apiUrl, live.token, collectionToDelete.id, live.refreshToken || undefined);
       setCollections((prev) => prev.filter((c) => c.id !== collectionToDelete.id));
       setCollectionToDelete(null);
     } catch (err: any) {
-      if (err?.code === 'FEATURE_DISABLED' || err?.status === 403 || err?.message?.includes('FEATURE_DISABLED')) {
+      if (err?.code === 'FEATURE_DISABLED' || err?.message?.includes('FEATURE_DISABLED')) {
         await refreshFeaturePolicy();
         setErrorMsg('This feature has been disabled by an administrator.');
       } else {
@@ -871,37 +928,58 @@ export const ProjectsView: React.FC = () => {
   const handleOpenEditMember = (member: ProjectMember) => {
     setEditingMember(member);
     setEditRole(member.role);
+    setSelfDemoteConfirmed(false);
     setErrorMsg(null);
   };
 
   const handleCloseEditMember = () => {
     setEditingMember(null);
     setEditRole('contributor');
+    setSelfDemoteConfirmed(false);
     setErrorMsg(null);
   };
 
   const handleUpdateRole = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!token || !selectedProjectId || !editingMember) return;
+    const live = useHubStore.getState();
+    if (!live.token || !selectedProjectId || !editingMember) return;
+    if (editingMember.user_id === user?.id && editRole !== editingMember.role && !selfDemoteConfirmed) {
+      return;
+    }
     setIsUpdatingRole(true);
     setErrorMsg(null);
     try {
+      const targetProjectId = selectedProjectId;
       await apiAddProjectMember(
         apiUrl,
-        token,
-        selectedProjectId,
+        live.token,
+        targetProjectId,
         editingMember.user_id,
         editRole,
-        refreshToken || undefined
+        live.refreshToken || undefined
       );
-      if (useHubStore.getState().selectedProjectId !== selectedProjectId) return;
-      const updated = await apiListProjectMembers(apiUrl, token, selectedProjectId, refreshToken || undefined);
-      if (useHubStore.getState().selectedProjectId !== selectedProjectId) return;
+      if (useHubStore.getState().selectedProjectId !== targetProjectId) return;
+      const afterRoleAuth = useHubStore.getState();
+      const updated = await apiListProjectMembers(
+        apiUrl,
+        afterRoleAuth.token || live.token,
+        targetProjectId,
+        afterRoleAuth.refreshToken || undefined
+      );
+      if (useHubStore.getState().selectedProjectId !== targetProjectId) return;
       setProjectMembers(updated);
       if (editingMember.user_id === user?.id) {
         if (selectedTeamId) {
-          const updatedProjects = await apiListTeamProjects(apiUrl, token, selectedTeamId, refreshToken || undefined);
-          setProjects(updatedProjects);
+          const latestForTeams = useHubStore.getState();
+          const updatedProjects = await apiListTeamProjects(
+            apiUrl,
+            latestForTeams.token || live.token,
+            selectedTeamId,
+            latestForTeams.refreshToken || undefined
+          );
+          if (useHubStore.getState().selectedTeamId === selectedTeamId) {
+            setProjects(updatedProjects);
+          }
         }
         await refreshResources();
       }
@@ -1435,7 +1513,7 @@ export const ProjectsView: React.FC = () => {
                                   {canMoveCollection && (
                                     <button
                                       type="button"
-                                      onClick={() => handleOpenMoveCollection({ id: col.id, name: col.name })}
+                                      onClick={() => handleOpenMoveCollection({ id: col.id, name: col.name, min_role: minRole })}
                                       className="flex items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-800/80 px-2.5 py-1 text-xs font-semibold text-zinc-300 hover:text-white hover:bg-zinc-700 transition"
                                       title="Move Collection to Another Project"
                                     >
@@ -1609,18 +1687,39 @@ export const ProjectsView: React.FC = () => {
                                     </td>
                                   </tr>
                                 ) : (
-                                  rawVars.map((v, idx) => {
-                                    const isEnabled = v.enabled !== false;
-                                    return (
-                                      <tr key={v.id || v.key || idx} className="hover:bg-zinc-800/20 transition">
-                                        <td className="px-4 py-2.5 font-mono text-xs text-zinc-200 font-semibold">
-                                          {v.key || <span className="text-zinc-500 italic">unnamed</span>}
-                                        </td>
-                                        <td className="px-4 py-2.5 font-mono text-xs text-zinc-300">
-                                          <span className="rounded bg-zinc-950/80 px-2 py-1 text-[11px] border border-zinc-800 inline-block max-w-md truncate">
-                                            {v.value !== undefined && v.value !== null ? String(v.value) : ''}
-                                          </span>
-                                        </td>
+                                    rawVars.map((v, idx) => {
+                                      const isEnabled = v.enabled !== false;
+                                      const varRevealKey = `${env.id}:${v.id || v.key || idx}`;
+                                      const isRevealed = Boolean(revealedEnvVars[varRevealKey]);
+                                      const rawValueStr = v.value !== undefined && v.value !== null ? String(v.value) : '';
+                                      return (
+                                        <tr key={v.id || v.key || idx} className="hover:bg-zinc-800/20 transition">
+                                          <td className="px-4 py-2.5 font-mono text-xs text-zinc-200 font-semibold">
+                                            {v.key || <span className="text-zinc-500 italic">unnamed</span>}
+                                          </td>
+                                          <td className="px-4 py-2.5 font-mono text-xs text-zinc-300">
+                                            <div className="flex items-center gap-2">
+                                              <span className="rounded bg-zinc-950/80 px-2 py-1 text-[11px] border border-zinc-800 inline-block max-w-md truncate">
+                                                {rawValueStr === '' ? '' : isRevealed ? rawValueStr : '••••••••'}
+                                              </span>
+                                              {rawValueStr !== '' && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    setRevealedEnvVars((prev) => ({
+                                                      ...prev,
+                                                      [varRevealKey]: !prev[varRevealKey],
+                                                    }))
+                                                  }
+                                                  className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 transition"
+                                                  title={isRevealed ? 'Hide variable value' : 'Reveal variable value'}
+                                                  aria-label={isRevealed ? 'Hide variable value' : 'Reveal variable value'}
+                                                >
+                                                  {isRevealed ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                                                </button>
+                                              )}
+                                            </div>
+                                          </td>
                                         <td className="px-4 py-2.5 text-right">
                                           <span
                                             className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
@@ -2026,6 +2125,26 @@ export const ProjectsView: React.FC = () => {
                 </select>
               </div>
 
+              {editingMember.user_id === user?.id && editRole !== editingMember.role && (
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200 space-y-2">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="h-4 w-4 shrink-0 text-amber-400 mt-0.5" />
+                    <span>
+                      Changing your own project role from <strong>{editingMember.role}</strong> to <strong>{editRole}</strong> may immediately revoke your administrative access.
+                    </span>
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer select-none text-[11px] font-medium">
+                    <input
+                      type="checkbox"
+                      checked={selfDemoteConfirmed}
+                      onChange={(e) => setSelfDemoteConfirmed(e.target.checked)}
+                      className="h-3.5 w-3.5 rounded border-amber-500/50 bg-zinc-900 text-amber-500 focus:ring-amber-500"
+                    />
+                    <span>I understand and want to change my own role</span>
+                  </label>
+                </div>
+              )}
+
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
@@ -2036,7 +2155,10 @@ export const ProjectsView: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  disabled={isUpdatingRole}
+                  disabled={
+                    isUpdatingRole ||
+                    (editingMember.user_id === user?.id && editRole !== editingMember.role && !selfDemoteConfirmed)
+                  }
                   className="flex items-center gap-1.5 rounded-lg bg-sky-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-sky-500 transition shadow-md disabled:opacity-50"
                 >
                   {isUpdatingRole ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Save Changes'}

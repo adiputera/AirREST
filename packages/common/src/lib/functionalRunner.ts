@@ -105,6 +105,8 @@ export interface StartFunctionalRunParams {
   dataFileMeta?: PerformanceDataFileMeta;
   dataRows?: Array<Record<string, string>>;
   initialVariables: Record<string, string>;
+  /** Optional initial local variables (e.g. pm.variables snapshot from prior run on Re-run Failed). */
+  initialLocalVariables?: Record<string, string>;
   adapter?: PlatformAdapter;
   onCommitEnvironmentUpdates?: (
     finalEnv: Record<string, string>,
@@ -339,7 +341,7 @@ export async function startFunctionalRun(
     };
     const scriptExecutor = params.adapter?.scriptExecutor;
     let runEnv: Record<string, string> = { ...params.initialVariables };
-    let runVars: Record<string, string> = {};
+    let runVars: Record<string, string> = { ...(params.initialLocalVariables || {}) };
     let completedIterations = 0;
     let stopReason: string | undefined;
     let captureBudgetExhausted = false;
@@ -650,10 +652,15 @@ export async function startFunctionalRun(
           if (typeof nextReqDirective === 'string') {
             const targetIdx = resolveNextStepIndex(selectedItems, nextReqDirective);
             if (targetIdx < 0) {
-              stopReason = `setNextRequest("${nextReqDirective}") could not find a matching selected request.`;
-              break outerLoop;
+              if (onlySet && resolveNextStepIndex(params.items || [], nextReqDirective) >= 0) {
+                cursor += 1;
+              } else {
+                // Unknown setNextRequest target ends the current iteration without aborting subsequent iterations.
+                break;
+              }
+            } else {
+              cursor = targetIdx;
             }
-            cursor = targetIdx;
           } else {
             cursor += 1;
           }
@@ -669,20 +676,31 @@ export async function startFunctionalRun(
         }
       }
 
-      // Always keep runEnv in volatile session memory so Re-run Failed can reuse chained variables
+      // Always keep runEnv and runVars in volatile session memory so Re-run Failed can reuse chained variables
       if (executedCount > 0 || totalStepsRecorded > 0) {
-        saveFunctionalRunEnvSnapshot(runId, params.tabId, runEnv);
+        saveFunctionalRunEnvSnapshot(runId, params.tabId, runEnv, runVars);
       }
 
       // Do NOT commit partial variable updates to Active Environment when user manually clicked Stop
       let updatedEnvVars: string[] | undefined;
       if (!stoppedByUser && effectiveConfig.keepVariableValues && params.onCommitEnvironmentUpdates) {
+        const changedUpdates: Record<string, string> = {};
+        for (const [k, v] of Object.entries(runEnv)) {
+          if (
+            !Object.prototype.hasOwnProperty.call(params.initialVariables, k) ||
+            params.initialVariables[k] !== v
+          ) {
+            changedUpdates[k] = v;
+          }
+        }
         const unsetKeys = Object.keys(params.initialVariables).filter(
           (k) => !Object.prototype.hasOwnProperty.call(runEnv, k)
         );
-        const committed = params.onCommitEnvironmentUpdates(runEnv, unsetKeys);
-        if (committed.length > 0) {
-          updatedEnvVars = committed;
+        if (Object.keys(changedUpdates).length > 0 || unsetKeys.length > 0) {
+          const committed = params.onCommitEnvironmentUpdates(changedUpdates, unsetKeys);
+          if (committed.length > 0) {
+            updatedEnvVars = committed;
+          }
         }
       }
 

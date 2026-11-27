@@ -123,7 +123,28 @@ func (r *CollectionRepository) MoveItem(ctx context.Context, id uuid.UUID, sourc
 	if exceedsItemMoveDepth(parentDepth, subtreeHeight) {
 		return ErrInvalidItemMove
 	}
-	now := time.Now().UTC()
+	if source.ID != target.ID {
+		var targetCount, subtreeCount int
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM collection_items WHERE collection_id=$1 AND deleted_at IS NULL`, target.ID).Scan(&targetCount); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(ctx, `WITH RECURSIVE subtree AS (
+			SELECT id FROM collection_items WHERE id=$1 AND collection_id=$2 AND deleted_at IS NULL
+			UNION ALL
+			SELECT ci.id FROM collection_items ci JOIN subtree s ON ci.parent_id = s.id
+			WHERE ci.collection_id=$2 AND ci.deleted_at IS NULL
+		) SELECT COUNT(*) FROM subtree`, id, source.ID).Scan(&subtreeCount); err != nil {
+			return err
+		}
+		if targetCount+subtreeCount > MaxItemsPerCollection {
+			return ErrCollectionItemLimit
+		}
+	}
+	var now time.Time
+	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		return err
+	}
+	now = now.UTC()
 	_, err = tx.Exec(ctx, `WITH RECURSIVE subtree AS (
 		SELECT id FROM collection_items WHERE id=$1
 		UNION SELECT i.id FROM collection_items i JOIN subtree s ON i.parent_id=s.id WHERE i.collection_id=$2

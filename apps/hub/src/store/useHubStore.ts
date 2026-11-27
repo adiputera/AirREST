@@ -1,7 +1,14 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { User, FeaturePolicy } from '../types';
-import { DEFAULT_API_URL, registerHubTokenRefresh, registerHubAuthEvicted, invalidateHubSession } from '../lib/api';
+import {
+  DEFAULT_API_URL,
+  validateHubApiUrl,
+  registerHubTokenRefresh,
+  registerHubAuthEvicted,
+  registerHubTokenProvider,
+  invalidateHubSession,
+} from '../lib/api';
 
 export type HubTab = 'teams' | 'projects' | 'superadmin';
 
@@ -59,7 +66,7 @@ export const useHubStore = create<HubStoreState>()(
       featurePolicyFetchedAt: null,
 
       setApiUrl: (url) => set((state) => {
-        const apiUrl = url.trim().replace(/\/+$/, '') || DEFAULT_API_URL;
+        const apiUrl = validateHubApiUrl(url);
         if (apiUrl === state.apiUrl) return state;
         invalidateHubSession();
         return { ...signedOutState, apiUrl };
@@ -111,6 +118,12 @@ export const useHubStore = create<HubStoreState>()(
           invalidateHubSession();
           return { ...merged, ...signedOutState, apiUrl: DEFAULT_API_URL };
         }
+        try {
+          merged.apiUrl = validateHubApiUrl(merged.apiUrl);
+        } catch {
+          invalidateHubSession();
+          return { ...merged, ...signedOutState, apiUrl: DEFAULT_API_URL };
+        }
         return merged;
       },
     }
@@ -121,6 +134,11 @@ export const useHubStore = create<HubStoreState>()(
 registerHubTokenRefresh((newTokens) => {
   if (useHubStore.getState().refreshToken !== newTokens.previousRefreshToken) return;
   useHubStore.getState().updateTokens(newTokens.token, newTokens.refreshToken, newTokens.expiresAt);
+});
+
+registerHubTokenProvider?.(() => {
+  const { apiUrl, token, refreshToken } = useHubStore.getState();
+  return { apiUrl, token, refreshToken };
 });
 
 // Register auth eviction callback to automatically log out if account is deleted/deactivated

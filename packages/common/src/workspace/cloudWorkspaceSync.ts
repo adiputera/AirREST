@@ -18,8 +18,10 @@ export type CloudWorkspaceSyncResult =
 
 export interface CloudWorkspaceSyncInput<Detail extends CloudCollectionDetail, RawEnvironment> {
   currentCollections: Collection[];
+  currentEnvironments?: Environment[];
   replayPendingExampleIntents?: () => Promise<void>;
   uploadPendingCollection: (collection: Collection) => Promise<void>;
+  uploadPendingEnvironment?: (environment: Environment) => Promise<void>;
   fetchCollectionMetadata: PullCloudCollectionsInput<Detail>['fetchMetadata'];
   fetchCollectionDetail: PullCloudCollectionsInput<Detail>['fetchDetail'];
   fetchEnvironments: () => Promise<RawEnvironment[]>;
@@ -28,7 +30,12 @@ export interface CloudWorkspaceSyncInput<Detail extends CloudCollectionDetail, R
   isCurrent: () => boolean;
   isAborted: () => boolean;
   onPendingCollectionUploaded: (collection: Collection) => void;
+  onPendingEnvironmentUploaded?: (environment: Environment) => void;
   onCollectionDetailFetchError: PullCloudCollectionsInput<Detail>['onDetailFetchError'];
+}
+
+function isPendingCloudEnvironment(env: Environment): boolean {
+  return env._syncStatus === 'pending' || env._pendingCreate === true;
 }
 
 /**
@@ -51,6 +58,20 @@ export async function synchronizeCloudWorkspace<Detail extends CloudCollectionDe
   if (pushed.status === 'cancelled') return pushed;
   if (pushed.status === 'failed') {
     return { status: 'push_failed', collection: pushed.collection, error: pushed.error };
+  }
+
+  if (input.uploadPendingEnvironment && input.currentEnvironments) {
+    for (const env of input.currentEnvironments.filter(isPendingCloudEnvironment)) {
+      if (!input.isCurrent()) return { status: 'cancelled' };
+      try {
+        await input.uploadPendingEnvironment(env);
+        if (!input.isCurrent()) return { status: 'cancelled' };
+        input.onPendingEnvironmentUploaded?.(env);
+      } catch (error) {
+        if (input.isAborted() || !input.isCurrent()) return { status: 'cancelled' };
+        console.warn(`Failed to upload pending environment "${env.name}":`, error);
+      }
+    }
   }
 
   if (input.replayPendingExampleIntents) {

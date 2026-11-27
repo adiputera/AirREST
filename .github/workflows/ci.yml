@@ -24,14 +24,53 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run test:all
+      - run: npm run build:all
+      - run: npm run test:api-contract-parity
 
   backend:
     name: Backend tests
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: airrest_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d airrest_test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.0'
-      - run: go test ./...
+      - run: go vet ./... && go test -count=1 ./...
         working-directory: backend
+        env:
+          AIRREST_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/airrest_test?sslmode=disable
+
+  native:
+    name: Native Rust checks
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: './apps/native/src-tauri -> target'
+      - run: cargo check && cargo test
+        working-directory: apps/native/src-tauri

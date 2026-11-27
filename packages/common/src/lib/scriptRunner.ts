@@ -20,6 +20,21 @@ interface IframeWaiter {
 }
 
 const pendingIframeWaiters: IframeWaiter[] = [];
+const activeDisposableIframes = new Set<{
+  iframe: HTMLIFrameElement;
+  dispose: (reason?: string) => void;
+}>();
+
+function removeIframeElement(iframe: HTMLIFrameElement | null): void {
+  if (!iframe) return;
+  try {
+    iframe.onload = null;
+    iframe.onerror = null;
+    iframe.remove();
+  } catch {
+    // ignore DOM removal errors
+  }
+}
 
 export function resetSandboxIframe(): void {
   const waiters = pendingIframeWaiters.splice(0, pendingIframeWaiters.length);
@@ -27,14 +42,85 @@ export function resetSandboxIframe(): void {
     w.reject(new Error('Sandbox iframe was reset or destroyed'));
   }
   if (sandboxIframe) {
-    try {
-      sandboxIframe.remove();
-    } catch {
-      // ignore DOM removal errors
-    }
+    removeIframeElement(sandboxIframe);
     sandboxIframe = null;
     isIframeReady = false;
   }
+  for (const entry of Array.from(activeDisposableIframes)) {
+    entry.dispose('Sandbox iframe was reset or destroyed');
+  }
+  activeDisposableIframes.clear();
+}
+
+function createMountedSandboxIframe(): {
+  promise: Promise<HTMLIFrameElement>;
+  dispose: (reason?: string) => void;
+} {
+  let disposed = false;
+  let iframe: HTMLIFrameElement | null = null;
+  let rejectPending: ((err: Error) => void) | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  const entry = {
+    get iframe() {
+      return iframe as HTMLIFrameElement;
+    },
+    dispose: (reason?: string) => {
+      if (disposed) return;
+      disposed = true;
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      activeDisposableIframes.delete(entry);
+      removeIframeElement(iframe);
+      iframe = null;
+      if (rejectPending) {
+        const rejectFn = rejectPending;
+        rejectPending = null;
+        rejectFn(new Error(reason || 'Sandbox iframe was reset or destroyed'));
+      }
+    },
+  };
+
+  const promise = new Promise<HTMLIFrameElement>((resolve, reject) => {
+    if (typeof document === 'undefined') {
+      reject(new Error('Document is not available in current execution environment'));
+      return;
+    }
+
+    rejectPending = reject;
+    iframe = document.createElement('iframe');
+    if (typeof iframe.setAttribute === 'function') {
+      iframe.setAttribute('sandbox', 'allow-scripts');
+    }
+    iframe.style.display = 'none';
+    iframe.src = 'sandbox.html';
+    activeDisposableIframes.add(entry);
+
+    timer = setTimeout(() => {
+      if (disposed) return;
+      entry.dispose('Timed out waiting for sandbox iframe readiness');
+    }, 3000);
+
+    iframe.onload = () => {
+      if (disposed || !iframe) return;
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      rejectPending = null;
+      resolve(iframe);
+    };
+    iframe.onerror = (err) => {
+      if (disposed) return;
+      entry.dispose('Failed to load sandbox iframe: ' + String(err));
+    };
+
+    document.body.appendChild(iframe);
+  });
+
+  return { promise, dispose: entry.dispose };
 }
 
 export function getSandboxIframe(): Promise<HTMLIFrameElement> {
@@ -226,9 +312,14 @@ export async function runScriptInSandbox(
     };
   }
 
+  let disposableHandle: ReturnType<typeof createMountedSandboxIframe> | null = null;
   try {
-    const iframe = await getSandboxIframe();
+    // Isolate each script run inside a fresh disposable sandbox iframe so globals, prototypes,
+    // or CryptoJS state from one script cannot poison subsequent script runs.
+    disposableHandle = createMountedSandboxIframe();
+    const iframe = await disposableHandle.promise;
     if (options?.signal?.aborted) {
+      disposableHandle.dispose();
       return {
         success: false,
         error: 'Script execution aborted.',
@@ -242,25 +333,52 @@ export async function runScriptInSandbox(
       : Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
 
     const timeoutMs = options?.timeoutMs ?? 2000;
+    const isOpaqueSandboxOrigin =
+      typeof iframe.getAttribute !== 'function' ||
+      !(iframe.getAttribute('sandbox') || '').includes('allow-same-origin');
 
     return new Promise((resolve) => {
       let isSettled = false;
+      const channel = typeof MessageChannel !== 'undefined' ? new MessageChannel() : null;
 
       const cleanup = () => {
         clearTimeout(timer);
+        if (channel) {
+          channel.port1.onmessage = null;
+          try {
+            channel.port1.close();
+          } catch {
+            // ignore close error
+          }
+          try {
+            channel.port2.close();
+          } catch {
+            // ignore close error
+          }
+        }
         if (typeof window !== 'undefined') {
           window.removeEventListener('message', handleMessage);
         }
         if (options?.signal) {
           options.signal.removeEventListener('abort', onAbort);
         }
+        disposableHandle?.dispose();
+      };
+
+      const acceptResult = (payload: unknown) => {
+        if (!payload || typeof payload !== 'object' || (payload as { id?: unknown }).id !== id) return;
+        if (isSettled) return;
+        isSettled = true;
+        cleanup();
+
+        const validated = validateScriptOutput(payload, scriptInput);
+        resolve(validated);
       };
 
       const timer = setTimeout(() => {
         if (isSettled) return;
         isSettled = true;
         cleanup();
-        resetSandboxIframe();
         resolve({
           success: false,
           error: `Script timed out after ${timeoutMs}ms.`,
@@ -273,7 +391,6 @@ export async function runScriptInSandbox(
         if (isSettled) return;
         isSettled = true;
         cleanup();
-        resetSandboxIframe();
         resolve({
           success: false,
           error: 'Script execution aborted.',
@@ -286,38 +403,40 @@ export async function runScriptInSandbox(
         options.signal.addEventListener('abort', onAbort, { once: true });
       }
 
+      if (channel) {
+        channel.port1.onmessage = (portEvent: MessageEvent) => {
+          acceptResult(portEvent.data);
+        };
+      }
+
       const handleMessage = (event: MessageEvent) => {
         // Enforce source check: message must come strictly from the target iframe content window
         if (event.source !== iframe.contentWindow) return;
-        // Verify matching execution ID and object envelope
-        if (!event.data || typeof event.data !== 'object' || event.data.id !== id) return;
-
-        if (isSettled) return;
-        isSettled = true;
-        cleanup();
-
-        const validated = validateScriptOutput(event.data, scriptInput);
-        resolve(validated);
+        if (isOpaqueSandboxOrigin && typeof event.origin === 'string' && event.origin !== 'null') return;
+        acceptResult(event.data);
       };
 
       if (typeof window !== 'undefined') {
         window.addEventListener('message', handleMessage);
       }
 
-      iframe.contentWindow?.postMessage(
-        {
-          id,
-          script,
-          request: scriptInput.request,
-          response: scriptInput.response,
-          environment,
-          variables,
-          iterationData: scriptInput.iterationData,
-        },
-        '*'
-      );
+      const messagePayload = {
+        id,
+        script,
+        request: scriptInput.request,
+        response: scriptInput.response,
+        environment,
+        variables,
+        iterationData: scriptInput.iterationData,
+      };
+      if (channel) {
+        iframe.contentWindow?.postMessage(messagePayload, '*', [channel.port2]);
+      } else {
+        iframe.contentWindow?.postMessage(messagePayload, '*');
+      }
     });
   } catch (err: unknown) {
+    disposableHandle?.dispose();
     return {
       success: false,
       error: err instanceof Error ? err.message : String(err),

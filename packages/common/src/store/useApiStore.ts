@@ -125,6 +125,7 @@ import {
   stopFunctionalRunHook,
   syncVisualTabOrder,
   triggerCloudPerfCleanup,
+  triggerOfflinePerfCleanup,
   updateCollectionItemById,
   validateSavedExampleName,
 } from '../lib/examples';
@@ -185,6 +186,7 @@ import { isCloudSessionActive, prepareCloudSessionUpdate } from '../workspace/cl
 import { isActiveCloudScope, prepareCloudScopeTransition } from '../workspace/cloudScopeTransition';
 import { prepareWorkspaceModeTransition } from '../workspace/workspaceModeTransition';
 import { prepareCloudDeltaState } from '../workspace/cloudDeltaState';
+import { retainPendingCloudCollections } from '../workspace/cloudSyncCollections';
 import { normalizeCloudCacheArchives, normalizePersistedWorkspaceScopeCache, preparePersistedWorkspaceCaches, serializeCloudCacheArchives } from '../workspace/persistence';
 import { archiveCloudCache, captureCloudCache, cloudCacheOwnerKey, emptyCloudCacheArchives, getArchivedScope, readCloudCache, type CloudCacheArchiveState } from '../workspace/cloudCacheArchive';
 import {
@@ -675,9 +677,12 @@ export interface ApiStoreState {
   closePerformanceTab: (tabId: string) => void;
   setPerformanceReport: (report: PerformanceRunReport) => void;
   setFunctionalReport: (report: FunctionalRunReport) => void;
+  removePerformanceReport: (reportId: string) => void;
+  removeFunctionalReport: (reportId: string) => void;
   applyEnvironmentVariableUpdates: (
     updates: Record<string, string>,
-    unsetKeys?: string[]
+    unsetKeys?: string[],
+    targetEnvId?: string
   ) => string[];
   pendingExampleIntents: Record<string, PendingExampleIntent>;
   saveResponseAsExample: (input: {
@@ -956,6 +961,8 @@ export function createApiStore(
   const collectionSaveSyncRevisions = new Map<string, number>();
   const collectionSaveSyncQueues = new Map<string, Promise<void>>();
   const pendingReorderBaseSnapshots = new Map<string, { items: CollectionItem[]; syncStatus?: Collection['_syncStatus'] }>();
+  const envIdAliasMap = new Map<string, string>();
+  const pendingEnvCreatePromises = new Map<string, Promise<string | null>>();
   const movingCollections = new Map<string, symbol>();
   const duplicatingCollections = new Map<string, symbol>();
   const inFlightDuplicateOperations = new Set<string>();
@@ -1254,6 +1261,8 @@ export function createApiStore(
     asyncOperations.invalidate({ session });
     if (session) {
       cloudSessionGeneration += 1;
+      envIdAliasMap.clear();
+      pendingEnvCreatePromises.clear();
       sessionOperations.invalidate({ session: true });
     }
     for (const id of Object.keys(envSyncDebounceTimers)) {
@@ -1272,22 +1281,33 @@ export function createApiStore(
     pendingTimers.clear();
   }
 
+  function resolveCanonicalEnvId(envId: string): string {
+    return envIdAliasMap.get(envId) || envId;
+  }
+
   function scheduleEnvironmentCloudSync(
-    envId: string,
+    rawEnvId: string,
     get: () => ApiStoreState,
     set: (fn: (state: ApiStoreState) => Partial<ApiStoreState>) => void
   ) {
     if (isOfflineOnly || isStoreDisposed) return;
 
-    if (envSyncDebounceTimers[envId]) {
-      clearTimeout(envSyncDebounceTimers[envId]);
-      delete envSyncDebounceTimers[envId];
+    const initialEnvId = resolveCanonicalEnvId(rawEnvId);
+    if (envSyncDebounceTimers[initialEnvId]) {
+      clearTimeout(envSyncDebounceTimers[initialEnvId]);
+      delete envSyncDebounceTimers[initialEnvId];
     }
 
-    envSyncDebounceTimers[envId] = setTimeout(async () => {
-      delete envSyncDebounceTimers[envId];
+    envSyncDebounceTimers[initialEnvId] = setTimeout(async () => {
+      delete envSyncDebounceTimers[initialEnvId];
+
+      const inFlightCreate = pendingEnvCreatePromises.get(rawEnvId) || pendingEnvCreatePromises.get(initialEnvId);
+      if (inFlightCreate) {
+        await inFlightCreate.catch(() => null);
+      }
 
       if (isStoreDisposed) return;
+      const envId = resolveCanonicalEnvId(initialEnvId);
       const { workspaceMode, cloudConfig } = get();
       if (workspaceMode !== 'cloud' || !isCloudSessionActive(cloudConfig)) return;
 
@@ -1304,12 +1324,17 @@ export function createApiStore(
         const currentEnv = state.environments.find((e) => e.id === envId);
         if (!currentEnv) return;
 
+        if (currentEnv._pendingCreate && envId === rawEnvId && !envIdAliasMap.has(rawEnvId)) {
+          return;
+        }
+
         envSyncInFlight[envId] = true;
         const operation = beginAsyncOperation();
         try {
+          const liveCloud = get().cloudConfig;
           const res = await updateScopeEnvironment(
-            state.cloudConfig.apiUrl,
-            state.cloudConfig.token,
+            liveCloud.apiUrl,
+            liveCloud.token,
             envId,
             {
               name: currentEnv.name,
@@ -1317,7 +1342,7 @@ export function createApiStore(
               min_role: currentEnv.minRole,
               base_version: currentEnv.version || 1,
             },
-            state.cloudConfig.refreshToken,
+            liveCloud.refreshToken,
             operation.controller.signal
           );
 
@@ -1328,7 +1353,7 @@ export function createApiStore(
               if (!isAsyncOperationCurrent(operation)) return {};
               return {
                 environments: s.environments.map((e) =>
-                  e.id === envId ? { ...e, version: res.version } : e
+                  e.id === envId ? { ...e, version: res.version, _syncStatus: 'synced' } : e
                 ),
               };
             });
@@ -1403,7 +1428,7 @@ export function createApiStore(
       // Persist before sending: after a lost reply or restart, these old trees must
       // be fetched from the server before any import can recreate moved items.
       store.setState((state) => ({ collections: state.collections.map((col) => ids.includes(col.id) ? { ...col, _needsMoveReconciliation: true } : col) }));
-      await moveScopeItem(cloudConfig.apiUrl, cloudConfig.token, itemId, sourceCollectionId, targetCollectionId, targetParentId, cloudConfig.refreshToken, operation.controller.signal);
+      await moveScopeItem(cloudConfig.apiUrl, store.getState().cloudConfig.token, itemId, sourceCollectionId, targetCollectionId, targetParentId, store.getState().cloudConfig.refreshToken, operation.controller.signal);
       if (!isAsyncOperationCurrent(operation)) return { success: false, error: 'Operation cancelled.' };
       commit();
       store.setState((state) => {
@@ -1415,8 +1440,18 @@ export function createApiStore(
             lastSyncedAt: 0,
           };
         }
+        const movedIds = new Set<string>([itemId]);
+        for (const colId of [sourceCollectionId, targetCollectionId]) {
+          const col = state.collections.find((c) => c.id === colId);
+          const movedNode = col ? findCollectionItemById(col.items, itemId) : undefined;
+          if (movedNode) {
+            for (const descendantId of collectAllItemIds([movedNode])) {
+              movedIds.add(descendantId);
+            }
+          }
+        }
         const nextOpenExampleTabs = (state.openExampleTabs || []).map((ex) =>
-          ex.collectionId === sourceCollectionId && ex.itemId === itemId && sourceCollectionId !== targetCollectionId
+          ex.collectionId === sourceCollectionId && movedIds.has(ex.itemId) && sourceCollectionId !== targetCollectionId
             ? {
               ...ex,
               collectionId: targetCollectionId,
@@ -1440,6 +1475,7 @@ export function createApiStore(
             state.tabs,
             nextOpenExampleTabs,
             (state.tabOrder || []).map((id) => tabIdRewrite.get(id) ?? id),
+            state.openPerformanceTabs,
           )
           : state.tabOrder;
         return {
@@ -1457,7 +1493,7 @@ export function createApiStore(
           selectedExample:
             state.selectedExample &&
               state.selectedExample.collectionId === sourceCollectionId &&
-              state.selectedExample.itemId === itemId &&
+              movedIds.has(state.selectedExample.itemId) &&
               sourceCollectionId !== targetCollectionId
               ? { ...state.selectedExample, collectionId: targetCollectionId }
               : state.selectedExample,
@@ -1789,15 +1825,37 @@ export function createApiStore(
                     continue;
                   } catch (fetchErr: unknown) {
                     if (fetchErr instanceof CloudApiError && (fetchErr.status === 403 || fetchErr.status === 404)) {
-                      set((state) => ({
-                        pendingExampleIntents: withoutPendingExampleIntent(state.pendingExampleIntents, intent.operationId),
-                        ...(opts?.preMutationCollections && state.workspaceMode === 'cloud'
-                          ? { collections: opts.preMutationCollections }
-                          : {}),
-                        ...(fetchErr.status === 404
-                          ? pruneExampleTabsState(state, (sel) => sel.itemId !== intent.itemId)
-                          : {}),
-                      }));
+                      set((state) => {
+                        const isSameScope =
+                          !intent.targetScope ||
+                          (state.workspaceMode === 'cloud' &&
+                            state.cloudConfig.activeScope?.id === intent.targetScope.id &&
+                            state.cloudConfig.activeScope?.type === intent.targetScope.type);
+                        const preCol = opts?.preMutationCollections?.find((c) => c.id === intent.collectionId);
+                        const preItem = preCol ? findCollectionItemById(preCol.items, intent.itemId) : undefined;
+                        const revertedCollections =
+                          isSameScope && preItem
+                            ? state.collections.map((c) => {
+                              if (c.id !== intent.collectionId) return c;
+                              const res = updateCollectionItemById(c.items || [], intent.itemId, (cur) => ({
+                                ...cur,
+                                ...(preItem.examples ? { examples: preItem.examples } : { examples: undefined }),
+                                ...(preItem.exampleSummaries ? { exampleSummaries: preItem.exampleSummaries } : { exampleSummaries: undefined }),
+                                exampleCount: preItem.exampleCount,
+                                examplesLoaded: preItem.examplesLoaded,
+                                exampleSummariesTruncated: preItem.exampleSummariesTruncated,
+                              }));
+                              return res.found ? { ...c, items: res.items } : c;
+                            })
+                            : state.collections;
+                        return {
+                          pendingExampleIntents: withoutPendingExampleIntent(state.pendingExampleIntents, intent.operationId),
+                          collections: revertedCollections,
+                          ...(fetchErr.status === 404
+                            ? pruneExampleTabsState(state, (sel) => sel.itemId !== intent.itemId)
+                            : {}),
+                        };
+                      });
                       await flushStorePersistence().catch(() => undefined);
                       return {
                         success: false,
@@ -1809,13 +1867,37 @@ export function createApiStore(
                 }
 
                 if (err instanceof CloudApiError && [400, 403, 404, 409, 413].includes(err.status)) {
-                  set((state) => ({
-                    pendingExampleIntents: withoutPendingExampleIntent(state.pendingExampleIntents, intent.operationId),
-                    ...(opts?.preMutationCollections ? { collections: opts.preMutationCollections } : {}),
-                    ...(err.status === 404
-                      ? pruneExampleTabsState(state, (sel) => sel.itemId !== intent.itemId)
-                      : {}),
-                  }));
+                  set((state) => {
+                    const isSameScope =
+                      !intent.targetScope ||
+                      (state.workspaceMode === 'cloud' &&
+                        state.cloudConfig.activeScope?.id === intent.targetScope.id &&
+                        state.cloudConfig.activeScope?.type === intent.targetScope.type);
+                    const preCol = opts?.preMutationCollections?.find((c) => c.id === intent.collectionId);
+                    const preItem = preCol ? findCollectionItemById(preCol.items, intent.itemId) : undefined;
+                    const revertedCollections =
+                      isSameScope && preItem
+                        ? state.collections.map((c) => {
+                          if (c.id !== intent.collectionId) return c;
+                          const res = updateCollectionItemById(c.items || [], intent.itemId, (cur) => ({
+                            ...cur,
+                            ...(preItem.examples ? { examples: preItem.examples } : { examples: undefined }),
+                            ...(preItem.exampleSummaries ? { exampleSummaries: preItem.exampleSummaries } : { exampleSummaries: undefined }),
+                            exampleCount: preItem.exampleCount,
+                            examplesLoaded: preItem.examplesLoaded,
+                            exampleSummariesTruncated: preItem.exampleSummariesTruncated,
+                          }));
+                          return res.found ? { ...c, items: res.items } : c;
+                        })
+                        : state.collections;
+                    return {
+                      pendingExampleIntents: withoutPendingExampleIntent(state.pendingExampleIntents, intent.operationId),
+                      collections: revertedCollections,
+                      ...(err.status === 404
+                        ? pruneExampleTabsState(state, (sel) => sel.itemId !== intent.itemId)
+                        : {}),
+                    };
+                  });
                   await flushStorePersistence().catch(() => undefined);
                   return {
                     success: false,
@@ -1864,7 +1946,7 @@ export function createApiStore(
           const pendingList = Object.values(live.pendingExampleIntents || {})
             .filter((intent) => {
               if (!intent) return false;
-              if (intent.ownerKey !== null && ownerKey !== null && intent.ownerKey !== ownerKey) return false;
+              if (!ownerKey || intent.ownerKey !== ownerKey) return false;
               if (intent.targetScope) {
                 return intent.targetScope.id === targetScope.id && intent.targetScope.type === targetScope.type;
               }
@@ -2122,6 +2204,11 @@ export function createApiStore(
                 scopesCache: nextConfig.sessionKind === 'provider' ? undefined : target.scopesCache,
               };
               if (before.workspaceMode === 'cloud') {
+                void stopActivePerformanceRun?.();
+                clearPerformanceDataRowsHook?.();
+                clearFunctionalSessionHook?.();
+                void stopFunctionalRunHook?.();
+                triggerCloudPerfCleanup?.(before.cloudConfig.user?.id, before.cloudConfig.apiUrl);
                 const targetSnapshot = getArchivedScope(target, nextConfig.activeScope);
                 const resources = restoreWorkspaceResources(targetSnapshot, createInitialTab);
                 cacheTransition = {
@@ -2129,6 +2216,14 @@ export function createApiStore(
                   ...resources,
                   activeResponse: null,
                   tabResponses: {},
+                  openExampleTabs: [],
+                  selectedExample: null,
+                  openPerformanceTabs: [],
+                  selectedPerformanceTabId: null,
+                  performanceReports: {},
+                  functionalReports: {},
+                  tabOrder: [],
+                  environmentOccConflict: null,
                   isLoading: false,
                   lastSyncedAt: targetSnapshot?.lastSyncedAt || null,
                   syncStatus: 'idle',
@@ -2700,7 +2795,7 @@ export function createApiStore(
             clearPerformanceDataRowsHook?.();
             clearFunctionalSessionHook?.();
             void stopFunctionalRunHook?.();
-            triggerCloudPerfCleanup?.(get().cloudConfig.user?.id);
+            triggerCloudPerfCleanup?.(get().cloudConfig.user?.id, get().cloudConfig.apiUrl);
             set({ isSwitchingWorkspace: true });
             const { offlineScopeCache, activeOfflineWorkspaceId } = get();
             const activeLocalId = activeOfflineWorkspaceId || DEFAULT_OFFLINE_WORKSPACE_ID;
@@ -2795,48 +2890,123 @@ export function createApiStore(
             const operation = beginAsyncOperation();
             activePullOperation = operation;
             const requestedScope = cloudConfig.activeScope;
-            const token = cloudConfig.token;
             set({ syncStatus: 'syncing', syncError: null });
             try {
+              const liveAuth = () => get().cloudConfig;
               const syncResult = await synchronizeCloudWorkspace({
                 currentCollections: get().collections || [],
-                replayPendingExampleIntents: () =>
-                  replayPendingExampleIntentsForScope(
+                currentEnvironments: get().environments || [],
+                replayPendingExampleIntents: () => {
+                  const cfg = liveAuth();
+                  return replayPendingExampleIntentsForScope(
                     requestedScope,
-                    cloudConfig.apiUrl,
-                    token,
-                    cloudConfig.refreshToken,
+                    cfg.apiUrl,
+                    cfg.token,
+                    cfg.refreshToken,
                     operation.controller.signal,
-                  ),
-                uploadPendingCollection: async (collection) => batchImportToScope(
-                  cloudConfig.apiUrl,
-                  token,
-                  requestedScope,
-                  [collection],
-                  cloudConfig.refreshToken,
-                  operation.controller.signal,
-                ),
-                fetchCollectionMetadata: () => fetchScopeCollectionsForRuntime(
-                  cloudConfig.apiUrl,
-                  token,
-                  requestedScope,
-                  cloudConfig.refreshToken,
-                  operation.controller.signal,
-                ),
-                fetchCollectionDetail: (collectionId) => fetchCollectionByIdForRuntime(
-                  cloudConfig.apiUrl,
-                  token,
-                  collectionId,
-                  cloudConfig.refreshToken,
-                  operation.controller.signal,
-                ),
-                fetchEnvironments: () => fetchScopeEnvironmentsForRuntime(
-                  cloudConfig.apiUrl,
-                  cloudConfig.token,
-                  requestedScope,
-                  cloudConfig.refreshToken,
-                  operation.controller.signal,
-                ),
+                  );
+                },
+                uploadPendingCollection: async (collection) => {
+                  const cfg = liveAuth();
+                  await batchImportToScope(
+                    cfg.apiUrl,
+                    cfg.token,
+                    requestedScope,
+                    [collection],
+                    cfg.refreshToken,
+                    operation.controller.signal,
+                  );
+                },
+                uploadPendingEnvironment: async (env) => {
+                  const cfg = liveAuth();
+                  if (env._pendingCreate) {
+                    const created = await createScopeEnvironment(
+                      cfg.apiUrl,
+                      cfg.token,
+                      requestedScope,
+                      {
+                        name: env.name,
+                        variables: sanitizeVariablesForUpstream(env.variables),
+                        min_role: env.minRole || 'reader',
+                      },
+                      cfg.refreshToken,
+                      operation.controller.signal,
+                    );
+                    if (!isAsyncOperationCurrent(operation)) return;
+                    if (created?.id) {
+                      envIdAliasMap.set(env.id, created.id);
+                      set((s) => {
+                        if (!isAsyncOperationCurrent(operation)) return {};
+                        return {
+                          environments: s.environments.map((candidate) =>
+                            candidate.id === env.id
+                              ? {
+                                  ...candidate,
+                                  id: created.id,
+                                  version: created.version || 1,
+                                  _syncStatus: 'synced',
+                                  _pendingCreate: undefined,
+                                }
+                              : candidate
+                          ),
+                          activeEnvironmentId: s.activeEnvironmentId === env.id ? created.id : s.activeEnvironmentId,
+                        };
+                      });
+                    }
+                    return;
+                  }
+                  const targetEnvId = resolveCanonicalEnvId(env.id);
+                  const updated = await updateScopeEnvironment(
+                    cfg.apiUrl,
+                    cfg.token,
+                    targetEnvId,
+                    {
+                      name: env.name,
+                      variables: sanitizeVariablesForUpstream(env.variables),
+                      min_role: env.minRole,
+                      base_version: env.version || 1,
+                    },
+                    cfg.refreshToken,
+                    operation.controller.signal,
+                  );
+                  if (updated && typeof updated.version === 'number' && isAsyncOperationCurrent(operation)) {
+                    set((s) => ({
+                      environments: s.environments.map((candidate) =>
+                        candidate.id === targetEnvId ? { ...candidate, version: updated.version, _syncStatus: 'synced' } : candidate
+                      ),
+                    }));
+                  }
+                },
+                fetchCollectionMetadata: () => {
+                  const cfg = liveAuth();
+                  return fetchScopeCollectionsForRuntime(
+                    cfg.apiUrl,
+                    cfg.token,
+                    requestedScope,
+                    cfg.refreshToken,
+                    operation.controller.signal,
+                  );
+                },
+                fetchCollectionDetail: (collectionId) => {
+                  const cfg = liveAuth();
+                  return fetchCollectionByIdForRuntime(
+                    cfg.apiUrl,
+                    cfg.token,
+                    collectionId,
+                    cfg.refreshToken,
+                    operation.controller.signal,
+                  );
+                },
+                fetchEnvironments: () => {
+                  const cfg = liveAuth();
+                  return fetchScopeEnvironmentsForRuntime(
+                    cfg.apiUrl,
+                    cfg.token,
+                    requestedScope,
+                    cfg.refreshToken,
+                    operation.controller.signal,
+                  );
+                },
                 buildCollection: buildCollectionFromDetails,
                 buildEnvironments: buildEnvironmentsFromDelta,
                 isCurrent: () => isAsyncOperationCurrent(operation),
@@ -2846,6 +3016,16 @@ export function createApiStore(
                     candidate.id === collection.id ? { ...candidate, _syncStatus: 'synced' } : candidate,
                   ),
                 })),
+                onPendingEnvironmentUploaded: (env) => set((state) => {
+                  const canonicalId = resolveCanonicalEnvId(env.id);
+                  return {
+                    environments: state.environments.map((candidate) =>
+                      candidate.id === env.id || candidate.id === canonicalId
+                        ? { ...candidate, _syncStatus: 'synced', _pendingCreate: undefined }
+                        : candidate
+                    ),
+                  };
+                }),
                 onCollectionDetailFetchError: (metadata, error) => console.warn(`Failed to fetch details for collection ${metadata.id}:`, error),
               });
               if (syncResult.status === 'cancelled') return;
@@ -2858,32 +3038,44 @@ export function createApiStore(
                 });
                 return;
               }
-              const currentState = get();
-              const currentOwnerKey = cloudCacheOwnerKey(currentState.cloudConfig, normalizeCloudApiUrl);
-              const overlaidCollections = overlayPendingExampleIntentsOnCollections(
-                syncResult.collections,
-                currentState.pendingExampleIntents,
-                currentOwnerKey,
-                requestedScope,
-              );
-              const deltaState = prepareCloudDeltaState({
-                scope: requestedScope,
-                scopeCache: currentState.scopeCache || {},
-                collections: overlaidCollections,
-                currentCollections: currentState.collections,
-                pulledEnvironments: syncResult.environments,
-                currentEnvironments: currentState.environments || [],
-                activeEnvironmentId: currentState.activeEnvironmentId,
-                tabs: currentState.tabs,
-                activeTabId: currentState.activeTabId,
-                history: currentState.history,
-                partialCollectionCount: syncResult.partialCollectionCount,
-                syncedAt: Date.now(),
-              });
-
-              set({
-                ...deltaState,
-                ...pruneExampleTabsState(currentState, (sel) => isSelectedExampleStillPresent(deltaState.collections, sel)),
+              set((latestState) => {
+                if (!isAsyncOperationCurrent(operation)) return {};
+                const currentOwnerKey = cloudCacheOwnerKey(latestState.cloudConfig, normalizeCloudApiUrl);
+                // Re-merge any collections created or edited locally after pullCloudDelta started.
+                const pulledIds = new Set(syncResult.collections.map((c) => c.id));
+                const latestById = new Map((latestState.collections || []).map((c) => [c.id, c]));
+                const mergedCollections = syncResult.collections.map((pulledCol) => {
+                  const localLatest = latestById.get(pulledCol.id);
+                  if (localLatest && (localLatest._syncStatus === 'pending' || localLatest._needsMoveReconciliation)) {
+                    return localLatest;
+                  }
+                  return pulledCol;
+                });
+                const concurrentPendingCollections = retainPendingCloudCollections(latestState.collections || [], pulledIds);
+                const overlaidCollections = overlayPendingExampleIntentsOnCollections(
+                  [...mergedCollections, ...concurrentPendingCollections],
+                  latestState.pendingExampleIntents,
+                  currentOwnerKey,
+                  requestedScope,
+                );
+                const deltaState = prepareCloudDeltaState({
+                  scope: requestedScope,
+                  scopeCache: latestState.scopeCache || {},
+                  collections: overlaidCollections,
+                  currentCollections: latestState.collections || [],
+                  pulledEnvironments: syncResult.environments,
+                  currentEnvironments: latestState.environments || [],
+                  activeEnvironmentId: latestState.activeEnvironmentId,
+                  tabs: latestState.tabs,
+                  activeTabId: latestState.activeTabId,
+                  history: latestState.history,
+                  partialCollectionCount: syncResult.partialCollectionCount,
+                  syncedAt: Date.now(),
+                });
+                return {
+                  ...deltaState,
+                  ...pruneExampleTabsState(latestState, (sel) => isSelectedExampleStillPresent(deltaState.collections, sel)),
+                };
               });
             } catch (err: unknown) {
               if (!isAsyncOperationCurrent(operation)) return;
@@ -2936,12 +3128,13 @@ export function createApiStore(
                   });
                 }
                 const expectedExamples = countCollectionSavedExamples(col);
+                const liveCloud = get().cloudConfig;
                 const batchResult = await batchImportToScope(
-                  cloudConfig.apiUrl,
-                  cloudConfig.token,
+                  liveCloud.apiUrl,
+                  liveCloud.token,
                   cloudConfig.activeScope,
                   [col],
-                  cloudConfig.refreshToken,
+                  liveCloud.refreshToken,
                   operation.controller.signal
                 );
                 if (
@@ -3646,6 +3839,7 @@ export function createApiStore(
               });
             }
 
+            void triggerOfflinePerfCleanup?.(id);
             return { success: true };
           },
 
@@ -3743,62 +3937,86 @@ export function createApiStore(
               }
             }
 
+            const isCloudCreate = workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && Boolean(cloudConfig.activeScope);
+            const initialStamp = Date.now();
             const newEnv: Environment = {
               id: generateId(),
               name: name.trim() || 'New Environment',
               variables: [{ id: generateId(), key: '', value: '', initialValue: '', currentValue: '', enabled: true }],
               minRole: effectiveMinRole,
               version: 1,
-              createdAt: Date.now(),
-              updatedAt: Date.now(),
+              createdAt: initialStamp,
+              updatedAt: initialStamp,
+              ...(isCloudCreate ? { _syncStatus: 'pending' as const, _pendingCreate: true } : {}),
             };
             set((state) => ({
               environments: [...state.environments, newEnv],
               activeEnvironmentId: newEnv.id,
             }));
 
-            if (workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && cloudConfig.activeScope) {
+            if (isCloudCreate) {
               const operation = beginAsyncOperation();
-              createScopeEnvironment(
-                cloudConfig.apiUrl,
-                cloudConfig.token,
-                cloudConfig.activeScope,
+              const liveCloud = get().cloudConfig;
+              const createPromise = createScopeEnvironment(
+                liveCloud.apiUrl,
+                liveCloud.token,
+                cloudConfig.activeScope!,
                 {
                   name: newEnv.name,
                   variables: sanitizeVariablesForUpstream(newEnv.variables),
                   min_role: newEnv.minRole,
                 },
-                cloudConfig.refreshToken,
+                liveCloud.refreshToken,
                 operation.controller.signal
               ).then((created) => {
-                if (!isAsyncOperationCurrent(operation)) return;
+                if (!isAsyncOperationCurrent(operation)) return null;
                 if (created && created.id) {
+                  envIdAliasMap.set(newEnv.id, created.id);
+                  const latestLocalEnv = get().environments.find((e) => e.id === newEnv.id);
+                  const editedWhileCreating = Boolean(latestLocalEnv && latestLocalEnv.updatedAt > initialStamp);
                   set((state) => {
                     if (!isAsyncOperationCurrent(operation)) return {};
                     return {
                       environments: state.environments.map((e) =>
                         e.id === newEnv.id
-                          ? { ...e, id: created.id, version: created.version || 1 }
+                          ? {
+                              ...e,
+                              id: created.id,
+                              version: created.version || 1,
+                              _syncStatus: editedWhileCreating ? 'pending' : 'synced',
+                              _pendingCreate: undefined,
+                            }
                           : e
                       ),
                       activeEnvironmentId: state.activeEnvironmentId === newEnv.id ? created.id : state.activeEnvironmentId,
                     };
                   });
+                  if (editedWhileCreating) {
+                    scheduleEnvironmentCloudSync(created.id, get, set);
+                  }
+                  return created.id;
                 }
+                return null;
               }).catch((err) => {
-                if (!isAsyncOperationCurrent(operation)) return;
+                if (!isAsyncOperationCurrent(operation)) return null;
                 console.error('Failed to sync created environment to cloud:', err);
+                return null;
               }).finally(() => {
+                if (pendingEnvCreatePromises.get(newEnv.id) === createPromise) {
+                  pendingEnvCreatePromises.delete(newEnv.id);
+                }
                 completeAsyncOperation(operation);
               });
+              pendingEnvCreatePromises.set(newEnv.id, createPromise);
             }
 
             return newEnv.id;
           },
 
           deleteEnvironment: (id) => {
+            const resolvedAtCall = resolveCanonicalEnvId(id);
             const { workspaceMode, cloudConfig, environments } = get();
-            const env = environments.find((e) => e.id === id);
+            const env = environments.find((e) => e.id === id || e.id === resolvedAtCall);
             if (env && workspaceMode === 'cloud' && cloudConfig.activeScope?.type === 'project') {
               if (!hasScopePermission(cloudConfig.activeScope, 'env:delete', workspaceMode, cloudConfig.user?.role) ||
                 !canModifyEnvironment(env.minRole, cloudConfig.activeScope, workspaceMode, cloudConfig.user?.role)) {
@@ -3807,30 +4025,49 @@ export function createApiStore(
               }
             }
 
-            if (envSyncDebounceTimers[id]) {
-              clearTimeout(envSyncDebounceTimers[id]);
-              delete envSyncDebounceTimers[id];
+            for (const key of [id, resolvedAtCall]) {
+              if (envSyncDebounceTimers[key]) {
+                clearTimeout(envSyncDebounceTimers[key]);
+                delete envSyncDebounceTimers[key];
+              }
             }
 
             set((state) => ({
-              environments: state.environments.filter((e) => e.id !== id),
-              activeEnvironmentId: state.activeEnvironmentId === id ? null : state.activeEnvironmentId,
+              environments: state.environments.filter((e) => e.id !== id && e.id !== resolvedAtCall),
+              activeEnvironmentId:
+                state.activeEnvironmentId === id || state.activeEnvironmentId === resolvedAtCall
+                  ? null
+                  : state.activeEnvironmentId,
             }));
 
             if (workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig)) {
               const operation = beginAsyncOperation();
-              deleteScopeEnvironment(
-                cloudConfig.apiUrl,
-                cloudConfig.token,
-                id,
-                cloudConfig.refreshToken,
-                operation.controller.signal
-              ).catch((err) => {
-                if (!isAsyncOperationCurrent(operation)) return;
-                console.error('Failed to delete environment from cloud:', err);
-              }).finally(() => {
-                completeAsyncOperation(operation);
-              });
+              void (async () => {
+                try {
+                  const inFlightCreate = pendingEnvCreatePromises.get(id) || pendingEnvCreatePromises.get(resolvedAtCall);
+                  if (inFlightCreate) {
+                    await inFlightCreate.catch(() => null);
+                  }
+                  if (!isAsyncOperationCurrent(operation)) return;
+                  const targetEnvId = resolveCanonicalEnvId(id);
+                  if (env?._pendingCreate && targetEnvId === id && !envIdAliasMap.has(id)) {
+                    return;
+                  }
+                  const liveCloud = get().cloudConfig;
+                  await deleteScopeEnvironment(
+                    liveCloud.apiUrl,
+                    liveCloud.token,
+                    targetEnvId,
+                    liveCloud.refreshToken,
+                    operation.controller.signal
+                  );
+                } catch (err) {
+                  if (!isAsyncOperationCurrent(operation)) return;
+                  console.error('Failed to delete environment from cloud:', err);
+                } finally {
+                  completeAsyncOperation(operation);
+                }
+              })();
             }
           },
 
@@ -4065,6 +4302,7 @@ export function createApiStore(
               };
               const reconcileEnvToTargetScope = (remoteId: string, remoteVersion: number) => {
                 if (isStoreDisposed || cloudSessionGeneration !== capturedSessionGen) return;
+                envIdAliasMap.set(taggedEnv.id, remoteId);
                 if (isSameTargetScope()) {
                   set((state) => ({
                     environments: state.environments.map((e) =>
@@ -4098,11 +4336,12 @@ export function createApiStore(
               };
               try {
                 if (options?.isRetry) {
+                  const liveCloudRetry = get().cloudConfig;
                   const remoteEnvs = await fetchScopeEnvironmentsForRuntime(
-                    cloudConfig.apiUrl,
-                    cloudConfig.token,
+                    liveCloudRetry.apiUrl,
+                    liveCloudRetry.token,
                     targetScope,
-                    cloudConfig.refreshToken,
+                    liveCloudRetry.refreshToken,
                     operation.controller.signal
                   );
                   if (isStoreDisposed || cloudSessionGeneration !== capturedSessionGen) return taggedEnv.id;
@@ -4132,16 +4371,17 @@ export function createApiStore(
                   }
                 }
 
+                const liveCloudCreate = get().cloudConfig;
                 const created = await createScopeEnvironment(
-                  cloudConfig.apiUrl,
-                  cloudConfig.token,
+                  liveCloudCreate.apiUrl,
+                  liveCloudCreate.token,
                   targetScope,
                   {
                     name: taggedEnv.name,
                     variables: sanitizeVariablesForUpstream(taggedEnv.variables),
                     min_role: taggedEnv.minRole || 'reader',
                   },
-                  cloudConfig.refreshToken,
+                  liveCloudCreate.refreshToken,
                   operation.controller.signal
                 );
                 if (isStoreDisposed || cloudSessionGeneration !== capturedSessionGen) return taggedEnv.id;
@@ -4585,6 +4825,15 @@ export function createApiStore(
               if (activePerf && activePerf.tabId !== id) {
                 void stopActivePerformanceRun?.();
               }
+              const activeFunc = getActiveFunctionalRunState?.();
+              if (activeFunc && activeFunc.tabId !== id) {
+                void stopFunctionalRunHook?.(activeFunc.tabId);
+              }
+              const closingPerfTabs = (get().openPerformanceTabs || []).filter((p) => p.id !== id);
+              for (const p of closingPerfTabs) {
+                clearPerformanceDataRowsHook?.(p.id);
+                clearFunctionalSessionHook?.(p.id);
+              }
               if (activeRequestOperation) {
                 activeRequestOperation.controller.abort();
                 activeRequestOperation = null;
@@ -4596,6 +4845,21 @@ export function createApiStore(
                 delete undoTypingTimers[key];
               }
               set((state) => {
+                let nextPerformanceReports = state.performanceReports;
+                let nextFunctionalReports = state.functionalReports;
+                for (const p of state.openPerformanceTabs || []) {
+                  if (p.id === id) continue;
+                  if (p.viewingReportId && nextPerformanceReports?.[p.viewingReportId]) {
+                    const restPerf = { ...nextPerformanceReports };
+                    delete restPerf[p.viewingReportId];
+                    nextPerformanceReports = restPerf;
+                  }
+                  if (p.viewingFunctionalReportId && nextFunctionalReports?.[p.viewingFunctionalReportId]) {
+                    const restFunc = { ...nextFunctionalReports };
+                    delete restFunc[p.viewingFunctionalReportId];
+                    nextFunctionalReports = restFunc;
+                  }
+                }
                 revokeUnreferencedResponses(
                   [state.activeResponse, ...Object.values(state.tabResponses || {})],
                   [],
@@ -4615,6 +4879,8 @@ export function createApiStore(
                   tabOrder: [currentPerf.id],
                   selectedExample: null,
                   selectedPerformanceTabId: currentPerf.id,
+                  performanceReports: nextPerformanceReports,
+                  functionalReports: nextFunctionalReports,
                   tabRevealRevision: state.tabRevealRevision + 1,
                   isLoading: false,
                   canUndoActiveRequest: false,
@@ -4628,6 +4894,9 @@ export function createApiStore(
               const currentExample = (get().openExampleTabs || []).find((ex) => ex.id === id);
               if (!currentExample) return;
               void stopActivePerformanceRun?.();
+              clearPerformanceDataRowsHook?.();
+              clearFunctionalSessionHook?.();
+              void stopFunctionalRunHook?.();
 
               if (activeRequestOperation) {
                 activeRequestOperation.controller.abort();
@@ -4643,6 +4912,20 @@ export function createApiStore(
               }
 
               set((state) => {
+                let nextPerformanceReports = state.performanceReports;
+                let nextFunctionalReports = state.functionalReports;
+                for (const p of state.openPerformanceTabs || []) {
+                  if (p.viewingReportId && nextPerformanceReports?.[p.viewingReportId]) {
+                    const restPerf = { ...nextPerformanceReports };
+                    delete restPerf[p.viewingReportId];
+                    nextPerformanceReports = restPerf;
+                  }
+                  if (p.viewingFunctionalReportId && nextFunctionalReports?.[p.viewingFunctionalReportId]) {
+                    const restFunc = { ...nextFunctionalReports };
+                    delete restFunc[p.viewingFunctionalReportId];
+                    nextFunctionalReports = restFunc;
+                  }
+                }
                 revokeUnreferencedResponses(
                   [state.activeResponse, ...Object.values(state.tabResponses || {})],
                   [],
@@ -4666,6 +4949,8 @@ export function createApiStore(
                     exampleId: currentExample.exampleId,
                   },
                   selectedPerformanceTabId: null,
+                  performanceReports: nextPerformanceReports,
+                  functionalReports: nextFunctionalReports,
                   tabRevealRevision: state.tabRevealRevision + 1,
                   isLoading: false,
                   canUndoActiveRequest: false,
@@ -4676,6 +4961,9 @@ export function createApiStore(
             }
 
             void stopActivePerformanceRun?.();
+            clearPerformanceDataRowsHook?.();
+            clearFunctionalSessionHook?.();
+            void stopFunctionalRunHook?.();
             let aborted = false;
             if (activeRequestOperation && activeRequestTabId && activeRequestTabId !== id) {
               activeRequestOperation.controller.abort();
@@ -4701,6 +4989,21 @@ export function createApiStore(
               if (!targetTab) return state;
 
               const shouldResetLoading = aborted || (state.isLoading && !activeRequestOperation);
+
+              let nextPerformanceReports = state.performanceReports;
+              let nextFunctionalReports = state.functionalReports;
+              for (const p of state.openPerformanceTabs || []) {
+                if (p.viewingReportId && nextPerformanceReports?.[p.viewingReportId]) {
+                  const restPerf = { ...nextPerformanceReports };
+                  delete restPerf[p.viewingReportId];
+                  nextPerformanceReports = restPerf;
+                }
+                if (p.viewingFunctionalReportId && nextFunctionalReports?.[p.viewingFunctionalReportId]) {
+                  const restFunc = { ...nextFunctionalReports };
+                  delete restFunc[p.viewingFunctionalReportId];
+                  nextFunctionalReports = restFunc;
+                }
+              }
 
               const nextTabResponses: Record<string, ApiResponse> = {};
               if (state.tabResponses?.[id]) {
@@ -4730,6 +5033,8 @@ export function createApiStore(
                 tabOrder: [id],
                 selectedExample: null,
                 selectedPerformanceTabId: null,
+                performanceReports: nextPerformanceReports,
+                functionalReports: nextFunctionalReports,
                 tabRevealRevision: state.tabRevealRevision + 1,
                 canUndoActiveRequest: (tabUndoHistory[id]?.past?.length ?? 0) > 0,
                 canRedoActiveRequest: (tabUndoHistory[id]?.future?.length ?? 0) > 0,
@@ -4778,6 +5083,8 @@ export function createApiStore(
                 tabOrder: [],
                 selectedExample: null,
                 selectedPerformanceTabId: null,
+                performanceReports: {},
+                functionalReports: {},
                 isLoading: false,
                 canUndoActiveRequest: false,
                 canRedoActiveRequest: false,
@@ -4812,6 +5119,25 @@ export function createApiStore(
               const activeFunc = getActiveFunctionalRunState?.();
               if (activeFunc && !remainingPerfIds.has(activeFunc.tabId)) {
                 void stopFunctionalRunHook?.(activeFunc.tabId);
+              }
+              const closedPerfTabs = (state.openPerformanceTabs || []).filter((p) => !remainingPerfIds.has(p.id));
+              let nextPerformanceReports = state.performanceReports;
+              let nextFunctionalReports = state.functionalReports;
+              const stillOpenPerfIds = new Set(remainingPerformanceTabs.map((p) => p.viewingReportId).filter(Boolean));
+              const stillOpenFuncIds = new Set(remainingPerformanceTabs.map((p) => p.viewingFunctionalReportId).filter(Boolean));
+              for (const p of closedPerfTabs) {
+                clearPerformanceDataRowsHook?.(p.id);
+                clearFunctionalSessionHook?.(p.id);
+                if (p.viewingReportId && !stillOpenPerfIds.has(p.viewingReportId) && nextPerformanceReports?.[p.viewingReportId]) {
+                  const restPerf = { ...nextPerformanceReports };
+                  delete restPerf[p.viewingReportId];
+                  nextPerformanceReports = restPerf;
+                }
+                if (p.viewingFunctionalReportId && !stillOpenFuncIds.has(p.viewingFunctionalReportId) && nextFunctionalReports?.[p.viewingFunctionalReportId]) {
+                  const restFunc = { ...nextFunctionalReports };
+                  delete restFunc[p.viewingFunctionalReportId];
+                  nextFunctionalReports = restFunc;
+                }
               }
 
               for (const key of Object.keys(tabUndoHistory)) {
@@ -4895,6 +5221,8 @@ export function createApiStore(
                 openExampleTabs: remainingExampleTabs,
                 openPerformanceTabs: remainingPerformanceTabs,
                 tabOrder: remainingOrder,
+                performanceReports: nextPerformanceReports,
+                functionalReports: nextFunctionalReports,
                 selectedExample: nextSelectedExample,
                 selectedPerformanceTabId: nextSelectedPerfId,
                 tabRevealRevision: nextRevealRevision,
@@ -5627,6 +5955,7 @@ export function createApiStore(
               };
             });
 
+            let pendingResponseCleanup: { blobUrl?: string; rawBodyId?: string } | null = null;
             try {
               // 1. Collect current active environment variables
               const activeEnv = state.environments.find((e) => e.id === state.activeEnvironmentId);
@@ -5683,11 +6012,17 @@ export function createApiStore(
                   timestamp: Date.now(),
                 };
 
-                set((s) => ({
-                  activeResponse: scriptFailureResponse,
-                  tabResponses: { ...(s.tabResponses || {}), [activeReq.id]: scriptFailureResponse },
-                  isLoading: false,
-                }));
+                set((s) => {
+                  const isCurrentTab = s.activeTabId === activeReq.id;
+                  const tabStillExists = s.tabs.some((t) => t.id === activeReq.id);
+                  return {
+                    ...(isCurrentTab ? { activeResponse: scriptFailureResponse } : {}),
+                    tabResponses: tabStillExists
+                      ? { ...(s.tabResponses || {}), [activeReq.id]: scriptFailureResponse }
+                      : (s.tabResponses || {}),
+                    isLoading: false,
+                  };
+                });
                 return;
               }
 
@@ -5784,9 +6119,11 @@ export function createApiStore(
                 operation.controller.signal,
                 boundAdapter
               );
+              pendingResponseCleanup = { blobUrl: response.blobUrl, rawBodyId: response.rawBodyId };
               if (!isAsyncOperationCurrent(operation)) {
                 revokeBlobUrl(response.blobUrl);
                 safeReleaseRawBody(response.rawBodyId);
+                pendingResponseCleanup = null;
                 return;
               }
 
@@ -5808,6 +6145,7 @@ export function createApiStore(
                 if (!isAsyncOperationCurrent(operation)) {
                   revokeBlobUrl(response.blobUrl);
                   safeReleaseRawBody(response.rawBodyId);
+                  pendingResponseCleanup = null;
                   return;
                 }
 
@@ -5884,6 +6222,7 @@ export function createApiStore(
                   }
                   : (s.tabResponses || {});
 
+                pendingResponseCleanup = null;
                 const nextActiveResponse = isCurrentTab ? finalResponse : s.activeResponse;
                 const protectedResponses = [
                   nextActiveResponse,
@@ -5941,6 +6280,11 @@ export function createApiStore(
                 };
               });
             } catch (err: unknown) {
+              if (pendingResponseCleanup) {
+                revokeBlobUrl(pendingResponseCleanup.blobUrl);
+                safeReleaseRawBody(pendingResponseCleanup.rawBodyId);
+                pendingResponseCleanup = null;
+              }
               if (!isAsyncOperationCurrent(operation)) return;
               const errorMsg = err instanceof Error ? err.message : String(err);
               const fallbackResponse: ApiResponse = {
@@ -5980,16 +6324,19 @@ export function createApiStore(
           cancelActiveRequest: () => {
             const operation = activeRequestOperation;
             if (!operation || operation.controller.signal.aborted) return;
+            const targetTabId = activeRequestTabId || get().activeTabId;
             operation.controller.abort();
             activeRequestOperation = null;
             activeRequestTabId = null;
             set((state) => {
-              const prevTabResponse = state.tabResponses?.[state.activeTabId];
+              const isCurrentTab = state.activeTabId === targetTabId;
+              const targetTabExists = state.tabs.some((tab) => tab.id === targetTabId);
+              const prevTabResponse = state.tabResponses?.[targetTabId];
               const remainingTabResponses = Object.entries(state.tabResponses || {})
-                .filter(([tabId]) => tabId !== state.activeTabId)
+                .filter(([tabId]) => tabId !== targetTabId)
                 .map(([, res]) => res);
               revokeUnreferencedResponses(
-                [prevTabResponse, state.activeResponse],
+                [prevTabResponse, isCurrentTab ? state.activeResponse : undefined],
                 remainingTabResponses,
                 [
                   state.history,
@@ -6007,13 +6354,15 @@ export function createApiStore(
                 data: 'Request was cancelled before a complete response was received.',
                 isError: true,
                 failureKind: 'cancelled',
-                requestUrl: state.tabs.find((tab) => tab.id === state.activeTabId)?.url,
+                requestUrl: state.tabs.find((tab) => tab.id === targetTabId)?.url,
                 timestamp: Date.now(),
               };
               return {
                 isLoading: false,
-                activeResponse: cancelledResponse,
-                tabResponses: { ...(state.tabResponses || {}), [state.activeTabId]: cancelledResponse },
+                ...(isCurrentTab ? { activeResponse: cancelledResponse } : {}),
+                tabResponses: targetTabExists
+                  ? { ...(state.tabResponses || {}), [targetTabId]: cancelledResponse }
+                  : (state.tabResponses || {}),
               };
             });
           },
@@ -6202,8 +6551,12 @@ export function createApiStore(
               return;
             }
             const col = collections.find((c) => c.id === id);
-            if (col?._needsMoveReconciliation) {
-              set({ syncError: 'Sync the workspace to confirm the previous move before renaming.' });
+            if (col?._needsMoveReconciliation || col?.isPartial) {
+              set({
+                syncError: col?.isPartial
+                  ? 'Wait for collection details to finish loading before renaming.'
+                  : 'Sync the workspace to confirm the previous move before renaming.',
+              });
               return;
             }
             if (col) {
@@ -6430,6 +6783,12 @@ export function createApiStore(
                 tabs: [...state.tabs, newReq],
                 activeTabId: reqId,
                 activeResponse: null,
+                selectedExample: null,
+                selectedPerformanceTabId: null,
+                tabOrder: [...syncVisualTabOrder(state.tabs, state.openExampleTabs, state.tabOrder, state.openPerformanceTabs), reqId],
+                tabRevealRevision: state.tabRevealRevision + 1,
+                canUndoActiveRequest: false,
+                canRedoActiveRequest: false,
               };
             });
 
@@ -8254,6 +8613,7 @@ export function createApiStore(
                   return {
                     collections: remainingCols,
                     scopeCache: updatedScopeCache,
+                    ...pruneExampleTabsState(state, (sel) => sel.collectionId !== collectionId),
                     syncStatus: 'idle',
                   };
                 });
@@ -8439,6 +8799,13 @@ export function createApiStore(
             const tabId = config.id || makePerformanceTabId(config.sourceType, config.sourceId);
             set((state) => {
               const existing = (state.openPerformanceTabs || []).find((p) => p.id === tabId);
+              if (existing && existing.viewMode === 'running') {
+                return {
+                  selectedExample: null,
+                  selectedPerformanceTabId: tabId,
+                  tabRevealRevision: state.tabRevealRevision + 1,
+                };
+              }
               const nextRunnerMode = config.runnerMode || existing?.runnerMode || 'performance';
               const nextTab: OpenPerformanceTab = existing
                 ? {
@@ -8525,20 +8892,24 @@ export function createApiStore(
 
               let nextPerformanceReports = state.performanceReports;
               let nextFunctionalReports = state.functionalReports;
-              if (closingTab.isSessionOnlyImported) {
-                if (closingTab.viewingReportId && state.performanceReports?.[closingTab.viewingReportId]) {
-                  const restPerf = { ...state.performanceReports };
-                  delete restPerf[closingTab.viewingReportId];
-                  nextPerformanceReports = restPerf;
-                }
-                if (
-                  closingTab.viewingFunctionalReportId &&
-                  state.functionalReports?.[closingTab.viewingFunctionalReportId]
-                ) {
-                  const restFunc = { ...state.functionalReports };
-                  delete restFunc[closingTab.viewingFunctionalReportId];
-                  nextFunctionalReports = restFunc;
-                }
+              const remainingTabsAfterClose = (state.openPerformanceTabs || []).filter((p) => p.id !== tabId);
+              if (
+                closingTab.viewingReportId &&
+                state.performanceReports?.[closingTab.viewingReportId] &&
+                !remainingTabsAfterClose.some((p) => p.viewingReportId === closingTab.viewingReportId)
+              ) {
+                const restPerf = { ...nextPerformanceReports };
+                delete restPerf[closingTab.viewingReportId];
+                nextPerformanceReports = restPerf;
+              }
+              if (
+                closingTab.viewingFunctionalReportId &&
+                state.functionalReports?.[closingTab.viewingFunctionalReportId] &&
+                !remainingTabsAfterClose.some((p) => p.viewingFunctionalReportId === closingTab.viewingFunctionalReportId)
+              ) {
+                const restFunc = { ...nextFunctionalReports };
+                delete restFunc[closingTab.viewingFunctionalReportId];
+                nextFunctionalReports = restFunc;
               }
 
               const ordered = buildOrderedVisualTabs(state.tabs, state.openExampleTabs, state.tabOrder, state.openPerformanceTabs);
@@ -8639,8 +9010,26 @@ export function createApiStore(
             }));
           },
 
-          applyEnvironmentVariableUpdates: (updates, unsetKeys = []) => {
-            const activeEnvId = get().activeEnvironmentId;
+          removePerformanceReport: (reportId) => {
+            set((state) => {
+              if (!state.performanceReports?.[reportId]) return state;
+              const next = { ...state.performanceReports };
+              delete next[reportId];
+              return { performanceReports: next };
+            });
+          },
+
+          removeFunctionalReport: (reportId) => {
+            set((state) => {
+              if (!state.functionalReports?.[reportId]) return state;
+              const next = { ...state.functionalReports };
+              delete next[reportId];
+              return { functionalReports: next };
+            });
+          },
+
+          applyEnvironmentVariableUpdates: (updates, unsetKeys = [], targetEnvId) => {
+            const activeEnvId = targetEnvId ?? get().activeEnvironmentId;
             if (!activeEnvId) return [];
             const unsetSet = new Set(unsetKeys);
             const changedKeys: string[] = [];
@@ -8764,8 +9153,8 @@ export function createApiStore(
               }
             }
 
-            const isCloud = !isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && Boolean(cloudConfig.activeScope);
-            if (isCloud) {
+            const initialIsCloud = !isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && Boolean(cloudConfig.activeScope);
+            if (initialIsCloud) {
               const supported = await ensureSavedExamplesCapability();
               if (!supported) {
                 return {
@@ -8775,7 +9164,13 @@ export function createApiStore(
               }
             }
 
-            const preMutationCollections = get().collections;
+            const liveAfterCap = get();
+            const liveCol = liveAfterCap.collections.find((c) => c.id === collectionId);
+            if (!liveCol || !findCollectionItemById(liveCol.items, itemId)) {
+              return { success: false, error: 'Target collection or request no longer exists.' };
+            }
+            const isCloud = !isOfflineOnly && liveAfterCap.workspaceMode === 'cloud' && isCloudSessionActive(liveAfterCap.cloudConfig) && Boolean(liveAfterCap.cloudConfig.activeScope);
+            const preMutationCollections = liveAfterCap.collections;
             const applyLocalAdd = (cols: Collection[]): Collection[] =>
               cols.map((c) => {
                 if (c.id !== collectionId) return c;
@@ -8785,8 +9180,9 @@ export function createApiStore(
                 return res.found ? { ...c, items: res.items, updatedAt: Date.now() } : c;
               });
 
+            const liveItemAfterCap = findCollectionItemById(liveCol.items, itemId)!;
             const opId = generateId();
-            const ownerKey = isCloud ? cloudCacheOwnerKey(cloudConfig, normalizeCloudApiUrl) : null;
+            const ownerKey = isCloud ? cloudCacheOwnerKey(liveAfterCap.cloudConfig, normalizeCloudApiUrl) : null;
             const intent: PendingExampleIntent | null = isCloud
               ? {
                 operationId: opId,
@@ -8795,9 +9191,9 @@ export function createApiStore(
                 collectionId,
                 itemId,
                 exampleId: builtExample.id,
-                baseVersion: typeof targetItem.version === 'number' ? targetItem.version : 1,
+                baseVersion: typeof liveItemAfterCap.version === 'number' ? liveItemAfterCap.version : 1,
                 example: builtExample,
-                targetScope: cloudConfig.activeScope,
+                targetScope: liveAfterCap.cloudConfig.activeScope,
                 createdAt: Date.now(),
                 status: 'pending',
               }
@@ -8872,19 +9268,27 @@ export function createApiStore(
               return { success: false, error: 'Saved example not found.' };
             }
 
-            const isCloud = !isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && Boolean(cloudConfig.activeScope);
-            if (isCloud) {
+            const initialIsCloud = !isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && Boolean(cloudConfig.activeScope);
+            if (initialIsCloud) {
               const supported = await ensureSavedExamplesCapability();
               if (!supported) {
                 return { success: false, error: 'This cloud server does not support Saved Examples.' };
               }
             }
 
-            const preMutationCollections = get().collections;
+            const liveAfterCap = get();
+            const liveCol = liveAfterCap.collections.find((c) => c.id === collectionId);
+            const liveItem = liveCol ? findCollectionItemById(liveCol.items, itemId) : undefined;
+            const liveTarget = liveItem?.examples?.find((ex) => ex.id === exampleId) || liveItem?.exampleSummaries?.find((s) => s.id === exampleId);
+            if (!liveCol || !liveItem || !liveTarget) {
+              return { success: false, error: 'Saved example or request no longer exists.' };
+            }
+            const isCloud = !isOfflineOnly && liveAfterCap.workspaceMode === 'cloud' && isCloudSessionActive(liveAfterCap.cloudConfig) && Boolean(liveAfterCap.cloudConfig.activeScope);
+            const preMutationCollections = liveAfterCap.collections;
             const opId = generateId();
-            const baseRevision = typeof existingTarget.revision === 'number' ? existingTarget.revision : 1;
+            const baseRevision = typeof liveTarget.revision === 'number' ? liveTarget.revision : 1;
             const nextRevision = baseRevision + 1;
-            const ownerKey = isCloud ? cloudCacheOwnerKey(cloudConfig, normalizeCloudApiUrl) : null;
+            const ownerKey = isCloud ? cloudCacheOwnerKey(liveAfterCap.cloudConfig, normalizeCloudApiUrl) : null;
             const intent: PendingExampleIntent | null = isCloud
               ? {
                 operationId: opId,
@@ -8893,10 +9297,10 @@ export function createApiStore(
                 collectionId,
                 itemId,
                 exampleId,
-                baseVersion: typeof targetItem.version === 'number' ? targetItem.version : 1,
+                baseVersion: typeof liveItem.version === 'number' ? liveItem.version : 1,
                 baseExampleRevision: baseRevision,
                 name: trimmedName,
-                targetScope: cloudConfig.activeScope,
+                targetScope: liveAfterCap.cloudConfig.activeScope,
                 createdAt: Date.now(),
                 status: 'pending',
               }
@@ -8972,21 +9376,29 @@ export function createApiStore(
               return { success: false, error: 'Saved example not found.' };
             }
 
-            const isCloud = !isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && Boolean(cloudConfig.activeScope);
-            if (isCloud) {
+            const initialIsCloud = !isOfflineOnly && workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && Boolean(cloudConfig.activeScope);
+            if (initialIsCloud) {
               const supported = await ensureSavedExamplesCapability();
               if (!supported) {
                 return { success: false, error: 'This cloud server does not support Saved Examples.' };
               }
             }
 
-            const preMutationCollections = get().collections;
-            const prevSelectedExample = get().selectedExample;
-            const prevOpenExampleTabs = get().openExampleTabs;
-            const prevTabOrder = get().tabOrder;
+            const liveAfterCap = get();
+            const liveCol = liveAfterCap.collections.find((c) => c.id === collectionId);
+            const liveItem = liveCol ? findCollectionItemById(liveCol.items, itemId) : undefined;
+            const liveTarget = liveItem?.examples?.find((ex) => ex.id === exampleId) || liveItem?.exampleSummaries?.find((s) => s.id === exampleId);
+            if (!liveCol || !liveItem || !liveTarget) {
+              return { success: false, error: 'Saved example or request no longer exists.' };
+            }
+            const isCloud = !isOfflineOnly && liveAfterCap.workspaceMode === 'cloud' && isCloudSessionActive(liveAfterCap.cloudConfig) && Boolean(liveAfterCap.cloudConfig.activeScope);
+            const preMutationCollections = liveAfterCap.collections;
+            const prevSelectedExample = liveAfterCap.selectedExample;
+            const prevOpenExampleTabs = liveAfterCap.openExampleTabs;
+            const prevTabOrder = liveAfterCap.tabOrder;
             const opId = generateId();
-            const baseRevision = typeof existingTarget.revision === 'number' ? existingTarget.revision : 1;
-            const ownerKey = isCloud ? cloudCacheOwnerKey(cloudConfig, normalizeCloudApiUrl) : null;
+            const baseRevision = typeof liveTarget.revision === 'number' ? liveTarget.revision : 1;
+            const ownerKey = isCloud ? cloudCacheOwnerKey(liveAfterCap.cloudConfig, normalizeCloudApiUrl) : null;
             const intent: PendingExampleIntent | null = isCloud
               ? {
                 operationId: opId,
@@ -8995,9 +9407,9 @@ export function createApiStore(
                 collectionId,
                 itemId,
                 exampleId,
-                baseVersion: typeof targetItem.version === 'number' ? targetItem.version : 1,
+                baseVersion: typeof liveItem.version === 'number' ? liveItem.version : 1,
                 baseExampleRevision: baseRevision,
-                targetScope: cloudConfig.activeScope,
+                targetScope: liveAfterCap.cloudConfig.activeScope,
                 createdAt: Date.now(),
                 status: 'pending',
               }
@@ -9163,12 +9575,13 @@ export function createApiStore(
                   if (!isAsyncOperationCurrent(operation) || isStoreDisposed) {
                     return { success: false, error: 'Session or scope changed.' };
                   }
+                  const liveCloudPage = get().cloudConfig;
                   const page = await fetchScopeCollectionExamples(
-                    cloudConfig.apiUrl,
-                    cloudConfig.token,
+                    liveCloudPage.apiUrl,
+                    liveCloudPage.token,
                     collectionId,
                     { cursor, limit: 100, includeBody },
-                    cloudConfig.refreshToken,
+                    liveCloudPage.refreshToken,
                     operation.controller.signal,
                   );
                   if (expectedCollectionVersion === null) {
@@ -9419,11 +9832,12 @@ export function createApiStore(
                 let rawScopeKey: string | null = null;
                 let detailsError: string | undefined;
                 try {
+                  const liveCloud = get().cloudConfig;
                   const raw = await fetchCollectionByIdForRuntime(
-                    cloudConfig.apiUrl,
-                    cloudConfig.token,
+                    liveCloud.apiUrl,
+                    liveCloud.token,
                     receipt.collection_id,
-                    cloudConfig.refreshToken,
+                    liveCloud.refreshToken,
                     operationSignal,
                   );
                   rawScopeKey = raw?.workspace_id
@@ -9534,13 +9948,14 @@ export function createApiStore(
                 const capturedSessionGen = cloudSessionGeneration;
                 try {
                   set({ syncStatus: 'syncing', syncError: null });
+                  const liveCloudReplay = get().cloudConfig;
                   const receipt = await importDuplicateCollection(
-                    cloudConfig.apiUrl,
-                    cloudConfig.token,
+                    liveCloudReplay.apiUrl,
+                    liveCloudReplay.token,
                     targetScope,
                     existingIntent.sanitizedPayload,
                     existingIntent.operationId,
-                    cloudConfig.refreshToken,
+                    liveCloudReplay.refreshToken,
                     operation.controller.signal,
                   );
                   const stillSameOwner =
@@ -9605,13 +10020,14 @@ export function createApiStore(
                 const capturedSessionGen = cloudSessionGeneration;
                 try {
                   set({ syncStatus: 'syncing', syncError: null });
+                  const liveCloudDup = get().cloudConfig;
                   const receipt = await duplicateScopeCollection(
-                    cloudConfig.apiUrl,
-                    cloudConfig.token,
+                    liveCloudDup.apiUrl,
+                    liveCloudDup.token,
                     existingIntent.sourceCollectionId,
                     targetScope,
                     existingIntent.operationId,
-                    cloudConfig.refreshToken,
+                    liveCloudDup.refreshToken,
                     operation.controller.signal,
                   );
                   const stillSameOwner =
@@ -9619,8 +10035,8 @@ export function createApiStore(
                     cloudSessionGeneration === capturedSessionGen &&
                     currentOwnerKey !== null &&
                     cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
-                  if (!stillSameOwner || !isAsyncOperationCurrent(operation)) {
-                    return { success: false, error: 'Session or scope changed.', operationId: existingIntent.operationId };
+                  if (!stillSameOwner) {
+                    return { success: false, error: 'Session changed.', operationId: existingIntent.operationId };
                   }
                   return await finalizeCommittedCollectionReceipt(
                     existingIntent.operationId,
@@ -9629,16 +10045,17 @@ export function createApiStore(
                     capturedSessionGen,
                     currentOwnerKey,
                     operation.controller.signal,
-                    () => isAsyncOperationCurrent(operation),
+                    () => !isStoreDisposed && isAsyncOperationCurrent(operation),
                   );
                 } catch (err: unknown) {
                   const rejected = err instanceof CloudApiError && [400, 403, 404, 409, 413].includes(err.status);
                   const errMsg = err instanceof Error ? err.message : 'Failed to duplicate collection';
-                  const stillCurrent =
-                    isAsyncOperationCurrent(operation) &&
+                  const stillSameOwner =
+                    !isStoreDisposed &&
                     cloudSessionGeneration === capturedSessionGen &&
+                    currentOwnerKey !== null &&
                     cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
-                  if (stillCurrent) {
+                  if (stillSameOwner) {
                     set((state) => ({
                       pendingDuplicateIntents: rejected
                         ? withoutPendingDuplicateIntent(state.pendingDuplicateIntents, existingIntent.operationId)
@@ -9885,13 +10302,14 @@ export function createApiStore(
 
                 try {
                   set({ syncStatus: 'syncing', syncError: null });
+                  const liveCloudImpDup = get().cloudConfig;
                   const receipt = await importDuplicateCollection(
-                    cloudConfig.apiUrl,
-                    cloudConfig.token,
+                    liveCloudImpDup.apiUrl,
+                    liveCloudImpDup.token,
                     targetScope,
                     sanitizedPayload,
                     opId,
-                    cloudConfig.refreshToken,
+                    liveCloudImpDup.refreshToken,
                     operation.controller.signal,
                   );
                   const stillSameOwner =
@@ -9908,7 +10326,10 @@ export function createApiStore(
                     capturedSessionGen,
                     currentOwnerKey,
                     operation.controller.signal,
-                    () => !isStoreDisposed && isAsyncOperationCurrent(operation),
+                    () =>
+                      !isStoreDisposed &&
+                      cloudSessionGeneration === capturedSessionGen &&
+                      cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey,
                   );
                 } catch (err: unknown) {
                   const rejected = err instanceof CloudApiError && [400, 401, 403, 404, 409, 413, 415].includes(err.status);
@@ -10028,21 +10449,23 @@ export function createApiStore(
               }
 
               set({ syncStatus: 'syncing', syncError: null });
+              const liveCloudMainDup = get().cloudConfig;
               const receipt = await duplicateScopeCollection(
-                cloudConfig.apiUrl,
-                cloudConfig.token,
+                liveCloudMainDup.apiUrl,
+                liveCloudMainDup.token,
                 collectionId,
                 targetScope,
                 opId,
-                cloudConfig.refreshToken,
+                liveCloudMainDup.refreshToken,
                 operation.controller.signal,
               );
-              if (
-                !isAsyncOperationCurrent(operation) ||
-                cloudSessionGeneration !== capturedSessionGen ||
-                cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) !== currentOwnerKey
-              ) {
-                return { success: false, operationId: opId, error: 'Session or scope changed.' };
+              const stillSameOwner =
+                !isStoreDisposed &&
+                cloudSessionGeneration === capturedSessionGen &&
+                currentOwnerKey !== null &&
+                cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
+              if (!stillSameOwner) {
+                return { success: false, operationId: opId, error: 'Session changed.' };
               }
 
               return await finalizeCommittedCollectionReceipt(
@@ -10057,11 +10480,12 @@ export function createApiStore(
             } catch (err: unknown) {
               const rejected = err instanceof CloudApiError && [400, 401, 403, 404, 409, 413].includes(err.status);
               const errMsg = err instanceof Error ? err.message : 'Failed to duplicate collection';
-              const stillCurrent =
-                isAsyncOperationCurrent(operation) &&
+              const stillSameOwner =
+                !isStoreDisposed &&
                 cloudSessionGeneration === capturedSessionGen &&
+                currentOwnerKey !== null &&
                 cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
-              if (stillCurrent) {
+              if (stillSameOwner) {
                 set((state) => ({
                   pendingDuplicateIntents: rejected
                     ? withoutPendingDuplicateIntent(state.pendingDuplicateIntents, opId)
@@ -10157,11 +10581,12 @@ export function createApiStore(
               let rawScopeKey: string | null = null;
               let detailsError: string | undefined;
               try {
+                const liveCloudItemGet = get().cloudConfig;
                 const rawTargetCol = await fetchCollectionByIdForRuntime(
-                  cloudConfig.apiUrl,
-                  cloudConfig.token,
+                  liveCloudItemGet.apiUrl,
+                  liveCloudItemGet.token,
                   receipt.target_collection_id,
-                  cloudConfig.refreshToken,
+                  liveCloudItemGet.refreshToken,
                   operationSignal,
                 );
                 const activeScopeNow = get().cloudConfig.activeScope;
@@ -10219,10 +10644,22 @@ export function createApiStore(
                   ];
 
                 set((state) => {
-                  const exists = state.collections.some((c) => c.id === refreshedTargetCol!.id);
-                  const nextCollections = exists
-                    ? state.collections.map((c) => (c.id === refreshedTargetCol!.id ? refreshedTargetCol! : c))
+                  const existingTarget = state.collections.find((c) => c.id === refreshedTargetCol!.id);
+                  const preservedTarget = existingTarget
+                    ? {
+                      ...refreshedTargetCol!,
+                      items: preserveHydratedItemExamples(refreshedTargetCol!.items || [], existingTarget.items || []),
+                    }
+                    : refreshedTargetCol!;
+                  const updatedTarget = existingTarget
+                    ? state.collections.map((c) => (c.id === preservedTarget.id ? preservedTarget : c))
                     : state.collections;
+                  const nextCollections = overlayPendingExampleIntentsOnCollections(
+                    updatedTarget,
+                    state.pendingExampleIntents,
+                    ownerKey,
+                    state.cloudConfig.activeScope,
+                  );
                   return {
                     pendingDuplicateIntents: withoutPendingDuplicateIntent(state.pendingDuplicateIntents, opId),
                     collections: nextCollections,
@@ -10310,23 +10747,25 @@ export function createApiStore(
               const capturedSessionGen = cloudSessionGeneration;
               try {
                 set({ syncStatus: 'syncing', syncError: null });
+                const liveCloudItemReplay = get().cloudConfig;
                 const receipt = await duplicateScopeItem(
-                  cloudConfig.apiUrl,
-                  cloudConfig.token,
+                  liveCloudItemReplay.apiUrl,
+                  liveCloudItemReplay.token,
                   existingIntent.sourceItemId || itemId,
                   replaySourceColId,
                   replayTargetColId,
                   existingIntent.targetParentId ?? targetParentId,
                   existingIntent.operationId,
-                  cloudConfig.refreshToken,
+                  liveCloudItemReplay.refreshToken,
                   operation.controller.signal,
                 );
-                if (
-                  !isAsyncOperationCurrent(operation) ||
-                  cloudSessionGeneration !== capturedSessionGen ||
-                  cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) !== currentOwnerKey
-                ) {
-                  return { success: false, operationId: existingIntent.operationId, error: 'Session or scope changed.' };
+                const stillSameOwner =
+                  !isStoreDisposed &&
+                  cloudSessionGeneration === capturedSessionGen &&
+                  currentOwnerKey !== null &&
+                  cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
+                if (!stillSameOwner) {
+                  return { success: false, operationId: existingIntent.operationId, error: 'Session changed.' };
                 }
                 return await finalizeCommittedItemReceipt(
                   existingIntent.operationId,
@@ -10339,11 +10778,12 @@ export function createApiStore(
               } catch (err: unknown) {
                 const rejected = err instanceof CloudApiError && [400, 403, 404, 409, 413].includes(err.status);
                 const errMsg = err instanceof Error ? err.message : 'Failed to duplicate item';
-                const stillCurrent =
-                  isAsyncOperationCurrent(operation) &&
+                const stillSameOwner =
+                  !isStoreDisposed &&
                   cloudSessionGeneration === capturedSessionGen &&
+                  currentOwnerKey !== null &&
                   cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
-                if (stillCurrent) {
+                if (stillSameOwner) {
                   set((state) => ({
                     pendingDuplicateIntents: rejected
                       ? withoutPendingDuplicateIntent(state.pendingDuplicateIntents, existingIntent.operationId)
@@ -10574,23 +11014,25 @@ export function createApiStore(
                 return { success: false, operationId: opId, error: 'Session or scope changed.' };
               }
 
+              const liveCloudItemDup = get().cloudConfig;
               const receipt = await duplicateScopeItem(
-                cloudConfig.apiUrl,
-                cloudConfig.token,
+                liveCloudItemDup.apiUrl,
+                liveCloudItemDup.token,
                 savedItem.id,
                 sourceCollectionId,
                 targetCollectionId,
                 targetParentId,
                 opId,
-                cloudConfig.refreshToken,
+                liveCloudItemDup.refreshToken,
                 operation.controller.signal,
               );
-              if (
-                !isAsyncOperationCurrent(operation) ||
-                cloudSessionGeneration !== capturedSessionGen ||
-                cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) !== currentOwnerKey
-              ) {
-                return { success: false, operationId: opId, error: 'Session or scope changed.' };
+              const stillSameOwner =
+                !isStoreDisposed &&
+                cloudSessionGeneration === capturedSessionGen &&
+                currentOwnerKey !== null &&
+                cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
+              if (!stillSameOwner) {
+                return { success: false, operationId: opId, error: 'Session changed.' };
               }
 
               return await finalizeCommittedItemReceipt(
@@ -10604,11 +11046,12 @@ export function createApiStore(
             } catch (err: unknown) {
               const rejected = err instanceof CloudApiError && [400, 401, 403, 404, 409, 413].includes(err.status);
               const errMsg = err instanceof Error ? err.message : 'Failed to duplicate item';
-              const stillCurrent =
-                isAsyncOperationCurrent(operation) &&
+              const stillSameOwner =
+                !isStoreDisposed &&
                 cloudSessionGeneration === capturedSessionGen &&
+                currentOwnerKey !== null &&
                 cloudCacheOwnerKey(get().cloudConfig, normalizeCloudApiUrl) === currentOwnerKey;
-              if (stillCurrent) {
+              if (stillSameOwner) {
                 set((state) => ({
                   pendingDuplicateIntents: rejected
                     ? withoutPendingDuplicateIntent(state.pendingDuplicateIntents, opId)
@@ -11116,6 +11559,10 @@ export function createApiStore(
   }) as typeof store.setState;
 
   (store as ApiStore).dispose = () => {
+    void stopActivePerformanceRun?.();
+    void stopFunctionalRunHook?.();
+    clearPerformanceDataRowsHook?.();
+    clearFunctionalSessionHook?.();
     const snapshot = store.getState();
     const { blobUrls, rawBodyIds } = collectProtectedResponseHandles(
       [snapshot.activeResponse, ...Object.values(snapshot.tabResponses || {})],

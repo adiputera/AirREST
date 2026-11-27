@@ -35,16 +35,13 @@ func (h *SyncHandler) Pull(w http.ResponseWriter, r *http.Request) {
 	projIDStr := r.URL.Query().Get("project_id")
 	sinceStr := r.URL.Query().Get("since")
 
-	var wsID, projID *uuid.UUID
-	if wsIDStr != "" {
-		if id, err := uuid.Parse(wsIDStr); err == nil {
-			wsID = &id
-		}
+	wsID, ok := parseOptionalQueryUUID(w, wsIDStr, "invalid workspace_id")
+	if !ok {
+		return
 	}
-	if projIDStr != "" {
-		if id, err := uuid.Parse(projIDStr); err == nil {
-			projID = &id
-		}
+	projID, ok := parseOptionalQueryUUID(w, projIDStr, "invalid project_id")
+	if !ok {
+		return
 	}
 
 	since := time.Unix(0, 0) // default to epoch if not provided
@@ -53,6 +50,9 @@ func (h *SyncHandler) Pull(w http.ResponseWriter, r *http.Request) {
 			since = t
 		} else if t, err := time.Parse(time.RFC3339, sinceStr); err == nil {
 			since = t
+		} else {
+			response.Error(w, http.StatusBadRequest, "invalid since timestamp", "BAD_REQUEST")
+			return
 		}
 	}
 

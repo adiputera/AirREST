@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -10,6 +12,7 @@ import (
 	"github.com/adiputera/airrest-backend/core/repository/postgres"
 	"github.com/adiputera/airrest-backend/core/service"
 	"github.com/adiputera/airrest-backend/pkg/response"
+	"github.com/adiputera/airrest-backend/pkg/token"
 )
 
 type AuthHandler struct {
@@ -88,7 +91,16 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 
 	user, tokens, err := h.authService.RefreshToken(r.Context(), req.RefreshToken)
 	if err != nil {
-		response.Error(w, http.StatusUnauthorized, "invalid or expired refresh token", "INVALID_REFRESH_TOKEN")
+		if errors.Is(err, token.ErrInvalidRefreshToken) {
+			response.Error(w, http.StatusUnauthorized, "invalid or expired refresh token", "INVALID_REFRESH_TOKEN")
+			return
+		}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			response.Error(w, http.StatusServiceUnavailable, "authentication service timed out", "REQUEST_TIMEOUT")
+			return
+		}
+		slog.Error("failed to refresh token", "error", err)
+		response.Error(w, http.StatusInternalServerError, "failed to refresh token", "DATABASE_ERROR")
 		return
 	}
 
@@ -137,10 +149,11 @@ func (h *AuthHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 
 	updatedUser, err := h.authService.UpdateProfile(r.Context(), user.ID, req.Name, req.AvatarURL)
 	if err != nil {
-		if errors.Is(err, service.ErrNameRequired) {
+		if errors.Is(err, service.ErrNameRequired) || errors.Is(err, service.ErrNameTooLong) {
 			response.Error(w, http.StatusBadRequest, err.Error(), "VALIDATION_ERROR")
 			return
 		}
+		slog.Error("failed to update profile", "user_id", user.ID, "error", err)
 		response.Error(w, http.StatusInternalServerError, "failed to update profile", "SERVER_ERROR")
 		return
 	}
@@ -168,10 +181,11 @@ func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusBadRequest, err.Error(), "INVALID_CURRENT_PASSWORD")
 			return
 		}
-		if errors.Is(err, service.ErrPasswordTooShort) {
+		if errors.Is(err, service.ErrPasswordTooShort) || errors.Is(err, service.ErrPasswordTooLong) {
 			response.Error(w, http.StatusBadRequest, err.Error(), "VALIDATION_ERROR")
 			return
 		}
+		slog.Error("failed to change password", "user_id", user.ID, "error", err)
 		response.Error(w, http.StatusInternalServerError, "failed to change password", "SERVER_ERROR")
 		return
 	}
