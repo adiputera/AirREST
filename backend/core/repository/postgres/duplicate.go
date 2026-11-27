@@ -360,6 +360,12 @@ func reserveOrLoadOperationInTx(
 		return nil, false, err
 	}
 	if res.RowsAffected() == 1 {
+		// Opportunistically prune expired duplicate operation receipts older than 30 days.
+		_, _ = tx.Exec(ctx, `
+			DELETE FROM duplicate_operations
+			WHERE (receipt_expires_at IS NOT NULL AND receipt_expires_at < NOW() - INTERVAL '30 days')
+			   OR (receipt_expires_at IS NULL AND created_at < NOW() - INTERVAL '30 days')
+		`)
 		return nil, true, nil
 	}
 

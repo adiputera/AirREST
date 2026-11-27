@@ -137,7 +137,7 @@ func (s *CollectionService) CreateCollection(ctx context.Context, user *domain.U
 	switch c.MinRole {
 	case domain.ProjectRoleAdmin, domain.ProjectRoleMaintainer, domain.ProjectRoleContributor, domain.ProjectRoleReader:
 	default:
-		return errors.New("invalid min_role, must be admin, maintainer, contributor, or reader")
+		return newValidationError("min_role", "invalid min_role, must be admin, maintainer, contributor, or reader")
 	}
 
 	if c.ProjectID != nil && !user.IsSuperadmin() {

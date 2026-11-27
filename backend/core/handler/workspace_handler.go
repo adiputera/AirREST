@@ -20,8 +20,8 @@ func NewWorkspaceHandler(workspaceService *service.WorkspaceService) *WorkspaceH
 }
 
 type WorkspaceRequest struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name        string  `json:"name"`
+	Description *string `json:"description"`
 }
 
 func (h *WorkspaceHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -42,7 +42,11 @@ func (h *WorkspaceHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ws, err := h.workspaceService.Create(r.Context(), user, req.Name, req.Description)
+	desc := ""
+	if req.Description != nil {
+		desc = *req.Description
+	}
+	ws, err := h.workspaceService.Create(r.Context(), user, req.Name, desc)
 	if err != nil {
 		writeMappedError(w, "create workspace", err, nil)
 		return

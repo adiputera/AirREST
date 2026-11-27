@@ -37,4 +37,26 @@ func TestLoadRequiresExplicitKeyAndHasNoBootstrapDefaults(t *testing.T) {
 	if cfg.DBMinConns > cfg.DBMaxConns {
 		t.Fatal("invalid pool bounds")
 	}
+	if cfg.JWTExpirationHours != 72 {
+		t.Fatalf("expected default JWTExpirationHours 72, got %d", cfg.JWTExpirationHours)
+	}
+	if cfg.CORSAllowCredentials {
+		t.Fatal("expected CORSAllowCredentials false by default without ALLOWED_ORIGINS")
+	}
+
+	t.Setenv("JWT_EXPIRATION_HOURS", "-5")
+	t.Setenv("ALLOWED_ORIGINS", "https://hub.example.com, https://app.example.com")
+	cfgCustom, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfgCustom.JWTExpirationHours != 72 {
+		t.Fatalf("expected non-positive JWTExpirationHours to fallback to 72, got %d", cfgCustom.JWTExpirationHours)
+	}
+	if !cfgCustom.CORSAllowCredentials {
+		t.Fatal("expected CORSAllowCredentials true when ALLOWED_ORIGINS is configured")
+	}
+	if len(cfgCustom.AllowedOrigins) != 2 || cfgCustom.AllowedOrigins[0] != "https://hub.example.com" || cfgCustom.AllowedOrigins[1] != "https://app.example.com" {
+		t.Fatalf("unexpected AllowedOrigins: %#v", cfgCustom.AllowedOrigins)
+	}
 }

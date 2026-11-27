@@ -64,23 +64,25 @@ func (s *WorkspaceService) Get(ctx context.Context, user *domain.User, id uuid.U
 
 	// Only owner (or superadmin) can view private workspace
 	if ws.OwnerID != user.ID && !user.IsSuperadmin() {
-		return nil, errors.New("access forbidden")
+		return nil, ErrForbidden
 	}
 	return ws, nil
 }
 
-func (s *WorkspaceService) Update(ctx context.Context, user *domain.User, id uuid.UUID, name, description string) (*domain.Workspace, error) {
+func (s *WorkspaceService) Update(ctx context.Context, user *domain.User, id uuid.UUID, name string, description *string) (*domain.Workspace, error) {
 	ws, err := s.Get(ctx, user, id)
 	if err != nil {
 		return nil, err
 	}
 
 	name = strings.TrimSpace(name)
-	if name != "" {
-		ws.Name = name
+	if err := ValidateName(name); err != nil {
+		return nil, err
 	}
-	if description != "" {
-		ws.Description = &description
+	ws.Name = name
+	if description != nil {
+		d := *description
+		ws.Description = &d
 	}
 
 	if err := s.workspaceRepo.Update(ctx, ws); err != nil {
@@ -95,7 +97,7 @@ func (s *WorkspaceService) Delete(ctx context.Context, user *domain.User, id uui
 		return err
 	}
 	if ws.IsDefault {
-		return errors.New("cannot delete default private workspace")
+		return ErrCannotDeleteDefaultWorkspace
 	}
 
 	return s.workspaceRepo.Delete(ctx, id, ws.OwnerID)

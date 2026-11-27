@@ -69,7 +69,6 @@ export interface ImportBatchItem {
   parsedPerfReport?: PerformanceRunReport;
   parsedFuncReport?: FunctionalRunReport;
   reportSourceMeta?: AirRESTReportSourceMeta;
-  rawReportContent?: string;
 }
 
 export interface ParseImportBatchContext {
@@ -257,7 +256,6 @@ export function parseImportBatchFiles(
             itemCountLabel: `${perfReport.summary.totalRequests} reqs • Performance`,
             parsedPerfReport: perfReport,
             reportSourceMeta: parsedReport.sourceMeta,
-            rawReportContent: file.content,
           };
         }
         if (!parsedReport.error && parsedReport.funcReport) {
@@ -273,7 +271,6 @@ export function parseImportBatchFiles(
             itemCountLabel: `${funcReport.totalTests} tests • Functional`,
             parsedFuncReport: funcReport,
             reportSourceMeta: parsedReport.sourceMeta,
-            rawReportContent: file.content,
           };
         }
         return createInvalidBatchItem(

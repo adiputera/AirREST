@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -50,6 +51,36 @@ func CanAccessEnv(userRole domain.ProjectRole, minRole domain.ProjectRole) bool 
 	return userRank >= minRank
 }
 
+func validateEnvironmentMinRole(minRole domain.ProjectRole) error {
+	switch minRole {
+	case domain.ProjectRoleAdmin, domain.ProjectRoleMaintainer, domain.ProjectRoleContributor, domain.ProjectRoleReader:
+		return nil
+	default:
+		return newValidationError("min_role", "invalid min_role, must be admin, maintainer, contributor, or reader")
+	}
+}
+
+func validateEnvironmentVariables(vars *json.RawMessage) error {
+	if vars == nil {
+		return nil
+	}
+	trimmed := bytes.TrimSpace(*vars)
+	if len(trimmed) == 0 || !bytes.HasPrefix(trimmed, []byte("[")) {
+		return newValidationError("variables", "variables must be a valid JSON array")
+	}
+	var varsList []json.RawMessage
+	if err := json.Unmarshal(trimmed, &varsList); err != nil {
+		return newValidationError("variables", "variables must be a valid JSON array")
+	}
+	for _, rawEl := range varsList {
+		var obj map[string]any
+		if err := json.Unmarshal(rawEl, &obj); err != nil || obj == nil {
+			return newValidationError("variables", "variables must be an array of objects")
+		}
+	}
+	return nil
+}
+
 // Create creates a new environment in a workspace or project
 func (s *EnvironmentService) Create(ctx context.Context, user *domain.User, env *domain.Environment) error {
 	if err := s.collectionService.CheckPermission(ctx, user, env.WorkspaceID, env.ProjectID, true); err != nil {
@@ -57,19 +88,20 @@ func (s *EnvironmentService) Create(ctx context.Context, user *domain.User, env 
 	}
 
 	env.Name = strings.TrimSpace(env.Name)
-	if env.Name == "" {
-		return errors.New("environment name is required")
+	if err := ValidateName(env.Name); err != nil {
+		return err
 	}
 
 	if env.MinRole == "" {
 		env.MinRole = domain.ProjectRoleReader
 	}
 
-	// Validate min_role value
-	switch env.MinRole {
-	case domain.ProjectRoleAdmin, domain.ProjectRoleMaintainer, domain.ProjectRoleContributor, domain.ProjectRoleReader:
-	default:
-		return errors.New("invalid min_role, must be admin, maintainer, contributor, or reader")
+	if err := validateEnvironmentMinRole(env.MinRole); err != nil {
+		return err
+	}
+
+	if err := validateEnvironmentVariables(env.Variables); err != nil {
+		return err
 	}
 
 	if env.ProjectID != nil && !user.IsSuperadmin() {
@@ -194,19 +226,14 @@ func (s *EnvironmentService) Update(ctx context.Context, user *domain.User, env 
 	}
 	if env.Variables == nil {
 		env.Variables = existing.Variables
-	} else {
-		var varsList []json.RawMessage
-		if err := json.Unmarshal(*env.Variables, &varsList); err != nil {
-			return nil, newValidationError("variables", "variables must be a valid JSON array")
-		}
+	} else if err := validateEnvironmentVariables(env.Variables); err != nil {
+		return nil, err
 	}
 	if env.MinRole == "" {
 		env.MinRole = existing.MinRole
 	}
-	switch env.MinRole {
-	case domain.ProjectRoleAdmin, domain.ProjectRoleMaintainer, domain.ProjectRoleContributor, domain.ProjectRoleReader:
-	default:
-		return nil, newValidationError("min_role", "invalid min_role, must be admin, maintainer, contributor, or reader")
+	if err := validateEnvironmentMinRole(env.MinRole); err != nil {
+		return nil, err
 	}
 
 	env.WorkspaceID = existing.WorkspaceID

@@ -50,7 +50,6 @@ export const App: React.FC = () => {
   const [hasHydrated, setHasHydrated] = useState(() => activeStore.persist.hasHydrated());
   const [storageUpdateAvailable, setStorageUpdateAvailable] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const storageUpdateAvailableState = storageUpdateAvailable;
   const isSwitchingWorkspace = activeStore((state) => state.isSwitchingWorkspace);
   const tabs = activeStore((state) => state.tabs);
   const activeTabId = activeStore((state) => state.activeTabId);

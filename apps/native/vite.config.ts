@@ -8,6 +8,9 @@ const host = process.env.TAURI_DEV_HOST;
 // https://vite.dev/config/
 export default defineConfig(() => ({
   plugins: [react(), tailwindcss()],
+  resolve: {
+    dedupe: ['react', 'react-dom'],
+  },
   define: {
     __AIRREST_ANDROID__: JSON.stringify(process.env.TAURI_ENV_PLATFORM === 'android'),
     __AIRREST_VERSION__: JSON.stringify(pkg.version),

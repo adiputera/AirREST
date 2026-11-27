@@ -1,7 +1,7 @@
 import { ApiRequest, ApiResponse, NetworkErrorCategory } from '../types/api';
 import { PlatformAdapter, TestRequestOptions } from '../types/platform';
 import { resolveBodyContentTypeHeader, resolveEffectiveAuthHeader, resolveManualHeaders } from './authHeaders';
-import { createTrackedBlobUrl, createTrackedRawBody } from './blobManager';
+import { createTrackedBlobUrl, createTrackedRawBody, getTrackedRawBody } from './blobManager';
 import { compileEffectiveJsonPayload } from './formatters';
 import { substitutePathVariables } from './urlParams';
 
@@ -405,6 +405,21 @@ export const SAFE_IMAGE_BLOB_MIME_TYPES = new Set([
   'image/x-icon',
   'image/vnd.microsoft.icon',
 ]);
+
+/**
+ * Lazily rebuilds a safe tracked blob URL from stored raw response bytes.
+ */
+export function rebuildTrackedImageBlobUrl(rawBodyId?: string, contentType?: string): string | undefined {
+  if (!rawBodyId || typeof getTrackedRawBody !== 'function' || typeof createTrackedBlobUrl !== 'function') {
+    return undefined;
+  }
+  const mime = (contentType || '').split(';')[0].trim().toLowerCase();
+  if (!SAFE_IMAGE_BLOB_MIME_TYPES.has(mime)) return undefined;
+  const bytes = getTrackedRawBody(rawBodyId);
+  if (!bytes) return undefined;
+  const blob = new Blob([bytes as unknown as BlobPart], { type: mime });
+  return createTrackedBlobUrl(blob);
+}
 
 export function detectMediaType(
   buffer: Uint8Array,

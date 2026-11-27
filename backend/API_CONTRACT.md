@@ -60,12 +60,12 @@ Every response from the backend (both success and error) MUST follow the Envelop
 ### 2. CORS Configuration
 Cloud requests from the packaged Chrome Extension are issued by an extension page with declared host permissions; the script sandbox only executes local scripts and does not call this API. AirREST Hub remains a Web SPA and is subject to browser CORS.
 
-The bundled backend config accepts the following web origins:
-- **Allowed Origins**: `http://localhost:*`, `http://127.0.0.1:*`, and `https://*`.
+The bundled backend config accepts the following web origins by default:
+- **Allowed Origins**: `http://localhost:*`, `http://127.0.0.1:*`, and `https://*` (overridable via `ALLOWED_ORIGINS`).
 - **Allowed Methods**: `GET, POST, PUT, PATCH, DELETE, OPTIONS`
 - **Allowed Headers**: `Accept, Authorization, Content-Type, Content-Encoding, X-CSRF-Token`
 - **Exposed Headers**: `Link`
-- **Allow Credentials**: `true`
+- **Allow Credentials**: `false` by default (automatically `true` when `ALLOWED_ORIGINS` is configured with explicit origins, or overridden via `CORS_ALLOW_CREDENTIALS`)
 - **Preflight Max Age**: `300` seconds (5 minutes)
 
 Deployments that expose the API to other web origins must configure and test those origins deliberately. Do not add the sandbox's opaque `null` origin: it is not a cloud transport context.
@@ -334,12 +334,13 @@ In addition to enums, the Frontend relies on specific primitive types and relati
   - Payload: `{ "user_id": UUID, "role": "admin" | "maintainer" | "contributor" | "reader" }`
 - `DELETE /api/v1/projects/{id}/members/{userId}` *(Auth, Project Admin)* — Unassign member.
 
+### 7. Collections & Collection Items
 - `GET /api/v1/collections?workspace_id={id}&project_id={id}&include_items={bool}` *(Auth)* — List collections (filtered by `min_role`). Defaults to lightweight collection metadata (`include_items=false`) without items to prevent serverless payload overflows (`FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE`). Clients fetch each collection's items 1-by-1 via `GET /api/v1/collections/{id}`. Collection list/detail JSON may be gzip encoded when the client accepts it; responses set `Vary: Accept-Encoding` and `Cache-Control: private, no-store`. Identity responses are capped at 4 MiB, gzip responses at 3,000,000 bytes, and decoded serialization at 16 MiB. An accepted-but-oversized response returns `413 RESPONSE_PAYLOAD_TOO_LARGE`; excluding both identity and gzip returns `406 NOT_ACCEPTABLE`.
 - `POST /api/v1/collections` *(Auth)* — Create collection.
   - Payload: `{ "workspace_id"?: UUID, "project_id"?: UUID, "name": string, "description"?: string, "min_role"?: ProjectRole }`
-- `GET /api/v1/collections/{id}` *(Auth)* — Get collection with hierarchical nested items; response may be gzip encoded as above.
-- `PUT /api/v1/collections/{id}` *(Auth)* — Update collection (enforces `base_version` OCC).
-  - Payload: `{ "name": string, "description"?: string, "min_role"?: ProjectRole, "base_version": int64 }`
+- `GET /api/v1/collections/{id}` *(Auth)* — Get collection with flat `items` array ordered by `sort_order` (hierarchy reconstructed via `parent_id`); response may be gzip encoded as above.
+- `PUT /api/v1/collections/{id}` *(Auth)* — Update collection metadata (`name`, `description`, `min_role`; enforces `base_version` OCC).
+  - Payload: `{ "name"?: string, "description"?: string, "min_role"?: ProjectRole, "base_version": int64 }`
 - `DELETE /api/v1/collections/{id}` *(Auth)* — Soft delete collection (tombstone). Requires both existing RBAC/min-role checks and global `collection.delete`; a disabled feature returns `403 FEATURE_DISABLED`.
 - `POST /api/v1/collections/{id}/move` *(Auth)* — Move collection across scopes. Personal/offline sources may move into a project; a project collection cannot move into a personal workspace. Requires both existing RBAC/min-role checks and global `collection.move`; a disabled feature returns `403 FEATURE_DISABLED`. Locks the source collection `FOR UPDATE` and verifies expected source scope/min-role consistency (`404` if missing, `409` on concurrent move/conflict).
   - Payload: `{ "target_workspace_id"?: UUID, "target_project_id"?: UUID }`
@@ -347,13 +348,14 @@ In addition to enums, the Frontend relies on specific primitive types and relati
   - Payload: `{ "operation_id": UUID, "target_workspace_id"?: UUID, "target_project_id"?: UUID }`
 - `POST /api/v1/collections/import-duplicate` *(Auth)* — Idempotent offline-to-cloud collection duplicate upload (`201`, `min_role = 'reader'`). Accepts identity JSON up to 4 MiB or one `Content-Encoding: gzip` member up to 3,000,000 bytes and 16 MiB decoded.
   - Payload: `{ "operation_id": UUID, "target_workspace_id"?: UUID, "target_project_id"?: UUID, "collection": { "name": string, "description"?: string, "items": ImportItemRequest[] } }`
-- `PUT /api/v1/collections/{id}/reorder` *(Auth)* — Batch reorder items and folder parentage (also accessible via contract alias `PUT /api/v1/collections/{id}/items/reorder`).
+- `PUT /api/v1/collections/{id}/reorder` *(Auth)* — Batch reorder items and folder parentage (also accessible via contract alias `PUT /api/v1/collections/{id}/items/reorder`; response supports gzip negotiation).
   - Payload: `{ "items": [{ "id": UUID, "parent_id": UUID|null, "sort_order": int }] }`
 - `POST /api/v1/items` *(Auth)* — Create request or folder item.
-  - Payload: `CollectionItem` schema.
-- `GET /api/v1/items/{id}` *(Auth)* — Get item details.
+  - Payload: `CollectionItemWriteInput` (`collection_id`, `type`, `name` required; server generates `id`, `version`, `created_at`, `updated_at`).
+- `GET /api/v1/items/{id}` *(Auth)* — Get item details (response supports gzip negotiation).
 - `PUT /api/v1/items/{id}` *(Auth)* — Update item (enforces `base_version` OCC).
-  - Payload: `{ "item": CollectionItem, "base_version": int64 }`
+  - Payload: `{ "item": CollectionItemWriteInput, "base_version": int64 }`
+- `PATCH /api/v1/items/{id}/examples` *(Auth)* — Mutate a single saved example with receipt idempotency and OCC (response supports gzip negotiation).
 - `POST /api/v1/items/{id}/duplicate` *(Auth)* — Atomically duplicate a request or folder subtree into the collection root or a target folder (`target_parent_id`) within the same workspace/project (`201`). Requires `collection:write` and `min_role` on both collections.
   - Payload: `{ "operation_id": UUID, "source_collection_id": UUID, "target_collection_id": UUID, "target_parent_id"?: UUID|null }`
 - `DELETE /api/v1/items/{id}` *(Auth)* — Soft delete item (tombstone).
@@ -512,7 +514,7 @@ interface CollectionItem {
   created_at: string;
   updated_at: string;
   deleted_at?: string | null; // Tombstone
-  items?: CollectionItem[]; // Populated when type === 'folder'
+  items?: CollectionItem[]; // Present on nested import payloads only; GET /collections/{id} returns a flat array linked via parent_id
 }
 ```
 

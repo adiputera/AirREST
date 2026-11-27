@@ -390,16 +390,15 @@ export function useReportImporter() {
     [activeStore, getCurrentScopeKey, platformId, requestResolveChoice]
   );
 
-  const importReportContent = useCallback(
+  const importParsedReport = useCallback(
     async (
-      content: string,
+      parsed: ReturnType<typeof parseShareableReportJson>,
       options?: {
         filename?: string;
         onAttachedSaved?: () => void;
       }
     ): Promise<ImportReportOutcome> => {
       const targetBinding = captureImportTarget(activeStore.getState());
-      const parsed = parseShareableReportJson(content);
       if (parsed.error || !parsed.kind || !parsed.sourceMeta) {
         return {
           ok: false,
@@ -514,6 +513,20 @@ export function useReportImporter() {
     [activeStore, persistAndOpenAttached, platformId, requestResolveChoice]
   );
 
+  const importReportContent = useCallback(
+    async (
+      content: string,
+      options?: {
+        filename?: string;
+        onAttachedSaved?: () => void;
+      }
+    ): Promise<ImportReportOutcome> => {
+      const parsed = parseShareableReportJson(content);
+      return importParsedReport(parsed, options);
+    },
+    [importParsedReport]
+  );
+
   const attachSessionReportToCollection = useCallback(
     async (params: {
       kind: 'performance' | 'functional';
@@ -625,6 +638,7 @@ export function useReportImporter() {
     resolvePrompt,
     handleResolveChoice,
     cancelPendingPrompt,
+    importParsedReport,
     importReportContent,
     attachSessionReportToCollection,
     pickReportFileContent,

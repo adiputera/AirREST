@@ -24,6 +24,7 @@ type Config struct {
 	DBMinConns               int
 	SkipMigrations           bool
 	AllowedOrigins           []string
+	CORSAllowCredentials     bool
 	IsServerless             bool
 }
 
@@ -42,7 +43,7 @@ func Load() (*Config, error) {
 
 	expHoursStr := getEnv("JWT_EXPIRATION_HOURS", "72")
 	expHours, err := strconv.Atoi(expHoursStr)
-	if err != nil {
+	if err != nil || expHours <= 0 {
 		expHours = 72
 	}
 
@@ -82,6 +83,25 @@ func Load() (*Config, error) {
 		minConns = maxConns
 	}
 	skipMigrations := skipMigrationsFromEnv()
+	allowedOrigins := []string{"http://localhost:*", "http://127.0.0.1:*", "https://*"}
+	corsAllowCredentials := false
+	if rawOrigins := strings.TrimSpace(os.Getenv("ALLOWED_ORIGINS")); rawOrigins != "" {
+		var parsed []string
+		for _, origin := range strings.Split(rawOrigins, ",") {
+			if trimmed := strings.TrimSpace(origin); trimmed != "" {
+				parsed = append(parsed, trimmed)
+			}
+		}
+		if len(parsed) > 0 {
+			allowedOrigins = parsed
+			corsAllowCredentials = true
+		}
+	}
+	if credEnv := strings.TrimSpace(os.Getenv("CORS_ALLOW_CREDENTIALS")); credEnv == "true" || credEnv == "1" {
+		corsAllowCredentials = true
+	} else if credEnv == "false" || credEnv == "0" {
+		corsAllowCredentials = false
+	}
 
 	return &Config{
 		Port:                     port,
@@ -95,7 +115,8 @@ func Load() (*Config, error) {
 		DBMaxConns:               maxConns,
 		DBMinConns:               minConns,
 		SkipMigrations:           skipMigrations,
-		AllowedOrigins:           []string{"http://localhost:*", "http://127.0.0.1:*", "https://*"},
+		AllowedOrigins:           allowedOrigins,
+		CORSAllowCredentials:     corsAllowCredentials,
 		IsServerless:             isServerless,
 	}, nil
 }

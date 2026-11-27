@@ -121,7 +121,7 @@ func NewWithOptions(ctx context.Context, options Options) (*App, error) {
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "Content-Encoding", "X-CSRF-Token"},
 		ExposedHeaders:   []string{"Link"},
-		AllowCredentials: true,
+		AllowCredentials: cfg.CORSAllowCredentials,
 		MaxAge:           300,
 	}))
 

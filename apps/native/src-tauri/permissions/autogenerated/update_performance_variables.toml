@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-update-performance-variables"
+description = "Enables the update_performance_variables command without any pre-configured scope."
+commands.allow = ["update_performance_variables"]
+
+[[permission]]
+identifier = "deny-update-performance-variables"
+description = "Denies the update_performance_variables command without any pre-configured scope."
+commands.deny = ["update_performance_variables"]

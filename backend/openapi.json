@@ -3,7 +3,7 @@
   "info": {
     "title": "AirREST Backend API Contract",
     "version": "1.1.2",
-    "description": "# AirREST Cloud Backend API Specification & Contract\n\nThis document defines the formal API Contract for the AirREST backend synchronization and collaboration service.\nThe default backend uses bearer JWT authentication. A custom client provider may use a separate cookie-backed\nproxy or replacement authenticator, but cookie authentication is not provided by the default backend contract.\nAny backend implementation (written in Go, Node.js/TypeScript, Python, Java, Rust, C#, PHP, etc.) that complies\nwith this specification will work as an immediate drop-in replacement for:\n- **AirREST Chrome Extension** (DevTools / Popup REST client)\n- **AirREST Hub** (Web-based workspace and team collaboration dashboard)\n\n---\n\n## Key Architectural Principles\n\n### 1. Standard Response Envelope\nAll HTTP endpoints return responses wrapped in a consistent Envelope structure:\n```json\n{\n  \"success\": true,\n  \"data\": { ... }\n}\n```\nOn errors:\n```json\n{\n  \"success\": false,\n  \"error\": \"Human-readable error description\",\n  \"code\": \"ERROR_CODE_STRING\"\n}\n```\n\n### 2. Authentication & Silent Rolling Refresh\n- Authenticated endpoints require `Authorization: Bearer <access_token>`.\n- Access tokens are JWTs (HS256) valid for 72 hours.\n- Refresh tokens are rolling 30-day tokens.\n- When the client receives HTTP `401 Unauthorized`, it transparently calls `POST /api/v1/auth/refresh`\n  with `{ \"refresh_token\": \"...\" }` and retries the original request upon renewal.\n\n### 3. Optimistic Concurrency Control (OCC)\n- Mutable entities (`collections`, `collection_items`, `environments`) include a numeric `version` (int64).\n- When updating, clients send `base_version`.\n- If `base_version != current_server_version`, the server aborts the write and returns HTTP `409 Conflict`:\n  ```json\n  {\n    \"success\": false,\n    \"error\": \"conflict: item has been modified by another user\",\n    \"code\": \"CONFLICT\",\n    \"data\": { ...latest_server_object... }\n  }\n  ```\n\n### 4. Soft-Deletes & Tombstone Deltas\n- Deletions are soft-deletes setting `deleted_at = NOW()`.\n- `GET /api/v1/sync/pull?since=<timestamp>` returns active items AND deleted items (`deleted_at != null`)\n  so that distributed clients purge deleted entities locally and never re-upload them as zombies.\n\n### 5. Hierarchical RBAC & Project Isolation\n- **System Roles**: `superadmin`, `user`\n- **Team Roles**: `admin`, `member`\n- **Project Roles**: `admin`, `maintainer`, `contributor`, `reader`\n- **Project Isolation**: Non-superadmin users can only view or query projects to which they are explicitly assigned.\n- **Granular Permissions**: Collections and Environments support `min_role` (`admin`, `maintainer`, `contributor`, `reader`).\n  Users with a project role below `min_role` are prohibited from reading or writing that resource.\n\n### 6. CORS Configuration\nCloud requests from the packaged Chrome Extension are issued by an extension page with declared host permissions; the script sandbox only executes local scripts and does not call this API. AirREST Hub remains a Web SPA and is subject to browser CORS.\nThe bundled backend config accepts the following web origins:\n- Allowed Origins: `http://localhost:*`, `http://127.0.0.1:*`, and `https://*`\n- Allowed Methods: `GET, POST, PUT, PATCH, DELETE, OPTIONS`\n- Allowed Headers: `Accept, Authorization, Content-Type, Content-Encoding, X-CSRF-Token`\n- Exposed Headers: `Link`\n- Allow Credentials: `true`\nDeployments that expose the API to other web origins must configure and test those origins deliberately. Do not add the sandbox's opaque `null` origin: it is not a cloud transport context.\n\n### Session revocation and resource limits\n Both access and refresh JWTs carry a nonnegative integer token_version matching users.token_version. Missing or stale versions are rejected with 401. Password changes and administrator resets atomically increment the version and revoke existing sessions. A self-service password change returns a replacement token pair for the current device; administrator resets revoke every target-device session. Profile changes do not revoke sessions. Refresh tokens can be reused until expiry or account-wide revocation; they are not single-use. Clients clear tokens and sign in again after a rejected refresh.\n Requests are limited to 4 MiB (including chunked bodies), 16 concurrent handlers per instance, and 300 seconds (5 minutes). Oversized bodies return 413 PAYLOAD_TOO_LARGE. Collection sync push/import also accept a single `Content-Encoding: gzip` member: compressed bytes are limited to 3,000,000 and decoded JSON to 16 MiB; requests must contain exactly one JSON document. Collection list/detail and sync pull responses use identity up to 4 MiB or gzip up to 3,000,000 bytes, with a 16 MiB decoded serialization cap. If no accepted representation fits, the server returns 413 RESPONSE_PAYLOAD_TOO_LARGE; if identity and gzip are both excluded, it returns 406 NOT_ACCEPTABLE. Saturation returns 503 SERVER_BUSY with Retry-After: 1; timeouts return 503 REQUEST_TIMEOUT. Proxy limits may be smaller. Serverless initialization attempts are serialized with a 20-second deadline (120 seconds when boot migrations are enabled) and retries after 1, 2, 4, 8, 16, then 30 seconds; requests during attempts/backoff receive 503 and Retry-After: 1, retaining the nested SERVICE_UNAVAILABLE envelope with an additive `reason` (INITIALIZING, CONFIG_INVALID, DATABASE_UNAVAILABLE, MIGRATION_FAILED, BOOTSTRAP_FAILED, INITIALIZATION_FAILED).\nContributors cannot delete collections/environments or move collections. Request/folder deletion is collection:write authoring. Moves require collection:move and min_role access in both project scopes; private scopes require ownership (superadmins bypass role/ownership restrictions).\n"
+    "description": "# AirREST Cloud Backend API Specification & Contract\n\nThis document defines the formal API Contract for the AirREST backend synchronization and collaboration service.\nThe default backend uses bearer JWT authentication. A custom client provider may use a separate cookie-backed\nproxy or replacement authenticator, but cookie authentication is not provided by the default backend contract.\nAny backend implementation (written in Go, Node.js/TypeScript, Python, Java, Rust, C#, PHP, etc.) that complies\nwith this specification will work as an immediate drop-in replacement for:\n- **AirREST Chrome Extension** (DevTools / Popup REST client)\n- **AirREST Hub** (Web-based workspace and team collaboration dashboard)\n\n---\n\n## Key Architectural Principles\n\n### 1. Standard Response Envelope\nAll HTTP endpoints return responses wrapped in a consistent Envelope structure:\n```json\n{\n  \"success\": true,\n  \"data\": { ... }\n}\n```\nOn errors:\n```json\n{\n  \"success\": false,\n  \"error\": \"Human-readable error description\",\n  \"code\": \"ERROR_CODE_STRING\"\n}\n```\n\n### 2. Authentication & Silent Rolling Refresh\n- Authenticated endpoints require `Authorization: Bearer <access_token>`.\n- Access tokens are JWTs (HS256) valid for 72 hours.\n- Refresh tokens are rolling 30-day tokens.\n- When the client receives HTTP `401 Unauthorized`, it transparently calls `POST /api/v1/auth/refresh`\n  with `{ \"refresh_token\": \"...\" }` and retries the original request upon renewal.\n\n### 3. Optimistic Concurrency Control (OCC)\n- Mutable entities (`collections`, `collection_items`, `environments`) include a numeric `version` (int64).\n- When updating, clients send `base_version`.\n- If `base_version != current_server_version`, the server aborts the write and returns HTTP `409 Conflict`:\n  ```json\n  {\n    \"success\": false,\n    \"error\": \"conflict: item has been modified by another user\",\n    \"code\": \"CONFLICT\",\n    \"data\": { ...latest_server_object... }\n  }\n  ```\n\n### 4. Soft-Deletes & Tombstone Deltas\n- Deletions are soft-deletes setting `deleted_at = NOW()`.\n- `GET /api/v1/sync/pull?since=<timestamp>` returns active items AND deleted items (`deleted_at != null`)\n  so that distributed clients purge deleted entities locally and never re-upload them as zombies.\n\n### 5. Hierarchical RBAC & Project Isolation\n- **System Roles**: `superadmin`, `user`\n- **Team Roles**: `admin`, `member`\n- **Project Roles**: `admin`, `maintainer`, `contributor`, `reader`\n- **Project Isolation**: Non-superadmin users can only view or query projects to which they are explicitly assigned.\n- **Granular Permissions**: Collections and Environments support `min_role` (`admin`, `maintainer`, `contributor`, `reader`).\n  Users with a project role below `min_role` are prohibited from reading or writing that resource.\n\n### 6. CORS Configuration\nCloud requests from the packaged Chrome Extension are issued by an extension page with declared host permissions; the script sandbox only executes local scripts and does not call this API. AirREST Hub remains a Web SPA and is subject to browser CORS.\nThe bundled backend config accepts the following web origins by default:\n- Allowed Origins: `http://localhost:*`, `http://127.0.0.1:*`, and `https://*` (overridable via `ALLOWED_ORIGINS`)\n- Allowed Methods: `GET, POST, PUT, PATCH, DELETE, OPTIONS`\n- Allowed Headers: `Accept, Authorization, Content-Type, Content-Encoding, X-CSRF-Token`\n- Exposed Headers: `Link`\n- Allow Credentials: `false` by default (automatically enabled when `ALLOWED_ORIGINS` is configured with explicit origins, or controlled via `CORS_ALLOW_CREDENTIALS`)\nDeployments that expose the API to other web origins must configure and test those origins deliberately. Do not add the sandbox's opaque `null` origin: it is not a cloud transport context.\n\n### Session revocation and resource limits\n Both access and refresh JWTs carry a nonnegative integer token_version matching users.token_version. Missing or stale versions are rejected with 401. Password changes and administrator resets atomically increment the version and revoke existing sessions. A self-service password change returns a replacement token pair for the current device; administrator resets revoke every target-device session. Profile changes do not revoke sessions. Refresh tokens can be reused until expiry or account-wide revocation; they are not single-use. Clients clear tokens and sign in again after a rejected refresh.\n Requests are limited to 4 MiB (including chunked bodies), 16 concurrent handlers per instance, and 300 seconds (5 minutes). Oversized bodies return 413 PAYLOAD_TOO_LARGE. Collection sync push/import also accept a single `Content-Encoding: gzip` member: compressed bytes are limited to 3,000,000 and decoded JSON to 16 MiB; requests must contain exactly one JSON document. Collection list/detail and sync pull responses use identity up to 4 MiB or gzip up to 3,000,000 bytes, with a 16 MiB decoded serialization cap. If no accepted representation fits, the server returns 413 RESPONSE_PAYLOAD_TOO_LARGE; if identity and gzip are both excluded, it returns 406 NOT_ACCEPTABLE. Saturation returns 503 SERVER_BUSY with Retry-After: 1; timeouts return 503 REQUEST_TIMEOUT. Proxy limits may be smaller. Serverless initialization attempts are serialized with a 20-second deadline (120 seconds when boot migrations are enabled) and retries after 1, 2, 4, 8, 16, then 30 seconds; requests during attempts/backoff receive 503 and Retry-After: 1, retaining the nested SERVICE_UNAVAILABLE envelope with an additive `reason` (INITIALIZING, CONFIG_INVALID, DATABASE_UNAVAILABLE, MIGRATION_FAILED, BOOTSTRAP_FAILED, INITIALIZATION_FAILED).\nContributors cannot delete collections/environments or move collections. Request/folder deletion is collection:write authoring. Moves require collection:move and min_role access in both project scopes; private scopes require ownership (superadmins bypass role/ownership restrictions).\n"
   },
   "servers": [
     {
@@ -390,7 +390,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -455,7 +455,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -518,7 +518,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -563,7 +563,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -616,7 +616,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -681,7 +681,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -744,7 +744,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -798,7 +798,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -843,7 +843,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -906,7 +906,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -961,7 +961,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1025,7 +1025,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1079,7 +1079,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1134,7 +1134,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1198,7 +1198,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1263,7 +1263,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1319,7 +1319,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1383,7 +1383,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1439,7 +1439,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1503,7 +1503,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1557,7 +1557,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1612,7 +1612,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1676,7 +1676,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1740,7 +1740,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1828,7 +1828,7 @@
             "$ref": "#/components/responses/ResponsePayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1881,7 +1881,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1951,7 +1951,7 @@
             "$ref": "#/components/responses/ResponsePayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2045,7 +2045,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2119,7 +2119,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2451,7 +2451,7 @@
           "Collections"
         ],
         "summary": "Paginated saved examples metadata or full payloads for a collection",
-        "description": "Cursor-paginated endpoint returning active request items' `example_count`, `example_summaries`, and optionally full `examples` (`include_body=true`) with `collection_version` snapshot consistency.",
+        "description": "Cursor-paginated endpoint returning active request items' example_count, example_summaries, and optionally full examples (include_body=true) with collection_version snapshot consistency. Responses support Accept-Encoding: gzip negotiation (Vary: Accept-Encoding, Cache-Control: private, no-store, 3,000,000-byte gzip / 4 MiB identity / 16 MiB decoded caps).",
         "security": [
           {
             "BearerAuth": []
@@ -2539,6 +2539,12 @@
                 }
               }
             }
+          },
+          "406": {
+            "$ref": "#/components/responses/NotAcceptable"
+          },
+          "413": {
+            "$ref": "#/components/responses/ResponsePayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
@@ -2658,7 +2664,7 @@
           "Collections"
         ],
         "summary": "Batch reorder items and hierarchy",
-        "description": "Updates `parent_id` and `sort_order` for folders and requests within the collection.",
+        "description": "Updates parent_id and sort_order for folders and requests within the collection. Responses support Accept-Encoding: gzip negotiation (Vary: Accept-Encoding, Cache-Control: private, no-store).",
         "security": [
           {
             "BearerAuth": []
@@ -2719,11 +2725,14 @@
               }
             }
           },
+          "406": {
+            "$ref": "#/components/responses/NotAcceptable"
+          },
           "413": {
-            "$ref": "#/components/responses/PayloadTooLarge"
+            "$ref": "#/components/responses/ResponsePayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2744,7 +2753,7 @@
           "Collections"
         ],
         "summary": "Batch reorder items (alias)",
-        "description": "Alias route for `/api/v1/collections/{id}/reorder`.",
+        "description": "Alias route for /api/v1/collections/{id}/reorder. Responses support Accept-Encoding: gzip negotiation (Vary: Accept-Encoding, Cache-Control: private, no-store).",
         "security": [
           {
             "BearerAuth": []
@@ -2805,11 +2814,14 @@
               }
             }
           },
+          "406": {
+            "$ref": "#/components/responses/NotAcceptable"
+          },
           "413": {
-            "$ref": "#/components/responses/PayloadTooLarge"
+            "$ref": "#/components/responses/ResponsePayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2841,7 +2853,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CollectionItem"
+                "$ref": "#/components/schemas/CreateItemRequest"
               }
             }
           }
@@ -2884,7 +2896,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2905,7 +2917,7 @@
           "Collection Items"
         ],
         "summary": "Mutate a single saved example (add/rename/delete) with OCC and receipt idempotency",
-        "description": "Applies `add`, `rename`, or `delete` on `examples` using `(actor_id, operation_id)` receipt ledger and `base_version` + `base_example_revision` concurrency checks without overwriting sibling request fields.",
+        "description": "Applies add, rename, or delete on examples using (actor_id, operation_id) receipt ledger and base_version + base_example_revision concurrency checks without overwriting sibling request fields. Responses support Accept-Encoding: gzip negotiation (Vary: Accept-Encoding, Cache-Control: private, no-store).",
         "security": [
           {
             "BearerAuth": []
@@ -2976,6 +2988,9 @@
               }
             }
           },
+          "406": {
+            "$ref": "#/components/responses/NotAcceptable"
+          },
           "409": {
             "description": "Version conflict or example revision conflict; includes latest server item in `data`.",
             "content": {
@@ -2987,7 +3002,7 @@
             }
           },
           "413": {
-            "$ref": "#/components/responses/PayloadTooLarge"
+            "$ref": "#/components/responses/ResponsePayloadTooLarge"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
@@ -3210,6 +3225,7 @@
           "Collection Items"
         ],
         "summary": "Get item details",
+        "description": "Returns item details. Responses support Accept-Encoding: gzip negotiation (Vary: Accept-Encoding, Cache-Control: private, no-store).",
         "security": [
           {
             "BearerAuth": []
@@ -3260,11 +3276,14 @@
               }
             }
           },
+          "406": {
+            "$ref": "#/components/responses/NotAcceptable"
+          },
           "413": {
-            "$ref": "#/components/responses/PayloadTooLarge"
+            "$ref": "#/components/responses/ResponsePayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3358,7 +3377,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3422,7 +3441,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3485,7 +3504,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3537,7 +3556,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3592,7 +3611,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3666,7 +3685,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3719,7 +3738,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4219,7 +4238,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4282,7 +4301,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4348,7 +4367,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
-            "description": "Internal server error while moving the collection.",
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4614,45 +4633,83 @@
       },
       "SystemStatusResponse": {
         "type": "object",
+        "required": [
+          "success",
+          "data"
+        ],
         "properties": {
-          "service": {
-            "type": "string",
-            "example": "AirREST Cloud API"
-          },
-          "status": {
-            "type": "string",
-            "example": "running"
-          },
-          "serverless": {
+          "success": {
             "type": "boolean",
-            "example": false
+            "example": true
           },
-          "time": {
-            "type": "string",
-            "format": "date-time",
-            "example": "2026-10-22T09:00:00Z"
+          "data": {
+            "type": "object",
+            "required": [
+              "service",
+              "status",
+              "serverless",
+              "time"
+            ],
+            "properties": {
+              "service": {
+                "type": "string",
+                "example": "AirREST Cloud API"
+              },
+              "status": {
+                "type": "string",
+                "example": "running"
+              },
+              "serverless": {
+                "type": "boolean",
+                "example": false
+              },
+              "time": {
+                "type": "string",
+                "format": "date-time",
+                "example": "2026-10-22T09:00:00Z"
+              }
+            }
           }
         }
       },
       "HealthResponse": {
         "type": "object",
+        "required": [
+          "success",
+          "data"
+        ],
         "properties": {
-          "status": {
-            "type": "string",
-            "example": "healthy"
-          },
-          "service": {
-            "type": "string",
-            "example": "AirREST Cloud API"
-          },
-          "serverless": {
+          "success": {
             "type": "boolean",
-            "example": false
+            "example": true
           },
-          "time": {
-            "type": "string",
-            "format": "date-time",
-            "example": "2026-10-22T09:00:00Z"
+          "data": {
+            "type": "object",
+            "required": [
+              "status",
+              "service",
+              "serverless",
+              "time"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "example": "healthy"
+              },
+              "service": {
+                "type": "string",
+                "example": "AirREST Cloud API"
+              },
+              "serverless": {
+                "type": "boolean",
+                "example": false
+              },
+              "time": {
+                "type": "string",
+                "format": "date-time",
+                "example": "2026-10-22T09:00:00Z"
+              }
+            }
           }
         }
       },
@@ -4763,9 +4820,11 @@
             "minimum": 1
           },
           "updated_by": {
-            "type": "string",
-            "format": "uuid",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           },
           "updated_at": {
             "type": "string",
@@ -5209,8 +5268,10 @@
             "example": "Alice Developer"
           },
           "avatar_url": {
-            "type": "string",
-            "nullable": true,
+            "type": [
+              "string",
+              "null"
+            ],
             "example": "https://example.com/avatar.png"
           },
           "role": {
@@ -5253,8 +5314,10 @@
             "example": "Personal Workspace"
           },
           "description": {
-            "type": "string",
-            "nullable": true,
+            "type": [
+              "string",
+              "null"
+            ],
             "example": "Default private workspace"
           },
           "is_default": {
@@ -5290,8 +5353,10 @@
             "example": "Platform Engineering"
           },
           "description": {
-            "type": "string",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "created_by": {
             "type": "string",
@@ -5373,8 +5438,10 @@
             "example": "User Service API"
           },
           "description": {
-            "type": "string",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "created_by": {
             "type": "string",
@@ -5472,22 +5539,28 @@
             "example": "77777777-7777-7777-7777-777777777777"
           },
           "workspace_id": {
-            "type": "string",
-            "format": "uuid",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           },
           "project_id": {
-            "type": "string",
-            "format": "uuid",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           },
           "name": {
             "type": "string",
             "example": "Authentication Endpoints"
           },
           "description": {
-            "type": "string",
-            "nullable": true,
+            "type": [
+              "string",
+              "null"
+            ],
             "example": "User authentication and tokens"
           },
           "min_role": {
@@ -5503,9 +5576,11 @@
             "format": "uuid"
           },
           "last_modified_by": {
-            "type": "string",
-            "format": "uuid",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           },
           "created_at": {
             "type": "string",
@@ -5516,9 +5591,11 @@
             "format": "date-time"
           },
           "deleted_at": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           },
           "items": {
             "type": "array",
@@ -5594,8 +5671,10 @@
             "example": true
           },
           "description": {
-            "type": "string",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -5663,9 +5742,11 @@
             "format": "uuid"
           },
           "parent_id": {
-            "type": "string",
-            "format": "uuid",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           },
           "type": {
             "$ref": "#/components/schemas/ItemType"
@@ -5718,12 +5799,16 @@
             "example": "{\"email\": \"user@example.com\", \"password\": \"SecretPassword123!\"}"
           },
           "graphql_query": {
-            "type": "string",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "graphql_variables": {
-            "type": "string",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "body_form_data": {
             "type": "array",
@@ -5732,12 +5817,16 @@
             }
           },
           "pre_request_script": {
-            "type": "string",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "post_response_script": {
-            "type": "string",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "examples": {
             "type": "array",
@@ -5766,9 +5855,11 @@
             "example": 1
           },
           "last_modified_by": {
-            "type": "string",
-            "format": "uuid",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           },
           "created_at": {
             "type": "string",
@@ -5779,9 +5870,11 @@
             "format": "date-time"
           },
           "deleted_at": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           },
           "items": {
             "type": "array",
@@ -5842,14 +5935,18 @@
             "example": "99999999-9999-9999-9999-999999999999"
           },
           "workspace_id": {
-            "type": "string",
-            "format": "uuid",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           },
           "project_id": {
-            "type": "string",
-            "format": "uuid",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           },
           "name": {
             "type": "string",
@@ -5870,9 +5967,11 @@
             "example": 1
           },
           "last_modified_by": {
-            "type": "string",
-            "format": "uuid",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           },
           "created_at": {
             "type": "string",
@@ -5883,9 +5982,11 @@
             "format": "date-time"
           },
           "deleted_at": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           }
         }
       },
@@ -6080,9 +6181,18 @@
             "type": "string",
             "example": "version conflict: local base_version 1 does not match server version 2"
           },
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "FEATURE_DISABLED"
+          },
           "server_data": {
-            "type": "object",
-            "nullable": true
+            "type": [
+              "object",
+              "null"
+            ]
           }
         }
       },
@@ -6125,8 +6235,10 @@
             "example": "req-1"
           },
           "parent_id": {
-            "type": "string",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "type": {
             "type": "string",
@@ -6228,8 +6340,10 @@
             "example": "Demo API"
           },
           "description": {
-            "type": "string",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "items": {
             "type": "array",
@@ -6353,8 +6467,10 @@
             "example": "Alice Updated"
           },
           "avatar_url": {
-            "type": "string",
-            "nullable": true,
+            "type": [
+              "string",
+              "null"
+            ],
             "example": "https://example.com/avatar.png"
           }
         }
@@ -6502,7 +6618,6 @@
       "UpdateCollectionRequest": {
         "type": "object",
         "required": [
-          "name",
           "base_version"
         ],
         "properties": {
@@ -6590,8 +6705,10 @@
             "maxLength": 150
           },
           "description": {
-            "type": "string",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "items": {
             "type": "array",
@@ -6706,14 +6823,18 @@
             "format": "uuid"
           },
           "workspace_id": {
-            "type": "string",
-            "format": "uuid",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           },
           "project_id": {
-            "type": "string",
-            "format": "uuid",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           },
           "name": {
             "type": "string"
@@ -6767,8 +6888,10 @@
             "type": "boolean"
           },
           "description": {
-            "type": "string",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -6797,8 +6920,10 @@
             "maxLength": 150
           },
           "originalRequest": {
-            "type": "object",
-            "nullable": true
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "status": {
             "type": "string"
@@ -6824,13 +6949,15 @@
             "type": "string"
           },
           "_postman_previewlanguage": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "enum": [
               "json",
               "xml",
               "html"
-            ],
-            "nullable": true
+            ]
           }
         }
       },
@@ -6863,13 +6990,15 @@
             "type": "string"
           },
           "_postman_previewlanguage": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "enum": [
               "json",
               "xml",
               "html"
-            ],
-            "nullable": true
+            ]
           },
           "body_size_bytes": {
             "type": "integer"
@@ -7145,9 +7274,11 @@
             "format": "uuid"
           },
           "target_parent_id": {
-            "type": "string",
-            "format": "uuid",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           },
           "target_collection_version": {
             "type": "integer",
@@ -7189,9 +7320,11 @@
             "format": "uuid"
           },
           "parent_id": {
-            "type": "string",
-            "format": "uuid",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           },
           "sort_order": {
             "type": "integer",
@@ -7238,6 +7371,128 @@
           }
         }
       },
+      "CollectionItemWriteInput": {
+        "type": "object",
+        "required": [
+          "type",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "collection_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ItemType"
+          },
+          "name": {
+            "type": "string",
+            "example": "Login API"
+          },
+          "sort_order": {
+            "type": "integer",
+            "example": 0
+          },
+          "method": {
+            "type": "string",
+            "example": "POST"
+          },
+          "url": {
+            "type": "string",
+            "example": "{{baseUrl}}/api/v1/auth/login"
+          },
+          "params": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KeyValuePair"
+            }
+          },
+          "path_variables": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KeyValuePair"
+            }
+          },
+          "headers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KeyValuePair"
+            }
+          },
+          "auth": {
+            "$ref": "#/components/schemas/AuthConfig"
+          },
+          "body_type": {
+            "$ref": "#/components/schemas/BodyType"
+          },
+          "raw_type": {
+            "$ref": "#/components/schemas/RawType"
+          },
+          "body_content": {
+            "type": "string"
+          },
+          "graphql_query": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "graphql_variables": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "body_form_data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FormDataItem"
+            }
+          },
+          "pre_request_script": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "post_response_script": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "examples": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedExample"
+            }
+          }
+        }
+      },
+      "CreateItemRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/CollectionItemWriteInput"
+          },
+          {
+            "type": "object",
+            "required": [
+              "collection_id"
+            ]
+          }
+        ]
+      },
       "UpdateItemRequest": {
         "type": "object",
         "required": [
@@ -7246,7 +7501,7 @@
         ],
         "properties": {
           "item": {
-            "$ref": "#/components/schemas/CollectionItem"
+            "$ref": "#/components/schemas/CollectionItemWriteInput"
           },
           "base_version": {
             "type": "integer",

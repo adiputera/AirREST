@@ -7,6 +7,10 @@
   "permissions": [
     "updater:default",
     "process:allow-restart",
-    "core:window:allow-destroy"
+    "core:window:allow-destroy",
+    "allow-start-performance-run",
+    "allow-stop-performance-run",
+    "allow-update-performance-variables",
+    "allow-check-performance-capacity"
   ]
 }

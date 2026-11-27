@@ -10,7 +10,6 @@ import {
   ChevronRight,
   ChevronDown,
   Search,
-  Plus,
   FileCode,
   FolderPlus,
   Layers,

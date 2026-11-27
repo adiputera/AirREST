@@ -141,6 +141,8 @@ func (s *AuthService) Register(ctx context.Context, email, password, name string
 	return newUser, tokens, nil
 }
 
+const dummyPasswordHash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
+
 // Login authenticates a user and returns a signed JWT pair
 func (s *AuthService) Login(ctx context.Context, email, password string) (*domain.User, *TokenPair, error) {
 	email = strings.TrimSpace(strings.ToLower(email))
@@ -148,6 +150,7 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*domai
 	user, err := s.userRepo.GetByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, postgres.ErrUserNotFound) {
+			_ = hasher.CheckPassword(password, dummyPasswordHash)
 			return nil, nil, ErrInvalidCredentials
 		}
 		return nil, nil, fmt.Errorf("failed to look up user: %w", err)
@@ -365,10 +368,16 @@ func (s *AuthService) ResetPasswordByAdmin(ctx context.Context, userID uuid.UUID
 	return s.userRepo.UpdatePassword(ctx, userID, newHash, nil)
 }
 
-// SearchUsers searches users by email or name (minimum 2 characters query)
+// SearchUsers searches users by email or name (minimum 2 non-wildcard characters query)
 func (s *AuthService) SearchUsers(ctx context.Context, query string) ([]*domain.User, error) {
 	query = strings.TrimSpace(query)
-	if len(query) < 2 {
+	nonWildcard := 0
+	for _, r := range query {
+		if r != '%' && r != '_' && r != '\\' {
+			nonWildcard++
+		}
+	}
+	if nonWildcard < 2 {
 		return []*domain.User{}, nil
 	}
 	return s.userRepo.SearchUsers(ctx, query, 20)

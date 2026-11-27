@@ -1494,3 +1494,31 @@ test('RUN-07/RUN-09/RUN-11/RUN-12/RUN-15: CSV parser handles inline quotes & emp
   assert.ok(synced);
   assert.deepEqual(Array.from(synced.setupItemIds), ['setup-req']);
 });
+
+test('RUN-04: parseImportedPerformanceReport normalizes malformed errorGroups elements', () => {
+  const { perfComparison } = loadCommonModules();
+  const res = perfComparison.parseImportedPerformanceReport(JSON.stringify({
+    id: 'perf-malformed-groups',
+    title: 'Perf Malformed Groups',
+    startedAt: 1000,
+    durationMs: 2000,
+    summary: { totalRequests: 5, errorCount: 2, errorRatePct: 40, requestsPerSec: 2, maxRequestsPerSec: 2, avgMs: 10, minMs: 5, maxMs: 20, p90Ms: 18, p95Ms: 19, p99Ms: 20, bytesReceived: 100 },
+    timeSeries: [],
+    endpoints: [],
+    errorGroups: [
+      { key: '', status: '500', category: 42, label: '', count: -3, requestIds: ['req-a', 123, null] },
+      null,
+    ],
+    configSnapshot: { loadProfile: { curveType: 'fixed', virtualUsers: 2, durationUnit: 'seconds', durationValue: 10 } },
+  }));
+  assert.ok(res.report);
+  assert.equal(res.report.errorGroups.length, 2);
+  assert.deepEqual(JSON.parse(JSON.stringify(res.report.errorGroups[0])), {
+    key: 'group_0',
+    status: 0,
+    category: 'error',
+    label: 'Unknown error',
+    count: 0,
+    requestIds: ['req-a'],
+  });
+});

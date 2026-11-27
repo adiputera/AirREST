@@ -259,3 +259,34 @@ test('EXT-02: sandbox uses null-prototype maps, supports MessagePort reply, and 
   assert.equal(portReplies[0].success, false);
   assert.match(portReplies[0].error, /2 MiB|maximum/i);
 });
+
+test('EXT-02: sandbox uses captured harness intrinsics even if user script mutates global JSON/Object/TextEncoder', () => {
+  const harness = createSandboxHarness({ protocol: 'chrome-extension:', hostname: 'example-extension' });
+  const portReplies = [];
+  const mockPort = {
+    postMessage: (data) => portReplies.push(data),
+    close: () => {},
+  };
+  harness.dispatch({
+    origin: 'chrome-extension://abcdefghijklmnopabcdefghijklmnop',
+    ports: [mockPort],
+    environment: { clean: '1' },
+    script: `
+      JSON.stringify = function () { throw new Error('hijacked JSON.stringify'); };
+      Object.keys = function () { return []; };
+      Object.defineProperty = function () { throw new Error('hijacked defineProperty'); };
+      globalThis.TextEncoder = function () { throw new Error('hijacked TextEncoder'); };
+      pm.environment.set('afterTamper', 'safe-value');
+      pm.test('survived tamper', function () {
+        pm.expect(pm.environment.get('afterTamper')).to.equal('safe-value');
+      });
+    `,
+  });
+
+  assert.equal(portReplies.length, 1);
+  assert.equal(portReplies[0].success, true);
+  assert.equal(portReplies[0].environment.clean, '1');
+  assert.equal(portReplies[0].environment.afterTamper, 'safe-value');
+  assert.equal(portReplies[0].testResults.length, 1);
+  assert.equal(portReplies[0].testResults[0].passed, true);
+});

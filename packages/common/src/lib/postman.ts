@@ -457,7 +457,14 @@ export function extractAuthFromHeaders(headers: KeyValuePair[]): AuthConfig | nu
   if (/^basic\s+/i.test(val)) {
     const b64 = val.replace(/^basic\s+/i, '').trim();
     try {
-      const decoded = atob(b64);
+      const binary = atob(b64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      const decoded = typeof TextDecoder !== 'undefined'
+        ? new TextDecoder('utf-8', { fatal: false }).decode(bytes)
+        : binary;
       const colonIdx = decoded.indexOf(':');
       if (colonIdx >= 0) {
         return {

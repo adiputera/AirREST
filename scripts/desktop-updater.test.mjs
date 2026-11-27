@@ -282,9 +282,17 @@ test('T-UPDATER-7: Tauri config, capabilities, and GitHub workflow contracts are
   assert.ok(capabilities.permissions.includes('updater:default'));
   assert.ok(capabilities.permissions.includes('process:allow-restart'));
   assert.ok(capabilities.permissions.includes('core:window:allow-destroy'));
+  assert.ok(capabilities.permissions.includes('allow-start-performance-run'));
+  assert.ok(capabilities.permissions.includes('allow-stop-performance-run'));
+  assert.ok(capabilities.permissions.includes('allow-update-performance-variables'));
+  assert.ok(capabilities.permissions.includes('allow-check-performance-capacity'));
   assert.deepEqual(capabilities.platforms, ['linux', 'macOS', 'windows']);
   assert.ok(!sharedCapabilities.permissions.includes('updater:default'));
   assert.ok(!sharedCapabilities.permissions.includes('process:allow-restart'));
+  assert.ok(!sharedCapabilities.permissions.includes('core:default'));
+  assert.ok(sharedCapabilities.permissions.includes('core:app:default'));
+  assert.ok(sharedCapabilities.permissions.includes('core:event:default'));
+  assert.ok(sharedCapabilities.permissions.includes('core:window:default'));
 
   assert.ok(workflow.includes('TAURI_SIGNING_PRIVATE_KEY'));
   assert.ok(workflow.includes('TAURI_UPDATER_PUBLIC_KEY'));

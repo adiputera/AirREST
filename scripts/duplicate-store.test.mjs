@@ -83,7 +83,30 @@ function createStoreHarness({ cloudClientOverrides = {}, storage: customStorageO
   modules.theme = { applyTheme: noop };
   modules.fetcher = { executeApiRequest: async () => ({ status: 200, statusText: 'OK', data: '{}', timeMs: 1, sizeBytes: 2, headers: {} }) };
   modules.blobManager = { revokeBlobUrl: noop, revokeBlobUrls: noop, releaseRawBody: noop, releaseRawBodies: noop, evictRawBodiesToBudget: () => [] };
-  modules.postman = { importPostmanCollection: noop, importPostmanEnvironment: noop, detectPostmanJsonType: noop, buildPostmanUrl: (url) => ({ raw: String(url || '') }) };
+  modules.postman = {
+    importPostmanCollection: noop,
+    importPostmanEnvironment: (jsonStr) => {
+      const parsed = JSON.parse(jsonStr);
+      return {
+        id: 'imported-env-' + Math.random().toString(36).slice(2, 8),
+        name: parsed.name || 'Imported',
+        variables: (parsed.values || []).map((v, idx) => ({
+          id: `v-${idx}`,
+          key: v.key || '',
+          value: v.value || '',
+          initialValue: v.value || '',
+          currentValue: v.value || '',
+          enabled: v.enabled !== false,
+        })),
+        minRole: 'reader',
+        version: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      };
+    },
+    detectPostmanJsonType: noop,
+    buildPostmanUrl: (url) => ({ raw: String(url || '') }),
+  };
   modules.scriptRunner = { executePreRequestScript: async () => ({ success: true, environment: {}, variables: {} }), executePostResponseScript: async () => ({ success: true, environment: {}, variables: {} }) };
   modules.urlParams = loadTsModule('../packages/common/src/lib/urlParams.ts');
   modules.productPolicy = loadTsModule('../packages/common/src/productPolicy.ts');
@@ -1766,5 +1789,91 @@ test('STU-06: duplicateCollectionItem clears pendingDuplicateIntents even if act
   assert.equal(res.success, false);
   assert.match(res.error, /Session or scope changed/);
   assert.deepEqual(toPlain(s.getState().pendingDuplicateIntents), {});
+  s.dispose();
+});
+
+test('STU-04: importEnvironmentFromJson and env mutators retain pending sync state across inline edits and sync errors', async () => {
+  let resolveImportCreate;
+  const updatedPayloads = [];
+  const h = createStoreHarness({
+    cloudClientOverrides: {
+      createScopeEnvironment: async () => new Promise((resolve) => { resolveImportCreate = resolve; }),
+      updateScopeEnvironment: async (_api, _tok, id, payload) => {
+        updatedPayloads.push({ id, payload });
+        throw new Error('transient network drop');
+      },
+    },
+  });
+  const s = await h.createStore();
+  s.setState({
+    workspaceMode: 'cloud',
+    cloudConfig: {
+      apiUrl: 'https://api.example.com',
+      token: 'tok-import-env',
+      user: { id: 'alice', email: 'alice@example.com', name: 'Alice', role: 'owner' },
+      activeScope: { type: 'workspace', id: 'ws-a', name: 'WS A', role: 'owner' },
+    },
+  });
+
+  const importedRes = s.getState().importEnvironmentFromJson(JSON.stringify({
+    name: 'Imported Staging',
+    values: [{ key: 'baseUrl', value: 'https://example.com', enabled: true }],
+  }));
+  assert.equal(importedRes.success, true);
+  const localId = importedRes.environment.id;
+  assert.equal(s.getState().environments.find((e) => e.id === localId)?._pendingCreate, true);
+  assert.equal(s.getState().environments.find((e) => e.id === localId)?._syncStatus, 'pending');
+
+  const varId = s.getState().environments.find((e) => e.id === localId).variables[0].id;
+  s.getState().updateEnvironmentVariable(localId, varId, { value: 'https://api.example.com', initialValue: 'https://api.example.com' });
+  assert.equal(s.getState().environments.find((e) => e.id === localId)?._syncStatus, 'pending');
+
+  resolveImportCreate({ id: 'server-imported-env-1', version: 1 });
+  await new Promise((r) => setTimeout(r, 30));
+  const promoted = s.getState().environments.find((e) => e.id === 'server-imported-env-1');
+  assert.ok(promoted);
+  assert.equal(promoted._pendingCreate, undefined);
+  assert.equal(promoted._syncStatus, 'pending');
+
+  await new Promise((r) => setTimeout(r, 1300));
+  assert.equal(updatedPayloads.length, 1);
+  assert.equal(updatedPayloads[0].id, 'server-imported-env-1');
+  assert.equal(s.getState().environments.find((e) => e.id === 'server-imported-env-1')?._syncStatus, 'pending');
+  s.dispose();
+});
+
+test('STU-14: moveCollection from offline to cloud prunes open example tabs for the moved collection', async () => {
+  const h = createStoreHarness({
+    cloudClientOverrides: {
+      batchImportToScope: async () => undefined,
+      fetchScopeCollections: async () => [],
+      fetchScopeEnvironments: async () => [],
+    },
+  });
+  const s = await h.createStore();
+  s.setState({
+    workspaceMode: 'offline',
+    activeOfflineWorkspaceId: 'offline-ws-1',
+    offlineWorkspaces: [{ id: 'offline-ws-1', name: 'Local', createdAt: 1, updatedAt: 1 }],
+    cloudConfig: {
+      apiUrl: 'https://api.example.com',
+      token: 'tok-move',
+      user: { id: 'alice', email: 'alice@example.com', name: 'Alice', role: 'owner' },
+      activeScope: { type: 'workspace', id: 'ws-a', name: 'WS A', role: 'owner' },
+    },
+    collections: [
+      { id: 'col-move', name: 'Local Col', minRole: 'reader', items: [{ id: 'req-1', name: 'Ping', type: 'request', request: makeSampleRequest('req-1', 'Ping') }], createdAt: 1, updatedAt: 1 },
+    ],
+    openExampleTabs: [
+      { collectionId: 'col-move', itemId: 'req-1', exampleId: 'ex-1' },
+      { collectionId: 'col-other', itemId: 'req-2', exampleId: 'ex-2' },
+    ],
+    selectedExample: { collectionId: 'col-move', itemId: 'req-1', exampleId: 'ex-1' },
+  });
+
+  const moved = await s.getState().moveCollection('col-move', { type: 'workspace', id: 'ws-a', name: 'WS A', role: 'owner' });
+  assert.equal(moved.success, true);
+  assert.deepEqual(toPlain(s.getState().openExampleTabs), [{ collectionId: 'col-other', itemId: 'req-2', exampleId: 'ex-2' }]);
+  assert.equal(s.getState().selectedExample, null);
   s.dispose();
 });

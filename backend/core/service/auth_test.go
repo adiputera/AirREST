@@ -25,13 +25,15 @@ func TestAuthServiceValidationRules(t *testing.T) {
 		}
 	})
 
-	t.Run("SearchUsers with short query returns empty list without error", func(t *testing.T) {
-		results, err := authService.SearchUsers(ctx, "a")
-		if err != nil {
-			t.Fatalf("unexpected error on short query: %v", err)
-		}
-		if len(results) != 0 {
-			t.Fatalf("expected 0 results for single character query, got: %d", len(results))
+	t.Run("SearchUsers with short or wildcard-only query returns empty list without error", func(t *testing.T) {
+		for _, q := range []string{"a", "%%", "__", "%_\\"} {
+			results, err := authService.SearchUsers(ctx, q)
+			if err != nil {
+				t.Fatalf("unexpected error on query %q: %v", q, err)
+			}
+			if len(results) != 0 {
+				t.Fatalf("expected 0 results for query %q, got: %d", q, len(results))
+			}
 		}
 	})
 

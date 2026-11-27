@@ -35,7 +35,11 @@ function safeJsonEmbed(data: unknown): string {
 }
 
 function csvEscape(value: string | number | boolean | null | undefined): string {
-  const str = value === null || value === undefined ? '' : String(value);
+  if (value === null || value === undefined) return '';
+  let str = String(value);
+  if (typeof value === 'string' && /^[=+\-@\t\r]/.test(str)) {
+    str = `'${str}`;
+  }
   if (/[",\r\n]/.test(str)) {
     return `"${str.replaceAll('"', '""')}"`;
   }

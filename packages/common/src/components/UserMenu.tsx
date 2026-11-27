@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { useBackHandler } from '../lib/backNavigation';
-import { User, LogIn, KeyRound, LogOut, ChevronDown, Pencil } from 'lucide-react';
+import { User, KeyRound, LogOut, ChevronDown, Pencil } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
 import { isCloudSessionActive } from '../workspace/cloudSession';
 import { useAuthProvider, useProductPolicy } from '../context';
@@ -118,15 +118,6 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onOpenLogin }) => {
 
   const displayName = user?.name || user?.email?.split('@')[0] || 'User';
   const roleName = user?.role || 'member';
-
-  // Get user initials for avatar fallback
-  const initials = displayName
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((n) => n[0] || '')
-    .join('')
-    .substring(0, 2)
-    .toUpperCase() || 'U';
 
   const getRoleBadgeStyle = (role?: string | null) => {
     switch (String(role || 'member').toLowerCase()) {

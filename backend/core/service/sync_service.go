@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -361,6 +362,18 @@ func truncateUTF8(value string, maxBytes int) string {
 	return value[:end]
 }
 
+func isUniqueConstraintError(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+func sameSyncOptionalUUID(a, b *uuid.UUID) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
 // PushChangeset processes a batch of offline mutations, applying non-conflicting mutations
 // and returning detailed conflict reports for any stale updates.
 func (s *SyncService) PushChangeset(ctx context.Context, user *domain.User, req SyncPushRequest) (*SyncPushResponse, error) {
@@ -390,6 +403,27 @@ func (s *SyncService) PushChangeset(ctx context.Context, user *domain.User, req 
 			}
 			if err := s.collectionService.CreateCollection(ctx, user, &col); err == nil {
 				resp.AppliedIDs = append(resp.AppliedIDs, col.ID)
+			} else if isUniqueConstraintError(err) && col.ID != uuid.Nil {
+				if existing, getErr := s.collectionService.GetCollection(ctx, user, col.ID); getErr == nil &&
+					sameSyncOptionalUUID(existing.WorkspaceID, col.WorkspaceID) &&
+					sameSyncOptionalUUID(existing.ProjectID, col.ProjectID) {
+					resp.AppliedIDs = append(resp.AppliedIDs, col.ID)
+				} else {
+					slog.Warn("sync push collection create conflict", "collection_id", col.ID, "error", err)
+					resp.Conflicts = append(resp.Conflicts, SyncConflictReport{
+						ID:         col.ID,
+						Type:       "collection",
+						Message:    err.Error(),
+						ServerData: existing,
+					})
+				}
+			} else {
+				slog.Warn("sync push collection create failed", "collection_id", col.ID, "error", err)
+				resp.Conflicts = append(resp.Conflicts, SyncConflictReport{
+					ID:      col.ID,
+					Type:    "collection",
+					Message: err.Error(),
+				})
 			}
 		case "update":
 			col := m.Collection
@@ -426,6 +460,26 @@ func (s *SyncService) PushChangeset(ctx context.Context, user *domain.User, req 
 			item := m.Item
 			if err := s.collectionService.CreateItem(ctx, user, &item); err == nil {
 				resp.AppliedIDs = append(resp.AppliedIDs, item.ID)
+			} else if isUniqueConstraintError(err) && item.ID != uuid.Nil {
+				if existing, getErr := s.collectionService.GetItem(ctx, user, item.ID); getErr == nil &&
+					existing.CollectionID == item.CollectionID {
+					resp.AppliedIDs = append(resp.AppliedIDs, item.ID)
+				} else {
+					slog.Warn("sync push item create conflict", "item_id", item.ID, "error", err)
+					resp.Conflicts = append(resp.Conflicts, SyncConflictReport{
+						ID:         item.ID,
+						Type:       "item",
+						Message:    err.Error(),
+						ServerData: existing,
+					})
+				}
+			} else {
+				slog.Warn("sync push item create failed", "item_id", item.ID, "error", err)
+				resp.Conflicts = append(resp.Conflicts, SyncConflictReport{
+					ID:      item.ID,
+					Type:    "item",
+					Message: err.Error(),
+				})
 			}
 		case "update":
 			item := m.Item
@@ -443,6 +497,13 @@ func (s *SyncService) PushChangeset(ctx context.Context, user *domain.User, req 
 		case "delete":
 			if err := s.collectionService.DeleteItem(ctx, user, m.Item.ID); err == nil {
 				resp.AppliedIDs = append(resp.AppliedIDs, m.Item.ID)
+			} else {
+				slog.Warn("sync push item delete failed", "item_id", m.Item.ID, "error", err)
+				resp.Conflicts = append(resp.Conflicts, SyncConflictReport{
+					ID:      m.Item.ID,
+					Type:    "item",
+					Message: err.Error(),
+				})
 			}
 		}
 	}
@@ -460,6 +521,27 @@ func (s *SyncService) PushChangeset(ctx context.Context, user *domain.User, req 
 			}
 			if err := s.envService.Create(ctx, user, &env); err == nil {
 				resp.AppliedIDs = append(resp.AppliedIDs, env.ID)
+			} else if isUniqueConstraintError(err) && env.ID != uuid.Nil {
+				if existing, getErr := s.envService.Get(ctx, user, env.ID); getErr == nil &&
+					sameSyncOptionalUUID(existing.WorkspaceID, env.WorkspaceID) &&
+					sameSyncOptionalUUID(existing.ProjectID, env.ProjectID) {
+					resp.AppliedIDs = append(resp.AppliedIDs, env.ID)
+				} else {
+					slog.Warn("sync push environment create conflict", "environment_id", env.ID, "error", err)
+					resp.Conflicts = append(resp.Conflicts, SyncConflictReport{
+						ID:         env.ID,
+						Type:       "environment",
+						Message:    err.Error(),
+						ServerData: existing,
+					})
+				}
+			} else {
+				slog.Warn("sync push environment create failed", "environment_id", env.ID, "error", err)
+				resp.Conflicts = append(resp.Conflicts, SyncConflictReport{
+					ID:      env.ID,
+					Type:    "environment",
+					Message: err.Error(),
+				})
 			}
 		case "update":
 			env := m.Environment
@@ -477,6 +559,13 @@ func (s *SyncService) PushChangeset(ctx context.Context, user *domain.User, req 
 		case "delete":
 			if err := s.envService.Delete(ctx, user, m.Environment.ID); err == nil {
 				resp.AppliedIDs = append(resp.AppliedIDs, m.Environment.ID)
+			} else {
+				slog.Warn("sync push environment delete failed", "environment_id", m.Environment.ID, "error", err)
+				resp.Conflicts = append(resp.Conflicts, SyncConflictReport{
+					ID:      m.Environment.ID,
+					Type:    "environment",
+					Message: err.Error(),
+				})
 			}
 		}
 	}

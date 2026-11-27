@@ -255,3 +255,22 @@ func TestValidateImportItem(t *testing.T) {
 		t.Fatalf("expected ErrInvalidItemPayload when request item contains nested items, got: %v", err)
 	}
 }
+
+func TestEnvironmentValidationHelpers(t *testing.T) {
+	if err := validateEnvironmentMinRole("super_invalid"); !errors.Is(err, ErrInvalidItemPayload) {
+		t.Fatalf("expected ErrInvalidItemPayload for invalid environment min_role, got: %v", err)
+	}
+	if err := validateEnvironmentMinRole(domain.ProjectRoleMaintainer); err != nil {
+		t.Fatalf("expected valid environment min_role to pass, got: %v", err)
+	}
+
+	if err := validateEnvironmentVariables(rawJSON(`["not-an-object"]`)); !errors.Is(err, ErrInvalidItemPayload) {
+		t.Fatalf("expected ErrInvalidItemPayload for string element in variables, got: %v", err)
+	}
+	if err := validateEnvironmentVariables(rawJSON(`null`)); !errors.Is(err, ErrInvalidItemPayload) {
+		t.Fatalf("expected ErrInvalidItemPayload for null variables, got: %v", err)
+	}
+	if err := validateEnvironmentVariables(rawJSON(`[{"id":"v1","key":"host","value":"example.com","enabled":true}]`)); err != nil {
+		t.Fatalf("expected valid variables array of objects to pass, got: %v", err)
+	}
+}

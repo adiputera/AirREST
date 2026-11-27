@@ -6,15 +6,15 @@ services:
     container_name: airrest-postgres
     restart: always
     environment:
-      POSTGRES_USER: airrest
-      POSTGRES_PASSWORD: airrest_secret_password
-      POSTGRES_DB: airrest_db
+      POSTGRES_USER: ${POSTGRES_USER:-airrest}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-airrest_secret_password}
+      POSTGRES_DB: ${POSTGRES_DB:-airrest_db}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U airrest -d airrest_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-airrest} -d ${POSTGRES_DB:-airrest_db}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -30,9 +30,10 @@ services:
         condition: service_healthy
     environment:
       PORT: 8080
-      DATABASE_URL: postgres://airrest:airrest_secret_password@postgres:5432/airrest_db?sslmode=disable
+      DATABASE_URL: postgres://${POSTGRES_USER:-airrest}:${POSTGRES_PASSWORD:-airrest_secret_password}@postgres:5432/${POSTGRES_DB:-airrest_db}?sslmode=disable
       JWT_SECRET: ${JWT_SECRET:?Set a randomly generated JWT_SECRET in .env}
       JWT_EXPIRATION_HOURS: 72
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
       SUPERADMIN_EMAIL: ${SUPERADMIN_EMAIL:-}
       SUPERADMIN_PASSWORD: ${SUPERADMIN_PASSWORD:-}
       SUPERADMIN_NAME: Super Administrator

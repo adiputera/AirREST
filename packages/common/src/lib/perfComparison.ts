@@ -1,5 +1,6 @@
 import type {
   PerformanceEndpointBreakdown,
+  PerformanceErrorGroup,
   PerformanceErrorSample,
   PerformanceMetricSnapshot,
   PerformanceRunReport,
@@ -345,6 +346,21 @@ function normalizeImportedBucket(raw: unknown, index: number): PerformanceTimeBu
   };
 }
 
+function normalizeImportedErrorGroup(raw: unknown, index: number): PerformanceErrorGroup {
+  const g = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const rawIds = Array.isArray(g.requestIds)
+    ? g.requestIds.filter((id): id is string => typeof id === 'string').slice(0, MAX_IMPORTED_ENDPOINTS)
+    : [];
+  return {
+    key: typeof g.key === 'string' && g.key ? g.key : `group_${index}`,
+    status: typeof g.status === 'number' && Number.isFinite(g.status) && g.status >= 0 ? Math.trunc(g.status) : 0,
+    category: typeof g.category === 'string' ? g.category : 'error',
+    label: typeof g.label === 'string' && g.label ? g.label : 'Unknown error',
+    count: Math.trunc(toFiniteNonNegative(g.count)),
+    requestIds: rawIds,
+  };
+}
+
 function normalizeImportedErrorSample(raw: unknown, index: number): PerformanceErrorSample {
   const e = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   return {
@@ -445,7 +461,9 @@ export function parseImportedPerformanceReport(content: string): {
     endpoints: (candidate.endpoints as unknown[])
       .slice(0, MAX_IMPORTED_ENDPOINTS)
       .map((ep, idx) => normalizeImportedEndpoint(ep, idx)),
-    errorGroups: Array.isArray(candidate.errorGroups) ? rawReport.errorGroups.slice(0, MAX_IMPORTED_ENDPOINTS) : [],
+    errorGroups: Array.isArray(candidate.errorGroups)
+      ? candidate.errorGroups.slice(0, MAX_IMPORTED_ENDPOINTS).map((g, idx) => normalizeImportedErrorGroup(g, idx))
+      : [],
     errorSamples: Array.isArray(candidate.errorSamples)
       ? candidate.errorSamples.slice(0, MAX_IMPORTED_ERROR_SAMPLES).map((e, idx) => normalizeImportedErrorSample(e, idx))
       : [],

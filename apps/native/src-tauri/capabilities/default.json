@@ -4,7 +4,9 @@
   "description": "AirREST main-window network and user-selected file operations",
   "windows": ["main"],
   "permissions": [
-    "core:default",
+    "core:app:default",
+    "core:event:default",
+    "core:window:default",
     "native-credential:allow-read",
     "native-credential:allow-write",
     "native-credential:allow-remove",

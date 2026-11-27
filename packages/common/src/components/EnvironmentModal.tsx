@@ -56,7 +56,6 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
   const persistEnvironmentCurrentValues = useApiStore((state) => state.persistEnvironmentCurrentValues);
   const addEnvironment = useApiStore((state) => state.addEnvironment);
   const replaceEnvironment = useApiStore((state) => state.replaceEnvironment);
-  const importEnvironmentFromJson = useApiStore((state) => state.importEnvironmentFromJson);
   const workspaceMode = useApiStore((state) => state.workspaceMode);
   const cloudConfig = useApiStore((state) => state.cloudConfig);
 
@@ -66,7 +65,6 @@ export const EnvironmentModal: React.FC<EnvironmentModalProps> = ({ isOpen, onCl
   // Dynamic capability permissions
   const canWriteEnv = hasScopePermission(activeScope, 'env:write', workspaceMode, cloudConfig?.user?.role);
   const canDeleteEnv = hasScopePermission(activeScope, 'env:delete', workspaceMode, cloudConfig?.user?.role);
-  const isProjectAdmin = hasScopePermission(activeScope, '*', workspaceMode, cloudConfig?.user?.role);
   const isCreateDisabled = isProjectScope && !canWriteEnv;
 
   const [selectedEnvId, setSelectedEnvId] = useState<string>(

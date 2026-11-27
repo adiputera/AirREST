@@ -96,6 +96,30 @@ export function encodeBasicCredentials(username: string, password: string): stri
 }
 
 /**
+ * Decodes Base64 Basic Auth credentials (`username:password`) using UTF-8.
+ */
+export function decodeBasicCredentials(b64: string): { username: string; password: string } | null {
+  try {
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    const decoded = typeof TextDecoder !== 'undefined'
+      ? new TextDecoder('utf-8', { fatal: false }).decode(bytes)
+      : binary;
+    const colonIdx = decoded.indexOf(':');
+    if (colonIdx < 0) return null;
+    return {
+      username: decoded.substring(0, colonIdx),
+      password: decoded.substring(colonIdx + 1),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Formats the warning message shown when an active manual header is overridden by Auth.
  */
 export function formatOverriddenHeaderWarning(authHeaderName: string): string {

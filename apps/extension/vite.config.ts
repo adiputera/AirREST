@@ -67,6 +67,7 @@ export default defineConfig(({ mode }) => {
       alias: {
         '@': path.resolve(import.meta.dirname, './src'),
       },
+      dedupe: ['react', 'react-dom'],
     },
     build: {
       outDir,

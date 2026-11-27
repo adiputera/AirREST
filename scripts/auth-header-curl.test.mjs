@@ -633,5 +633,21 @@ test('C4-C7: form-data file @filename, API key #fragment, cURL parser (-d/-b/--j
     substitutedPriceUrl,
     'https://example.com/items/$100/users/$2b$10$hash',
   );
+
+  // STU-20: UTF-8 Basic Auth credentials round-trip cleanly without Latin-1 mojibake
+  const utf8User = 'üser_名';
+  const utf8Pass = 'päss€word_🔐';
+  const utf8Req = {
+    ...baseRequest,
+    method: 'GET',
+    url: 'https://example.com/utf8-basic',
+    headers: [],
+    auth: { type: 'basic', basicUsername: utf8User, basicPassword: utf8Pass },
+  };
+  const utf8Curl = curl.generateCurlCommand(utf8Req);
+  const parsedUtf8Curl = curl.tryParseCurlCommand(utf8Curl);
+  assert.equal(parsedUtf8Curl.auth.type, 'basic');
+  assert.equal(parsedUtf8Curl.auth.basicUsername, utf8User);
+  assert.equal(parsedUtf8Curl.auth.basicPassword, utf8Pass);
 });
 

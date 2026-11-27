@@ -1,5 +1,5 @@
 import { ApiRequest, HttpMethod, KeyValuePair, AuthConfig, FormDataItem, BinaryFileData, RawType } from '../types/api';
-import { resolveBodyContentTypeHeader, resolveEffectiveAuthHeader, resolveManualHeaders } from './authHeaders';
+import { decodeBasicCredentials, resolveBodyContentTypeHeader, resolveEffectiveAuthHeader, resolveManualHeaders } from './authHeaders';
 import { interpolateVariables } from './fetcher';
 import { compileEffectiveJsonPayload } from './formatters';
 import {
@@ -646,18 +646,13 @@ export function parseCurlCommand(rawCurl: string): Partial<ApiRequest> {
         };
       } else if (/^basic\s+/i.test(val)) {
         const b64 = val.replace(/^basic\s+/i, '').trim();
-        try {
-          const decoded = atob(b64);
-          const colonIdx = decoded.indexOf(':');
-          if (colonIdx >= 0) {
-            auth = {
-              type: 'basic',
-              basicUsername: decoded.substring(0, colonIdx),
-              basicPassword: decoded.substring(colonIdx + 1),
-            };
-          }
-        } catch {
-          // ignore if not standard base64
+        const creds = decodeBasicCredentials(b64);
+        if (creds) {
+          auth = {
+            type: 'basic',
+            basicUsername: creds.username,
+            basicPassword: creds.password,
+          };
         }
       }
     }

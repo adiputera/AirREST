@@ -110,7 +110,6 @@ import {
   CloudProject,
   ActiveScope,
   Collection,
-  Environment,
   FeaturePolicy,
   ProjectRole,
   SavedExample,

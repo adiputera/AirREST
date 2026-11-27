@@ -11,7 +11,6 @@ import {
   RotateCcw,
   Maximize2,
   Minimize2,
-  X,
 } from 'lucide-react';
 import { PayloadBuilderConfig, PayloadNode } from '../../types/payloadBuilder';
 import {
@@ -23,7 +22,6 @@ import {
 } from '../../lib/payloadCompiler';
 import { jsonToTree, xmlToTree } from '../../lib/payloadReverseParser';
 import { PayloadNodeRow } from './PayloadNodeRow';
-import { handleCodeEditorKeyDown } from '../../lib/editorHelper';
 import { beautifyJson, beautifyXml, compileEffectiveJsonPayload, sanitizeRelaxedJson } from '../../lib/formatters';
 import { useBackHandler } from '../../lib/backNavigation';
 import { CodeEditor, CodeEditorHandle } from '../editor/CodeEditor';
@@ -349,7 +347,7 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
   }, [viewMode, rawText, previewText, compiledText]);
 
   // Shared Sub-Views
-  const renderBuilderView = (isModal: boolean) => (
+  const renderBuilderView = (_isModal: boolean) => (
     <div className="flex-1 min-h-0 flex flex-col space-y-3">
       {/* Builder Sub-Header: Root Type Switcher & XML Tags */}
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-element/50 p-2 text-xs shrink-0">
@@ -497,7 +495,7 @@ export const PayloadBuilder: React.FC<PayloadBuilderProps> = ({
     </div>
   );
 
-  const renderPreviewView = (isModal: boolean) => (
+  const renderPreviewView = (_isModal: boolean) => (
     <div className="flex-1 min-h-0 flex flex-col space-y-2">
       <div className="flex items-center justify-between text-[11px] text-tx-muted shrink-0">
         <span>

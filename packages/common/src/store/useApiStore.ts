@@ -43,7 +43,7 @@ import {
   SavedExampleSummary,
 } from '../types/api';
 import { applyTheme } from '../lib/theme';
-import { executeApiRequest } from '../lib/fetcher';
+import { executeApiRequest, rebuildTrackedImageBlobUrl } from '../lib/fetcher';
 import type { PlatformAdapter, ScriptRequest } from '../types/platform';
 import type { NativeCredentialState, NativeCredentialStorage, NativeCredentialScope } from '../types/credentials';
 import {
@@ -149,7 +149,6 @@ import {
   findSavedRequestInCollections,
   alignCollectionItemIds,
   collectAllItemIds,
-  flattenCollectionRequests,
   alignEnvironmentVariableIds,
 } from '../lib/requestDiff';
 import { canModifyCollection, canModifyEnvironment, hasScopePermission, getUserScopeRank } from '../lib/jwt';
@@ -963,6 +962,7 @@ export function createApiStore(
   const pendingReorderBaseSnapshots = new Map<string, { items: CollectionItem[]; syncStatus?: Collection['_syncStatus'] }>();
   const envIdAliasMap = new Map<string, string>();
   const pendingEnvCreatePromises = new Map<string, Promise<string | null>>();
+  const pendingEnvEditedWhileCreating = new Set<string>();
   const movingCollections = new Map<string, symbol>();
   const duplicatingCollections = new Map<string, symbol>();
   const inFlightDuplicateOperations = new Set<string>();
@@ -1092,9 +1092,44 @@ export function createApiStore(
     }
   }
 
+  function stripHistoryBlobUrls(history: HistoryItem[] | undefined): HistoryItem[] {
+    if (!history || history.length === 0) return [];
+    return history.map((entry) =>
+      entry.response?.blobUrl
+        ? { ...entry, response: { ...entry.response, blobUrl: undefined } }
+        : entry
+    );
+  }
+
+  function stripBackgroundCacheBlobUrls(
+    cache: Record<string, ScopeCacheEntry> | undefined,
+    activeKey?: string | null
+  ): Record<string, ScopeCacheEntry> {
+    if (!cache) return {};
+    const next: Record<string, ScopeCacheEntry> = {};
+    for (const [key, entry] of Object.entries(cache)) {
+      if (!entry) continue;
+      next[key] =
+        key === activeKey || !entry.history?.some((h) => h.response?.blobUrl)
+          ? entry
+          : { ...entry, history: stripHistoryBlobUrls(entry.history) };
+    }
+    return next;
+  }
+
+  function ensureResponseImageBlobUrl(response: ApiResponse | null | undefined): ApiResponse | null | undefined {
+    if (!response || !response.isImage || response.blobUrl || !response.rawBodyId) {
+      return response;
+    }
+    if (typeof rebuildTrackedImageBlobUrl !== 'function') return response;
+    const rebuiltUrl = rebuildTrackedImageBlobUrl(response.rawBodyId, response.contentType);
+    return rebuiltUrl ? { ...response, blobUrl: rebuiltUrl } : response;
+  }
+
   function collectProtectedResponseHandles(
     responses: Iterable<ApiResponse | null | undefined>,
-    histories: Array<Array<HistoryItem> | undefined>
+    histories: Array<Array<HistoryItem> | undefined>,
+    rawOnlyHistories: Array<Array<HistoryItem> | undefined> = []
   ): { blobUrls: Set<string>; rawBodyIds: Set<string> } {
     const blobUrls = new Set<string>();
     const rawBodyIds = new Set<string>();
@@ -1110,17 +1145,25 @@ export function createApiStore(
         if (item.response?.rawBodyId) rawBodyIds.add(item.response.rawBodyId);
       }
     }
+    for (const hist of rawOnlyHistories) {
+      if (!hist) continue;
+      for (const item of hist) {
+        if (item.response?.rawBodyId) rawBodyIds.add(item.response.rawBodyId);
+      }
+    }
     return { blobUrls, rawBodyIds };
   }
 
   function revokeUnreferencedResponses(
     candidates: Iterable<ApiResponse | null | undefined>,
     protectedResponses: Iterable<ApiResponse | null | undefined>,
-    protectedHistories: Array<Array<HistoryItem> | undefined>
+    protectedHistories: Array<Array<HistoryItem> | undefined>,
+    rawOnlyHistories: Array<Array<HistoryItem> | undefined> = []
   ) {
     const { blobUrls: protectedBlobs, rawBodyIds: protectedRawIds } = collectProtectedResponseHandles(
       protectedResponses,
-      protectedHistories
+      protectedHistories,
+      rawOnlyHistories
     );
 
     const blobsToRevoke = new Set<string>();
@@ -1141,12 +1184,19 @@ export function createApiStore(
   function revokeUnreferencedTabBlobs(
     prevTabResponses: Record<string, ApiResponse> | undefined,
     prevActiveResponse: ApiResponse | null | undefined,
-    protectedHistories: Array<Array<HistoryItem> | undefined>
+    protectedHistories: Array<Array<HistoryItem> | undefined>,
+    rawOnlyHistories: Array<Array<HistoryItem> | undefined> = [],
+    prevHistory: Array<HistoryItem> | undefined = []
   ) {
     revokeUnreferencedResponses(
-      [prevActiveResponse, ...(prevTabResponses ? Object.values(prevTabResponses) : [])],
+      [
+        prevActiveResponse,
+        ...(prevTabResponses ? Object.values(prevTabResponses) : []),
+        ...(prevHistory || []).map((entry) => entry.response),
+      ],
       [],
-      protectedHistories
+      protectedHistories,
+      rawOnlyHistories
     );
   }
 
@@ -1263,6 +1313,7 @@ export function createApiStore(
       cloudSessionGeneration += 1;
       envIdAliasMap.clear();
       pendingEnvCreatePromises.clear();
+      pendingEnvEditedWhileCreating.clear();
       sessionOperations.invalidate({ session: true });
     }
     for (const id of Object.keys(envSyncDebounceTimers)) {
@@ -1283,6 +1334,82 @@ export function createApiStore(
 
   function resolveCanonicalEnvId(envId: string): string {
     return envIdAliasMap.get(envId) || envId;
+  }
+
+  function isCloudEnvSyncActive(state: Pick<ApiStoreState, 'workspaceMode' | 'cloudConfig'>): boolean {
+    return !isOfflineOnly && !isStoreDisposed && state.workspaceMode === 'cloud' && isCloudSessionActive(state.cloudConfig);
+  }
+
+  function dispatchCloudEnvironmentCreate(
+    newEnv: Environment,
+    scope: NonNullable<ApiStoreState['cloudConfig']['activeScope']>,
+    initialStamp: number,
+    get: () => ApiStoreState,
+    set: (fn: (state: ApiStoreState) => Partial<ApiStoreState>) => void,
+  ): void {
+    const operation = beginAsyncOperation();
+    const liveCloud = get().cloudConfig;
+    const createPromise = createScopeEnvironment(
+      liveCloud.apiUrl,
+      liveCloud.token,
+      scope,
+      {
+        name: newEnv.name,
+        variables: sanitizeVariablesForUpstream(newEnv.variables),
+        min_role: newEnv.minRole || 'reader',
+      },
+      liveCloud.refreshToken,
+      operation.controller.signal
+    ).then((created) => {
+      if (!isAsyncOperationCurrent(operation)) return null;
+      if (created && created.id) {
+        envIdAliasMap.set(newEnv.id, created.id);
+        if (envSyncDebounceTimers[newEnv.id]) {
+          clearTimeout(envSyncDebounceTimers[newEnv.id]);
+          delete envSyncDebounceTimers[newEnv.id];
+        }
+        const latestLocalEnv = get().environments.find((e) => e.id === newEnv.id);
+        const editedWhileCreating = Boolean(
+          pendingEnvEditedWhileCreating.has(newEnv.id) ||
+          (latestLocalEnv && latestLocalEnv.updatedAt > initialStamp)
+        );
+        pendingEnvEditedWhileCreating.delete(newEnv.id);
+        set((state) => {
+          if (!isAsyncOperationCurrent(operation)) return {};
+          return {
+            environments: state.environments.map((e) =>
+              e.id === newEnv.id
+                ? {
+                    ...e,
+                    id: created.id,
+                    version: created.version || 1,
+                    _syncStatus: editedWhileCreating ? 'pending' : 'synced',
+                    _pendingCreate: undefined,
+                  }
+                : e
+            ),
+            activeEnvironmentId: state.activeEnvironmentId === newEnv.id ? created.id : state.activeEnvironmentId,
+          };
+        });
+        if (editedWhileCreating) {
+          scheduleEnvironmentCloudSync(created.id, get, set);
+        }
+        return created.id;
+      }
+      pendingEnvEditedWhileCreating.delete(newEnv.id);
+      return null;
+    }).catch((err) => {
+      pendingEnvEditedWhileCreating.delete(newEnv.id);
+      if (!isAsyncOperationCurrent(operation)) return null;
+      console.error('Failed to sync created environment to cloud:', err);
+      return null;
+    }).finally(() => {
+      if (pendingEnvCreatePromises.get(newEnv.id) === createPromise) {
+        pendingEnvCreatePromises.delete(newEnv.id);
+      }
+      completeAsyncOperation(operation);
+    });
+    pendingEnvCreatePromises.set(newEnv.id, createPromise);
   }
 
   function scheduleEnvironmentCloudSync(
@@ -1329,6 +1456,7 @@ export function createApiStore(
         }
 
         envSyncInFlight[envId] = true;
+        const syncStartedAt = currentEnv.updatedAt;
         const operation = beginAsyncOperation();
         try {
           const liveCloud = get().cloudConfig;
@@ -1353,7 +1481,9 @@ export function createApiStore(
               if (!isAsyncOperationCurrent(operation)) return {};
               return {
                 environments: s.environments.map((e) =>
-                  e.id === envId ? { ...e, version: res.version, _syncStatus: 'synced' } : e
+                  e.id === envId
+                    ? { ...e, version: res.version, _syncStatus: e.updatedAt > syncStartedAt ? 'pending' : 'synced' }
+                    : e
                 ),
               };
             });
@@ -1375,6 +1505,14 @@ export function createApiStore(
             });
             return;
           }
+          set((currentState) => {
+            if (!isAsyncOperationCurrent(operation)) return {};
+            return {
+              environments: currentState.environments.map((e) =>
+                e.id === envId ? { ...e, _syncStatus: 'pending' as const } : e
+              ),
+            };
+          });
           console.error('Failed to sync updated environment to cloud:', err);
         } finally {
           completeAsyncOperation(operation);
@@ -2069,16 +2207,22 @@ export function createApiStore(
             });
 
             if (workspaceMode === 'offline') {
-              revokeUnreferencedTabBlobs(get().tabResponses, get().activeResponse, [
-                transition.targetResources.history,
-                ...Object.values(transition.scopeCache).map((entry) => entry.history),
-                ...Object.values(get().offlineScopeCache || {}).map((e) => e.history),
-              ]);
+              const nextScopeCache = stripBackgroundCacheBlobUrls(transition.scopeCache);
+              revokeUnreferencedTabBlobs(
+                get().tabResponses,
+                get().activeResponse,
+                [transition.targetResources.history],
+                [
+                  ...Object.values(nextScopeCache).map((entry) => entry.history),
+                  ...Object.values(get().offlineScopeCache || {}).map((e) => e.history),
+                ],
+                get().history
+              );
 
               set({
                 workspaceMode: 'offline',
                 hasConfiguredMode: true,
-                scopeCache: transition.scopeCache,
+                scopeCache: nextScopeCache,
                 collections: transition.targetResources.collections,
                 environments: transition.targetResources.environments,
                 activeEnvironmentId: transition.targetResources.activeEnvironmentId,
@@ -2103,16 +2247,22 @@ export function createApiStore(
                 set({ isSwitchingWorkspace: false });
               }, 250);
             } else {
-              revokeUnreferencedTabBlobs(get().tabResponses, get().activeResponse, [
-                transition.targetResources.history,
-                ...Object.values(transition.offlineScopeCache).map((entry) => entry.history),
-                ...Object.values(transition.scopeCache).map((entry) => entry.history),
-              ]);
+              const nextOfflineScopeCache = stripBackgroundCacheBlobUrls(transition.offlineScopeCache);
+              revokeUnreferencedTabBlobs(
+                get().tabResponses,
+                get().activeResponse,
+                [transition.targetResources.history],
+                [
+                  ...Object.values(nextOfflineScopeCache).map((entry) => entry.history),
+                  ...Object.values(transition.scopeCache).map((entry) => entry.history),
+                ],
+                get().history
+              );
 
               set({
                 workspaceMode: isOfflineOnly ? 'offline' : 'cloud',
                 hasConfiguredMode: true,
-                offlineScopeCache: transition.offlineScopeCache,
+                offlineScopeCache: nextOfflineScopeCache,
                 collections: transition.targetResources.collections,
                 environments: transition.targetResources.environments,
                 activeEnvironmentId: transition.targetResources.activeEnvironmentId,
@@ -2740,11 +2890,20 @@ export function createApiStore(
             clearFunctionalSessionHook?.();
             void stopFunctionalRunHook?.();
 
-            revokeUnreferencedTabBlobs(get().tabResponses, get().activeResponse, [
-              transition.targetCache?.history,
-              ...Object.values(transition.scopeCache).map((entry) => entry.history),
-              ...Object.values(transition.offlineScopeCache).map((entry) => entry.history),
-            ]);
+            const activeTargetScopeKey = getScopeCacheKey(scope);
+            const nextScopeCache = stripBackgroundCacheBlobUrls(transition.scopeCache, activeTargetScopeKey);
+            const nextOfflineScopeCache = stripBackgroundCacheBlobUrls(transition.offlineScopeCache);
+
+            revokeUnreferencedTabBlobs(
+              get().tabResponses,
+              get().activeResponse,
+              [transition.targetCache?.history],
+              [
+                ...Object.values(nextScopeCache).map((entry) => entry.history),
+                ...Object.values(nextOfflineScopeCache).map((entry) => entry.history),
+              ],
+              get().history
+            );
 
             set((state) => ({
               workspaceMode: 'cloud',
@@ -2752,8 +2911,8 @@ export function createApiStore(
                 ...state.cloudConfig,
                 activeScope: scope,
               },
-              scopeCache: transition.scopeCache,
-              ...(workspaceMode === 'offline' ? { offlineScopeCache: transition.offlineScopeCache } : {}),
+              scopeCache: nextScopeCache,
+              ...(workspaceMode === 'offline' ? { offlineScopeCache: nextOfflineScopeCache } : {}),
               collections: transition.targetResources.collections,
               environments: transition.targetResources.environments,
               activeEnvironmentId: transition.targetResources.activeEnvironmentId,
@@ -2827,10 +2986,12 @@ export function createApiStore(
                 (entry.history || []).map((h) => h.response)
               ),
             ];
-            revokeUnreferencedResponses(candidateResponses, [], [
-              localEntry.history,
-              ...Object.values(offlineScopeCache || {}).map((entry) => entry.history),
-            ]);
+            revokeUnreferencedResponses(
+              candidateResponses,
+              [],
+              [localEntry.history],
+              Object.values(offlineScopeCache || {}).map((entry) => entry.history)
+            );
 
             const preserveCleanupPending = Boolean(
               currentState.nativeCredentialCleanupPending || currentState.nativeCredentialState?.phase === 'cleanup-pending',
@@ -3741,18 +3902,26 @@ export function createApiStore(
                 ? targetEntry.activeTabId
                 : restoredTabs[0].id;
 
-            revokeUnreferencedTabBlobs(get().tabResponses, get().activeResponse, [
-              targetEntry.history,
-              ...Object.values(updatedOfflineCache).map((e) => e.history),
-              ...Object.values(updatedScopeCache).map((e) => e.history),
-            ]);
+            const strippedOfflineCache = stripBackgroundCacheBlobUrls(updatedOfflineCache, workspaceId);
+            const strippedScopeCache = stripBackgroundCacheBlobUrls(updatedScopeCache);
+
+            revokeUnreferencedTabBlobs(
+              get().tabResponses,
+              get().activeResponse,
+              [targetEntry.history],
+              [
+                ...Object.values(strippedOfflineCache).map((e) => e.history),
+                ...Object.values(strippedScopeCache).map((e) => e.history),
+              ],
+              get().history
+            );
 
             set({
               workspaceMode: 'offline',
               hasConfiguredMode: true,
               activeOfflineWorkspaceId: workspaceId,
-              offlineScopeCache: updatedOfflineCache,
-              scopeCache: updatedScopeCache,
+              offlineScopeCache: strippedOfflineCache,
+              scopeCache: strippedScopeCache,
               collections: targetEntry.collections || [],
               environments: targetEntry.environments || [],
               activeEnvironmentId: targetEntry.activeEnvironmentId || null,
@@ -3955,59 +4124,7 @@ export function createApiStore(
             }));
 
             if (isCloudCreate) {
-              const operation = beginAsyncOperation();
-              const liveCloud = get().cloudConfig;
-              const createPromise = createScopeEnvironment(
-                liveCloud.apiUrl,
-                liveCloud.token,
-                cloudConfig.activeScope!,
-                {
-                  name: newEnv.name,
-                  variables: sanitizeVariablesForUpstream(newEnv.variables),
-                  min_role: newEnv.minRole,
-                },
-                liveCloud.refreshToken,
-                operation.controller.signal
-              ).then((created) => {
-                if (!isAsyncOperationCurrent(operation)) return null;
-                if (created && created.id) {
-                  envIdAliasMap.set(newEnv.id, created.id);
-                  const latestLocalEnv = get().environments.find((e) => e.id === newEnv.id);
-                  const editedWhileCreating = Boolean(latestLocalEnv && latestLocalEnv.updatedAt > initialStamp);
-                  set((state) => {
-                    if (!isAsyncOperationCurrent(operation)) return {};
-                    return {
-                      environments: state.environments.map((e) =>
-                        e.id === newEnv.id
-                          ? {
-                              ...e,
-                              id: created.id,
-                              version: created.version || 1,
-                              _syncStatus: editedWhileCreating ? 'pending' : 'synced',
-                              _pendingCreate: undefined,
-                            }
-                          : e
-                      ),
-                      activeEnvironmentId: state.activeEnvironmentId === newEnv.id ? created.id : state.activeEnvironmentId,
-                    };
-                  });
-                  if (editedWhileCreating) {
-                    scheduleEnvironmentCloudSync(created.id, get, set);
-                  }
-                  return created.id;
-                }
-                return null;
-              }).catch((err) => {
-                if (!isAsyncOperationCurrent(operation)) return null;
-                console.error('Failed to sync created environment to cloud:', err);
-                return null;
-              }).finally(() => {
-                if (pendingEnvCreatePromises.get(newEnv.id) === createPromise) {
-                  pendingEnvCreatePromises.delete(newEnv.id);
-                }
-                completeAsyncOperation(operation);
-              });
-              pendingEnvCreatePromises.set(newEnv.id, createPromise);
+              dispatchCloudEnvironmentCreate(newEnv, cloudConfig.activeScope!, initialStamp, get, set);
             }
 
             return newEnv.id;
@@ -4086,10 +4203,12 @@ export function createApiStore(
               }
             }
 
+            const pendingPatch = isCloudEnvSyncActive(get()) ? ({ _syncStatus: 'pending' as const }) : {};
             set((state) => ({
               environments: state.environments.map((e) => {
                 if (e.id === id) {
-                  return { ...e, ...updates, updatedAt: Date.now() };
+                  if (e._pendingCreate) pendingEnvEditedWhileCreating.add(e.id);
+                  return { ...e, ...updates, ...pendingPatch, updatedAt: Date.now() };
                 }
                 return e;
               }),
@@ -4109,11 +4228,14 @@ export function createApiStore(
               }
             }
 
+            const pendingPatch = isCloudEnvSyncActive(get()) ? ({ _syncStatus: 'pending' as const }) : {};
             set((state) => ({
               environments: state.environments.map((e) => {
                 if (e.id !== envId) return e;
+                if (e._pendingCreate) pendingEnvEditedWhileCreating.add(e.id);
                 return {
                   ...e,
+                  ...pendingPatch,
                   variables: [
                     ...e.variables,
                     { id: generateId(), key: '', value: '', initialValue: '', currentValue: '', enabled: true },
@@ -4142,11 +4264,14 @@ export function createApiStore(
               }
             }
 
+            const pendingPatch = !isOnlyCurrentValue && isCloudEnvSyncActive(get()) ? ({ _syncStatus: 'pending' as const }) : {};
             set((state) => ({
               environments: state.environments.map((e) => {
                 if (e.id !== envId) return e;
+                if (!isOnlyCurrentValue && e._pendingCreate) pendingEnvEditedWhileCreating.add(e.id);
                 return {
                   ...e,
+                  ...pendingPatch,
                   variables: e.variables.map((v) => {
                     if (v.id !== varId) return v;
                     const next = { ...v, ...updates };
@@ -4176,11 +4301,14 @@ export function createApiStore(
               }
             }
 
+            const pendingPatch = isCloudEnvSyncActive(get()) ? ({ _syncStatus: 'pending' as const }) : {};
             set((state) => ({
               environments: state.environments.map((e) => {
                 if (e.id !== envId) return e;
+                if (e._pendingCreate) pendingEnvEditedWhileCreating.add(e.id);
                 return {
                   ...e,
+                  ...pendingPatch,
                   variables: e.variables.filter((v) => v.id !== varId),
                   updatedAt: Date.now(),
                 };
@@ -4217,11 +4345,14 @@ export function createApiStore(
               }
             }
 
+            const pendingPatch = isCloudEnvSyncActive(get()) ? ({ _syncStatus: 'pending' as const }) : {};
             set((state) => ({
               environments: state.environments.map((e) => {
                 if (e.id !== envId) return e;
+                if (e._pendingCreate) pendingEnvEditedWhileCreating.add(e.id);
                 return {
                   ...e,
+                  ...pendingPatch,
                   variables: e.variables.map((v) => {
                     const effective = v.currentValue ?? v.initialValue ?? v.value ?? '';
                     return {
@@ -4580,7 +4711,7 @@ export function createApiStore(
                 if (!isSameTargetScope()) return;
                 if (err?.status === 409) {
                   const remote = getRemoteEnvironment(err.data);
-                  set((state) => {
+                  set((_state) => {
                     if (!isAsyncOperationCurrent(operation) || !isSameTargetScope()) return {};
                     return {
                       syncStatus: 'error',
@@ -6231,8 +6362,8 @@ export function createApiStore(
                 revokeUnreferencedResponses(
                   evictedHistory.map((entry) => entry.response),
                   protectedResponses,
+                  [newHistory],
                   [
-                    newHistory,
                     ...Object.values(s.scopeCache || {}).map((e) => e.history),
                     ...Object.values(s.offlineScopeCache || {}).map((e) => e.history),
                   ]
@@ -6409,7 +6540,7 @@ export function createApiStore(
           },
 
           createCollectionAsync: async (name, description = '') => {
-            const { workspaceMode, cloudConfig, offlineWorkspaces, activeOfflineWorkspaceId } = get();
+            const { workspaceMode, cloudConfig, activeOfflineWorkspaceId } = get();
             if (!hasScopePermission(cloudConfig.activeScope, 'collection:write', workspaceMode, cloudConfig.user?.role)) {
               return { success: false, error: 'Write permission in the active workspace is required to create a collection.' };
             }
@@ -6442,7 +6573,7 @@ export function createApiStore(
                 return {
                   collections: nextCollections,
                   offlineWorkspaces: (state.offlineWorkspaces || []).map((w) =>
-                    w.id === capturedOfflineWsId ? { ...w, collections: nextCollections, updatedAt: Date.now() } : w,
+                    w.id === capturedOfflineWsId ? { ...w, updatedAt: Date.now() } : w,
                   ),
                 };
               });
@@ -7632,44 +7763,24 @@ export function createApiStore(
                 }
               }
 
-              const imported = importPostmanEnvironment(jsonStr);
+              const baseImported = importPostmanEnvironment(jsonStr);
+              const isCloudCreate = workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && Boolean(cloudConfig.activeScope);
+              const initialStamp = Date.now();
+              const imported: Environment = isCloudCreate
+                ? {
+                    ...baseImported,
+                    updatedAt: initialStamp,
+                    _syncStatus: 'pending' as const,
+                    _pendingCreate: true,
+                  }
+                : baseImported;
               set((state) => ({
                 environments: [...state.environments, imported],
                 activeEnvironmentId: imported.id,
               }));
 
-              if (workspaceMode === 'cloud' && isCloudSessionActive(cloudConfig) && cloudConfig.activeScope) {
-                const operation = beginAsyncOperation();
-                createScopeEnvironment(
-                  cloudConfig.apiUrl,
-                  cloudConfig.token,
-                  cloudConfig.activeScope,
-                  {
-                    name: imported.name,
-                    variables: sanitizeVariablesForUpstream(imported.variables),
-                    min_role: imported.minRole || 'reader',
-                  },
-                  cloudConfig.refreshToken,
-                  operation.controller.signal
-                ).then((created) => {
-                  if (!isAsyncOperationCurrent(operation)) return;
-                  if (created?.id) {
-                    set((state) => {
-                      if (!isAsyncOperationCurrent(operation)) return {};
-                      return {
-                        environments: state.environments.map((e) =>
-                          e.id === imported.id ? { ...e, id: created.id, version: created.version || 1 } : e
-                        ),
-                        activeEnvironmentId: state.activeEnvironmentId === imported.id ? created.id : state.activeEnvironmentId,
-                      };
-                    });
-                  }
-                }).catch((err) => {
-                  if (!isAsyncOperationCurrent(operation)) return;
-                  console.error('Failed to sync imported environment to cloud:', err);
-                }).finally(() => {
-                  completeAsyncOperation(operation);
-                });
+              if (isCloudCreate) {
+                dispatchCloudEnvironmentCreate(imported, cloudConfig.activeScope!, initialStamp, get, set);
               }
 
               return { success: true, environment: imported };
@@ -8499,6 +8610,7 @@ export function createApiStore(
                     collections: remainingActive,
                     offlineScopeCache: updatedOfflineCache,
                     scopeCache: updatedScopeCache,
+                    ...pruneExampleTabsState(state, (sel) => sel.collectionId !== collectionId),
                     syncStatus: 'idle',
                   };
                 });
@@ -9725,7 +9837,6 @@ export function createApiStore(
               cloudConfig,
               offlineWorkspaces,
               activeOfflineWorkspaceId,
-              offlineScopeCache,
             } = stateAtStart;
 
             const existingIntent = actionOptions?.operationId
@@ -10397,8 +10508,6 @@ export function createApiStore(
             duplicatingCollections.set(collectionId, lock);
             const operation = beginAsyncOperation();
             const capturedSessionGen = cloudSessionGeneration;
-            const sourceScopeKey = getScopeCacheKey(activeScope);
-            const targetScopeKey = getScopeCacheKey(targetScope);
             const intent: PendingDuplicateIntent = existingIntent || {
               operationId: opId,
               ownerKey: currentOwnerKey,
@@ -11077,15 +11186,17 @@ export function createApiStore(
 
           openRequestInTab: (request, initialResponse) => {
             set((state) => {
+              const resolvedInitialResponse = ensureResponseImageBlobUrl(initialResponse) ?? undefined;
               const targetId = request.id;
               const existingTab = targetId
                 ? state.tabs.find((t) => t.id === targetId)
                 : undefined;
 
               if (existingTab) {
-                const restoredResponse = state.tabResponses?.[existingTab.id] || initialResponse || null;
-                const nextTabResponses = initialResponse && !state.tabResponses?.[existingTab.id]
-                  ? { ...(state.tabResponses || {}), [existingTab.id]: initialResponse }
+                const cachedResponse = state.tabResponses?.[existingTab.id];
+                const restoredResponse = ensureResponseImageBlobUrl(cachedResponse) || resolvedInitialResponse || null;
+                const nextTabResponses = restoredResponse && restoredResponse !== cachedResponse
+                  ? { ...(state.tabResponses || {}), [existingTab.id]: restoredResponse }
                   : state.tabResponses;
                 return {
                   activeTabId: existingTab.id,
@@ -11104,14 +11215,14 @@ export function createApiStore(
                 id: targetId || generateId(),
               };
 
-              const nextTabResponses = initialResponse
-                ? { ...(state.tabResponses || {}), [newTab.id]: initialResponse }
+              const nextTabResponses = resolvedInitialResponse
+                ? { ...(state.tabResponses || {}), [newTab.id]: resolvedInitialResponse }
                 : state.tabResponses;
 
               return {
                 tabs: [...state.tabs, newTab],
                 activeTabId: newTab.id,
-                activeResponse: initialResponse || null,
+                activeResponse: resolvedInitialResponse || null,
                 selectedExample: null,
                 selectedPerformanceTabId: null,
                 tabOrder: [...syncVisualTabOrder(state.tabs, state.openExampleTabs, state.tabOrder, state.openPerformanceTabs), newTab.id],

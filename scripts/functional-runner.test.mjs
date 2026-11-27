@@ -837,6 +837,58 @@ test('functionalRunner skips keepVariableValues on manual Stop, supports session
     assert.equal(capReport.totalStepsRecorded, 8);
     assert.equal(capReport.steps.length, 4);
     assert.equal(capReport.steps.every((s) => s.status === 'failed'), true, 'All 4 retained slots must keep prioritized failed steps');
+
+    // RUN-09: unexpected runner error catch fallback still saves runVars alongside runEnv for Re-run Failed
+    const errFallbackReport = await new Promise((resolve) => {
+      let threwOnce = false;
+      void functionalRunner.startFunctionalRun({
+        tabId: 'func:catch-fallback',
+        title: 'Catch Fallback Run',
+        sourceType: 'collection',
+        sourceId: 'c1',
+        items: [
+          makeDescriptor('c-global', 'Set Global', 'GET', `${baseUrl}/login`, {
+            postResponseScript: 'SAVE_FALLBACK_VAR',
+          }),
+          makeDescriptor('c-boom', 'Trigger Progress Throw', 'GET', `${baseUrl}/login`),
+        ],
+        config: {
+          iterations: 1,
+          delayMs: 220,
+          persistResponses: false,
+          keepVariableValues: false,
+          failOnHttpError: false,
+          stopOnError: 'never',
+          requestTimeoutMs: 5000,
+          followRedirects: true,
+          ignoreSslErrors: false,
+        },
+        initialVariables: {},
+        initialLocalVariables: { seedVar: 'seed-1' },
+        adapter: {
+          ...mockAdapter,
+          scriptExecutor: {
+            execute: async (input) => {
+              const nextVars = { ...input.variables };
+              if (input.script.includes('SAVE_FALLBACK_VAR')) nextVars.fallbackVar = 'preserved-global-42';
+              return { success: true, environment: { ...input.environment }, variables: nextVars, testResults: [] };
+            },
+            dispose: () => {},
+          },
+        },
+        onUpdate: (snap) => {
+          if (!threwOnce && snap.totalRequestsExecuted >= 1) {
+            threwOnce = true;
+            throw new Error('simulated onUpdate crash');
+          }
+        },
+        onFinish: resolve,
+      });
+    });
+    assert.equal(errFallbackReport.status, 'failed');
+    const errSnapshot = functionalSessionStore.getFunctionalRunVariablesSnapshot(errFallbackReport.id);
+    assert.equal(errSnapshot?.vars?.fallbackVar, 'preserved-global-42');
+    assert.equal(errSnapshot?.vars?.seedVar, 'seed-1');
   } finally {
     server.close();
   }

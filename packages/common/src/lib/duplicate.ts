@@ -14,7 +14,6 @@ import {
 import {
   buildExampleSummariesFromExamples,
   cloneSavedExamplesList,
-  hasUnloadedCollectionExamples,
 } from './examples';
 
 export const MAX_DUPLICATE_NAME_RUNES = 150;

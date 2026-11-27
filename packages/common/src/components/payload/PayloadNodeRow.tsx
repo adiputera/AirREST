@@ -9,7 +9,7 @@ import {
 import { PayloadNode, PayloadValueType, DateConfig } from '../../types/payloadBuilder';
 import { PayloadTypeBadge } from './PayloadTypeBadge';
 import { DateConfigPopover } from './DateConfigPopover';
-import { generateNodeId, createDefaultPayloadNode } from '../../lib/payloadCompiler';
+import { createDefaultPayloadNode } from '../../lib/payloadCompiler';
 import { VariableInput } from '../VariableInput';
 
 interface PayloadNodeRowProps {

@@ -68,7 +68,7 @@ import {
   queueInitialRequestEditorSection,
   resolveInitialCurlSection,
 } from './requestEditorSectionState';
-import { isStrictAirrestReportJson } from '../lib/reportShare';
+import { parseShareableReportJson } from '../lib/reportShare';
 import { ReportImportResolveModal } from './performance/ReportImportResolveModal';
 import { useReportImporter } from './performance/useReportImporter';
 
@@ -749,12 +749,23 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
         }
       } else if (
         (item.type === 'performance_report' || item.type === 'functional_report') &&
-        item.rawReportContent
+        (item.parsedPerfReport || item.parsedFuncReport)
       ) {
         try {
-          const outcome = await reportImporter.importReportContent(item.rawReportContent, {
-            filename: item.filename,
-          });
+          const parsedInput = {
+            kind: item.type === 'performance_report' ? ('performance' as const) : ('functional' as const),
+            perfReport: item.parsedPerfReport,
+            funcReport: item.parsedFuncReport,
+            sourceMeta: item.reportSourceMeta,
+          };
+          const outcome = typeof reportImporter.importParsedReport === 'function'
+            ? await reportImporter.importParsedReport(parsedInput, {
+              filename: item.filename,
+            })
+            : await reportImporter.importReportContent(
+              JSON.stringify(item.parsedPerfReport || item.parsedFuncReport),
+              { filename: item.filename }
+            );
           if (!isRunCurrent(runId, target)) return;
           if (outcome.cancelled) {
             markBatchItemOutcome(item.id, 'skipped');
@@ -860,10 +871,15 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose, initi
       const detected = detectPostmanJsonType(jsonText);
 
       if (detected === 'unknown') {
-        if (isStrictAirrestReportJson(jsonText)) {
-          const reportRes = await reportImporter.importReportContent(jsonText, {
-            filename: 'pasted.airrest-report.json',
-          });
+        const parsedReport = parseShareableReportJson(jsonText);
+        if (!parsedReport.error && parsedReport.kind) {
+          const reportRes = typeof reportImporter.importParsedReport === 'function'
+            ? await reportImporter.importParsedReport(parsedReport, {
+              filename: 'pasted.airrest-report.json',
+            })
+            : await reportImporter.importReportContent(jsonText, {
+              filename: 'pasted.airrest-report.json',
+            });
           if (!isRunCurrent(runId, target)) return;
           if (reportRes.cancelled) return;
           if (!reportRes.ok) {

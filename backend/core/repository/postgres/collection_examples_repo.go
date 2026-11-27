@@ -253,6 +253,9 @@ func (r *CollectionRepository) PatchItemExamples(
 			return nil, fmt.Errorf("failed to record example operation receipt: %w", err)
 		}
 
+		// Opportunistically prune expired idempotency receipts older than 30 days.
+		_, _ = tx.Exec(ctx, `DELETE FROM item_example_operations WHERE created_at < $1`, now.Add(-30*24*time.Hour))
+
 		if err := tx.Commit(ctx); err != nil {
 			return nil, fmt.Errorf("failed to commit example mutation: %w", err)
 		}
@@ -592,6 +595,9 @@ func (r *CollectionRepository) ReplaceCollectionAtomic(
 	`, actorID, operationID, collectionID, fingerprint, string(receiptBytes)); err != nil {
 		return nil, fmt.Errorf("failed to store replace receipt: %w", err)
 	}
+
+	// Opportunistically prune expired replace receipts older than 30 days.
+	_, _ = tx.Exec(ctx, `DELETE FROM collection_replace_operations WHERE created_at < $1`, now.Add(-30*24*time.Hour))
 
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("failed to commit replace transaction: %w", err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/adiputera/airrest-backend/core/domain"
@@ -298,14 +299,25 @@ func (r *UserRepository) SearchUsers(ctx context.Context, queryStr string, limit
 	if limit <= 0 || limit > 50 {
 		limit = 20
 	}
+	trimmed := strings.TrimSpace(queryStr)
+	nonWildcard := 0
+	for _, ch := range trimmed {
+		if ch != '%' && ch != '_' && ch != '\\' {
+			nonWildcard++
+		}
+	}
+	if nonWildcard < 2 {
+		return []*domain.User{}, nil
+	}
+	escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(trimmed)
 	query := `
 		SELECT id, email, password_hash, name, avatar_url, role, created_at, updated_at, token_version
 		FROM users
-		WHERE email ILIKE '%' || $1 || '%' OR name ILIKE '%' || $1 || '%'
+		WHERE email ILIKE '%' || $1 || '%' ESCAPE '\' OR name ILIKE '%' || $1 || '%' ESCAPE '\'
 		ORDER BY name ASC, email ASC
 		LIMIT $2
 	`
-	rows, err := r.pool.Query(ctx, query, queryStr, limit)
+	rows, err := r.pool.Query(ctx, query, escaped, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search users: %w", err)
 	}

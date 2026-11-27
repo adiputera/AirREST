@@ -630,4 +630,80 @@ test('RUN-01/RUN-02/RUN-04: redacts authority/fragment/JSON secrets and sanitize
   });
   assert.match(funcHtml, /http-equiv="Content-Security-Policy"/);
   assert.doesNotMatch(funcHtml, /jwt123|secret_jwt_token/);
+
+  // RUN-13: CSV formula injection prevention on string cells (while preserving numeric metrics)
+  const formulaCsv = perfReportExporter.exportPerformanceEndpointsCsv({
+    ...makePerfReport(),
+    endpoints: [
+      {
+        requestId: 'req-formula',
+        name: '=HYPERLINK("https://evil.example","Click")',
+        method: '+GET',
+        path: '-/v1/@test',
+        totalRequests: 10,
+        requestsPerSec: 5,
+        errorRatePct: 0,
+        errorCount: 0,
+        avgMs: 12,
+        minMs: 5,
+        maxMs: 25,
+        p90Ms: 20,
+        p95Ms: 22,
+        p99Ms: 24,
+        bytesReceived: 100,
+      },
+    ],
+  });
+  assert.match(formulaCsv, /"'=HYPERLINK/);
+  assert.match(formulaCsv, /,\+GET|,'\+GET/);
+  assert.match(formulaCsv, /,'-\/v1\/@test/);
+
+  // RUN-14: bindImportedFunctionalReport sets tabId, ImportModal accepts Export->JSON via parseShareableReportJson, and importBatch avoids rawReportContent
+  const attachedFunc = reportShare.bindImportedFunctionalReport(
+    makeFuncReport(),
+    {
+      mode: 'attached',
+      targetType: 'collection',
+      targetId: 'col-1',
+      targetCollection: { id: 'col-1', name: 'Auth API', items: [] },
+      targetName: 'Auth API',
+    }
+  );
+  assert.equal(attachedFunc.tabId, 'perf:collection:col-1');
+  const sessionFunc = reportShare.bindImportedFunctionalReport(
+    makeFuncReport(),
+    { mode: 'session_only' },
+    { forceNewId: true }
+  );
+  assert.equal(sessionFunc.tabId, `perf:imported:${sessionFunc.id}`);
+
+  const importModalSrc = fs.readFileSync(path.resolve(ROOT, 'packages/common/src/components/ImportModal.tsx'), 'utf8');
+  const importBatchSrc = fs.readFileSync(path.resolve(ROOT, 'packages/common/src/lib/importBatch.ts'), 'utf8');
+  assert.match(importModalSrc, /parseShareableReportJson\(jsonText\)/);
+  assert.doesNotMatch(importModalSrc, /isStrictAirrestReportJson/);
+  assert.doesNotMatch(importBatchSrc, /rawReportContent/);
+
+  // RUN-02 & RUN-04: code/cookie/pass query params are redacted while status_code stays intact; failedItemIds & failedIterations normalized
+  const funcInput = {
+    ...makeFuncReport(),
+    failedItemIds: ['req-1', 123, null],
+    failedIterations: [2, -1, Number.NaN, 'bad', 3.9],
+    steps: [
+      {
+        ...makeFuncReport().steps[0],
+        url: 'https://api.example.com/cb?code=oauth_code&cookie=sess&pass=pw&status_code=200',
+      },
+    ],
+  };
+  const funcBundle = reportShare.exportShareableFunctionalReport(
+    funcInput,
+    reportShare.buildSourceMetaFromContext(funcInput, SAMPLE_COLLECTIONS),
+  );
+  assert.doesNotMatch(funcBundle, /oauth_code|sess|pw/);
+  assert.match(funcBundle, /status_code=200/);
+
+  const parsedFunc = reportShare.parseShareableReportJson(funcBundle);
+  assert.equal(parsedFunc.kind, 'functional');
+  assert.deepEqual(Array.from(parsedFunc.funcReport.failedItemIds), ['req-1']);
+  assert.deepEqual(Array.from(parsedFunc.funcReport.failedIterations), [2, 3]);
 });

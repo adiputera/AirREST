@@ -69,12 +69,12 @@ info:
 
     ### 6. CORS Configuration
     Cloud requests from the packaged Chrome Extension are issued by an extension page with declared host permissions; the script sandbox only executes local scripts and does not call this API. AirREST Hub remains a Web SPA and is subject to browser CORS.
-    The bundled backend config accepts the following web origins:
-    - Allowed Origins: `http://localhost:*`, `http://127.0.0.1:*`, and `https://*`
+    The bundled backend config accepts the following web origins by default:
+    - Allowed Origins: `http://localhost:*`, `http://127.0.0.1:*`, and `https://*` (overridable via `ALLOWED_ORIGINS`)
     - Allowed Methods: `GET, POST, PUT, PATCH, DELETE, OPTIONS`
     - Allowed Headers: `Accept, Authorization, Content-Type, Content-Encoding, X-CSRF-Token`
     - Exposed Headers: `Link`
-    - Allow Credentials: `true`
+    - Allow Credentials: `false` by default (automatically enabled when `ALLOWED_ORIGINS` is configured with explicit origins, or controlled via `CORS_ALLOW_CREDENTIALS`)
     Deployments that expose the API to other web origins must configure and test those origins deliberately. Do not add the sandbox's opaque `null` origin: it is not a cloud transport context.
 
     ### Session revocation and resource limits
@@ -325,7 +325,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -365,7 +365,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -404,7 +404,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -431,7 +431,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -464,7 +464,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -503,7 +503,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -541,7 +541,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -575,7 +575,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -602,7 +602,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -641,7 +641,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -674,7 +674,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -713,7 +713,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -747,7 +747,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -780,7 +780,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -820,7 +820,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -861,7 +861,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -897,7 +897,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -937,7 +937,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -971,7 +971,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -1010,7 +1010,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -1044,7 +1044,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -1077,7 +1077,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -1117,7 +1117,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -1157,7 +1157,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -1214,7 +1214,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -1247,7 +1247,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -1291,7 +1291,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -1350,7 +1350,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -1396,7 +1396,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -1605,7 +1605,7 @@ paths:
       tags:
         - Collections
       summary: Paginated saved examples metadata or full payloads for a collection
-      description: Cursor-paginated endpoint returning active request items' `example_count`, `example_summaries`, and optionally full `examples` (`include_body=true`) with `collection_version` snapshot consistency.
+      description: "Cursor-paginated endpoint returning active request items' example_count, example_summaries, and optionally full examples (include_body=true) with collection_version snapshot consistency. Responses support Accept-Encoding: gzip negotiation (Vary: Accept-Encoding, Cache-Control: private, no-store, 3,000,000-byte gzip / 4 MiB identity / 16 MiB decoded caps)."
       security:
         - BearerAuth: []
       parameters:
@@ -1661,6 +1661,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        '413':
+          $ref: '#/components/responses/ResponsePayloadTooLarge'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
   /api/v1/collections/{id}/replace:
@@ -1732,7 +1736,7 @@ paths:
       tags:
         - Collections
       summary: Batch reorder items and hierarchy
-      description: Updates `parent_id` and `sort_order` for folders and requests within the collection.
+      description: "Updates parent_id and sort_order for folders and requests within the collection. Responses support Accept-Encoding: gzip negotiation (Vary: Accept-Encoding, Cache-Control: private, no-store)."
       security:
         - BearerAuth: []
       parameters:
@@ -1767,13 +1771,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
         '413':
-          $ref: '#/components/responses/PayloadTooLarge'
+          $ref: '#/components/responses/ResponsePayloadTooLarge'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -1785,7 +1790,7 @@ paths:
       tags:
         - Collections
       summary: Batch reorder items (alias)
-      description: Alias route for `/api/v1/collections/{id}/reorder`.
+      description: "Alias route for /api/v1/collections/{id}/reorder. Responses support Accept-Encoding: gzip negotiation (Vary: Accept-Encoding, Cache-Control: private, no-store)."
       security:
         - BearerAuth: []
       parameters:
@@ -1820,13 +1825,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
         '413':
-          $ref: '#/components/responses/PayloadTooLarge'
+          $ref: '#/components/responses/ResponsePayloadTooLarge'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -1848,7 +1854,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CollectionItem'
+              $ref: '#/components/schemas/CreateItemRequest'
       responses:
         '201':
           description: Item created successfully.
@@ -1874,7 +1880,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -1886,7 +1892,7 @@ paths:
       tags:
         - Collection Items
       summary: Mutate a single saved example (add/rename/delete) with OCC and receipt idempotency
-      description: Applies `add`, `rename`, or `delete` on `examples` using `(actor_id, operation_id)` receipt ledger and `base_version` + `base_example_revision` concurrency checks without overwriting sibling request fields.
+      description: "Applies add, rename, or delete on examples using (actor_id, operation_id) receipt ledger and base_version + base_example_revision concurrency checks without overwriting sibling request fields. Responses support Accept-Encoding: gzip negotiation (Vary: Accept-Encoding, Cache-Control: private, no-store)."
       security:
         - BearerAuth: []
       parameters:
@@ -1935,8 +1941,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ConflictEnvelope'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
         '413':
-          $ref: '#/components/responses/PayloadTooLarge'
+          $ref: '#/components/responses/ResponsePayloadTooLarge'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
   /api/v1/items/{id}/move:
@@ -2083,6 +2091,7 @@ paths:
       tags:
         - Collection Items
       summary: Get item details
+      description: "Returns item details. Responses support Accept-Encoding: gzip negotiation (Vary: Accept-Encoding, Cache-Control: private, no-store)."
       security:
         - BearerAuth: []
       parameters:
@@ -2111,12 +2120,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
         '413':
-          $ref: '#/components/responses/PayloadTooLarge'
+          $ref: '#/components/responses/ResponsePayloadTooLarge'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -2176,7 +2187,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -2220,7 +2231,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -2258,7 +2269,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -2290,7 +2301,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -2323,7 +2334,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -2368,7 +2379,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -2401,7 +2412,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -2709,7 +2720,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -2748,7 +2759,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -2789,7 +2800,7 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
-          description: Internal server error while moving the collection.
+          description: Internal server error.
           content:
             application/json:
               schema:
@@ -2946,37 +2957,65 @@ components:
     # ------------------ Envelopes ------------------
     SystemStatusResponse:
       type: object
+      required:
+        - success
+        - data
       properties:
-        service:
-          type: string
-          example: AirREST Cloud API
-        status:
-          type: string
-          example: running
-        serverless:
+        success:
           type: boolean
-          example: false
-        time:
-          type: string
-          format: date-time
-          example: '2026-10-22T09:00:00Z'
+          example: true
+        data:
+          type: object
+          required:
+            - service
+            - status
+            - serverless
+            - time
+          properties:
+            service:
+              type: string
+              example: AirREST Cloud API
+            status:
+              type: string
+              example: running
+            serverless:
+              type: boolean
+              example: false
+            time:
+              type: string
+              format: date-time
+              example: '2026-10-22T09:00:00Z'
 
     HealthResponse:
       type: object
+      required:
+        - success
+        - data
       properties:
-        status:
-          type: string
-          example: healthy
-        service:
-          type: string
-          example: AirREST Cloud API
-        serverless:
+        success:
           type: boolean
-          example: false
-        time:
-          type: string
-          format: date-time
-          example: '2026-10-22T09:00:00Z'
+          example: true
+        data:
+          type: object
+          required:
+            - status
+            - service
+            - serverless
+            - time
+          properties:
+            status:
+              type: string
+              example: healthy
+            service:
+              type: string
+              example: AirREST Cloud API
+            serverless:
+              type: boolean
+              example: false
+            time:
+              type: string
+              format: date-time
+              example: '2026-10-22T09:00:00Z'
 
     MessageEnvelope:
       type: object
@@ -3060,9 +3099,8 @@ components:
           format: int64
           minimum: 1
         updated_by:
-          type: string
+          type: [string, 'null']
           format: uuid
-          nullable: true
         updated_at:
           type: string
           format: date-time
@@ -3395,8 +3433,7 @@ components:
           type: string
           example: 'Alice Developer'
         avatar_url:
-          type: string
-          nullable: true
+          type: [string, 'null']
           example: 'https://example.com/avatar.png'
         role:
           $ref: '#/components/schemas/SystemRole'
@@ -3430,8 +3467,7 @@ components:
           type: string
           example: 'Personal Workspace'
         description:
-          type: string
-          nullable: true
+          type: [string, 'null']
           example: 'Default private workspace'
         is_default:
           type: boolean
@@ -3459,8 +3495,7 @@ components:
           type: string
           example: 'Platform Engineering'
         description:
-          type: string
-          nullable: true
+          type: [string, 'null']
         created_by:
           type: string
           format: uuid
@@ -3523,8 +3558,7 @@ components:
           type: string
           example: 'User Service API'
         description:
-          type: string
-          nullable: true
+          type: [string, 'null']
         created_by:
           type: string
           format: uuid
@@ -3595,19 +3629,16 @@ components:
           format: uuid
           example: '77777777-7777-7777-7777-777777777777'
         workspace_id:
-          type: string
+          type: [string, 'null']
           format: uuid
-          nullable: true
         project_id:
-          type: string
+          type: [string, 'null']
           format: uuid
-          nullable: true
         name:
           type: string
           example: 'Authentication Endpoints'
         description:
-          type: string
-          nullable: true
+          type: [string, 'null']
           example: 'User authentication and tokens'
         min_role:
           $ref: '#/components/schemas/ProjectRole'
@@ -3619,9 +3650,8 @@ components:
           type: string
           format: uuid
         last_modified_by:
-          type: string
+          type: [string, 'null']
           format: uuid
-          nullable: true
         created_at:
           type: string
           format: date-time
@@ -3629,9 +3659,8 @@ components:
           type: string
           format: date-time
         deleted_at:
-          type: string
+          type: [string, 'null']
           format: date-time
-          nullable: true
         items:
           type: array
           items:
@@ -3684,8 +3713,7 @@ components:
           type: boolean
           example: true
         description:
-          type: string
-          nullable: true
+          type: [string, 'null']
 
     AuthConfig:
       type: object
@@ -3731,9 +3759,8 @@ components:
           type: string
           format: uuid
         parent_id:
-          type: string
+          type: [string, 'null']
           format: uuid
-          nullable: true
         type:
           $ref: '#/components/schemas/ItemType'
         name:
@@ -3770,21 +3797,17 @@ components:
           type: string
           example: '{"email": "user@example.com", "password": "SecretPassword123!"}'
         graphql_query:
-          type: string
-          nullable: true
+          type: [string, 'null']
         graphql_variables:
-          type: string
-          nullable: true
+          type: [string, 'null']
         body_form_data:
           type: array
           items:
             $ref: '#/components/schemas/FormDataItem'
         pre_request_script:
-          type: string
-          nullable: true
+          type: [string, 'null']
         post_response_script:
-          type: string
-          nullable: true
+          type: [string, 'null']
         examples:
           type: array
           items:
@@ -3804,9 +3827,8 @@ components:
           format: int64
           example: 1
         last_modified_by:
-          type: string
+          type: [string, 'null']
           format: uuid
-          nullable: true
         created_at:
           type: string
           format: date-time
@@ -3814,9 +3836,8 @@ components:
           type: string
           format: date-time
         deleted_at:
-          type: string
+          type: [string, 'null']
           format: date-time
-          nullable: true
         items:
           type: array
           items:
@@ -3864,13 +3885,11 @@ components:
           format: uuid
           example: '99999999-9999-9999-9999-999999999999'
         workspace_id:
-          type: string
+          type: [string, 'null']
           format: uuid
-          nullable: true
         project_id:
-          type: string
+          type: [string, 'null']
           format: uuid
-          nullable: true
         name:
           type: string
           example: 'Development Local'
@@ -3885,9 +3904,8 @@ components:
           format: int64
           example: 1
         last_modified_by:
-          type: string
+          type: [string, 'null']
           format: uuid
-          nullable: true
         created_at:
           type: string
           format: date-time
@@ -3895,9 +3913,8 @@ components:
           type: string
           format: date-time
         deleted_at:
-          type: string
+          type: [string, 'null']
           format: date-time
-          nullable: true
 
     # ------------------ Sync & Delta Models ------------------
     SyncDeltaResult:
@@ -4027,9 +4044,11 @@ components:
         message:
           type: string
           example: 'version conflict: local base_version 1 does not match server version 2'
+        code:
+          type: [string, 'null']
+          example: 'FEATURE_DISABLED'
         server_data:
-          type: object
-          nullable: true
+          type: [object, 'null']
 
     SyncPushResponse:
       type: object
@@ -4061,8 +4080,7 @@ components:
           type: string
           example: 'req-1'
         parent_id:
-          type: string
-          nullable: true
+          type: [string, 'null']
         type:
           type: string
           example: 'request'
@@ -4134,8 +4152,7 @@ components:
           type: string
           example: 'Demo API'
         description:
-          type: string
-          nullable: true
+          type: [string, 'null']
         items:
           type: array
           items:
@@ -4225,8 +4242,7 @@ components:
           type: string
           example: 'Alice Updated'
         avatar_url:
-          type: string
-          nullable: true
+          type: [string, 'null']
           example: 'https://example.com/avatar.png'
 
     ChangePasswordRequest:
@@ -4333,7 +4349,6 @@ components:
     UpdateCollectionRequest:
       type: object
       required:
-        - name
         - base_version
       properties:
         name:
@@ -4388,8 +4403,7 @@ components:
           type: string
           maxLength: 150
         description:
-          type: string
-          nullable: true
+          type: [string, 'null']
         items:
           type: array
           items:
@@ -4460,13 +4474,11 @@ components:
           type: string
           format: uuid
         workspace_id:
-          type: string
+          type: [string, 'null']
           format: uuid
-          nullable: true
         project_id:
-          type: string
+          type: [string, 'null']
           format: uuid
-          nullable: true
         name:
           type: string
         min_role:
@@ -4505,8 +4517,7 @@ components:
         disabled:
           type: boolean
         description:
-          type: string
-          nullable: true
+          type: [string, 'null']
 
     SavedExample:
       type: object
@@ -4529,8 +4540,7 @@ components:
           type: string
           maxLength: 150
         originalRequest:
-          type: object
-          nullable: true
+          type: [object, 'null']
         status:
           type: string
         code:
@@ -4548,9 +4558,8 @@ components:
         body:
           type: string
         _postman_previewlanguage:
-          type: string
+          type: [string, 'null']
           enum: [json, xml, html]
-          nullable: true
 
     SavedExampleSummary:
       type: object
@@ -4575,9 +4584,8 @@ components:
         status:
           type: string
         _postman_previewlanguage:
-          type: string
+          type: [string, 'null']
           enum: [json, xml, html]
-          nullable: true
         body_size_bytes:
           type: integer
 
@@ -4778,9 +4786,8 @@ components:
           type: string
           format: uuid
         target_parent_id:
-          type: string
+          type: [string, 'null']
           format: uuid
-          nullable: true
         target_collection_version:
           type: integer
           format: int64
@@ -4811,9 +4818,8 @@ components:
           type: string
           format: uuid
         parent_id:
-          type: string
+          type: [string, 'null']
           format: uuid
-          nullable: true
         sort_order:
           type: integer
           example: 1
@@ -4847,6 +4853,79 @@ components:
           items:
             $ref: '#/components/schemas/ReorderItemPosition'
 
+    CollectionItemWriteInput:
+      type: object
+      required:
+        - type
+        - name
+      properties:
+        id:
+          type: string
+          format: uuid
+        collection_id:
+          type: string
+          format: uuid
+        parent_id:
+          type: [string, 'null']
+          format: uuid
+        type:
+          $ref: '#/components/schemas/ItemType'
+        name:
+          type: string
+          example: 'Login API'
+        sort_order:
+          type: integer
+          example: 0
+        method:
+          type: string
+          example: 'POST'
+        url:
+          type: string
+          example: '{{baseUrl}}/api/v1/auth/login'
+        params:
+          type: array
+          items:
+            $ref: '#/components/schemas/KeyValuePair'
+        path_variables:
+          type: array
+          items:
+            $ref: '#/components/schemas/KeyValuePair'
+        headers:
+          type: array
+          items:
+            $ref: '#/components/schemas/KeyValuePair'
+        auth:
+          $ref: '#/components/schemas/AuthConfig'
+        body_type:
+          $ref: '#/components/schemas/BodyType'
+        raw_type:
+          $ref: '#/components/schemas/RawType'
+        body_content:
+          type: string
+        graphql_query:
+          type: [string, 'null']
+        graphql_variables:
+          type: [string, 'null']
+        body_form_data:
+          type: array
+          items:
+            $ref: '#/components/schemas/FormDataItem'
+        pre_request_script:
+          type: [string, 'null']
+        post_response_script:
+          type: [string, 'null']
+        examples:
+          type: array
+          items:
+            $ref: '#/components/schemas/SavedExample'
+
+    CreateItemRequest:
+      allOf:
+        - $ref: '#/components/schemas/CollectionItemWriteInput'
+        - type: object
+          required:
+            - collection_id
+
     UpdateItemRequest:
       type: object
       required:
@@ -4854,7 +4933,7 @@ components:
         - base_version
       properties:
         item:
-          $ref: '#/components/schemas/CollectionItem'
+          $ref: '#/components/schemas/CollectionItemWriteInput'
         base_version:
           type: integer
           format: int64

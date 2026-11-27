@@ -20,7 +20,6 @@ import {
   RotateCw,
   ServerOff,
   Globe,
-  WifiOff,
   Maximize2,
   Minimize2,
   GripHorizontal,

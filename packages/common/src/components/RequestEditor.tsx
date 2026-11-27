@@ -14,7 +14,6 @@ import {
   PlayCircle,
   FlaskConical,
   Bookmark,
-  Terminal,
   Copy,
   Check,
   UploadCloud,

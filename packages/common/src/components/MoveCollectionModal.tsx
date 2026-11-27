@@ -9,7 +9,6 @@ import {
   AlertCircle,
   Building2,
   User,
-  ShieldCheck,
   ArrowRight,
   Laptop,
 } from 'lucide-react';

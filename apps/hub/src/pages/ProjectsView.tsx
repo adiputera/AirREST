@@ -1451,7 +1451,7 @@ export const ProjectsView: React.FC = () => {
                       const isCollapsed = !!collapsedCollections[col.id];
                       const minRole = col.min_role || 'reader';
                       const roleBadge = getMinRoleBadge(minRole);
-                      const reqCount = (col.items || []).filter((i) => i.type === 'request').length;
+                      const reqCount = (col.items || []).filter((i) => !(i as any)?.deleted_at && i.type === 'request').length;
 
                       return (
                         <div

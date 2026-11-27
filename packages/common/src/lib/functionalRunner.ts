@@ -721,7 +721,7 @@ export async function startFunctionalRun(
     } catch (err) {
       stopReason = err instanceof Error ? err.message : String(err);
       if (executedCount > 0 || totalStepsRecorded > 0) {
-        saveFunctionalRunEnvSnapshot(runId, params.tabId, runEnv);
+        saveFunctionalRunEnvSnapshot(runId, params.tabId, runEnv, runVars);
       }
       const finalReport = buildSnapshot({
         status: stoppedByUser ? 'stopped' : 'failed',

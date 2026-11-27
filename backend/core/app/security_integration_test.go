@@ -217,7 +217,7 @@ func TestSecurityIntegration(t *testing.T) {
 	})
 
 	contributor, contributorTokens := newUser("contributor")
-	maintainer, _ := newUser("maintainer")
+	maintainer, maintainerTokens := newUser("maintainer")
 	reader, _ := newUser("reader")
 	teamID, projectID := uuid.New(), uuid.New()
 	exec := func(query string, args ...any) {
@@ -708,6 +708,46 @@ func TestSecurityIntegration(t *testing.T) {
 			a.Router.ServeHTTP(w, req)
 			assertStatus(w, 413)
 		}
+	})
+
+	t.Run("workspace, collection, and environment validation returns 400 and 403", func(t *testing.T) {
+		defaultWsID := uuid.New()
+		exec("INSERT INTO workspaces (id,owner_id,name,is_default) VALUES ($1,$2,'Default WS',true)", defaultWsID, contributor.ID)
+
+		// BKD-13: cross-user workspace GET/PUT/DELETE returns 403; deleting default workspace returns 400
+		assertStatus(request("GET", "/api/v1/workspaces/"+defaultWsID.String(), maintainerTokens.AccessToken, nil), 403)
+		assertStatus(request("PUT", "/api/v1/workspaces/"+defaultWsID.String(), maintainerTokens.AccessToken, map[string]string{"name": "Hijacked"}), 403)
+		assertStatus(request("DELETE", "/api/v1/workspaces/"+defaultWsID.String(), maintainerTokens.AccessToken, nil), 403)
+		assertStatus(request("DELETE", "/api/v1/workspaces/"+defaultWsID.String(), contributorTokens.AccessToken, nil), 400)
+
+		// BKD-14: workspace Update validates name (blank and >150 chars return 400)
+		assertStatus(request("PUT", "/api/v1/workspaces/"+defaultWsID.String(), contributorTokens.AccessToken, map[string]string{"name": "   "}), 400)
+		assertStatus(request("PUT", "/api/v1/workspaces/"+defaultWsID.String(), contributorTokens.AccessToken, map[string]string{"name": strings.Repeat("x", 151)}), 400)
+
+		// BKD-09: invalid min_role on CreateCollection returns 400
+		assertStatus(request("POST", "/api/v1/collections", contributorTokens.AccessToken, map[string]any{
+			"name":         "Bad Role Col",
+			"workspace_id": workspaceID.String(),
+			"min_role":     "superadmin",
+		}), 400)
+
+		// BKD-09: Environment Create validates blank/long name, min_role, and non-object variables with 400
+		assertStatus(request("POST", "/api/v1/environments", contributorTokens.AccessToken, map[string]any{
+			"name":         "   ",
+			"workspace_id": workspaceID.String(),
+			"variables":    []any{},
+		}), 400)
+		assertStatus(request("POST", "/api/v1/environments", contributorTokens.AccessToken, map[string]any{
+			"name":         "Bad Role Env",
+			"workspace_id": workspaceID.String(),
+			"min_role":     "invalid_role",
+			"variables":    []any{},
+		}), 400)
+		assertStatus(request("POST", "/api/v1/environments", contributorTokens.AccessToken, map[string]any{
+			"name":         "Bad Vars Env",
+			"workspace_id": workspaceID.String(),
+			"variables":    []string{"not-an-object"},
+		}), 400)
 	})
 	fmt.Fprintln(os.Stdout, "security integration suite verified with isolated schema and single-connection pool")
 }

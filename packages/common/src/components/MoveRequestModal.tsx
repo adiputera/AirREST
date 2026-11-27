@@ -7,7 +7,6 @@ import {
   X,
   Loader2,
   AlertCircle,
-  ArrowRight,
 } from 'lucide-react';
 import { useApiStore } from '../store/useApiStore';
 import { CollectionItem } from '../types/api';

@@ -61,6 +61,12 @@ const SENSITIVE_QUERY_KEYS = new Set([
   'password',
   'passwd',
   'pwd',
+  'pass',
+  'code',
+  'oauth_code',
+  'auth_code',
+  'access_code',
+  'cookie',
   'auth',
   'authorization',
   'sig',
@@ -85,9 +91,9 @@ function normalizeName(raw: string | undefined | null): string {
 
 function isSensitiveParamKey(normalizedKey: string): boolean {
   if (SENSITIVE_QUERY_KEYS.has(normalizedKey)) return true;
-  return /(?:^|[_-])(token|secret|password|passwd|pwd|api[_-]?key|auth|signature|sig|session|jwt|bearer|credential|private[_-]?key)(?:$|[_-])/i.test(
+  return /(?:^|[_-])(token|secret|password|passwd|pwd|cookie|oauth[_-]?code|auth[_-]?code|access[_-]?code|api[_-]?key|auth|signature|sig|session|jwt|bearer|credential|private[_-]?key)(?:$|[_-])/i.test(
     normalizedKey
-  );
+  ) || /[_-]pass$/i.test(normalizedKey);
 }
 
 function redactQueryStringParams(queryPartRaw: string): string {
@@ -416,6 +422,16 @@ function normalizeImportedFunctionalReport(raw: Record<string, unknown>): Functi
     };
   });
 
+  const failedItemIds = Array.isArray(raw.failedItemIds)
+    ? raw.failedItemIds.filter((id): id is string => typeof id === 'string').slice(0, MAX_FUNCTIONAL_IMPORT_STEPS)
+    : [];
+  const failedIterations = Array.isArray(raw.failedIterations)
+    ? raw.failedIterations
+        .filter((n): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 1)
+        .map((n) => Math.trunc(n))
+        .slice(0, MAX_FUNCTIONAL_IMPORT_STEPS)
+    : undefined;
+
   const base = raw as unknown as FunctionalRunReport;
   return {
     ...base,
@@ -434,6 +450,8 @@ function normalizeImportedFunctionalReport(raw: Record<string, unknown>): Functi
     testsFailed: Math.trunc(toFiniteNonNeg(raw.testsFailed)),
     avgResponseTimeMs: toFiniteNonNeg(raw.avgResponseTimeMs),
     steps,
+    failedItemIds,
+    ...(failedIterations !== undefined ? { failedIterations } : {}),
   };
 }
 
@@ -844,6 +862,7 @@ export function bindImportedFunctionalReport(
       sourceCollectionId: target.targetCollection.id,
       sourceCollectionName: target.targetCollection.name,
       sourceName: target.targetName,
+      tabId: makePerformanceTabId(target.targetType, target.targetId),
       imported: true,
       importedAt: Date.now(),
       ...(options?.filename ? { importedFilename: options.filename } : {}),
@@ -853,6 +872,7 @@ export function bindImportedFunctionalReport(
   return {
     ...report,
     id: nextId,
+    tabId: makePerformanceTabId('imported', nextId),
     imported: true,
     importedAt: Date.now(),
     ...(options?.filename ? { importedFilename: options.filename } : {}),

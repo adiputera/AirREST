@@ -47,7 +47,7 @@ interface ScopeSwitcherProps {
 }
 
 export const ScopeSwitcher: React.FC<ScopeSwitcherProps> = ({
-  onOpenModeSelector,
+  onOpenModeSelector: _onOpenModeSelector,
   onOpenCloudAuth,
 }) => {
   const productPolicy = useProductPolicy();

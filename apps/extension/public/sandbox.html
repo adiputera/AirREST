@@ -7,6 +7,21 @@
   </head>
   <body>
     <script>
+      (function () {
+      const _hasOwn = Object.prototype.hasOwnProperty;
+      const _objectKeys = Object.keys;
+      const _defineProperty = Object.defineProperty;
+      const _objectCreate = Object.create;
+      const _jsonStringify = JSON.stringify;
+      const _TextEncoder = typeof TextEncoder !== 'undefined' ? TextEncoder : null;
+      const _textEncoder = _TextEncoder ? new _TextEncoder() : null;
+      const _portPostMessage =
+        typeof MessagePort !== 'undefined' &&
+        MessagePort.prototype &&
+        typeof MessagePort.prototype.postMessage === 'function'
+          ? MessagePort.prototype.postMessage
+          : null;
+
       function isValidOrigin(origin) {
         if (!origin || typeof origin !== 'string' || origin === 'null') return false;
         if (typeof location !== 'undefined' && location.ancestorOrigins && location.ancestorOrigins.length > 0) {
@@ -33,9 +48,9 @@
       }
 
       function createNullPrototypeMap(source) {
-        const map = Object.create(null);
+        const map = _objectCreate(null);
         if (!source || typeof source !== 'object' || Array.isArray(source)) return map;
-        for (const k of Object.keys(source)) {
+        for (const k of _objectKeys(source)) {
           if (!isForbiddenKey(k)) {
             map[k] = source[k];
           }
@@ -46,9 +61,9 @@
       function toSafePlainObject(source) {
         const out = {};
         if (!source || typeof source !== 'object') return out;
-        for (const k of Object.keys(source)) {
+        for (const k of _objectKeys(source)) {
           if (!isForbiddenKey(k)) {
-            Object.defineProperty(out, k, {
+            _defineProperty(out, k, {
               value: source[k],
               enumerable: true,
               writable: true,
@@ -61,9 +76,9 @@
 
       function measurePayloadUtf8Bytes(payload) {
         try {
-          const json = JSON.stringify(payload);
-          if (typeof TextEncoder !== 'undefined') {
-            return new TextEncoder().encode(json).length;
+          const json = _jsonStringify(payload);
+          if (_textEncoder) {
+            return _textEncoder.encode(json).length;
           }
           return json.length * 3;
         } catch {
@@ -335,11 +350,14 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
               headerList.length = 0;
             },
             toObject: function () {
-              const obj = {};
+              const obj = _objectCreate(null);
               for (let i = 0; i < headerList.length; i++) {
-                obj[headerList[i].key] = headerList[i].value;
+                const k = headerList[i].key;
+                if (!isForbiddenKey(k)) {
+                  obj[k] = headerList[i].value;
+                }
               }
-              return obj;
+              return toSafePlainObject(obj);
             }
           };
 
@@ -440,12 +458,12 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
             }
             return true;
           }
-          const aKeys = Object.keys(a);
-          const bKeys = Object.keys(b);
+          const aKeys = _objectKeys(a);
+          const bKeys = _objectKeys(b);
           if (aKeys.length !== bKeys.length) return false;
           for (let i = 0; i < aKeys.length; i++) {
             const k = aKeys[i];
-            if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
+            if (!_hasOwn.call(b, k)) return false;
             if (!deepEqualValues(a[k], b[k], pairs)) return false;
           }
           return true;
@@ -455,11 +473,11 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
           const d = depth || 0;
           if (v === null) return 'null';
           if (v === undefined) return 'undefined';
-          if (typeof v === 'string') return JSON.stringify(v);
+          if (typeof v === 'string') return _jsonStringify(v);
           if (typeof v !== 'object') return String(v);
           if (d >= 2) return Array.isArray(v) ? '[Array]' : '[Object]';
           try {
-            return JSON.stringify(v);
+            return _jsonStringify(v);
           } catch {
             return String(v);
           }
@@ -496,19 +514,19 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
           const passThroughProps = ['to', 'been', 'is', 'that', 'which', 'and', 'has', 'have', 'with', 'at', 'of', 'same'];
           for (let i = 0; i < passThroughProps.length; i++) {
             const prop = passThroughProps[i];
-            Object.defineProperty(chain, prop, {
+            _defineProperty(chain, prop, {
               enumerable: true,
               configurable: true,
               get: function () { return chain; }
             });
           }
 
-          Object.defineProperty(chain, 'not', {
+          _defineProperty(chain, 'not', {
             enumerable: true,
             configurable: true,
             get: function () { state.inverted = !state.inverted; return chain; }
           });
-          Object.defineProperty(chain, 'deep', {
+          _defineProperty(chain, 'deep', {
             enumerable: true,
             configurable: true,
             get: function () { state.deep = true; return chain; }
@@ -566,10 +584,10 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
                 }
               } else if (actual && typeof actual === 'object' && expected && typeof expected === 'object') {
                 found = true;
-                const keys = Object.keys(expected);
+                const keys = _objectKeys(expected);
                 for (let i = 0; i < keys.length; i++) {
                   const k = keys[i];
-                  if (!Object.prototype.hasOwnProperty.call(actual, k) || !deepEqualValues(actual[k], expected[k])) {
+                  if (!_hasOwn.call(actual, k) || !deepEqualValues(actual[k], expected[k])) {
                     found = false;
                     break;
                   }
@@ -587,7 +605,7 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
             contains: function (expected) { return methods.include(expected); },
             property: function (propName, expectedVal) {
               const key = String(propName);
-              const hasProp = actual !== null && actual !== undefined && Object.prototype.hasOwnProperty.call(Object(actual), key);
+              const hasProp = actual !== null && actual !== undefined && _hasOwn.call(Object(actual), key);
               if (arguments.length >= 2 && hasProp) {
                 const valMatch = state.deep ? deepEqualValues(actual[key], expectedVal) : actual[key] === expectedVal;
                 check(
@@ -607,7 +625,7 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
             lengthOf: function (expectedLen) {
               const actualLen = actual !== null && actual !== undefined && typeof actual.length === 'number'
                 ? actual.length
-                : (actual && typeof actual === 'object' ? Object.keys(actual).length : undefined);
+                : (actual && typeof actual === 'object' ? _objectKeys(actual).length : undefined);
               check(
                 actualLen === expectedLen,
                 'Expected length ' + expectedLen + ' but got ' + actualLen,
@@ -661,44 +679,44 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
             empty: function () {
               let isEmpty = false;
               if (typeof actual === 'string' || Array.isArray(actual)) isEmpty = actual.length === 0;
-              else if (actual && typeof actual === 'object') isEmpty = Object.keys(actual).length === 0;
+              else if (actual && typeof actual === 'object') isEmpty = _objectKeys(actual).length === 0;
               check(isEmpty, 'Expected ' + formatExpectVal(actual) + ' to be empty', 'Expected ' + formatExpectVal(actual) + ' not to be empty');
               return chain;
             }
           };
 
-          const mKeys = Object.keys(methods);
+          const mKeys = _objectKeys(methods);
           for (let i = 0; i < mKeys.length; i++) {
             const k = mKeys[i];
             chain[k] = methods[k];
             beAssertion[k] = methods[k];
           }
-          const gKeys = Object.keys(getterChecks);
+          const gKeys = _objectKeys(getterChecks);
           for (let i = 0; i < gKeys.length; i++) {
             const gk = gKeys[i];
-            Object.defineProperty(chain, gk, { enumerable: true, configurable: true, get: getterChecks[gk] });
-            Object.defineProperty(beAssertion, gk, { enumerable: true, configurable: true, get: getterChecks[gk] });
+            _defineProperty(chain, gk, { enumerable: true, configurable: true, get: getterChecks[gk] });
+            _defineProperty(beAssertion, gk, { enumerable: true, configurable: true, get: getterChecks[gk] });
           }
           for (let i = 0; i < passThroughProps.length; i++) {
             const p = passThroughProps[i];
-            Object.defineProperty(beAssertion, p, { enumerable: true, configurable: true, get: function () { return chain; } });
+            _defineProperty(beAssertion, p, { enumerable: true, configurable: true, get: function () { return chain; } });
           }
-          Object.defineProperty(beAssertion, 'not', {
+          _defineProperty(beAssertion, 'not', {
             enumerable: true,
             configurable: true,
             get: function () { state.inverted = !state.inverted; return chain; }
           });
-          Object.defineProperty(beAssertion, 'deep', {
+          _defineProperty(beAssertion, 'deep', {
             enumerable: true,
             configurable: true,
             get: function () { state.deep = true; return chain; }
           });
-          Object.defineProperty(chain, 'be', {
+          _defineProperty(chain, 'be', {
             enumerable: true,
             configurable: true,
             get: function () { return beAssertion; }
           });
-          Object.defineProperty(beAssertion, 'be', {
+          _defineProperty(beAssertion, 'be', {
             enumerable: true,
             configurable: true,
             get: function () { return beAssertion; }
@@ -715,17 +733,17 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
           request: createPmRequest(request),
           environment: {
             get: function (k) {
-              return Object.prototype.hasOwnProperty.call(currentEnv, k) ? currentEnv[k] : undefined;
+              return _hasOwn.call(currentEnv, k) ? currentEnv[k] : undefined;
             },
             set: function (k, v) {
               if (isForbiddenKey(k)) return;
               currentEnv[k] = String(v);
             },
             unset: function (k) { delete currentEnv[k]; },
-            has: function (k) { return Object.prototype.hasOwnProperty.call(currentEnv, k); },
+            has: function (k) { return _hasOwn.call(currentEnv, k); },
             toObject: function () {
               const res = {};
-              for (const key of Object.keys(currentEnv)) {
+              for (const key of _objectKeys(currentEnv)) {
                 res[key] = currentEnv[key];
               }
               return res;
@@ -733,9 +751,9 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
           },
           variables: {
             get: function (k) {
-              if (Object.prototype.hasOwnProperty.call(currentVars, k)) return currentVars[k];
-              if (Object.prototype.hasOwnProperty.call(currentIterationData, k)) return currentIterationData[k];
-              if (Object.prototype.hasOwnProperty.call(currentEnv, k)) return currentEnv[k];
+              if (_hasOwn.call(currentVars, k)) return currentVars[k];
+              if (_hasOwn.call(currentIterationData, k)) return currentIterationData[k];
+              if (_hasOwn.call(currentEnv, k)) return currentEnv[k];
               return undefined;
             },
             set: function (k, v) {
@@ -744,7 +762,7 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
             },
             toObject: function () {
               const res = {};
-              for (const key of Object.keys(currentVars)) {
+              for (const key of _objectKeys(currentVars)) {
                 res[key] = currentVars[key];
               }
               return res;
@@ -753,15 +771,15 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
           iterationData: {
             get: function (k) {
               if (!k || isForbiddenKey(k)) return undefined;
-              return Object.prototype.hasOwnProperty.call(currentIterationData, k) ? currentIterationData[k] : undefined;
+              return _hasOwn.call(currentIterationData, k) ? currentIterationData[k] : undefined;
             },
             has: function (k) {
               if (!k || isForbiddenKey(k)) return false;
-              return Object.prototype.hasOwnProperty.call(currentIterationData, k);
+              return _hasOwn.call(currentIterationData, k);
             },
             toObject: function () {
               const res = {};
-              for (const key of Object.keys(currentIterationData)) {
+              for (const key of _objectKeys(currentIterationData)) {
                 if (!isForbiddenKey(key)) res[key] = currentIterationData[key];
               }
               return res;
@@ -784,7 +802,7 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
                 : JSON.parse(response.data || '{}');
             },
             text: function () {
-              return typeof response.data === 'string' ? response.data : JSON.stringify(response.data || '');
+              return typeof response.data === 'string' ? response.data : _jsonStringify(response.data || '');
             },
             to: {
               have: {
@@ -804,7 +822,7 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
                   const hdrs = response.headers || {};
                   let matchedValue;
                   let found = false;
-                  for (const hKey of Object.keys(hdrs)) {
+                  for (const hKey of _objectKeys(hdrs)) {
                     if (String(hKey).toLowerCase() === targetKey) {
                       found = true;
                       matchedValue = hdrs[hKey];
@@ -832,7 +850,7 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
                     const segments = pathOrObj.split('.').filter(Boolean);
                     let cursor = parsed;
                     for (let i = 0; i < segments.length; i++) {
-                      if (cursor === null || cursor === undefined || !Object.prototype.hasOwnProperty.call(Object(cursor), segments[i])) {
+                      if (cursor === null || cursor === undefined || !_hasOwn.call(Object(cursor), segments[i])) {
                         throw new Error('Expected JSON body to have path "' + pathOrObj + '"');
                       }
                       cursor = cursor[segments[i]];
@@ -847,7 +865,7 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
                   }
                 },
                 body: function (expected) {
-                  const text = typeof response.data === 'string' ? response.data : JSON.stringify(response.data || '');
+                  const text = typeof response.data === 'string' ? response.data : _jsonStringify(response.data || '');
                   if (arguments.length === 0) {
                     if (!text) throw new Error('Expected response body not to be empty');
                     return;
@@ -904,7 +922,7 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
             currentEnv[k] = String(v);
           },
           getEnvironmentVariable: function (k) {
-            return Object.prototype.hasOwnProperty.call(currentEnv, k) ? currentEnv[k] : undefined;
+            return _hasOwn.call(currentEnv, k) ? currentEnv[k] : undefined;
           },
           clearEnvironmentVariable: function (k) { delete currentEnv[k]; },
           setGlobalVariable: function (k, v) {
@@ -912,7 +930,7 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
             currentVars[k] = String(v);
           },
           getGlobalVariable: function (k) {
-            return Object.prototype.hasOwnProperty.call(currentVars, k) ? currentVars[k] : undefined;
+            return _hasOwn.call(currentVars, k) ? currentVars[k] : undefined;
           },
           clearGlobalVariable: function (k) { delete currentVars[k]; },
           setNextRequest: function (target) {
@@ -922,12 +940,12 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
         };
 
         const rawBody = response
-          ? (typeof response.data === 'string' ? response.data : JSON.stringify(response.data || ''))
+          ? (typeof response.data === 'string' ? response.data : _jsonStringify(response.data || ''))
           : '';
         const responseCode = response ? { code: response.status, name: response.statusText } : { code: 0, name: '' };
         const responseTime = response ? (response.timeMs || 0) : 0;
         const responseHeaders = response ? (response.headers || {}) : {};
-        const tests = Object.create(null);
+        const tests = _objectCreate(null);
         const targetOrigin = event.origin;
 
         function postSandboxResult(payload) {
@@ -941,9 +959,15 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
               variables: safeInitialVars
             };
           }
-          if (replyPort && typeof replyPort.postMessage === 'function') {
-            replyPort.postMessage(safePayload);
-            return;
+          if (replyPort) {
+            if (_portPostMessage) {
+              _portPostMessage.call(replyPort, safePayload);
+              return;
+            }
+            if (typeof replyPort.postMessage === 'function') {
+              replyPort.postMessage(safePayload);
+              return;
+            }
           }
           if (event.source && typeof event.source.postMessage === 'function') {
             event.source.postMessage(safePayload, targetOrigin);
@@ -951,7 +975,7 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
         }
 
         function appendLegacyTests() {
-          for (const key of Object.keys(tests)) {
+          for (const key of _objectKeys(tests)) {
             if (isForbiddenKey(key)) continue;
             if (collectedTestResults.length >= 250) break;
             const passed = Boolean(tests[key]);
@@ -1027,6 +1051,7 @@ c.mode.CTRGladman=function(){var t=c.lib.BlockCipherMode.extend();function e(t){
           postSandboxResult(errPayload);
         }
       });
+      }).call(this);
     </script>
   </body>
 </html>
